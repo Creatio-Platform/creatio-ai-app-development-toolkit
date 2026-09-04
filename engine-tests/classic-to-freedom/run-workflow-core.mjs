@@ -36,6 +36,7 @@ import { declareHost, negotiateStep, negotiateRun, CapabilityError } from "../..
 import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } from "../../skills/_workflow-core/run-state.mjs";
 import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
 import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
+import { INDEX_ENTRY as SCHEMA_INDEX_ENTRY } from "../../skills/_workflow-core/behaviour-analysis/schemas.mjs";
 import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
@@ -43,12 +44,19 @@ import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAll
   planInvalidNext, componentReplanClause, componentTypeMismatches, planGapKinds, planGapNext,
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
+import * as prompts from "../../skills/_workflow-core/behaviour-analysis/prompts.mjs";
 // The ENGINE's own producer of the plan-gap entries. This suite otherwise knows the engine only by path, but
 // the plan-gap vocabulary is a string-typed contract BETWEEN the two modules (PR review, F1): the engine writes
 // the entries and `planGapKinds` above re-derives their taxonomy by containment. Asserting each side against
 // its own hand-written strings, in its own suite, is exactly what let a reword pass green while every stop
 // degraded to the unclassified fallback — so the producer is imported here and fed to the real consumer.
 import { planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+// The ENGINE's own MIRROR of the reported-trigger validator — imported for the same reason `planGaps` is: the
+// workflow script may not `import`, so the check exists twice (helpers.mjs and engine/migrate.mjs), and a
+// hand-written assertion per side is exactly what would let the two drift while both suites stayed green. The
+// parity test below feeds ONE table to BOTH functions and compares their reason strings byte-for-byte.
+import { validateReportedTrigger as engineValidateReportedTrigger,
+  REPORTED_TRIGGERS as ENGINE_REPORTED_TRIGGERS } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { CLAUDE_HOST, makeExecute, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
 import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
 import { genericHost, explainMissing } from "../../skills/_workflow-core/adapters/generic-cli.mjs";
@@ -425,6 +433,146 @@ const happyAnswer = (item) => {
     result.coverage.complete === false && result.coverage.described === 4, () => JSON.stringify(result.coverage));
 }
 
+/* ---------------------------------------------------------------------------
+   ENG-96571 C4 / C5 / B3 — a zero-row scope is still described, scratch files
+   stay out of the repository, and the fan-out actually fires.
+   --------------------------------------------------------------------------- */
+console.log("\n===== behaviour-analysis: override-only scopes, $TMPDIR, fan-out =====");
+{
+  // C4. A surface with rows on one scope and NONE on another. The zero-row scope used to be filtered out with
+  // "gets no agent" — measured on the Applicants run, where scope "section" had 0 stubs / 0 members and a
+  // replacing layer in its parent chain overrode `rowSelected` with no `callParent` (750 ms delay, mini-card
+  // does not close). It must reach a describe item, flagged, WITHOUT moving a single coverage number.
+  const CTX_EMPTY = {
+    ...CTX,
+    scopes: [
+      { role: "main page", schema: "DealPage", methodKeys: ["onSaved"], memberKeys: [], unresolvedCount: 0 },
+      { role: "section", schema: "DealSectionV2", methodKeys: [], memberKeys: [], unresolvedCount: 0 },
+    ],
+  };
+  const DESCRIBE_EMPTY = {
+    reportPart: "out/part.md",
+    indexEntries: [
+      { key: "onSaved", card: "DealPage/C01", ac: ["AC-1"] },
+      // The override finding, keyed the qualified way. `rowSelected` bare would suffix-match a digest key.
+      { key: "DealSectionV2::override:rowSelected", card: "DealSectionV2/C01", ac: ["AC-1"] },
+    ],
+    gaps: [], refusals: [],
+  };
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_EMPTY };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: DESCRIBE_EMPTY };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  const describes = asked.filter((i) => i.phase === "Describe");
+  check("core C4: a scope with ZERO digest rows still reaches a Describe item — it used to be filtered out with 'gets no agent', which is how a replacing layer that overrode `rowSelected` without `callParent` was never looked at",
+    describes.length >= 1 && describes.some((i) => /DealSectionV2/.test(i.prompt)),
+    () => describes.map((i) => i.id).join(","));
+  check("core C4: the zero-row scope is flagged OVERRIDE-ONLY in the prompt and told to card every non-passthrough override, and the run logs that it is reported outside the coverage count",
+    describes.some((i) => /OVERRIDE-ONLY SCOPES/.test(i.prompt) && /callParent/.test(i.prompt))
+      && logs.some((l) => /OVERRIDE-ONLY scopes/.test(l) && /DealSectionV2/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /OVERRIDE/.test(l))));
+  check("core C4: the override-only scope names the SCHEMA-QUALIFIED key form in the prompt — a bare `rowSelected` would suffix-match the digest key `DealPage::rowSelected` and be counted as coverage of a row nobody described",
+    describes.every((i) => !/OVERRIDE-ONLY SCOPES/.test(i.prompt) || /<schema>::override:<method>/.test(i.prompt)));
+  check("core C4: ARITHMETIC UNCHANGED — the zero-row scope adds no keys, so `allKeys` is the one worked row and the override entry is not coverage of anything",
+    result.coverage.digestRows === 1 && result.coverage.described === 1 && result.coverage.complete === true
+      && result.coverage.uncovered.length === 0,
+    () => JSON.stringify(result.coverage));
+  check("core C4: the override finding is returned as its OWN list and carried into the Merge prompt as an extra section, never as coverage",
+    result.overrideFindings.map((e) => e.key).join(",") === "DealSectionV2::override:rowSelected"
+      && /OVERRIDE-ONLY FINDINGS/.test(asked.find((i) => i.phase === "Merge").prompt)
+      && /Overrides in scopes with no digest rows/.test(asked.find((i) => i.phase === "Merge").prompt),
+    () => JSON.stringify(result.overrideFindings));
+  check("core C4: the part file and the work-item id are still named by a WORKED scope — the override scope is APPENDED, so `batch.scopes[0]` never becomes a zero-row scope",
+    describes.every((i) => /part-DealPage\.md/.test(i.prompt) && i.id.startsWith("describe.1.DealPage")),
+    () => describes.map((i) => i.id).join(","));
+
+  // GUARD CAN FAIL. Break the ONE thing each check reads and watch the named check go red.
+  const brokenKey = { ...DESCRIBE_EMPTY, indexEntries: [DESCRIBE_EMPTY.indexEntries[0], { key: "rowSelected", card: "x/C01" }] };
+  const broken = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_EMPTY };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: brokenKey };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core C4 (anti-vacuity): an override card keyed the BARE way is invisible to `overrideFindings` — which is exactly why the prompt mandates the qualified form; the qualified-key check above is therefore load-bearing, not decorative",
+    broken.result.overrideFindings.length === 0 && result.overrideFindings.length === 1,
+    () => JSON.stringify(broken.result.overrideFindings));
+}
+{
+  // C4's companion: a surface where EVERY scope is zero-row must still take the skip exit. Two separate exits
+  // exist (the caller's declared `totals` before Context, and this post-Context count) and both were added for a
+  // measured wizard-section run; attaching override scopes must not have moved either.
+  const CTX_ALL_ZERO = {
+    ...CTX,
+    scopes: [
+      { role: "main page", schema: "DealPage", methodKeys: [], memberKeys: [], unresolvedCount: 0 },
+      { role: "section", schema: "DealSectionV2", methodKeys: [], memberKeys: [], unresolvedCount: 0 },
+    ],
+  };
+  const { result, asked } = await runCba(INPUT, (i) => (i.phase === "Context" ? { outcome: OUTCOME.VALUE, value: CTX_ALL_ZERO } : happyAnswer(i)));
+  check("core C4: a surface whose EVERY scope has zero rows still takes the POST-CONTEXT skip exit with `complete:true` — an empty worklist is DONE, and only the CALLER-DECLARED exit was covered before",
+    result.skipped === true && result.coverage.complete === true && result.describeAgents === 0
+      && asked.filter((i) => i.phase !== "Context").length === 0 && result.censusNote === CTX.censusNote,
+    () => JSON.stringify({ result, asked: asked.map((i) => i.phase) }));
+}
+{
+  // B3. The measured defect: 13 rows across 2 scopes went to ONE agent (76.8 min, 993k tokens, every phase
+  // sequential) because 13 was under the 40-row target. The target is 12 now and the shortcut is gated.
+  check("helpers B3: DEFAULT_ROWS_PER_AGENT is 12 — measured, not reasoned: the Applicants run's 13 rows sat under the old 40-row target and the fan-out never once fired",
+    () => helpers.DEFAULT_ROWS_PER_AGENT === 12);
+  const two = [
+    { label: "main", role: "main page", rows: 12, methodKeys: Array.from({ length: 12 }, (_, i) => `m${i}`), memberKeys: [] },
+    { label: "sect", role: "section", rows: 1, methodKeys: ["s0"], memberKeys: [] },
+  ];
+  const planned = helpers.planBatches(two, 13, helpers.DEFAULT_ROWS_PER_AGENT, helpers.DEFAULT_MAX_DESCRIBE);
+  check("helpers B3: 13 rows across TWO scopes → TWO describe agents at the default target — the exact shape that ran as one agent for 76.8 minutes",
+    planned.batches.length === 2 && /never the one-agent shortcut/.test(planned.note),
+    () => JSON.stringify({ n: planned.batches.length, note: planned.note }));
+  const one = [{ label: "main", role: "main page", rows: 13, methodKeys: Array.from({ length: 13 }, (_, i) => `m${i}`), memberKeys: [] }];
+  const single = helpers.planBatches(one, 13, helpers.DEFAULT_ROWS_PER_AGENT, helpers.DEFAULT_MAX_DESCRIBE);
+  check("helpers B3: 13 rows in ONE scope → ONE agent, and the note says why it is one (a scope is never SPLIT) rather than claiming the rows are under the target — the two reasons are different facts and read differently by an operator",
+    single.batches.length === 1 && /a scope is never split/.test(single.note) && !/under the/.test(single.note),
+    () => JSON.stringify({ n: single.batches.length, note: single.note }));
+  const small = helpers.planBatches(two, 5, 12, 8);
+  check("helpers B3: a genuinely small multi-scope surface still gets the under-the-target note — the shortcut's two legs are distinguishable in the log",
+    small.batches.length === 1 && /under the 12-row target/.test(small.note), () => small.note);
+  const many = Array.from({ length: 9 }, (_, i) => ({ label: `s${i}`, role: "r", rows: 13, methodKeys: [`k${i}`], memberKeys: [] }));
+  const capped = helpers.planBatches(many, 117, 12, 3);
+  check("helpers B3: over the cap the smallest batches are still MERGED, never dropped — every scope survives the cap, which is the silent coverage hole the cap exists not to create",
+    capped.batches.length === 3 && capped.batches.flatMap((b) => b.scopes).length === 9 && /were MERGED, no scope was dropped/.test(capped.capped),
+    () => JSON.stringify({ n: capped.batches.length, scopes: capped.batches.flatMap((b) => b.scopes.length) }));
+
+  // GUARD CAN FAIL: feed the OLD target and the two-scope case collapses back to one agent — the defect.
+  const regressed = helpers.planBatches(two, 13, 40, 8);
+  check("helpers B3 (anti-vacuity): with the OLD 40-row target the same 13-row / 2-scope surface collapses back to ONE agent, so the target value is what the fan-out check depends on",
+    regressed.batches.length === 1 && planned.batches.length === 2,
+    () => JSON.stringify({ old: regressed.batches.length, now: planned.batches.length }));
+}
+{
+  // C5. The Describe agent in the Applicants run wrote 12 Classic bodies into a `.scope-main-page/` folder in the
+  // project tree, `BasePageV2_base.js` among them at 121 KB. The rule is in `rules()`, so every phase carries it.
+  const { asked } = await runCba(INPUT, happyAnswer);
+  const forPhase = (p) => asked.find((i) => i.phase === p)?.prompt || "";
+  for (const p of ["Context", "Describe"]) {
+    check(`core C5: the ${p} prompt carries the $TMPDIR scratch rule — Classic bodies go under the directory \`echo $TMPDIR\` reports, never the repository working tree`,
+      /SCRATCH FILES GO OUTSIDE THE REPOSITORY/.test(forPhase(p)) && /echo \$TMPDIR/.test(forPhase(p))
+        && /never anywhere inside the repository working tree/i.test(forPhase(p)),
+      () => forPhase(p).split("\n").filter((l) => /TMPDIR/.test(l)).join("\n"));
+  }
+  check("core C5: only the report/index DELIVERABLES go to outDir, and the measured incident is named in the rule so it cannot be reworded into a vague preference",
+    /Only the report and index DELIVERABLES/.test(forPhase("Describe")) && /BasePageV2_base\.js/.test(forPhase("Describe")));
+  check("core C5: the MERGE phase deletes the scratch directory it knows about — the raw stand-sourced bodies have no further use once the deliverables are written, and nothing outside that directory is touched",
+    /DELETE THE SCRATCH DIRECTORY/.test(forPhase("Merge")) && /Delete only the scratch directory this run created/.test(forPhase("Merge")),
+    () => forPhase("Merge").split("\n").filter((l) => /SCRATCH|scratch/.test(l)).join("\n"));
+
+  // GUARD CAN FAIL: the rule lives in `rules()`, so a builder called without it produces a prompt the check rejects.
+  const noRule = prompts.describePrompt({ RULES: "(no rules)", batch: { scopes: [{ role: "r", label: "l", methodKeys: [], memberKeys: [] }] }, sharedCardList: "", sharedCorePath: "p", partPath: "q", roundNote: "" });
+  check("core C5 (anti-vacuity): a Describe prompt built WITHOUT the shared rules block fails the same regex — the check reads the text the phase actually receives, not a constant that happens to exist",
+    !/SCRATCH FILES GO OUTSIDE THE REPOSITORY/.test(noRule));
+}
+
 console.log("\n===== the Critique retry, EXECUTED as a generator =====");
 // `retryOnDeath` is a DELEGATING generator now: it asks the driver for one more
 // attempt rather than calling an agent API. Driven here directly so the second
@@ -652,6 +800,149 @@ function driveRetry(outcomes, onFailure) {
   check("isCritiqueShape: a PARTIAL critique is dead too — the repair round still reads `uncovered` either way, so the only thing refused is a claim that the MISSING field was verified",
     helpers.isCritiqueShape({ uncovered: [], conflicts: [] }) === false
       && helpers.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" }) === false);
+}
+
+console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger is VALIDATED =====");
+// A1 — `coverage.complete` used to treat the digest as a census, and an entry that ADMITTED the behaviour was not
+// established still counted as coverage. Measured on the Applicants run: the plan read "10 of 10 carry a behaviour
+// card" while the card for `init` said the behaviour was NOT established.
+{
+  const notEstablished = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+    (e.key === "onSaved" ? { ...e, behaviourEstablished: false } : e)) };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: notEstablished };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A1: an entry carrying `behaviourEstablished: false` is NOT coverage — it names a card whose own text says the behaviour was not established, and counting it is how a plan reported 10 of 10 described with the first card saying otherwise",
+    result.coverage.described === 3 && result.coverage.uncovered.includes("onSaved") && result.coverage.complete === false,
+    () => JSON.stringify(result.coverage));
+  check("ENG-96571 A1: the exclusion is applied in ONE place (`entriesOf`), so the covered count and the wiring-only leg cannot disagree about the same entry",
+    helpers.entriesOf([{ indexEntries: [{ key: "a", card: "C1" }, { key: "b", card: "C2", behaviourEstablished: false }] }])
+      .map((e) => e.key).join(",") === "a"
+    && helpers.coveredKeys([{ indexEntries: [{ key: "mixin:X", card: "C1", behaviourEstablished: false }] }], new Set(["mixin:X"])).size === 0
+    && helpers.wiringOnlyMixinKeys(helpers.entriesOf([{ indexEntries: [{ key: "mixin:X", card: "C1", behaviourEstablished: false }] }]), new Set(["mixin:X"])).length === 0);
+  check("ENG-96571 A1: `behaviourEstablished` absent or `true` is ESTABLISHED — an index written before the field existed keeps counting",
+    helpers.behaviourEstablished({ key: "a" }) === true && helpers.behaviourEstablished({ key: "a", behaviourEstablished: true }) === true
+    && helpers.behaviourEstablished({ key: "a", behaviourEstablished: false }) === false);
+}
+{
+  // BOTH NUMBERS in the return. The digest is the worklist the engine could not answer; the engine's own member
+  // ledger for the scope it mapped is a larger population and travels in `totals` (migrate.mjs `--stubs`).
+  const withLedger = { ...INPUT, totals: { stubs: 3, members: 1, ledgerMembers: 88, ledgerUnaccounted: 0 } };
+  const { result, logs } = await runCba(withLedger, happyAnswer);
+  check("ENG-96571 A1: the return carries BOTH populations — `digestRows` (this worklist) and `ledgerMembers` (the engine's ledger for the scope it mapped) — so no consumer has to read one as the other",
+    result.coverage.digestRows === 4 && result.coverage.ledgerMembers === 88 && result.coverage.described === 4,
+    () => JSON.stringify(result.coverage));
+  check("ENG-96571 A1: `total` survives as an ALIAS of `digestRows` for one release — the parity golden and SKILL.md still read it",
+    result.coverage.total === result.coverage.digestRows);
+  check("ENG-96571 A1: the log says the digest is the WORKLIST, not a surface census, and prints both numbers",
+    logs.some((l) => /digest row\(s\) described/.test(l) && /88 member\(s\) in the engine's ledger/.test(l) && /not a surface census/.test(l)),
+    () => logs.join(" | "));
+  check("ENG-96571 A1: with no `ledgerMembers` supplied the number is `null`, never a guess — an older digest says 'unknown' rather than borrowing the digest count",
+    (await runCba(INPUT, happyAnswer)).result.coverage.ledgerMembers === null);
+}
+
+// A2 — a reported trigger used to be accepted verbatim. `"init": {"trigger":"internal","from":"init"}` rendered as
+// `internal (from init) — reported` and moved the plan header from "8 row(s) have no trigger yet" to "0 … 8
+// answered by the behaviour run": a row naming ITSELF as its own origin, counted as answered.
+{
+  const REJECT_TABLE = [
+    { trigger: "internal", from: "init", methodName: "init" },              // the measured Applicants case
+    { trigger: "internal", from: "  ", methodName: "reload" },              // blank origin
+    { trigger: "internal", methodName: "reload" },                          // no origin at all
+    { trigger: "attribute", from: "Thing attribute onChange", methodName: "reload" }, // prose, not a declaration path
+    { trigger: "detail", from: "SomeDetail", methodName: "reload" },
+    { trigger: "entity-filter", from: "attributes", methodName: "reload" }, // prefix alone is not a path
+    { trigger: "attribute-onchange", from: "attributes.Thing", methodName: "reload" }, // outside the vocabulary
+    { trigger: "should-not-replace", from: "nowhere", methodName: "reload" },
+    { trigger: 7, from: "attributes.Thing", methodName: "reload" },         // not even a string
+    // ACCEPTED rows — the table must prove the validator is not simply refusing everything
+    { trigger: "attribute", from: "attributes.Contact.onChange", methodName: "reload" },
+    { trigger: "detail", from: "details.Orders", methodName: "reload" },
+    { trigger: "entity-filter", from: "attributes.Owner.filter.deep", methodName: "reload" },
+    { trigger: "internal", from: "onEntityInitialized", methodName: "reload" },
+    { trigger: "lifecycle", from: "onSaved", methodName: "reload" },
+    { trigger: "message", from: "RefreshThing", methodName: "reload" },
+    { trigger: "external", from: "UsrOtherModule", methodName: "reload" },
+    { trigger: null, from: null, methodName: "reload" },                    // nothing reported: nothing to validate
+    { trigger: "", from: "", methodName: "reload" },
+  ];
+  const wf = REJECT_TABLE.map((r) => helpers.validateReportedTrigger(r));
+  const eng = REJECT_TABLE.map((r) => engineValidateReportedTrigger(r));
+  check("ENG-96571 A2 PARITY: the workflow's validator and the ENGINE's mirrored copy return byte-identical reasons for every row of the table — the two programs cannot share a module, so this is the only thing keeping 'edit one, look at the other' honest",
+    JSON.stringify(wf) === JSON.stringify(eng),
+    () => REJECT_TABLE.map((r, i) => `${JSON.stringify(r)}\n         wf: ${wf[i]}\n         eng: ${eng[i]}`).join("\n      "));
+  check("ENG-96571 A2 PARITY: both copies publish the SAME vocabulary, in the same order",
+    helpers.REPORTED_TRIGGERS.join(",") === ENGINE_REPORTED_TRIGGERS.join(","),
+    () => `${helpers.REPORTED_TRIGGERS.join(",")} vs ${ENGINE_REPORTED_TRIGGERS.join(",")}`);
+  check("ENG-96571 A2 ANTI-VACUITY: the table really splits — the first nine rows are REJECTED with a reason, the last nine ACCEPTED",
+    wf.slice(0, 9).every((r) => typeof r === "string" && r.length > 0) && wf.slice(9).every((r) => r === null),
+    () => JSON.stringify(wf));
+  check("ENG-96571 A2: the measured Applicants row (`init` reporting itself as its own origin) is rejected on THAT reason, not on a generic one",
+    /row itself/.test(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })),
+    () => String(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })));
+}
+{
+  // The core's own leg: a rejected trigger is STRIPPED, logged, and the row goes back through the repair round.
+  const selfOrigin = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+    (e.key === "onSaved" ? { ...e, trigger: "internal", from: "onSaved" } : e)) };
+  const good = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+    (e.key === "onSaved" ? { ...e, trigger: "attribute", from: "attributes.Contact.onChange" } : e)) };
+  let round = 0;
+  const { result, logs, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") { round++; return { outcome: OUTCOME.VALUE, value: round === 1 ? structuredClone(selfOrigin) : structuredClone(good) } }
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A2: an invalid reported trigger keeps the row in `uncovered` (so it goes through the repair round) and is logged by ROW, not summarised",
+    logs.some((l) => /rejected the reported trigger on 'onSaved'/.test(l)) && asked.some((i) => i.id.startsWith("repair.")),
+    () => logs.join(" | "));
+  check("ENG-96571 A2: the repair round's VALID trigger closes the row — a rejection is a repairable state, not a permanent one",
+    result.coverage.complete === true && result.rejectedTriggers.length === 1,
+    () => JSON.stringify({ coverage: result.coverage, rejected: result.rejectedTriggers }));
+  check("ENG-96571 A2: the rejection travels to the caller with its REASON — 'the trigger came back unusable' is a different repair from 'no answer came back'",
+    /row itself/.test(result.rejectedTriggers[0].why) && result.rejectedTriggers[0].key === "onSaved",
+    () => JSON.stringify(result.rejectedTriggers));
+  check("ENG-96571 A2: the rejected trigger reaches the Critique AND Merge prompts — a merge agent that never heard about it would write it back into the index",
+    asked.filter((i) => ["Critique", "Merge"].includes(i.phase)).every((i) => /REJECTED/.test(i.prompt) && /onSaved/.test(i.prompt)),
+    () => asked.filter((i) => ["Critique", "Merge"].includes(i.phase)).map((i) => i.phase).join(","));
+}
+{
+  // TWO ROUNDS, STILL INVALID. `uncoveredKeys` is recomputed after the repair round from `covered` alone, and the
+  // row HAS a card — so without re-unioning the rejections there, `complete` goes true on the row that was never
+  // answered. One round cannot catch this.
+  const selfOrigin = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+    (e.key === "onSaved" ? { ...e, trigger: "internal", from: "onSaved" } : e)) };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: structuredClone(selfOrigin) };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A2: a trigger still invalid after the REPAIR round leaves the run INCOMPLETE — the post-repair recompute re-unions the rejections, because the row carries a card and would otherwise be dropped from `uncovered`",
+    result.coverage.complete === false && result.coverage.uncovered.includes("onSaved") && result.rejectedTriggers.length === 2,
+    () => JSON.stringify({ coverage: result.coverage, rejected: result.rejectedTriggers }));
+}
+{
+  // A VALID trigger must survive untouched — the guard is a filter, not a blanket strip.
+  const good = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+    (e.key === "onSaved" ? { ...e, trigger: "attribute", from: "attributes.Contact.onChange" } : e)) };
+  const { result, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: structuredClone(good) };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A2: a VALID `{trigger:'attribute', from:'attributes.Contact.onChange'}` is ACCEPTED — nothing rejected, no repair round, the run is complete",
+    result.rejectedTriggers.length === 0 && result.coverage.complete === true && !asked.some((i) => i.id.startsWith("repair.")),
+    () => JSON.stringify({ rejected: result.rejectedTriggers, coverage: result.coverage }));
+  check("ENG-96571 A2: the response SCHEMA advertises the same closed vocabulary and makes `from` required beside a trigger — the host-side half of the check",
+    () => { const t = SCHEMA_INDEX_ENTRY.properties.trigger;
+      return t.enum.join(",") === helpers.REPORTED_TRIGGERS.join(",") && SCHEMA_INDEX_ENTRY.dependentRequired.trigger.join(",") === "from"
+        && SCHEMA_INDEX_ENTRY.properties.behaviourEstablished.type === "boolean"; });
 }
 
 /* ---------------------------------------------------------------------------

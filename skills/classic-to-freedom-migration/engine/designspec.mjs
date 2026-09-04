@@ -299,13 +299,22 @@ function rowsForProfileCards(profileCards, regionOf) {
   });
 }
 
+// ENG-96571 A3 — the Trigger cell of ONE declarative page rule. Own fn for Sonar CC 15, and because the
+// three-way choice is the whole point: `conditionsIncomplete` (the mapper could not read the condition) must NOT
+// render as `always` NOR as `conditional`. `always` claims the classic page applied the action unconditionally —
+// a claim nobody verified — and `conditional` hides that the condition itself is missing from the ChangeSet.
+// Naming the gap in the cell is what sends the reader to the ⚠ Confirm row that carries the remedy.
+function ruleTriggerCell(r, attrs) {
+  if (r.conditionsIncomplete) return "⚠ condition unread — parse gap";
+  if (attrs.length) return `when ${attrs.map(esc).join(" / ")}`;
+  return (r.conditions || []).length ? "conditional" : "always";
+}
+
 // Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
 function pageRuleRows(cs) {
   const condAttrs = (conds) => [...new Set((conds || []).map((c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute).filter(Boolean))];
   return (cs.pageBusinessRules || []).map((r) => {
-    const attrs = condAttrs(r.conditions);
-    const condTrigger = (r.conditions || []).length ? "conditional" : "always";
-    const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
+    const trigger = ruleTriggerCell(r, condAttrs(r.conditions));
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
     return [esc(r.element), trigger, effect, "page business rule"];
   });
@@ -667,15 +676,40 @@ function renderConfirmWorklist(cs) {
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
   // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+  // ENG-96571 C1 — a row an operator ANSWERED through `manifest.confirmDispositions` is CLOSED: it leaves the open
+  // list (so the header count is the work that is actually left) but is still printed, as `ℹ`, with its note. Same
+  // split and same voice as `renderFidelityWarnings`. Dropping it would make an answered question indistinguishable
+  // from a question the engine stopped asking, which is the failure the disposition channel exists to prevent.
+  const open = nd.filter((n) => !n.closed);
+  const closedRows = nd.filter((n) => n.closed);
+  const invalid = nd.filter((n) => n.dispositionInvalid);
+  const confirm = open.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
   // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
   // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
   // Do not re-add a render-time push: a question the renderer invents is a question with nowhere to record an answer.
-  if (!confirm.length) return [];
-  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+  if (!confirm.length && !closedRows.length && !invalid.length) return [];
+  // The header counts BOTH halves, and says which is which: "(3)" on a run where two of the three were answered
+  // reads as three open questions. The closed half is only mentioned when there IS one, so an unanswered run's
+  // header is unchanged.
+  const head = closedRows.length
+    ? `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed)`
+    : `#### ⚠ Confirm before I build (${confirm.length})`;
+  const L = [head, ...confirm];
+  if (closedRows.length) {
+    L.push("", `> ℹ ${closedRows.length} item(s) CLOSED by a recorded disposition: ${closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${d.note ? ` (${esc(d.note)})` : ""}`).join(" · ")}`);
+  }
+  // An INVALID disposition word is named, not swallowed: the operator believes the question is answered, the engine
+  // does not, and the row above still says it is open. Naming the word is what makes that discrepancy fixable.
+  if (invalid.length) {
+    L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ")}: that word is not one of \`accepted\` | \`reproduced-manually\` | \`n/a\` | \`resolved-on-stand\`, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
+  }
+  return [...L, ""];
 }
+// The key a `confirmDispositions` entry is written under, for the advisory line above. Spelled here rather than
+// imported so the renderer has no import cycle with migrate.mjs; the shape is asserted by a test on both sides.
+const confirmKeyOf = (n) => `${n.kind}:${n.item}`;
 
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -790,8 +824,8 @@ export function renderDesignSpec(result, opts = {}) {
   //    decisions only; kinds already surfaced in Layout / Logic / Child-pages are not re-listed.
   //  • the member ledger, which is the completeness proof.
   L.push(
-    ...renderImperativeLogic(cs),
-    ...renderImperativeMembers(cs),
+    ...renderImperativeLogic(cs, result.coverage),
+    ...renderImperativeMembers(cs, result.coverage),
     ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
     ...renderMemberLedger(result.coverage),
   );
@@ -816,18 +850,54 @@ function triggerText(t) {
   // dressed up as a declarative trigger — the reader has to see the difference, because the Freedom target follows
   // from what STARTS the chain, not from the call itself. Three grades of answer, most specific first: the chain
   // reaches a declaration (name it), it reaches a platform lifecycle method, or only the immediate caller is known.
+  // ENG-96571 B1 — the chain reached a PLATFORM LIFECYCLE method. Its own `kind` now (it used to be an `internal`
+  // trigger carrying a `lifecycle` field), because it is a different ANSWER: the platform starts this chain, which
+  // is what the reader needs, whereas a bare `internal` trigger leaves the origin open. The rendered text is
+  // deliberately UNCHANGED by the rename — the plan reads the same, only the shape it is computed from is honest.
+  if (t.kind === "lifecycle") return `${esc(t.from)} (platform lifecycle) → internal call${callersSuffix(t)}`;
   if (t.kind === "internal") {
     const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
-    // Called from more than one place — the reader needs that before choosing a target: a helper with two call sites
-    // is not the same port as one with a single caller.
-    const more = t.callers?.length > 1 ? ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})` : "";
-    if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${more}`;
-    if (t.lifecycle) return `${esc(t.lifecycle)} (platform lifecycle) → internal call${more}`;
-    return `internal call from ${esc(t.from)}${via}${more}`;
+    if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${callersSuffix(t)}`;
+    return `internal call from ${esc(t.from)}${via}${callersSuffix(t)}`;
   }
-  if (t.kind !== "attribute-dependency") return `${esc(t.element)}.${esc(t.property)}`;
-  const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
-  return `${esc(t.attribute)} changes${cols}`;
+  if (t.kind === "attribute-dependency") {
+    const cols = t.columns?.length ? ` (${t.columns.map(esc).join(", ")})` : "";
+    return `${esc(t.attribute)} changes${cols}`;
+  }
+  // ENG-96571 B1 — the DECLARATION-backed kinds, each naming the declaration path that binds the method. Before
+  // these branches every one of them fell through to `${element}.${property}`, and a kind carrying neither field
+  // rendered as a bare `.` — a cell that says less than the `⚠ unresolved` it replaced.
+  const decl = declarationTriggerText(t);
+  if (decl) return decl;
+  // Last resort for a kind with no branch: the control-shaped `element`.`property` pair.
+  return `${esc(t.element)}.${esc(t.property)}`;
+}
+
+// Called from more than one place — the reader needs that before choosing a target: a helper with two call sites is
+// not the same port as one with a single caller. Own fn: both the `internal` and the `lifecycle` branch append it.
+function callersSuffix(t) {
+  if (!(t.callers?.length > 1)) return "";
+  return ` (+${t.callers.length - 1} more caller${t.callers.length > 2 ? "s" : ""})`;
+}
+
+// ENG-96571 B1 — the trigger cell for a declaration-backed kind: WHAT fires the method, followed by the exact
+// declaration path that proves it (`attributes.Contact.onChange`, `details.Emails.filterMethod`, …). That path is
+// also the string a behaviour-analysis run has to report for the same row, so the traced and the reported answer are
+// directly comparable. Returns null when the trigger carries no path — then the caller falls back rather than
+// printing a half sentence. Own fn for Sonar CC 15 on `triggerText`.
+function declarationTriggerText(t) {
+  if (!t.from) return null;
+  const path = ` (${esc(t.from)})`;
+  if (t.kind === "attribute" && t.attribute) return `${esc(t.attribute)} changes${path}`;
+  if (t.kind === "entity-filter" && t.attribute) return `lookup filter for ${esc(t.attribute)}${path}`;
+  if (t.kind === "detail" && t.detail) {
+    // `from` is `details.<Key>.<what>`; the cell names the detail once and then only the declaration that binds it
+    // (`filterMethod` / `subscriberMethods.<event>`), so the key is not printed twice in one cell.
+    const tail = String(t.from).startsWith(`details.${t.detail}.`)
+      ? String(t.from).slice(`details.${t.detail}.`.length) : String(t.from);
+    return `detail ${esc(t.detail)} ${esc(tail)}`;
+  }
+  return null;
 }
 
 // The ⚠ Confirm rows a behaviour-analysis run (SKILL.md step 5.1) must describe, alongside the methods. That step
@@ -991,7 +1061,10 @@ const IMPERATIVE_LOGIC_PREAMBLE = [
   "> SEVERAL callers is deliberately NOT folded: it is usually the row that becomes a shared converter.",
   "> **Described in** names the behaviour card and the",
   "> acceptance criteria a step-5.1 `classic-ui-expert` run established for the row — port against those criteria,",
-  "> not against the method's name; `⚠ not described` means no run has covered it yet.", "",
+  "> not against the method's name; `⚠ not described` means no run has covered it yet.",
+  "> A REPORTED trigger is only accepted from the closed vocabulary (`attribute` / `detail` / `entity-filter` /",
+  "> `message` / `lifecycle` / `internal` / `external`) with a `from` that is neither blank nor the row itself —",
+  "> anything else is REJECTED, the cell stays `⚠ unresolved`, and a banner at the top of the plan names the row.", "",
   "| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |",
   "| --- | --- | --- | --- | --- | --- | --- |",
 ];
@@ -1015,7 +1088,10 @@ function foldByCaller(stubs) {
   const parentOf = new Map();
   for (const h of stubs) {
     const t = (h.triggers || [])[0];
-    if (!t || t.kind !== "internal" || t.callers?.length > 1) continue;
+    // ENG-96571 B1 — `lifecycle` is folded on the same terms as `internal`: the fold is about the CALLER being a
+    // row in this table, and a standard method WITH LOGIC is one. The `byName.has(t.from)` guard below is what
+    // keeps a filtered-out platform hook from folding, not the kind.
+    if (!t || (t.kind !== "internal" && t.kind !== "lifecycle") || t.callers?.length > 1) continue;
     if (!t.from || t.from === h.sourceMethod || !byName.has(t.from)) continue;
     parentOf.set(h.sourceMethod, t.from);
   }
@@ -1048,7 +1124,19 @@ function foldByCaller(stubs) {
 // The ⚠ Imperative members worklist. Mirrors ⚠ Imperative logic: a table of port units, with each row's unresolved
 // aspect stated IN ITS OWN CELL rather than escalated to ⚠ Confirm — a bullet list can only say "this row is open",
 // it cannot say "we know what it is, we do not know whether the template already provides it".
-function renderImperativeMembers(cs) {
+// THE SECOND NUMBER — and the sentence that stops the first one reading as a census. The worklist counts the rows
+// the engine could NOT answer; `coverage.total` is every member it accounted for in the scope this run mapped, a
+// larger population (measured on a real run: 10 worklist method names against 11 definitions, 2 virtual attributes
+// of 5, 3 members of 88). Printing "N of M carry a behaviour card" alone let M read as the surface's member count,
+// so a plan said "10 of 10" while the very first card admitted the behaviour was not established.
+// Own function because both headers need the identical clause and both are already near Sonar's CC 15.
+function ledgerNote(coverage) {
+  const total = coverage && typeof coverage.total === "number" ? coverage.total : null;
+  if (total === null) return "";
+  return ` · this worklist is NOT a surface census: the member ledger for this run accounts for ${total} member(s)`;
+}
+
+function renderImperativeMembers(cs, coverage) {
   const { order, rows: rawRows } = imperativeMemberRows(cs);
   const rows = rawRows
     .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
@@ -1056,7 +1144,8 @@ function renderImperativeMembers(cs) {
   const described = rows.filter((d) => d.describedIn).length;
   const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, "",
     `> ${described} of ${rows.length} carry a behaviour card` +
-    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), "",
+    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : ".") +
+    ledgerNote(coverage), "",
     "> Each row is declared on this page, but its behaviour lives OUTSIDE the page body. Mark each **ported** (naming",
     "> the Freedom artifact you built), **dropped** (with the reason) or **blocked** — the same standard as a method row.",
     "> **Described in** names the behaviour card and acceptance criteria a step-5.1 run established: port against those,",
@@ -1070,7 +1159,7 @@ function renderImperativeMembers(cs) {
   return L;
 }
 
-function renderImperativeLogic(cs) {
+function renderImperativeLogic(cs, coverage) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
   // Counted, not just listed: how many rows still have no trigger, and how many carry a behaviour card. The
@@ -1082,7 +1171,9 @@ function renderImperativeLogic(cs) {
   const reported = stubs.filter((h) => (h.triggers || []).some((t) => t.kind === "reported")).length;
   // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
   // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
-  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
+  // ENG-96571 B1 — same predicate as `internalCallOnly` in migrate.mjs; a `lifecycle` kind is an answered origin
+  // and is excluded by the kind test itself.
+  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger)).length;
   const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
   const { ordered, folded } = foldByCaller(stubs);
   // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
@@ -1094,7 +1185,8 @@ function renderImperativeLogic(cs) {
     (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
     (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
     ` · ${described} of ${stubs.length} carry a behaviour card` +
-    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
+    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : ".") +
+    ledgerNote(coverage), ""];
   L.push(...IMPERATIVE_LOGIC_PREAMBLE);
   // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
   // also print as an unclassified framework call.
@@ -1207,6 +1299,19 @@ function renderMemberLedger(coverage) {
 // `renderPlanBanners` itself is one — Sonar CC 15. Two branches independently grew this function past the limit
 // (the sectionOnly banner and the placement blockers below), and neither crossed it alone; splitting the three
 // related advisories out is the natural seam. Returns the lines to push — empty when the index reports nothing.
+// The REJECTED-TRIGGER banner. Its own function rather than a fourth branch in `renderBehaviourIndexBanners`,
+// which is already near Sonar's CC 15 (it exists because `renderPlanBanners` hit the same limit). Never silent: a
+// rejected trigger means the answer came back UNUSABLE, which is a different repair from "no answer came back" —
+// the reported kind or its `from` has to be corrected in `behaviour-index.json` and the index re-merged.
+function renderRejectedTriggerBanner(rt) {
+  const rejected = rt.rejectedTriggers || [];
+  if (!rejected.length) return [];
+  return [
+    `> ⚠ **${rejected.length} reported trigger(s) in \`manifest.behaviourIndex\` were REJECTED and NOT filled in:** ` +
+    rejected.map((r) => "`" + esc(r.key) + "` — " + esc(r.why)).join(" · ") +
+    ". The row stays ⚠ unresolved and still counts as open in the ⚠ Imperative logic header. Fix the `trigger`/`from` pair in `behaviour-index.json` (the vocabulary is `attribute`, `detail`, `entity-filter`, `message`, `lifecycle`, `internal`, `external`; `from` may be neither blank nor the row itself) and re-merge the index.", ""];
+}
+
 function renderBehaviourIndexBanners(result) {
   const P = [];
   // A step-5.1 answer whose method matches NO worklist row. Advisory, not a block — but never silent: it means the
@@ -1231,6 +1336,7 @@ function renderBehaviourIndexBanners(result) {
     `> ⚠ **${rt.sectionOnly.length} \`manifest.behaviourIndex\` key(s) address only the SECTION scope:** ` +
     rt.sectionOnly.map((k) => "`" + esc(k) + "`").join(", ") +
     ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
+  P.push(...renderRejectedTriggerBanner(rt));
   return P;
 }
 // FIDELITY warnings (ENG-95862) — the half of `eff.warnings` that says "the mapping is RIGHT, an effect of the op
@@ -1260,6 +1366,18 @@ function renderFidelityWarnings(result) {
   return P;
 }
 
+// BUNDLE warnings (ENG-96571 A5) — what `get-classic-page-sources` says its OWN lookups could not do. The OPEN
+// ones are already rendered: they are `structure.issues`, printed verbatim by the ⛔ STRUCTURE banner below, which
+// is also why they BLOCK. This renders the other half — the ones an operator CLOSED with a recorded
+// `manifest.bundleWarningDispositions` answer — as `ℹ`, so a cleared warning stays auditable instead of vanishing.
+// Same shape and same voice as `renderFidelityWarnings`'s closed line, and spread-pushed for the same reason: it
+// adds no branch to `renderPlanBanners`, which has no Sonar CC 15 headroom.
+function renderBundleWarningNotes(result) {
+  const closed = result.structure?.bundleWarningsClosed || [];
+  if (!closed.length) return [];
+  return [`> ℹ ${closed.length} bundle warning(s) from \`get-classic-page-sources\` CLOSED by a recorded disposition: ${closed.map((w) => `**${esc(w.disposition)}** — "${esc(w.text)}"${w.note ? ` (${esc(w.note)})` : ""}`).join(" · ")}`, ""];
+}
+
 function renderPlanBanners(result, opts) {
   const P = [];
   const gate = result.gate || { blocked: false, reasons: [] };
@@ -1274,6 +1392,7 @@ function renderPlanBanners(result, opts) {
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
+  P.push(...renderBundleWarningNotes(result));
   // COVERAGE banner — a schema member with no Freedom artifact and no decision. Same standing as the two above:
   // a plan that leaves a member unaccounted asserts a completeness it does not have.
   const coverage = result.coverage || { complete: true, issues: [] };
@@ -1389,6 +1508,63 @@ function boundaryChildLines(c) {
   ];
 }
 
+// ENG-96571 C3 — THE SPLIT. `plan.md` is the document a USER approves, so it carries the FACT ("no separate child
+// page — recorded") and nothing about which clio call the agent should make next. The verification the agent still
+// owes — a TYPED entity registers per-type cards in `SysModuleEdit`, so `list-pages` finding no `*Page` is not the
+// same as there being none — is not deleted: it moves to `plan.notes.md` (`renderPlanNotes`), which the agent reads
+// and the user never has to. The two halves are ONE fact split by AUDIENCE, so they live next to each other here.
+function noChildPageLine(c) {
+  return `> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here.`;
+}
+function noChildPageNote(c) {
+  return `- **\`${esc(c.entity)}\` — confirm the "no child page" answer before accepting it.** A TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`;
+}
+// Every child in the tree whose recorded answer is `editPage: false`, depth-first — the grandchildren carry the
+// same obligation, and a note that stops at the first level leaves the deeper ones unverified.
+function noChildPageNodes(childs, out = []) {
+  for (const c of childs || []) {
+    // The SAME arms `renderChild` tests, in the same order — `specError` included, because it is tested EARLIER
+    // there: a hand-built record carrying both would print the parse-error line in the plan while the notes told the
+    // agent to confirm an answer the plan never claimed. (`childPages` records are built by hand too — goldens,
+    // direct API callers — which is why every arm is checked rather than inferred from `editPage` alone.)
+    if (c.editPage === false && !c.reuseFreedomPage && !boundaryChild(c) && !c.cyclic && !c.spec && !c.specError) out.push(c);
+    noChildPageNodes(c.childPages || [], out);
+  }
+  return out;
+}
+
+// THE AGENT'S OWN NOTES, out of the approved document (ENG-96571 C3). `plan.md` is presented to a user verbatim;
+// instructions addressed to the agent that generated it ("supply the plan values and re-run", "also call
+// `list-entity-client-schemas`") are noise there and, worse, read as work the user must understand. They are NOT
+// dropped — they are published separately: `result.planNotes`, written by the CLI to `<out-basename>.notes.md`
+// beside the plan (`plan.md` → `plan.notes.md`) and echoed to stderr when there is no `--out`.
+//
+// WHAT STAYS IN `plan.md`: every ⛔ banner keeps naming its manifest key (`manifest.planMeta`,
+// `manifest.placement`, `manifest.signals`, `manifest.memberDispositions`, …). A BLOCKING remedy that names no key
+// is a ⛔ nobody can clear — the same rule `warningsReason` states, and the reason this split is about
+// UNCONDITIONAL agent instructions only, never about the gates' remediation text.
+export function renderPlanNotes(result) {
+  const L = [
+    "## Plan notes — for the AGENT, not for the approver",
+    "",
+    "> Generated by `migrate.mjs --plan` alongside `plan.md`. These are the instructions the run has for the agent",
+    "> that produced the plan. They are deliberately NOT in `plan.md`: that file is presented to the user verbatim,",
+    "> and a call to make next is not something the approver should have to read past. Nothing here is a gate — the",
+    "> ⛔ banners in `plan.md` remain the blocking ones and still name the manifest key each of them needs.",
+    "",
+    "### Presenting the plan",
+    "",
+    "- Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
+    "- Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
+    "- The Plan-vs-Done control table is NOT part of `plan.md`: produce it with `--checklist` AFTER implementation, and close the build with `--verify --built <file>`.",
+  ];
+  const unverified = noChildPageNodes(result.childPages || []);
+  if (unverified.length) L.push("", "### Child-page answers still worth one more call", "", ...unverified.map(noChildPageNote));
+  // No `--out`-dependent footer: the CLI writes THIS string verbatim and `result.planNotes` carries the same one, so
+  // the file and the programmatic result cannot drift into two slightly different documents.
+  return L.join("\n") + "\n";
+}
+
 function renderChildMappings(childs) {
   if (!childs.length) return [];
   const P = ["### Child page mappings", ""];
@@ -1411,7 +1587,7 @@ function renderChildMappings(childs) {
     } else if (typeof c.editPage === "string" && c.editPage) {
       P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
     } else if (c.editPage === false) {
-      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
+      P.push(noChildPageLine(c));
     } else if (c.editable === false) {
       // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
       // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
@@ -1721,7 +1897,11 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  // ENG-96571 C3 — the "supply the plan values / present this verbatim / do not reorder the tables" paragraph that
+  // used to close the plan is an instruction to the AGENT, not to the approver, so it moved to `renderPlanNotes`
+  // (written to `plan.notes.md` beside the plan). The ⛔ banners at the top still name every manifest key they
+  // block on: this split covers UNCONDITIONAL agent instructions only, never a gate's remedy.
+  P.push(...renderChildMappings(childs));
   return P.join("\n");
 }
 

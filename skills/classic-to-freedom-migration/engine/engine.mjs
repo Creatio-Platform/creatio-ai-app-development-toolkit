@@ -226,6 +226,24 @@ export const DATA_VALUE_TYPE = {
   FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
   FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
 };
+// `Terrasoft.DataValueType` member names a real stand or a hand-written schema body uses that are NOT in the
+// pinned table above under their own spelling — kept as a SEPARATE alias map (not folded into DATA_VALUE_TYPE)
+// so goldens that count pinned-table members do not shift. `STRING` is the common alias for `TEXT` (both classic
+// stands and hand-authored ViewModel bodies use `Terrasoft.DataValueType.STRING`); extend here, never in the
+// pinned table, when another alias surfaces.
+const DATA_VALUE_TYPE_ALIASES = { STRING: "TEXT" };
+// Case-insensitively resolve `key` against `table` (an aliased member — e.g. `STRING` — resolved to its
+// canonical name FIRST via `aliases`). ONE helper so the drift guard and the AST enum-member lookup normalize
+// identically: a stand echoing `Guid` (member) against the pinned `GUID` (member) is the same member, not a
+// vocabulary gap, and `STRING` against pinned `TEXT` is the same member, not a mismatch.
+function resolveEnumMember(table, key, aliases = null) {
+  const upper = String(key ?? "").toUpperCase();
+  const canonical = aliases && Object.hasOwn(aliases, upper) ? aliases[upper] : upper;
+  for (const ownKey of Object.keys(table)) {
+    if (ownKey.toUpperCase() === canonical) return { found: true, key: ownKey, value: table[ownKey] };
+  }
+  return { found: false, key: canonical, value: null };
+}
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
@@ -247,13 +265,15 @@ export function enumDriftIssues(vocabulary) {
   for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
     const standTable = plainObj(live[enumName]);
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
+    const aliases = enumName === "DataValueType" ? DATA_VALUE_TYPE_ALIASES : null;
     for (const [member, standValue] of Object.entries(standTable)) {
       if (!isNum(standValue)) continue;              // a non-numeric echo is not evidence either way
-      // `Object.hasOwn`, never `in`: the echo is UNTRUSTED input, and `in` walks the prototype chain — an echoed
-      // `toString`/`constructor`/`valueOf` key would count as pinned and be compared against a native function,
-      // producing a BLOCKING mismatch whose text names `function toString() { [native code] }`.
-      if (!Object.hasOwn(pinned, member)) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
-      if (pinned[member] !== standValue) mismatches.push(`${enumName}.${member}: engine ${pinned[member]}, stand ${standValue}`);
+      // Case-insensitive, alias-aware lookup: `Guid` against pinned `GUID`, or `STRING` against pinned `TEXT`,
+      // is the SAME member, not a vocabulary gap — resolved once via `resolveEnumMember` (see its own comment;
+      // it also protects against `toString`/`constructor`/`valueOf` prototype-chain collisions via Object.hasOwn).
+      const resolved = resolveEnumMember(pinned, member, aliases);
+      if (!resolved.found) { newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
+      if (resolved.value !== standValue) mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
     }
   }
   mismatches.sort(byLocale);
@@ -358,10 +378,13 @@ function walkTagAutomaton(tag, path) {
     if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) {                                             // terminal: the next key indexes the enum table
-      // `Object.hasOwn`, never `in`: the body is UNTRUSTED, and `in` walks the prototype chain — a body naming
-      // `Terrasoft.ViewItemType.constructor` would resolve to a native function instead of raising the
-      // `unknown-enum-member` advisory, so the member would go unreported rather than fail loud.
-      if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
+      // Case-insensitive, alias-aware lookup via `resolveEnumMember` (same helper the drift guard uses): a body
+      // naming `Terrasoft.DataValueType.STRING` or `DataValueType.Guid` resolves to TEXT/GUID rather than
+      // raising a false `unknown-enum-member` — `resolveEnumMember` still uses Object.hasOwn internally, so a
+      // member naming `constructor`/`toString`/`valueOf` still cannot resolve to a native function.
+      const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
+      const resolved = resolveEnumMember(enumTable, k, aliases);
+      if (resolved.found) return { value: resolved.value };
       return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
     }
     const next = TAG_TRANSITIONS[tag];
@@ -1169,6 +1192,25 @@ const isFnPlaceholder = (v) => v === AST_FN;
 // One `attributes` entry → the facts that decide its Freedom target. `lookupListConfig.filters` and
 // `dependencies` are the two imperative shapes with an exact Freedom analog (filter handler / on-change
 // handler), so they are surfaced explicitly instead of being folded into an opaque "attribute exists".
+// The STRING-valued handler slots on one `attributes` entry: `onChange` / `changeMethod` name a view-model
+// method the platform calls when the column changes, and `lookupListConfig.filter` (or a
+// `lookupListConfig.filters[].method`) names the method that builds the lookup's filter. These are
+// DECLARATIONS — the platform binds exactly this name — so they are the method's traced trigger.
+//
+// A FUNCTION-valued slot is deliberately NOT read here. It has no name to carry, and the repo forbids deriving a
+// trigger from a method's name (`04-units.md`), so guessing which method an inline `filter: function(){…}` calls
+// would be exactly the inference that rule exists to prevent. Such a slot stays in `fnKeys` instead, which
+// already reports "imperative logic on the attribute the engine cannot evaluate".
+function attributeHandlerMethods(d) {
+  const llc = plainObj(d.lookupListConfig);
+  const filters = Array.isArray(llc.filters) ? llc.filters : [];
+  const onChange = strOrNull(d.onChange) ?? strOrNull(d.changeMethod);
+  const lookupFilter = strOrNull(llc.filter)
+    ?? filters.map((f) => strOrNull(plainObj(f).method)).find(isStr) ?? null;
+  if (!onChange && !lookupFilter) return null;
+  return { onChange, lookupFilter };
+}
+
 function attributeFact(name, def) {
   const d = plainObj(def);
   const llc = plainObj(d.lookupListConfig);
@@ -1183,7 +1225,13 @@ function attributeFact(name, def) {
     name,
     // a function-valued sub-key (`value: function(){…}`, a `dependencies[].methodName` body elsewhere) is
     // imperative logic on the attribute itself — name it so the ledger can account for it.
-    fnKeys: Object.keys(d).filter((k) => isFnPlaceholder(d[k])),
+    // `lookupListConfig.filter: function(){…}` is a function-valued slot ONE level down, so a top-level scan
+    // missed it and the imperative filter it declares was reported by nothing at all. Named with its dotted
+    // path — the name of the method it calls is NOT inferred (see attributeHandlerMethods).
+    fnKeys: [...Object.keys(d).filter((k) => isFnPlaceholder(d[k])),
+      ...["filter"].filter((k) => isFnPlaceholder(llc[k])).map((k) => `lookupListConfig.${k}`)],
+    // string-valued handler declarations: `{ onChange, lookupFilter }`, or null when the entry declares none
+    handlerMethods: attributeHandlerMethods(d),
     lookupFilters: filters.length,
     // each filter object's own keys — enough for the plan to say WHAT is filtered without reading a function
     lookupFilterKeys: [...new Set(filters.flatMap((f) => safeKeys(f)))].sort(byLocale),
@@ -1378,6 +1426,16 @@ function normalizeLayout(l) {
   return Object.values(out).some(v => v !== null) ? out : null;
 }
 
+// A detail's `subscriberMethods: { <event>: "<methodName>" }` block — the string-valued entries only. A
+// function-valued entry declares behaviour whose NAME the engine must not invent, so it is dropped here (the
+// method it would name is not a member of this schema anyway).
+function detailSubscriberMethods(e) {
+  const src = plainObj(e.subscriberMethods);
+  const out = {};
+  for (const k of safeKeys(src)) if (isStr(src[k])) out[k] = src[k];
+  return Object.keys(out).length ? out : null;
+}
+
 function normalizeDetails(d) {
   const out = {};
   for (const k of safeKeys(d)) {
@@ -1386,7 +1444,15 @@ function normalizeDetails(d) {
     out[k] = { schemaName: strOrNull(e.schemaName),
                entitySchemaName: strOrNull(e.entitySchemaName),
                detailColumn: strOrNull(f.detailColumn),
-               masterColumn: strOrNull(f.masterColumn) };
+               masterColumn: strOrNull(f.masterColumn),
+               // `filterMethod: "getEmailDetailFilter"` — the detail filters its rows through a view-model METHOD
+               // instead of a static master/detail column pair. Dropping it is what left that method's row reading
+               // `⚠ unresolved` while the declaration that calls it sat two lines above in the same body. The
+               // platform reads it off the detail config (`filter` absent), so BOTH nesting levels are accepted:
+               // real bodies put it beside `schemaName`, some put it inside `filter`.
+               filterMethod: strOrNull(e.filterMethod) ?? strOrNull(f.filterMethod),
+               // `subscriberMethods` — the detail's own event wiring to page methods (add/edit/delete handlers)
+               subscriberMethods: detailSubscriberMethods(e) };
   }
   return out;
 }
@@ -1429,6 +1495,20 @@ function normalizeModules(m) {
 // ruleType 0=BINDPARAMETER,1=FILTRATION ; property 0=Visible,1=Enabled,2=Required,3=Readonly
 const RULE_TYPE = { 0: "BINDPARAMETER", 1: "FILTRATION" };
 const PROP = { 0: "Visible", 1: "Enabled", 2: "Required", 3: "Readonly" };
+
+// ENG-96571 A3 — how many condition entries the SOURCE declared, before any of them was sanitized away.
+// `sanitizeConditions` returns `[]` for both "the rule declares no conditions" (genuinely unconditional) and
+// "the rule declares conditions this parser could not read" (a parse gap). Those two render the OPPOSITE cell:
+// the first is `always`, the second must never be, because presenting an unread condition as "no condition"
+// tells the builder to make a field unconditionally required when the classic page made it required only
+// sometimes. The count is the fact that separates them, so it is recorded at the point the source is read.
+// An object MAP of conditions (a shape some bodies use instead of an array) declares its keys; anything else
+// declares nothing.
+function declaredConditionCount(conds) {
+  if (Array.isArray(conds)) return conds.length;
+  if (conds && typeof conds === "object") return safeKeys(conds).length;
+  return 0;
+}
 
 // Extract a rule's condition tree (leftExpression attribute/path, comparison, rightExpression value)
 // so the mapper can emit COMPLETE business rules (not just an action + prose note).
@@ -1761,6 +1841,9 @@ function normalizeRule(r, { attr, key, sys, seed, pkg }) {
     ruleType: isNum(r.ruleType) ? (RULE_TYPE[r.ruleType] ?? String(r.ruleType)) : "symbolic",
     property: isNum(r.property) ? (PROP[r.property] ?? String(r.property)) : null,
     conditions: sanitizeConditions(r.conditions),
+    // ENG-96571 A3 — the DECLARED count travels beside the sanitized set so the mapper can tell an
+    // unconditional rule from one whose conditions were dropped or came back unreadable.
+    conditionsDeclared: declaredConditionCount(r.conditions),
     filterColumn: strOrNull(r.baseAttributePatch),
     comparison: numOrNull(r.comparisonType),
     value: ["number", "string", "boolean"].includes(typeof r.value) ? r.value : null,
@@ -1825,13 +1908,61 @@ function mergeModuleDeps(L, seed, sink) {
 // the method's name. `04-units.md` makes this the difference between a described behaviour and an open thread:
 // "the trigger must be traced to its concrete origin — the actual control, the actual hook, the actual message —
 // and never inferred from schema or method names".
-function methodTriggers(name, attributes, items) {
+// The `from` path a declaration-backed trigger must carry: `attributes.<Col>.…` / `details.<Key>.…`, the shape
+// `validateReportedTrigger` (helpers.mjs / migrate.mjs) enforces on a REPORTED trigger. The engine's own traced
+// triggers travel through the same renderers and the same handoff digest, so they are held to the same shape —
+// a member name the path grammar cannot express yields NO trigger rather than an unusable one.
+const DECLARATION_NAME_RX = /^[A-Za-z0-9_$]+$/;
+
+// One declaration-backed trigger: the KIND, whatever identifies the declaration (`attribute` / `detail`), and
+// `from` — the declaration PATH, which is the whole answer and the same string a behaviour-analysis run has to
+// report for the row. `designspec.triggerText` has an explicit branch per kind reading exactly these fields
+// (ENG-96571 B1); the `element`/`property` pair that used to be split out here as a bridge to that renderer's
+// `${element}.${property}` fallback is gone with it — a trigger no longer carries two fields nothing reads.
+const declTrigger = (kind, extra, dir, name, prop) => ({
+  kind, ...extra, from: `${dir}.${name}.${prop}`,
+});
+
+// `attributes.<Col>.onChange` and `attributes.<Col>.lookupListConfig.filter` — the two string-valued handler
+// declarations the platform binds by name. Both were parsed and then dropped, so a method named by either read
+// `⚠ unresolved` in the plan while the declaration that calls it sat in the same body.
+function attributeDeclarationTriggers(name, attributes) {
+  const out = [];
+  for (const a of attributes.values()) {
+    if (!DECLARATION_NAME_RX.test(String(a.name))) continue;
+    const h = a.handlerMethods;
+    if (h?.onChange === name) out.push(declTrigger("attribute", { attribute: a.name }, "attributes", a.name, "onChange"));
+    if (h?.lookupFilter === name)
+      out.push(declTrigger("entity-filter", { attribute: a.name }, "attributes", `${a.name}.lookupListConfig`, "filter"));
+  }
+  return out;
+}
+
+// `details.<Key>.filterMethod` (and each `subscriberMethods` entry) — the detail-side declarations. The detail's
+// key is what the platform and the plan both name it by, so that is what `from` carries.
+function detailDeclarationTriggers(name, details) {
+  const out = [];
+  // the merge store is a Map keyed by detail key; a plain object is accepted too so a caller can pass one layer's
+  // normalized `details` block directly (that is the shape the parser produces).
+  const entries = details instanceof Map ? [...details.entries()] : Object.entries(plainObj(details));
+  for (const [key, d] of entries) {
+    if (!DECLARATION_NAME_RX.test(key)) continue;
+    if (d?.filterMethod === name) out.push(declTrigger("detail", { detail: key }, "details", key, "filterMethod"));
+    for (const [evt, m] of Object.entries(plainObj(d?.subscriberMethods)))
+      if (m === name && DECLARATION_NAME_RX.test(evt))
+        out.push(declTrigger("detail", { detail: key }, "details", `${key}.subscriberMethods`, evt));
+  }
+  return out;
+}
+
+function methodTriggers(name, attributes, items, details) {
   const out = [];
   for (const a of attributes.values()) {
     for (const d of a.dependencies || [])
       if (d.methodName === name)
         out.push({ kind: "attribute-dependency", attribute: a.name, columns: d.columns });
   }
+  out.push(...attributeDeclarationTriggers(name, attributes), ...detailDeclarationTriggers(name, details));
   // a diff item binding a handler: `values: { click: { bindTo: "onX" } }` / `changeMethod` / a bound property.
   for (const i of items.values()) {
     if (i.removed) continue;
@@ -2085,7 +2216,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       //  • a diff item's click/change binding → a control on the page
       //  • `messages` + a subscribe call in the body → a sandbox message
       // A method with a resolved trigger needs no guess in the plan; one with none is honestly "trigger unresolved".
-      triggers: methodTriggers(n, attributes, items),
+      triggers: methodTriggers(n, attributes, items, details),
     })),
     // Imperative members, now reaching the effective model. `attributes` in particular used to be parsed and
     // then dropped here, which is why an imperatively filtered lookup (`lookupListConfig.filters`) had no member

@@ -1,0 +1,17 @@
+{
+ "entity": "Applicant",
+ "seed": [
+  { "pkg": "BaseModulePageV2", "file": "_base/BaseModulePageV2_skeleton.js" }
+ ],
+ "schemas": [
+  { "pkg": "WorkHrBase", "file": "applicantpage/WorkHrBase.js" },
+  { "pkg": "HRApplicant", "file": "applicantpage/HRApplicant.js" }
+ ],
+ "entityColumns": {
+  "Contact": "Lookup",
+  "InternalRequest": "Lookup",
+  "Job": "Lookup",
+  "Owner": "Lookup",
+  "Stage": "Lookup"
+ }
+}

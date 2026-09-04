@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy, CONTENT_TYPE } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { parseSchema, mergeHierarchy, CONTENT_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { makeSchema } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -737,6 +737,212 @@ check("ENG-95862: EVERY warning declares a severity, and only the two legal valu
 check("ENG-95862: every warning also carries a `hint` — the gate quotes it, so a producer that names its text differently renders as `undefined`",
   everyWarning.every((w) => typeof w.hint === "string" && w.hint.length > 0),
   () => everyWarning.map((w) => ({ op: w.op, name: w.name, hint: w.hint })));
+
+/* ================= ENG-96571 / A4: DataValueType alias (STRING→TEXT) + case-insensitive member lookup =================
+   The defect: the pinned DATA_VALUE_TYPE table has TEXT:1 (no STRING) and GUID:0, and lookups were case-sensitive,
+   so a stand echoing `STRING`/`Guid`, or a schema body referencing `Terrasoft.DataValueType.STRING`/`DataValueType.Guid`,
+   raised a false `unknown-enum-member` — the attribute then read as parse-gap instead of a typed virtual attribute. */
+console.log("\n===== ENG-96571 A4: DataValueType alias + case-insensitive lookup =====");
+
+// 1) manifest.enumVocabulary drift guard: STRING:1 and Guid:0 are the SAME members as pinned TEXT:1/GUID:0 —
+//    resolved via alias + case-insensitive match, so neither is a mismatch nor a stand-only "new member".
+const okVocab = { DataValueType: { STRING: 1, Guid: 0 } };
+const okDrift = enumDriftIssues(okVocab);
+check("A4: STRING:1 and Guid:0 from manifest.enumVocabulary produce no diagnostics",
+  okDrift.mismatches.length === 0 && okDrift.newMembers.length === 0, () => okDrift);
+
+// 2) STRING:2 is a REAL mismatch (engine's TEXT is 1, this stand disagrees) — still blocks after the alias fix.
+const badVocab = { DataValueType: { STRING: 2 } };
+const badDrift = enumDriftIssues(badVocab);
+check("A4: STRING:2 still blocks (genuine mismatch survives the alias/case-insensitive resolution)",
+  badDrift.mismatches.length === 1 && /DataValueType\.STRING: engine 1, stand 2/.test(badDrift.mismatches[0]),
+  () => badDrift);
+
+// 3) A stand-only member (not in the pinned table, no alias for it) stays advisory ("newMembers"), same as today.
+const standOnlyVocab = { DataValueType: { SOME_FUTURE_MEMBER: 99 } };
+const standOnlyDrift = enumDriftIssues(standOnlyVocab);
+check("A4: a stand-only member (no alias, not pinned) stays advisory (newMembers), not blocking",
+  standOnlyDrift.mismatches.length === 0 && standOnlyDrift.newMembers.length === 1 &&
+  /DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(standOnlyDrift.newMembers[0]), () => standOnlyDrift);
+
+// 4) A virtual attribute (no entity column) declared with `dataValueType: Terrasoft.DataValueType.STRING` must
+//    resolve to a NUMBER (TEXT=1) — no `unknown-enum-member` diagnostic — so mapper.mjs's virtualAttributeDecision
+//    reads it as a typed attribute-virtual, not a parse-gap.
+const stringAttrSrc = 'define("VA1",[],function(){return{entitySchemaName:"E",diff:[],attributes:{IsBusy:{dataValueType:Terrasoft.DataValueType.STRING,value:""}}};});';
+const stringAttrRes = parseSchema(stringAttrSrc, "VA1");
+const isBusy = stringAttrRes.attributeDefs.find(a => a.name === "IsBusy");
+check("A4: a virtual attribute declared with dataValueType: Terrasoft.DataValueType.STRING resolves to TEXT (1), no unknown-enum-member",
+  !!isBusy && isBusy.dataValueType === 1 && !stringAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
+  () => ({ isBusy, diagnostics: stringAttrRes.astDiagnostics }));
+
+// 5) Same for the mixed-case `Guid` member (GUID=0) via `this.Terrasoft.DataValueType.Guid`.
+const guidAttrSrc = 'define("VA2",[],function(){return{entitySchemaName:"E",diff:[],attributes:{RecordVisaId:{dataValueType:this.Terrasoft.DataValueType.Guid}}};});';
+const guidAttrRes = parseSchema(guidAttrSrc, "VA2");
+const recordVisaId = guidAttrRes.attributeDefs.find(a => a.name === "RecordVisaId");
+check("A4: `this.Terrasoft.DataValueType.Guid` resolves to GUID (0), no unknown-enum-member",
+  !!recordVisaId && recordVisaId.dataValueType === 0 && !guidAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
+  () => ({ recordVisaId, diagnostics: guidAttrRes.astDiagnostics }));
+
+// 6) Guard-can-fail proof: a member that genuinely does not exist in the pinned table (with no alias) MUST still
+//    raise `unknown-enum-member` — proving the alias/case-insensitivity fix did not turn the guard into a no-op.
+const brokenAttrSrc = 'define("VA3",[],function(){return{entitySchemaName:"E",diff:[],attributes:{Broken:{dataValueType:Terrasoft.DataValueType.TOTALLY_NOT_A_REAL_MEMBER}}};});';
+const brokenAttrRes = parseSchema(brokenAttrSrc, "VA3");
+check("A4 guard-can-fail proof: a genuinely unknown DataValueType member still raises unknown-enum-member",
+  brokenAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member" && d.detail === "DataValueType.TOTALLY_NOT_A_REAL_MEMBER"),
+  () => brokenAttrRes.astDiagnostics);
+
+
+/* ================================================================================================
+   ENG-96571 B1 — the trigger tracer must read the declarations the parser ALREADY has.
+   Before this, `methodTriggers` looked only at `attributes[].dependencies[].methodName` and bound
+   diff-item handlers, `normalizeDetails` kept four fields (dropping `filterMethod`), and
+   `attributeFact` counted `lookupListConfig.filters` without keeping any method NAME. The result on
+   the Applicants run: the plan's ⚠ rows named four declarations the engine had parsed itself.
+   ================================================================================================ */
+
+// ---- parser: `details[].filterMethod`, in BOTH nesting positions real bodies use ----
+const detFilterSrc = 'define("D1",[],function(){return{entitySchemaName:"E",diff:[],details:{' +
+  'Emails:{schemaName:"ApplicantEmailDetailV2",entitySchemaName:"Activity",filterMethod:"getEmailDetailFilter"},' +
+  'Nested:{schemaName:"XDetail",filter:{filterMethod:"getNestedFilter"}},' +
+  'Plain:{schemaName:"YDetail",filter:{masterColumn:"Id",detailColumn:"E"}},' +
+  'Subs:{schemaName:"ZDetail",subscriberMethods:{onCardSaved:"reloadZ",onDelete:function(){return;}}}' +
+  '}};});';
+const detFilter = parseSchema(detFilterSrc, "D1");
+check("B1 parser: `details[].filterMethod` survives normalizeDetails — beside `schemaName` AND inside `filter` (both forms occur in real bodies)",
+  detFilter.details.Emails?.filterMethod === "getEmailDetailFilter"
+  && detFilter.details.Nested?.filterMethod === "getNestedFilter"
+  && detFilter.details.Plain?.filterMethod === null,
+  () => detFilter.details);
+check("B1 parser: `details[].subscriberMethods` keeps the STRING-valued entries and drops the function-valued one (its method has no name to carry)",
+  detFilter.details.Subs?.subscriberMethods?.onCardSaved === "reloadZ"
+  && !("onDelete" in (detFilter.details.Subs?.subscriberMethods || {}))
+  && detFilter.details.Plain?.subscriberMethods === null,
+  () => detFilter.details.Subs);
+
+// ---- parser: the string-valued handler slots on an `attributes` entry ----
+const attrHandlerSrc = 'define("A1",[],function(){return{entitySchemaName:"E",diff:[],attributes:{' +
+  'Contact:{onChange:"onContactChange"},' +
+  'Amount:{changeMethod:"recalcAmount"},' +
+  'Job:{lookupListConfig:{filter:"getJobFilter"}},' +
+  'Stage:{lookupListConfig:{filters:[{method:"getStageFilter"}]}},' +
+  'Request:{lookupListConfig:{filter:function(){return this.getRequestStatusFilter();}}},' +
+  'Plain:{dataValueType:Terrasoft.DataValueType.STRING}' +
+  '}};});';
+const attrHandler = parseSchema(attrHandlerSrc, "A1");
+const af = (n) => attrHandler.attributeDefs.find(a => a.name === n);
+check("B1 parser: a STRING `onChange` / `changeMethod` reaches `handlerMethods.onChange`",
+  af("Contact")?.handlerMethods?.onChange === "onContactChange"
+  && af("Amount")?.handlerMethods?.onChange === "recalcAmount",
+  () => ({ Contact: af("Contact")?.handlerMethods, Amount: af("Amount")?.handlerMethods }));
+check("B1 parser: a STRING `lookupListConfig.filter` — and a `lookupListConfig.filters[].method` — reach `handlerMethods.lookupFilter`",
+  af("Job")?.handlerMethods?.lookupFilter === "getJobFilter"
+  && af("Stage")?.handlerMethods?.lookupFilter === "getStageFilter",
+  () => ({ Job: af("Job")?.handlerMethods, Stage: af("Stage")?.handlerMethods }));
+// The rule this protects: `04-units.md` forbids deriving a trigger from a method's NAME. A function-valued
+// slot has no name to carry, so it must produce NO `handlerMethods` entry — and must still be REPORTED, as a
+// dotted `fnKeys` path, so the imperative filter is visible without being invented.
+check("B1 parser: a FUNCTION-valued `lookupListConfig.filter` yields NO handlerMethods name — and is reported as the dotted fnKey `lookupListConfig.filter`",
+  af("Request")?.handlerMethods === null
+  && af("Request")?.fnKeys.includes("lookupListConfig.filter"),
+  () => ({ handlerMethods: af("Request")?.handlerMethods, fnKeys: af("Request")?.fnKeys }));
+check("B1 parser: an attribute declaring no handler slot at all carries `handlerMethods: null` (absent, not an empty shell)",
+  af("Plain")?.handlerMethods === null, () => af("Plain"));
+
+// ---- tracer: the three new trigger kinds, with `from` paths the reported-trigger grammar accepts ----
+// `from` must satisfy the same shape `validateReportedTrigger` enforces on a REPORTED trigger
+// (`^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)*$`), because both travel through the same
+// renderers and the same step-5.1 handoff digest.
+const DECL_PATH_RX = /^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)*$/;
+const trcSrc = 'define("T1",[],function(){return{entitySchemaName:"E",diff:[],' +
+  'details:{Emails:{schemaName:"ApplicantEmailDetailV2",filterMethod:"getEmailDetailFilter"},' +
+  'Subs:{schemaName:"ZDetail",subscriberMethods:{onCardSaved:"reloadZ"}}},' +
+  'attributes:{Contact:{onChange:"onContactChange"},Job:{lookupListConfig:{filter:"getJobFilter"}}},' +
+  'methods:{onContactChange:function(){this.set("X",1);},getJobFilter:function(){return 1;},' +
+  'getEmailDetailFilter:function(){return 2;},reloadZ:function(){return 3;},lonely:function(){return 4;}}};});';
+const trc = mergeHierarchy([parseSchema(trcSrc, "T1")]);
+const trg = (n) => trc.methods.find(m => m.name === n)?.triggers || [];
+check("B1 tracer: `attributes.<Col>.onChange` yields {kind:'attribute'} naming the attribute and the declaration path",
+  trg("onContactChange").length === 1 && trg("onContactChange")[0].kind === "attribute"
+  && trg("onContactChange")[0].attribute === "Contact"
+  && trg("onContactChange")[0].from === "attributes.Contact.onChange",
+  () => trg("onContactChange"));
+check("B1 tracer: a STRING `attributes.<Col>.lookupListConfig.filter` yields {kind:'entity-filter'}",
+  trg("getJobFilter").length === 1 && trg("getJobFilter")[0].kind === "entity-filter"
+  && trg("getJobFilter")[0].attribute === "Job"
+  && trg("getJobFilter")[0].from === "attributes.Job.lookupListConfig.filter",
+  () => trg("getJobFilter"));
+check("B1 tracer: `details.<Key>.filterMethod` yields {kind:'detail'} naming the detail KEY (what the platform and the plan both call it)",
+  trg("getEmailDetailFilter").length === 1 && trg("getEmailDetailFilter")[0].kind === "detail"
+  && trg("getEmailDetailFilter")[0].detail === "Emails"
+  && trg("getEmailDetailFilter")[0].from === "details.Emails.filterMethod",
+  () => trg("getEmailDetailFilter"));
+check("B1 tracer: a `details.<Key>.subscriberMethods.<event>` entry yields {kind:'detail'} naming the event in the path",
+  trg("reloadZ").length === 1 && trg("reloadZ")[0].kind === "detail"
+  && trg("reloadZ")[0].from === "details.Subs.subscriberMethods.onCardSaved",
+  () => trg("reloadZ"));
+check("B1 tracer: every emitted `from` path satisfies the reported-trigger grammar validateReportedTrigger enforces",
+  ["onContactChange", "getJobFilter", "getEmailDetailFilter", "reloadZ"]
+    .every(n => trg(n).every(t => DECL_PATH_RX.test(t.from) && t.from !== n)),
+  () => ["onContactChange", "getJobFilter", "getEmailDetailFilter", "reloadZ"].map(n => [n, trg(n)]));
+check("B1 tracer: a method NO declaration names still gets no trigger — the tracer reads declarations, it does not guess from names",
+  trg("lonely").length === 0, () => trg("lonely"));
+// The existing `dependencies`-based trigger is untouched, and coexists with a new one on the same attribute.
+const bothSrc = 'define("T2",[],function(){return{entitySchemaName:"E",diff:[],attributes:{' +
+  'Contact:{onChange:"onContactChange",dependencies:[{columns:["Account"],methodName:"onContactChange"}]}},' +
+  'methods:{onContactChange:function(){return 1;}}};});';
+const both = mergeHierarchy([parseSchema(bothSrc, "T2")]).methods.find(m => m.name === "onContactChange").triggers;
+check("B1 tracer: the pre-existing `attribute-dependency` trigger is NOT displaced — a column declaring both shapes yields both",
+  both.length === 2 && both.some(t => t.kind === "attribute-dependency" && t.attribute === "Contact")
+  && both.some(t => t.kind === "attribute" && t.from === "attributes.Contact.onChange"),
+  () => both);
+// Guard-can-fail: a detail KEY the `from` grammar cannot express must yield NO trigger rather than an
+// unusable path that the reported-trigger validator would reject downstream.
+const badKeySrc = 'define("T3",[],function(){return{entitySchemaName:"E",diff:[],' +
+  'details:{"Bad-Key.v2":{schemaName:"XDetail",filterMethod:"getXFilter"}},' +
+  'methods:{getXFilter:function(){return 1;}}};});';
+const badKey = mergeHierarchy([parseSchema(badKeySrc, "T3")]).methods.find(m => m.name === "getXFilter").triggers;
+check("B1 tracer guard: a detail key the declaration-path grammar cannot express emits NO trigger (an unusable `from` is worse than an honest blank)",
+  badKey.length === 0, () => badKey);
+
+/* ---- ENG-96571 A3: the parser records how many conditions a rule DECLARED ---- */
+// `sanitizeConditions` returns `[]` for both "no conditions" and "conditions this parser could not read", and those
+// two must render the OPPOSITE Trigger cell. `conditionsDeclared` is the fact that separates them, so it is recorded
+// where the source is read — here, not inferred downstream.
+const A3_SRC = (conds) => `define("A3Page", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "JobRequired": {
+    "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.REQUIRED,
+    "conditions": ${conds}
+  } } },
+  diff: []
+}; });`;
+const a3Rule = (conds) => mergeHierarchy([parseSchema(A3_SRC(conds), "A3Page")]).rules.find(r => r.key === "JobRequired");
+// (i) a COMPLETE condition — one entry, fully readable
+const a3Complete = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]`);
+check("ENG-96571 A3: a readable condition is recorded as 1 declared / 1 sanitized",
+  a3Complete.conditionsDeclared === 1 && a3Complete.conditions.length === 1
+  && a3Complete.conditions[0].left.attribute === "Stage" && a3Complete.conditions[0].comparison === 3,
+  () => JSON.stringify(a3Complete));
+// (ii) the REAL Job.JobRequired shape — declared, and sanitizes to a degenerate entry (symbolic comparison, a
+// CONSTANT left expression). The count says a condition WAS declared even though nothing readable came out of it.
+const a3Degenerate = a3Rule(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
+check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and sanitizes to a degenerate entry (no comparison, no left attribute)",
+  a3Degenerate.conditionsDeclared === 1 && a3Degenerate.conditions.length === 1
+  && a3Degenerate.conditions[0].comparison === null
+  && a3Degenerate.conditions[0].left.attribute === null && a3Degenerate.conditions[0].left.path === null
+  && a3Degenerate.conditions[0].right.value === true,
+  () => JSON.stringify(a3Degenerate.conditions));
+// (iii) DECLARED but DROPPED — a non-array `conditions` (the object-map form). `sanitizeConditions` returns `[]`,
+// which is why the declared count has to be recorded separately: it is the only thing left saying they existed.
+const a3Dropped = a3Rule(`{ "c1": { "comparisonType": 3 }, "c2": { "comparisonType": 4 } }`);
+check("ENG-96571 A3: an object-MAP `conditions` block declares its keys even though the sanitized set comes back empty",
+  a3Dropped.conditionsDeclared === 2 && a3Dropped.conditions.length === 0,
+  () => JSON.stringify(a3Dropped));
+// (iv) genuinely unconditional — nothing declared, nothing sanitized. This is the ONLY shape that may render `always`.
+const a3None = a3Rule(`[]`);
+check("ENG-96571 A3: a rule that declares NO conditions is 0 declared — the only shape a renderer may call `always`",
+  a3None.conditionsDeclared === 0 && a3None.conditions.length === 0, () => JSON.stringify(a3None));
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

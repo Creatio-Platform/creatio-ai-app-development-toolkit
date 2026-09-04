@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -2589,8 +2589,13 @@ check("--plan: result.plan is the full skeleton (title + Overview + <FILL:> + Ma
   && !/## Design spec/.test(cli.plan));
 check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)",
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
-check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
-  /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
+// ENG-96571 C3 — the agent-facing guardrail moved OUT of the plan into `result.planNotes` (written to
+// `<plan>.notes.md`), so `plan.md` carries only what the approver reads. Assert it on the notes AND assert the
+// plan no longer carries it: a guardrail present in both places is the duplication C3 removed.
+check("--plan: verbatim / Adjustments guardrail present in planNotes (agent must not edit generated tables)",
+  typeof cli.planNotes === "string"
+  && /present `plan\.md` VERBATIM/i.test(cli.planNotes) && /Adjustments/.test(cli.planNotes)
+  && !/VERBATIM/i.test(cli.plan) && !/Adjustments/.test(cli.plan));
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
@@ -3481,12 +3486,20 @@ check("ENG-95543: a LIST-shaped feature carries NO gate type — it is gated as 
 check("ENG-95543: feature resolution is exact-name first, then longest suffix, then the ENTITY fallback (which marks itself inferred)",
   resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
   && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
-  && resolveFeatureRow("ApplicantVisaDetail") === null
+  // A flat `VisaDetail` row now exists (added with `APPROVALS_SIGNAL`), so `ApplicantVisaDetail` is RECOGNISED —
+  // it used to be the `none` case only because no row could match it. The pair below is what actually pins the
+  // ordering: both suffix rows match `ApplicantVisaDetailV2`, and the LONGER one has to win.
+  && resolveFeatureRow("ApplicantVisaDetail")?.match.schemaNameSuffix === "VisaDetail"
+  && resolveFeatureRow("ApplicantVisaDetailV2")?.match.schemaNameSuffix === "VisaDetailV2"
+  // the `none` case needs a name NO row claims by exact name or suffix, and with no entity to fall back on
+  && resolveFeatureRow("CustomThingDetail") === null
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
   () => ({ exact: resolveFeatureRow("VisaDetailV2")?.meta, suffix: resolveFeatureRow("ApplicantEmailDetailV2")?.meta,
-    none: resolveFeatureRow("ApplicantVisaDetail"), entity: resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta }));
+    shortSuffix: resolveFeatureRow("ApplicantVisaDetail")?.match,
+    longSuffix: resolveFeatureRow("ApplicantVisaDetailV2")?.match,
+    none: resolveFeatureRow("CustomThingDetail"), entity: resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta }));
 // ---- ENG-95543: the widget / profile-card / card-action catalogs, moved into the same table -------------------
 // The DERIVED VIEWS are what the mapper's builders read, so a row that lost a `meta` key would leave a builder
 // with an empty catalog and no test would otherwise notice. This pin exists because it HAPPENED mid-move: merging
@@ -7027,12 +7040,16 @@ check("inverse graph: the walk is TRANSITIVE — two hops still reach the declar
   invTrig("roundIt")?.rootTrigger?.kind === "attribute-dependency" && invTrig("roundIt")?.from === "recalcTotals",
   () => JSON.stringify(invTrig("roundIt")));
 check("inverse graph: a helper called from a STANDARD lifecycle method reports the lifecycle hook (those are filtered from the worklist, so indexing only custom methods would miss it)",
-  invTrig("syncOwner")?.lifecycle === "onSaved",
+  // ENG-96571 B1 — the lifecycle answer is now its own `kind` with the hook in `from` (it used to be an
+  // `internal` trigger carrying a `lifecycle` field). The ANSWER is the same fact, keyed honestly.
+  invTrig("syncOwner")?.kind === "lifecycle" && invTrig("syncOwner")?.from === "onSaved",
   () => JSON.stringify(invTrig("syncOwner")));
 check("inverse graph: a method nothing calls stays honestly unresolved",
   (invStub("orphanHelper")?.triggers || []).length === 0);
 check("inverse graph: mutual recursion does not hang or invent a root (cycle guard)",
-  (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger && !invTrig("pingPongA")?.lifecycle);
+  // kind `internal` is itself the "no origin yet" state now — a resolved lifecycle origin carries kind
+  // `lifecycle`, so it can no longer hide inside this predicate.
+  (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger);
 check("inverse graph: a declaration-triggered method keeps its OWN declared trigger, never an internal one",
   invTrig("onStageChanged")?.kind === "attribute-dependency");
 // Regression from a real Order-section run: the immediate caller must not also appear in `via`, and `via` must not
@@ -7267,8 +7284,8 @@ check("chain roots: with NO behaviour index the helper keeps the weak form and t
   () => JSON.stringify(rootsStub(rootsBare, "setThingInfo").triggers));
 
 const rootsRun = runMigration({ ...rootsManifest, behaviourIndex: {
-  onThingChange: { trigger: "attribute-onchange", from: "Thing attribute onChange", card: "C01", ac: ["AC-1"] },
-  onStageChanged: { trigger: "should-not-replace", from: "nowhere", card: "C01", ac: ["AC-2"] },
+  onThingChange: { trigger: "attribute", from: "attributes.Thing.onChange", card: "C01", ac: ["AC-1"] },
+  onStageChanged: { trigger: "internal", from: "someCaller", card: "C01", ac: ["AC-2"] },
 } });
 check("chain roots: a REPORTED caller trigger propagates down to the helper that only knew its caller",
   rootsStub(rootsRun, "setThingInfo").triggers[0].root === "onThingChange"
@@ -7301,7 +7318,7 @@ const DEEP = {
 const deepRun = (order) => runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
   `define("DeepPage", [], function() { return { entitySchemaName: "Deal", methods: { ${order.map((k) => DEEP[k]).join(", ")} },
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }],
-  behaviourIndex: { startIt: { trigger: "attribute-onchange", from: "Stage attribute onChange", card: "C1", ac: ["AC-1"] } } });
+  behaviourIndex: { startIt: { trigger: "attribute", from: "attributes.Stage.onChange", card: "C1", ac: ["AC-1"] } } });
 const deepFwd = deepRun(["A", "B", "C"]), deepRev = deepRun(["C", "B", "A"]);
 const deepLeaf = (r) => r.changeSet.handlerStubs.find((h) => h.sourceMethod === "leafHelper").triggers[0];
 
@@ -7328,7 +7345,7 @@ const multiRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     pingA: function() { this.pingB(); },
     pingB: function() { this.pingA(); } },
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }],
-  behaviourIndex: { zAnsweredOne: { trigger: "attribute-onchange", from: "Stage attribute onChange", card: "C1", ac: ["AC-1"] } } });
+  behaviourIndex: { zAnsweredOne: { trigger: "attribute", from: "attributes.Stage.onChange", card: "C1", ac: ["AC-1"] } } });
 const multiStub = (m) => multiRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m).triggers[0];
 check("chain roots: a multi-caller helper takes the answer from ANY caller that has one, not only the first",
   multiStub("sharedHelper").root === "zAnsweredOne" && multiStub("sharedHelper").rootTrigger.kind === "reported",
@@ -7363,14 +7380,18 @@ const lifeRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     answered: function() { return 1; } },
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }],
   // propagateChainRoots only runs when an index was supplied; this entry is unrelated to the chain under test.
-  behaviourIndex: { answered: { trigger: "attribute-onchange", from: "Stage attribute onChange", card: "C1", ac: ["AC-1"] } } });
+  behaviourIndex: { answered: { trigger: "attribute", from: "attributes.Stage.onChange", card: "C1", ac: ["AC-1"] } } });
 const lifeTrig = (m) => (lifeRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
 check("chain roots: the SETUP holds — the caller carries `lifecycle` while the row under test is still weak",
-  lifeTrig("hHelper")?.lifecycle === "onSaved"
-  && lifeTrig("cHelper")?.kind === "internal" && !lifeTrig("cHelper")?.lifecycle,
+  lifeTrig("hHelper")?.kind === "lifecycle" && lifeTrig("hHelper")?.from === "onSaved"
+  // "still weak" = its OWN trigger is not the lifecycle answer. Under the B1 shape `kind === "internal"` IS that
+  // statement (a lifecycle-answered row carries kind `lifecycle`), so no second field check is needed — and none is
+  // possible: `propagateChainRoots` has already given this row its inherited root by the time it is read here.
+  && lifeTrig("cHelper")?.kind === "internal",
   () => JSON.stringify([lifeTrig("hHelper"), lifeTrig("cHelper")]));
 check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
-  lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.lifecycle === "onSaved",
+  lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.kind === "lifecycle"
+  && lifeTrig("cHelper")?.rootTrigger?.from === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
 check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
   /onSaved \(platform lifecycle\) → internal call/.test(
@@ -7660,6 +7681,100 @@ const stubsPlain = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.m
   { input: JSON.stringify(handoffManifest), encoding: "utf8" });
 check("handoff OUT: `--stubs` does not mask the gates — same exit code as a plain run of the same manifest",
   stubsCli.status === stubsPlain.status && stubsCli.status !== 0 && !!stubsOut);
+
+/* ENG-96571 — the digest is a WORKLIST, not a surface census, and a reported trigger is VALIDATED.
+   A1: the analysis run had only its own `described / digestRows` number, so the plan header's "N of M carry a
+   behaviour card" read as a member census of the surface. The engine's own member ledger is a LARGER population
+   (measured on the Applicants run: 10 digest method names against 11 definitions, 2 virtual attributes of 5, 3
+   members of 88), so it now travels with the worklist in `totals` — which is exactly the object the workflow core
+   already receives as `input.totals`. */
+const stubsPlainOut = (() => { try { return JSON.parse(stubsPlain.stdout); } catch { return null; } })();
+check("ENG-96571 A1: `--stubs` totals carry `ledgerMembers` — the engine's OWN member ledger for the scope it mapped, so the analysis run stops reading its worklist count as a surface census",
+  !!stubsOut && typeof stubsOut.totals.ledgerMembers === "number"
+    && stubsOut.totals.ledgerMembers === stubsPlainOut?.coverage?.total,
+  () => JSON.stringify({ totals: stubsOut?.totals, ledger: stubsPlainOut?.coverage?.total }));
+check("ENG-96571 A1: the WORKLIST is smaller than the ledger on this fixture — the two numbers are not interchangeable, which is the whole point of publishing both",
+  !!stubsOut && stubsOut.totals.stubs + stubsOut.totals.members < stubsOut.totals.ledgerMembers,
+  () => JSON.stringify(stubsOut?.totals));
+check("ENG-96571 A1: `ledgerUnaccounted` travels too — a ledger figure with no gap count invites reading a blocked run's ledger as a clean one",
+  !!stubsOut && typeof stubsOut.totals.ledgerUnaccounted === "number"
+    && stubsOut.totals.ledgerUnaccounted === (stubsPlainOut?.coverage?.issues || []).length,
+  () => JSON.stringify({ unaccounted: stubsOut?.totals.ledgerUnaccounted, issues: (stubsPlainOut?.coverage?.issues || []).length }));
+
+// A1 — `behaviourEstablished: false`: the analysis agent's own admission that the card established nothing. The
+// row must keep its `⚠ not described` cell, exactly as if no entry existed, and must not clear the wiring-only leg.
+const notEstablished = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { card: "C01", ac: ["AC-1"], behaviourEstablished: false },
+  "message:RefreshThing": { card: "C02", ac: ["AC-1"], behaviourEstablished: false },
+} });
+const notEstablishedPlan = renderPlan(notEstablished, {});
+check("ENG-96571 A1: a `behaviourEstablished: false` entry renders `⚠ not described` on its METHOD row — a card whose own text says the behaviour was not established is not a description of it",
+  !notEstablished.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper").describedIn
+    && /^\| privateHelper \|.*\| ⚠ not described \|$/m.test(notEstablishedPlan),
+  () => notEstablishedPlan.split("\n").filter((l) => /privateHelper/.test(l)));
+check("ENG-96571 A1: it renders `⚠ not described` on a MEMBER row too — the ⚠ Imperative members table reads the same field",
+  !notEstablished.changeSet.needsDecision.find((n) => n.kind === "message" && n.item === "RefreshThing").describedIn
+    && /^\| RefreshThing \| message \|.*\| ⚠ not described \|$/m.test(notEstablishedPlan),
+  () => notEstablishedPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
+check("ENG-96571 A1 ANTI-VACUITY: the SAME entries WITHOUT the field do render their card — the ⚠ above is the field's effect, not a fixture that never matched",
+  (() => { const r = runMigration({ ...handoffManifest, behaviourIndex: {
+      privateHelper: { card: "C01", ac: ["AC-1"] }, "message:RefreshThing": { card: "C02", ac: ["AC-1"] } } });
+    return /^\| privateHelper \|.*C01 AC-1.*\|$/m.test(renderPlan(r, {})); })());
+check("ENG-96571 A1: a `behaviourEstablished: false` mixin entry is NOT counted as wiring-only either — it is an UNDESCRIBED row, and both legs read the field the same way",
+  (() => { const r = runMigration({ ...wireManifest, behaviourIndex: {
+      "mixin:LeadMixin": { card: "C01", behaviourEstablished: false } } });
+    return r.behaviourIndex.wiringOnly.length === 0 && /⚠ not described/.test(renderPlan(r, {})); })());
+check("ENG-96571 A1: the ⚠ Imperative logic and ⚠ Imperative members headers print the LEDGER number beside the card count, and say the worklist is not a surface census",
+  (notEstablishedPlan.match(/this worklist is NOT a surface census: the member ledger for this run accounts for \d+ member\(s\)/g) || []).length === 2,
+  () => notEstablishedPlan.split("\n").filter((l) => /carry a behaviour card/.test(l)));
+
+// A2 — an invalid reported trigger is NOT filled in: the cell stays `⚠ unresolved`, the header keeps counting the
+// row open, and a fourth plan banner names it. The measured case is `"init": {"trigger":"internal","from":"init"}`.
+const badTrigger = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { trigger: "internal", from: "privateHelper", card: "C01", ac: ["AC-1"] },
+} });
+const badTriggerPlan = renderPlan(badTrigger, {});
+const badTriggerStub = badTrigger.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper");
+check("ENG-96571 A2: a row naming ITSELF as its own origin is NOT filled — `triggers` stays empty, so the cell keeps reading ⚠ unresolved instead of `internal (from privateHelper) — reported`",
+  badTriggerStub.triggers.length === 0 && /^\| privateHelper \|[^|]*\|[^|]*⚠ unresolved[^|]*\|/m.test(badTriggerPlan),
+  () => JSON.stringify(badTriggerStub.triggers) + " | " + badTriggerPlan.split("\n").filter((l) => /privateHelper/.test(l)));
+check("ENG-96571 A2: the run records the rejection with its REASON in `behaviourIndex.rejectedTriggers` — a silently dropped trigger is indistinguishable from one that was never reported",
+  badTrigger.behaviourIndex.rejectedTriggers.length === 1
+    && badTrigger.behaviourIndex.rejectedTriggers[0].key === "privateHelper"
+    && /row itself/.test(badTrigger.behaviourIndex.rejectedTriggers[0].why)
+    && !badTrigger.behaviourIndex.triggersFilled.includes("privateHelper"),
+  () => JSON.stringify(badTrigger.behaviourIndex.rejectedTriggers));
+check("ENG-96571 A2: the plan renders the REJECTED-TRIGGER banner, naming the row and the reason, and points at the vocabulary to fix it with",
+  /reported trigger\(s\) in `manifest.behaviourIndex` were REJECTED and NOT filled in/.test(badTriggerPlan)
+    && /privateHelper/.test(badTriggerPlan) && /entity-filter/.test(badTriggerPlan),
+  () => badTriggerPlan.split("\n").filter((l) => /REJECTED/.test(l)));
+check("ENG-96571 A2: and the ⚠ Imperative logic header still counts the row as having NO trigger — the header count is what the reported trigger used to clear",
+  /> [1-9]\d* row\(s\) have no trigger yet/.test(badTriggerPlan)
+    && !/answered by the behaviour run/.test(badTriggerPlan),
+  () => badTriggerPlan.split("\n").filter((l) => /no trigger yet/.test(l)));
+check("ENG-96571 A2 ANTI-VACUITY: a VALID reported trigger on the same row IS filled, prints `— reported`, and raises NO banner — the rejection above is the guard firing, not the fill path being broken",
+  (() => { const r = runMigration({ ...handoffManifest, behaviourIndex: {
+      privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01", ac: ["AC-1"] } } });
+    const plan = renderPlan(r, {});
+    return r.behaviourIndex.rejectedTriggers.length === 0 && r.behaviourIndex.triggersFilled.includes("privateHelper")
+      && /attribute \(from attributes.Contact.onChange\) — reported/.test(plan) && !/were REJECTED/.test(plan); })(),
+  () => JSON.stringify(runMigration({ ...handoffManifest, behaviourIndex: { privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01" } } }).behaviourIndex));
+// PINNED, not accidental: `behaviourEstablished: false` blocks the TRIGGER fill as well as the card. The two legs
+// must read ONE entry the same way — the workflow's `entriesOf` drops the entry entirely, so it never validates
+// that trigger, and an engine that filled it anyway would render a resolved trigger beside `⚠ not described`.
+const notEstablishedWithTrigger = runMigration({ ...handoffManifest, behaviourIndex: {
+  privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01", behaviourEstablished: false },
+} });
+check("ENG-96571 A1/A2: a `behaviourEstablished: false` entry blocks the TRIGGER fill too, even when the trigger itself is VALID — an entry that says the behaviour was not established is not evidence for its origin, and the two legs must read one entry the same way",
+  !notEstablishedWithTrigger.behaviourIndex.triggersFilled.includes("privateHelper")
+    && notEstablishedWithTrigger.behaviourIndex.rejectedTriggers.length === 0
+    && notEstablishedWithTrigger.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper").triggers.length === 0
+    && /⚠ not described/.test(renderPlan(notEstablishedWithTrigger, {})),
+  () => JSON.stringify(notEstablishedWithTrigger.behaviourIndex));
+
+check("ENG-96571 A2: the preamble states the closed vocabulary and the `from` rule, so a reader repairing the index does not have to find the engine source",
+  /closed vocabulary/.test(badTriggerPlan) && /neither blank nor the row itself/.test(badTriggerPlan),
+  () => badTriggerPlan.split("\n").filter((l) => /closed vocabulary|neither blank/.test(l)));
 
 /* ==================================================================================================
    ENG-94975 — the PAGE-SCOPED done-gate (engine contract v2). The defect this whole ticket exists to
@@ -11298,6 +11413,235 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
 }
+
+
+/* ================================================================================================
+   ENG-96571 B1 — the trigger tracer on the REAL Applicants page (fixtures/applicantpage/).
+   Provenance + what is verbatim vs trimmed: fixtures/applicantpage/README.md.
+
+   The defect this pins: the Applicants handoff rows reported 8 of 10 triggers unresolved, and the plan's
+   ⚠ rows then NAMED four declarations the engine had parsed itself and dropped — two `onChange` strings, a
+   `lookupListConfig.filter` and a `details[].filterMethod`.
+
+   The numbers below are MEASURED on this fixture, not the multi-page run's 8-of-10. Two reasons they differ,
+   both real: (a) this is one page's two layers, not the whole Applicants scope; (b) the captured
+   `InternalRequest` lookup filter is a FUNCTION, so `getRequestStatusFilter` stays unresolved BY DESIGN —
+   reading a method name out of a function body is the inference `04-units.md` forbids.
+   Measured with the declaration tracer disabled: unresolvedTrigger 7, internalCallOnly 2. With it: 3 and 0.
+   ================================================================================================ */
+const applMan = JSON.parse(fs.readFileSync(path.join(FIX, "applicantpage", "manifest.json"), "utf8"));
+const appl = runMigration(applMan, { baseDir: FIX });
+const applStubs = appl.changeSet.handlerStubs;
+const applTrig = (n) => (applStubs.find(s => s.sourceMethod === n)?.triggers || [])[0];
+const applUnresolved = applStubs.filter(s => !s.triggers.length).map(s => s.sourceMethod).sort();
+check("ENG-96571 B1: the real Applicants page yields 9 handler rows and the tracer leaves exactly 3 triggers unresolved (7 before the declaration pass)",
+  applStubs.length === 9 && appl.stubIndex[0].counts.unresolvedTrigger === 3,
+  () => ({ stubs: applStubs.length, counts: appl.stubIndex[0].counts, unresolved: applUnresolved }));
+// WHICH three, by name — a count alone would stay green if the tracer resolved the wrong rows.
+check("ENG-96571 B1: the three that stay unresolved are the honest ones — the two lifecycle hooks (no caller to trace) and the method reached only from a FUNCTION-valued filter slot",
+  applUnresolved.join(",") === "getRequestStatusFilter,init,onSaved",
+  () => applUnresolved);
+check("ENG-96571 B1: `onContactChange` is traced to `attributes.Contact.onChange` — the declaration the plan used to ask a human to find",
+  applTrig("onContactChange")?.kind === "attribute" && applTrig("onContactChange")?.from === "attributes.Contact.onChange",
+  () => applTrig("onContactChange"));
+check("ENG-96571 B1: `onInternalRequestChange` is traced to `attributes.InternalRequest.onChange`",
+  applTrig("onInternalRequestChange")?.kind === "attribute" && applTrig("onInternalRequestChange")?.from === "attributes.InternalRequest.onChange",
+  () => applTrig("onInternalRequestChange"));
+check("ENG-96571 B1: `getEmailDetailFilter` is traced to `details.ApplicantEmailDetailV2.filterMethod`",
+  applTrig("getEmailDetailFilter")?.kind === "detail" && applTrig("getEmailDetailFilter")?.from === "details.ApplicantEmailDetailV2.filterMethod",
+  () => applTrig("getEmailDetailFilter"));
+check("ENG-96571 B1: the STRING-form lookup filter is traced to `attributes.Job.lookupListConfig.filter` as an `entity-filter`",
+  applTrig("getJobFilter")?.kind === "entity-filter" && applTrig("getJobFilter")?.from === "attributes.Job.lookupListConfig.filter",
+  () => applTrig("getJobFilter"));
+// The FUNCTION-form slot: no trigger invented, and the slot still visible as an attribute fnKey. Both halves
+// matter — dropping it silently is the failure this fix exists to remove, inventing a name is the rule it
+// must not break.
+const applReqAttr = appl.changeSet.needsDecision.find(n => n.kind === "attribute-imperative" && n.item === "InternalRequest");
+check("ENG-96571 B1: the FUNCTION-valued `lookupListConfig.filter` invents NO trigger, and is still reported as an `attribute-imperative` row naming the dotted slot",
+  !applTrig("getRequestStatusFilter") && !!applReqAttr && /lookupListConfig\.filter/.test(applReqAttr.detail || ""),
+  () => ({ trigger: applTrig("getRequestStatusFilter"), row: applReqAttr }));
+// A helper reached from a now-traced caller inherits a real ROOT instead of the weakest "internal call from X":
+// that is what drops `internalCallOnly` from 2 to 0, and it is the whole point of tracing the caller.
+check("ENG-96571 B1: a helper called from a traced handler now carries the DECLARATION as its rootTrigger — `internalCallOnly` falls to 0",
+  appl.stubIndex[0].counts.internalCallOnly === 0
+  && applTrig("setContactInfo")?.rootTrigger?.from === "attributes.Contact.onChange"
+  && applTrig("clearContactInfo")?.root === "onContactChange",
+  () => ({ counts: appl.stubIndex[0].counts, setContactInfo: applTrig("setContactInfo") }));
+// The renderers must not print the new kinds as `undefined.undefined`. `triggerPhrase` (mapper) ended in
+// `${t.element}.${t.property}` for every kind it did not name, and a method's `reason` text is where that
+// showed. designspec's `triggerText` has the same fallback and is NOT this file's to fix — see the report.
+const applJobReason = appl.changeSet.needsDecision.find(n => n.kind === "method" && n.item === "getJobFilter")?.reason || "";
+check("ENG-96571 B1: a method's reason text names the declaration that triggers it and never renders `undefined.undefined`",
+  /attributes\.Job\.lookupListConfig\.filter/.test(applJobReason)
+  && !appl.changeSet.needsDecision.some(n => /undefined\.undefined/.test(n.reason || "")),
+  () => applJobReason);
+// And the RENDERED artifact, which is what a reader actually gets. `designspec.triggerText` now has an explicit
+// branch per declaration-backed kind (wave 3): the cell SAYS what fires the method and then cites the declaration
+// path that proves it, instead of falling through to `${esc(t.element)}.${esc(t.property)}` — which printed a bare
+// `.` for a kind carrying neither field, a cell that reads worse in the plan than the `⚠ unresolved` it replaced.
+const applSpecTrigRows = (appl.designSpec || "").split("\n").filter(l => /^\| (↳ )?(onContactChange|getJobFilter|getEmailDetailFilter|setContactInfo) /.test(l));
+check("ENG-96571 B1: the rendered design-spec trigger CELL prints the declaration path for each new kind — not the empty `.` the untouched triggerText fallback would produce",
+  applSpecTrigRows.length === 4
+  && /\| Contact changes \(attributes\.Contact\.onChange\) \|/.test(appl.designSpec)
+  && /\| lookup filter for Job \(attributes\.Job\.lookupListConfig\.filter\) \|/.test(appl.designSpec)
+  && /\| detail ApplicantEmailDetailV2 filterMethod \|/.test(appl.designSpec)
+  && /Contact changes \(attributes\.Contact\.onChange\) → onContactChange \(internal call\)/.test(appl.designSpec)
+  && !applSpecTrigRows.some(l => /\| \. \|/.test(l)),
+  () => applSpecTrigRows);
+// Guard-can-fail: BREAK the declaration and the named assertions above must go red, not stay green on a
+// coincidence. Re-folding a copy of the manifest with the `filterMethod` renamed is the smallest break that
+// isolates one emit path.
+{
+  const brokenSrc = fs.readFileSync(path.join(FIX, "applicantpage", "HRApplicant.js"), "utf8")
+    .replace('"filterMethod": "getEmailDetailFilter"', '"filterMethodTYPO": "getEmailDetailFilter"');
+  const brokenMan = { ...applMan, schemas: [applMan.schemas[0], { pkg: "HRApplicant", body: brokenSrc }] };
+  const brokenRun = runMigration(brokenMan, { baseDir: FIX });
+  const brokenStubs = brokenRun.changeSet.handlerStubs;
+  const brokenUnresolved = brokenStubs.filter(s => !s.triggers.length).map(s => s.sourceMethod).sort();
+  check("ENG-96571 B1 guard-can-fail: renaming `filterMethod` to a key the platform does not read puts `getEmailDetailFilter` BACK to unresolved and the count back to 4 — the assertions above are load-bearing",
+    brokenRun.stubIndex[0].counts.unresolvedTrigger === 4
+    && brokenUnresolved.includes("getEmailDetailFilter")
+    && !(brokenStubs.find(s => s.sourceMethod === "getEmailDetailFilter")?.triggers || []).length,
+    () => ({ counts: brokenRun.stubIndex[0].counts, unresolved: brokenUnresolved }));
+}
+
+/* ================= ENG-96571 A3 — a business rule whose CONDITION could not be read ================= */
+// The Trigger cell of a declarative rule has three possible answers and only one of them may be `always`. The
+// measured case is the REAL `Job.JobRequired` rule from Applicant1Page (a BINDPARAMETER Required rule whose
+// condition compares a CONSTANT through a symbolic `Terrasoft.ComparisonType.EQUAL`): before this item it rendered
+// `| Job | conditional | required (else optional) |` — the condition was silently absent from the ChangeSet while
+// the cell claimed the rule was conditional and named nothing.
+const A3_PAGE = (rulesBlock) => `define("A3Page", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: ${rulesBlock},
+  diff: /**SCHEMA_DIFF*/[
+    { "operation": "insert", "name": "Job", "parentName": "Header", "propertyName": "items",
+      "values": { "bindTo": "Job", "layout": { "column": 0, "row": 0, "colSpan": 12 } } }
+  ]/**SCHEMA_DIFF*/
+}; });`;
+const A3_RULE = (conds) => `{ "Job": { "JobRequired": {
+  "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+  "property": BusinessRuleModule.enums.Property.REQUIRED,
+  "conditions": ${conds} } } }`;
+const a3Run = (conds) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "A3Page", body: A3_PAGE(A3_RULE(conds)) }] });
+// The LOGIC row (`| <element> | <trigger> | <effect> | page business rule |`), not the Layout row that also
+// carries the field name — the Trigger cell under test lives only in the Logic table.
+const a3Row = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const a3Cell = (r) => (a3Row(r).split("|")[2] || "").trim();
+const a3Ruleset = (r) => r.changeSet.pageBusinessRules[0];
+const a3Gap = (r) => r.changeSet.needsDecision.filter((n) => n.kind === "rule-condition");
+
+// (i) READABLE condition → the cell names the attribute the rule watches. No gap, no worklist row.
+const a3Ok = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]`);
+check("ENG-96571 A3: a rule with a READABLE condition renders `when <attr>` and raises no condition gap",
+  a3Cell(a3Ok) === "when Stage"
+  && !a3Ruleset(a3Ok).conditionsIncomplete && a3Gap(a3Ok).length === 0,
+  () => ({ row: a3Row(a3Ok), rule: a3Ruleset(a3Ok) }));
+
+// (ii) the REAL Job.JobRequired shape — DEGENERATE sanitized condition (comparison null, no left attribute).
+const a3Deg = a3Run(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
+check("ENG-96571 A3: the REAL Job.JobRequired rule renders `⚠ condition unread — parse gap` — never `conditional`, never `always`",
+  a3Cell(a3Deg) === "⚠ condition unread — parse gap"
+  && a3Ruleset(a3Deg).conditionsIncomplete === true
+  && a3Gap(a3Deg).length === 1 && a3Gap(a3Deg)[0].item === "Job"
+  && /parse gap, not an unconditional rule/.test(a3Gap(a3Deg)[0].reason),
+  () => ({ row: a3Row(a3Deg), decisions: a3Gap(a3Deg) }));
+check("ENG-96571 A3: the ACTION is still mapped and still in the ChangeSet — only the condition is missing, so the row says complete the rule, not rebuild it",
+  a3Ruleset(a3Deg).action === "make-required" && a3Ruleset(a3Deg).inverseAction === "make-optional"
+  && /required \(else optional\)/.test(a3Row(a3Deg)),
+  () => a3Row(a3Deg));
+check("ENG-96571 A3: the gap reaches the ⚠ Confirm worklist as its own `rule-condition` row",
+  /\*\*\[rule-condition\]\*\* Job/.test(a3Deg.designSpec), () => a3Deg.designSpec.split("\n").filter((l) => /rule-condition/.test(l)));
+
+// (iii) DECLARED but DROPPED — an object-MAP `conditions`, which `sanitizeConditions` returns as `[]`. Same cell:
+// the rule declared a condition, so `always` would be a claim nobody verified.
+const a3Drop = a3Run(`{ "c1": { "comparisonType": 3 } }`);
+check("ENG-96571 A3: conditions DECLARED but dropped by sanitization render the same parse-gap cell and row — an empty sanitized set is not evidence of an unconditional rule",
+  a3Cell(a3Drop) === "⚠ condition unread — parse gap"
+  && a3Ruleset(a3Drop).conditionsIncomplete === true && a3Gap(a3Drop).length === 1,
+  () => ({ row: a3Row(a3Drop), rule: a3Ruleset(a3Drop) }));
+
+// (iv) the NEGATIVE control: a rule that declares nothing is genuinely unconditional and keeps reading `always`.
+// Without this the parse-gap cell could have been reached by every rule and the three cases above would still pass.
+const a3Always = a3Run(`[]`);
+check("ENG-96571 A3: a rule declaring NO conditions still renders `always` and raises no gap — the parse-gap cell did not swallow the unconditional case",
+  a3Cell(a3Always) === "always" && !a3Ruleset(a3Always).conditionsIncomplete && a3Gap(a3Always).length === 0,
+  () => ({ row: a3Row(a3Always), rule: a3Ruleset(a3Always) }));
+
+/* ================= ENG-96571 C1 — manifest.confirmDispositions closes a ⚠ Confirm row ================= */
+// The `rule-condition` row above is the subject: a real question, raised by the engine, with a key an answer can
+// bind to. Before this item the only way to answer it was a hand-written *Adjustments* entry in `plan.md`, which
+// `--plan --out` rewrites — so the answer was lost on every regenerate and the same question came back.
+const C1_MAN = (dispositions) => ({ entity: "HRRequest",
+  schemas: [{ pkg: "A3Page", body: A3_PAGE(A3_RULE(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`)) }],
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const c1Open = runMigration(C1_MAN(null));
+const c1OpenCount = (c1Open.designSpec.match(/#### ⚠ Confirm before I build \((\d+)\)/) || [])[1];
+check("ENG-96571 C1: the SETUP — with no disposition the `rule-condition` row is OPEN and the header counts it",
+  /\*\*\[rule-condition\]\*\* Job/.test(c1Open.designSpec) && Number(c1OpenCount) >= 1
+  && !/CLOSED by a recorded disposition/.test(c1Open.designSpec),
+  () => c1Open.designSpec.split("\n").filter((l) => /Confirm before I build|rule-condition/.test(l)));
+
+const c1Closed = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "resolved-on-stand", note: "read the rule on-stand: required only while Stage = New" } }));
+check("ENG-96571 C1: a recorded disposition CLOSES the row — it leaves the open list, the header says `(N open, M closed)`, and it is still printed with its note",
+  /#### ⚠ Confirm before I build \(\d+ open, 1 closed\)/.test(c1Closed.designSpec)
+  && /ℹ 1 item\(s\) CLOSED by a recorded disposition/.test(c1Closed.designSpec)
+  && /\*\*\[rule-condition\]\*\* Job → \*\*resolved-on-stand\*\*/.test(c1Closed.designSpec)
+  && /required only while Stage = New/.test(c1Closed.designSpec)
+  && !/^- \*\*\[rule-condition\]\*\* Job/m.test(c1Closed.designSpec),
+  () => c1Closed.designSpec.split("\n").filter((l) => /Confirm before I build|rule-condition|CLOSED/.test(l)));
+check("ENG-96571 C1: the closed key is reported on the result, so a caller can see what the manifest actually did",
+  c1Closed.confirmDispositions.closed.join("|") === "rule-condition:Job"
+  && c1Closed.confirmDispositions.invalid.length === 0,
+  () => JSON.stringify(c1Closed.confirmDispositions));
+// The whole point: the answer lives in the MANIFEST, so re-rendering from the same manifest keeps it closed. A
+// second run is what the hand-written *Adjustments* list could not survive.
+const c1Again = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "resolved-on-stand", note: "read the rule on-stand: required only while Stage = New" } }));
+check("ENG-96571 C1: a SECOND render from the same manifest keeps the row closed — the answer survives `--plan --out` rewriting the plan, which is what an *Adjustments* entry could not",
+  /\(\d+ open, 1 closed\)/.test(c1Again.designSpec)
+  && c1Again.designSpec === c1Closed.designSpec,
+  () => [c1Again.confirmDispositions, /\(\d+ open, 1 closed\)/.test(c1Again.designSpec)]);
+// SCOPED key — `"<schema>::<kind>:<item>"`, the precedence `applyBehaviourIndex` uses, so one answer cannot close
+// the same question on another page of the same migration.
+const c1Scoped = runMigration(C1_MAN({ "A3Page::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
+const c1WrongScope = runMigration(C1_MAN({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
+check("ENG-96571 C1: the SCOPED key closes the row for its own schema and NOT for another — a per-page answer stays per-page",
+  c1Scoped.confirmDispositions.closed.join("|") === "rule-condition:Job"
+  && c1WrongScope.confirmDispositions.closed.length === 0
+  && /\*\*\[rule-condition\]\*\* Job —/.test(c1WrongScope.designSpec),
+  () => JSON.stringify([c1Scoped.confirmDispositions, c1WrongScope.confirmDispositions]));
+// An INVALID disposition word does NOT close the row: a truthy `resolved` with a typo would clear a question
+// nobody answered. It is named, so the discrepancy is fixable instead of invisible.
+const c1Bad = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "sorted-it", note: "typo" } }));
+check("ENG-96571 C1: an INVALID disposition word does not close the row, and an advisory line NAMES the word and the key",
+  c1Bad.confirmDispositions.closed.length === 0
+  && c1Bad.confirmDispositions.invalid.join("|") === "rule-condition:Job"
+  && /\*\*\[rule-condition\]\*\* Job —/.test(c1Bad.designSpec)
+  && /recorded disposition\(s\) were NOT applied/.test(c1Bad.designSpec)
+  && /`rule-condition:Job` → `sorted-it`/.test(c1Bad.designSpec)
+  && !/CLOSED by a recorded disposition/.test(c1Bad.designSpec),
+  () => c1Bad.designSpec.split("\n").filter((l) => /NOT applied|rule-condition/.test(l)));
+check("ENG-96571 C1: `resolved` must be TRUE — a disposition word with no `resolved: true` neither closes nor is reported as invalid (it is an unfinished entry, not a wrong one)",
+  runMigration(C1_MAN({ "rule-condition:Job": { disposition: "accepted" } })).confirmDispositions.closed.length === 0
+  && runMigration(C1_MAN({ "rule-condition:Job": { disposition: "accepted" } })).confirmDispositions.invalid.length === 0);
+
+/* ================= ENG-96571 B1 — the `lifecycle` trigger kind renders its own text ================= */
+const b1Life = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+  `define("LifeKindPage", [], function() { return { entitySchemaName: "Deal", methods: {
+    onEntityInitialized: function() { this.callParent(arguments); this.warmCache(); },
+    warmCache: function() { return 1; } },
+    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] });
+const b1Trig = (b1Life.changeSet.handlerStubs.find((h) => h.sourceMethod === "warmCache")?.triggers || [])[0];
+check("ENG-96571 B1: a chain answered by a PLATFORM LIFECYCLE method carries kind `lifecycle` with the hook in `from` — not kind `internal` plus a side field",
+  b1Trig?.kind === "lifecycle" && b1Trig?.from === "onEntityInitialized" && b1Trig?.lifecycle === undefined,
+  () => JSON.stringify(b1Trig));
+check("ENG-96571 B1: `lifecycle` is a REPORTED_TRIGGERS kind — a traced answer and a described one stay one vocabulary",
+  REPORTED_TRIGGERS.includes("lifecycle") && REPORTED_TRIGGERS.includes(b1Trig?.kind));
+check("ENG-96571 B1: the rendered cell is UNCHANGED by the rename — `<hook> (platform lifecycle) → internal call`",
+  /onEntityInitialized \(platform lifecycle\) → internal call/.test(renderPlan(b1Life, {})),
+  () => renderPlan(b1Life, {}).split("\n").filter((l) => /warmCache/.test(l)));
+check("ENG-96571 B1: a lifecycle-answered row is NOT counted as `internalCallOnly` — the platform starting the chain IS the answer",
+  b1Life.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(b1Life.stubIndex[0].counts));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

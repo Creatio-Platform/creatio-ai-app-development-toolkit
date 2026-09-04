@@ -95,7 +95,15 @@ export function isComplete(totalKeys, uncovered, wiringOnly) {
 // while this arithmetic called it described.
 export const hasCard = (e) => typeof e.card === 'string' && e.card.trim() !== ''
 
-export const entriesOf = (rs) => (rs || []).flatMap((r) => r?.indexEntries || [])
+// `behaviourEstablished: false` — an entry that SAYS SO. An analysis agent that wrote a card and then admitted
+// in it that the behaviour could not be established was still counted as coverage: the Applicants run reported
+// "10 of 10 carry a behaviour card" while the card for `init` said the behaviour was NOT established. So the
+// admission is now a FIELD, and an entry carrying it is not coverage on either leg — this is the one place the
+// exclusion is applied, so `coveredKeys` and `wiringOnlyMixinKeys` cannot disagree about the same entry. Absent
+// or `true` means established, so an index written before the field existed is unaffected.
+export const behaviourEstablished = (e) => !e || e.behaviourEstablished !== false
+
+export const entriesOf = (rs) => (rs || []).flatMap((r) => r?.indexEntries || []).filter(behaviourEstablished)
 
 export function coveredKeys(rs, allKeys) {
   return new Set(entriesOf(rs).filter(hasCard).map((e) => digestKeyOf(e.key, allKeys)).filter(Boolean))
@@ -185,33 +193,90 @@ export function normalizeScopes(rawScopes) {
   }))
 }
 
-// Batch sizing. THEORETICAL DEFAULTS — no measured profile exists yet: the only
-// observed run (a product section: 63 rows on the record page, 16 on the mini
-// page) took ~47 minutes and ~105 tool calls for the whole surface in ONE agent,
-// which is the upper end of comfortable, so ~40 rows is taken as a working
-// target and one agent is kept for anything smaller. These are the two numbers
-// to revisit once several real custom sections have been profiled.
-export const DEFAULT_ROWS_PER_AGENT = 40
+// Batch sizing. MEASURED, and lowered because the first default never fanned out
+// at all. The Applicants run: 13 rows across 2 scopes → 1 describe agent, 76.8
+// minutes, 993k tokens, every phase sequential inside that one agent. 13 rows is
+// well under the old 40-row target, so the small-surface shortcut below took the
+// whole surface — the fan-out this workflow was built for had never once fired on
+// a real custom section. 12 puts a 13-row / 2-scope surface over the target, which
+// is the smallest surface that must still fan out.
+export const DEFAULT_ROWS_PER_AGENT = 12
 // Cap the fan-out. Kept well under a host's concurrency ceiling so Context,
 // Critique and Merge always have room, and enforced by MERGING batches rather
 // than dropping scopes — a dropped scope is a silent coverage hole, the one
 // failure this workflow exists to prevent.
 export const DEFAULT_MAX_DESCRIBE = 8
 
+// The two reasons ONE agent takes the whole surface, as two distinguishable
+// lines. They are not the same fact: a small surface is under the target, while a
+// single oversized scope is over it and gets one agent only because a scope is
+// never SPLIT. One shared string claiming "under the N-row target" was wrong on
+// the second case, and that is the line an operator reads when asking why a
+// 40-row run never fanned out.
+function shortcutNote(worked, totalRows, rowsPerAgent) {
+  return totalRows <= rowsPerAgent
+    ? `${totalRows} row(s) total — under the ${rowsPerAgent}-row target, so ONE describe agent over the whole surface`
+    : `${totalRows} row(s) in a SINGLE scope (${worked[0]?.label}) — over the ${rowsPerAgent}-row target, but a scope is never split, so ONE describe agent`
+}
+
 export function planBatches(worked, totalRows, rowsPerAgent, maxDescribe) {
   if (totalRows === 0) return { batches: [], note: null }
-  if (totalRows <= rowsPerAgent) {
-    // Small surface: one agent over everything. This is the whole-surface run the
-    // analysis skill was written for, and it is the DEFAULT rather than a special
-    // case — a fan-out is only worth its coordination cost above the threshold.
-    return { batches: [{ scopes: worked, rows: totalRows }], note: `${totalRows} row(s) total — under the ${rowsPerAgent}-row target, so ONE describe agent over the whole surface` }
+  // ONE agent on exactly two conditions. `worked.length === 1` is a documented
+  // fast path rather than a behaviour change — `packBatches` never splits a
+  // scope, so a lone scope would come back as one batch anyway; stating it here
+  // is what lets the note say WHY. Everything multi-scope goes through the
+  // packing, which is the leg the Applicants run never reached.
+  if (worked.length === 1 || totalRows <= rowsPerAgent) {
+    return { batches: [{ scopes: worked, rows: totalRows }], note: shortcutNote(worked, totalRows, rowsPerAgent) }
   }
   const batches = packBatches(worked, rowsPerAgent, maxDescribe)
   return {
     batches,
-    note: `${totalRows} row(s) across ${worked.length} scope(s) → ${batches.length} describe agent(s) (target ${rowsPerAgent}/agent, cap ${maxDescribe})`,
+    note: `${totalRows} row(s) across ${worked.length} scope(s) → ${batches.length} describe agent(s) (target ${rowsPerAgent}/agent, cap ${maxDescribe}) — a multi-scope surface goes through the packing, never the one-agent shortcut`,
     capped: batches.length === maxDescribe ? `fan-out hit the cap of ${maxDescribe}: the smallest batches were MERGED, no scope was dropped` : null,
   }
+}
+
+// A ZERO-ROW SCOPE IS STILL DESCRIBED — as an OVERRIDE-ONLY scope.
+//
+// The digest lists a scope with 0 stubs and 0 members when the engine could map
+// every row it found; that is NOT the same as the scope changing nothing.
+// Measured on the Applicants run: scope "section" had stubs 0 / members 0 and was
+// skipped with "gets no agent", while card `shared/C03` proved a replacing layer
+// in that scope's parent chain changes visible behaviour — a `rowSelected`
+// override with no `callParent`, giving a 750 ms delay and a mini-card that does
+// not close. Nobody was asked to look, so nobody found it.
+//
+// The scopes are ATTACHED to the existing batches rather than given batches of
+// their own: they add no keys to `allKeys`, so every coverage number is unchanged,
+// and the agent that already reads the surface is the cheapest place to put the
+// question. APPENDED, never unshifted — `batch.scopes[0].label` names the part
+// file and the work-item id, and both must stay a worked scope. Round-robin over
+// the array order (never a Set) so two runs of the same input attach identically.
+export function attachOverrideOnly(batches, empty) {
+  const attached = (empty || []).map((s) => ({ ...s, overrideOnly: true }))
+  if (!batches.length) return attached
+  attached.forEach((s, i) => batches[i % batches.length].scopes.push(s))
+  return attached
+}
+
+// THE KEY AN OVERRIDE CARD CARRIES, and why it is schema-qualified. `digestKeyOf`
+// resolves a BARE key by unique suffix match, so an override card keyed
+// `rowSelected` would resolve to the digest key `MainPage::rowSelected` and be
+// counted as real coverage of a row nobody described. Qualifying with the scope
+// AND the `override:` kind puts the key outside every digest key by construction.
+export const overrideKey = (schema, method) => `${schema}::override:${method}`
+
+// The override findings, picked back out of what the describe agents returned.
+// They travel in `indexEntries` (no schema change: `INDEX_ENTRY` already carries
+// key + card + ac) and are separated HERE by their key kind, so the coverage
+// arithmetic never sees them and the merge can render them as their own section.
+// Deliberately NOT filtered through `behaviourEstablished`: an override the agent
+// could not fully establish is still a finding worth printing, and it counts
+// towards nothing.
+const OVERRIDE_KEY_RX = /(^|::)override:/
+export function overrideEntries(results) {
+  return (results || []).flatMap((r) => r?.indexEntries || []).filter((e) => e?.key && OVERRIDE_KEY_RX.test(e.key))
 }
 
 // A stable, deterministic work-item id. The journal replays by id, so the id may
@@ -225,3 +290,36 @@ export function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 export const partFile = (outDir, label) => `${outDir}/customizations-part-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}.md`
+
+// A REPORTED TRIGGER'S VOCABULARY — the only `trigger` values a behaviour run may hand back, and the shape `from`
+// must have for the three that name a declaration. WHY A CLOSED LIST: `INDEX_ENTRY` typed `trigger` as a bare
+// string, so `{"init": {"trigger":"internal","from":"init"}}` was accepted verbatim, rendered as
+// `internal (from init) — reported` and cleared the row out of the plan header's "no trigger yet" count. A row
+// pointing at ITSELF as its own origin answers nothing; the header went from "8 row(s) have no trigger yet" to
+// "0 … 8 answered by the behaviour run" on exactly that. Measured on the Applicants run.
+export const REPORTED_TRIGGERS = ['attribute', 'detail', 'entity-filter', 'message', 'lifecycle', 'internal', 'external']
+
+// The `from` shape the three DECLARATION-backed kinds require: `attributes.<name>` / `details.<key>` and any
+// deeper path under them. A kind that claims a declaration must name one that can be looked up in the schema.
+const DECLARATION_PATH_RX = /^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)*$/
+const DECLARATION_KINDS = new Set(['attribute', 'detail', 'entity-filter'])
+
+// Returns `null` when the reported trigger is usable, otherwise the REASON, as one short string. The reason text
+// is part of the contract: the engine carries its own mirrored copy of this function (`validateReportedTrigger`
+// in engine/migrate.mjs, beside `describedInOf`) and a table-driven parity test compares the two byte-for-byte,
+// so the two rejections can never diverge into "the workflow dropped it, the engine filled it".
+// EDIT ONE, LOOK AT THE OTHER — the workflow script is evaluated as a function body and may not `import`, which
+// is why there are two copies at all (same reason `wiringOnlyMixinKeys` and `wiringOnlyKeys` are separate).
+export function validateReportedTrigger({ trigger, from, methodName } = {}) {
+  if (trigger === null || trigger === undefined || trigger === '') return null   // no trigger reported: nothing to validate
+  if (typeof trigger !== 'string' || !REPORTED_TRIGGERS.includes(trigger)) {
+    return `trigger '${String(trigger)}' is not one of ${REPORTED_TRIGGERS.join(', ')}`
+  }
+  const origin = typeof from === 'string' ? from.trim() : ''
+  if (!origin) return `trigger '${trigger}' names no \`from\` — a reported trigger without its origin answers nothing`
+  if (methodName && origin === methodName) return `\`from\` is the row itself ('${origin}') — a row cannot be its own origin`
+  if (DECLARATION_KINDS.has(trigger) && !DECLARATION_PATH_RX.test(origin)) {
+    return `trigger '${trigger}' must name a declaration as \`attributes.<name>\` or \`details.<key>\`, not '${origin}'`
+  }
+  return null
+}

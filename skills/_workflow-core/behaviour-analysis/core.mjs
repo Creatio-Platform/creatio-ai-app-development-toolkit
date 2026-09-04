@@ -28,6 +28,7 @@ import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, merge
 import {
   normalizeScopes, planBatches, packBatches, repairKeys, isComplete, wiringOnlyMixinKeys, coveredKeys, entriesOf,
   declaredNothingToDo, isCritiqueShape, critiqueDeathLine, retryOnDeath, itemId, partFile,
+  validateReportedTrigger, digestKeyOf, attachOverrideOnly, overrideEntries,
   DEFAULT_ROWS_PER_AGENT, DEFAULT_MAX_DESCRIBE,
 } from './helpers.mjs'
 
@@ -82,7 +83,7 @@ function skippedReturn(surface, extra = {}) {
     surface,
     skipped: true,
     reason: NOTHING_TO_DESCRIBE,
-    coverage: { described: 0, total: 0, complete: true, uncovered: [], wiringOnly: [] },
+    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: null, complete: true, uncovered: [], wiringOnly: [] },
     describeAgents: 0,
     ...extra,
   }
@@ -101,6 +102,44 @@ function reportCritique(critique, critiqueReturned, log) {
   }
   if (!ran) log('⚠ Critique never ran — conflicts / settledElsewhere are UNCHECKED, and coverage.complete is arithmetic-only (no adversarial pass checked that cited cards actually describe their rows)')
   return ran
+}
+
+// REPORTED TRIGGERS, VALIDATED BEFORE THEY TRAVEL. A trigger this run reports is a DESCRIPTION of an origin the
+// engine could not trace, and the engine fills the row's empty trigger cell from it — so an unusable one does not
+// stay harmless: it renders as `<kind> (from <x>) — reported` and clears the row out of the plan header's "no
+// trigger yet" count. Measured: the Applicants index carried `"init": {"trigger":"internal","from":"init"}` and
+// the header went from "8 row(s) have no trigger yet" to "0 … 8 answered by the behaviour run".
+//
+// A rejected trigger is STRIPPED from the entry (so nothing downstream can read it) while the ENTRY stays — its
+// card may be perfectly good. The row goes back through the repair round, because the trigger is what was asked
+// for and is still missing.
+function rejectTriggers(results, allKeys, log) {
+  const rejected = []
+  for (const entry of entriesOf(results)) {
+    const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    if (!why) continue
+    rejected.push({ key: entry.key, digestKey: digestKeyOf(entry.key, allKeys), trigger: entry.trigger ?? null, from: entry.from ?? null, why })
+    delete entry.trigger
+    delete entry.from
+    log(`⚠ rejected the reported trigger on '${entry.key}': ${why} — the row stays UNRESOLVED and goes back through the repair round`)
+  }
+  return rejected
+}
+
+// Rows whose reported trigger was rejected are UNCOVERED for this run's purposes even when their card is fine —
+// the trigger is what step 5.1 was asked for. Applied at every site that recomputes `uncoveredKeys`, including
+// after the repair round: the plain recompute reads `covered` alone, and a row that came back a SECOND time with
+// a still-invalid trigger HAS a card, so it would be dropped and `complete` would go true on the row that was
+// never answered.
+//
+// A rejection is CURRENT, not historical: only invalid triggers are stripped from the entries, so an entry still
+// carrying a trigger is one that passed. A row whose repair round came back with a valid trigger therefore closes
+// — a rejection is a repairable state, and a sticky union would leave the run permanently incomplete on a row
+// that got its answer one round later.
+function withRejectedTriggers(uncovered, rejected, allKeys, results) {
+  const answered = new Set(entriesOf(results).filter((e) => e.trigger).map((e) => digestKeyOf(e.key, allKeys)))
+  const keys = rejected.map((r) => r.digestKey).filter((k) => k && allKeys.has(k) && !answered.has(k))
+  return [...new Set([...uncovered, ...keys])]
 }
 
 export function* run(rawInput, io = {}) {
@@ -154,7 +193,7 @@ export function* run(rawInput, io = {}) {
       skipped: false,
       stopped: 'context-failed',
       reason: 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
-      coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
+      coverage: { described: 0, digestRows: null, total: null, ledgerMembers: null, complete: false, uncovered: [], wiringOnly: [] },
       conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
     }
   }
@@ -163,7 +202,6 @@ export function* run(rawInput, io = {}) {
   const worked = scopes.filter((s) => s.rows > 0)
   const empty = scopes.filter((s) => s.rows === 0)
   const totalRows = worked.reduce((n, s) => n + s.rows, 0)
-  if (empty.length) log(`${empty.length} scope(s) carry no rows and get no agent: ${empty.map((s) => s.label).join(', ')}`)
 
   // Same verdict as the pre-Context check above, for a caller that did not pass `totals`: an empty worklist is
   // DONE. Reached only when Context has already run, so its census and shared-core reading are still reported back.
@@ -181,6 +219,16 @@ export function* run(rawInput, io = {}) {
   const batches = plan.batches
   if (plan.note) log(plan.note)
   if (plan.capped) log(plan.capped)
+
+  // A ZERO-ROW SCOPE STILL GETS DESCRIBED. It used to be filtered out with a log
+  // line saying it "gets no agent"; the Applicants run then missed a replacing
+  // layer whose `rowSelected` override changes visible behaviour (see
+  // `attachOverrideOnly`). The scopes are appended to the batches as
+  // `overrideOnly`, which adds no keys to `allKeys` — every coverage number below
+  // is arithmetically unchanged, and what comes back is reported as its own
+  // section rather than as coverage.
+  const overrideOnly = attachOverrideOnly(batches, empty)
+  if (overrideOnly.length) log(`${overrideOnly.length} scope(s) carry no digest rows and are attached as OVERRIDE-ONLY scopes (replacing layers only, reported outside the coverage count): ${overrideOnly.map((s) => s.label).join(', ')}`)
 
   const sharedCardList = (ctx.sharedCore?.cards || []).map((c) => `${c.id} — ${c.title}`).join('\n') || '(none returned)'
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
@@ -207,6 +255,11 @@ export function* run(rawInput, io = {}) {
     label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
   })
 
+  // FOLLOW-UP, NOT DONE HERE: running Context and Describe in parallel would cut the wall clock further, and it is
+  // not attemptable as the phases stand — every Describe item consumes `ctx.sharedCore.path` and `sharedCardList`,
+  // which only exist once Context has returned. Overlapping them would mean either handing Describe a path to a
+  // file not yet written or letting each scope re-read the shared core, which is the duplicate-carding failure the
+  // Context phase exists to prevent. Revisit only with a shared-core contract that does not depend on the file.
   phase('Describe')
   let described = (yield step({
     items: batches.map((b, i) => describeItem(b, i)),
@@ -217,8 +270,9 @@ export function* run(rawInput, io = {}) {
 
   // --- Coverage is COMPUTED, never asserted ----------------------------------
   const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
+  const rejectedTriggers = rejectTriggers(described, allKeys, log)
   let covered = coveredKeys(described, allKeys)
-  let uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
+  let uncoveredKeys = withRejectedTriggers([...allKeys].filter((k) => !covered.has(k)), rejectedTriggers, allKeys, described)
   // The computed floor under the two-card rule (mixin only — see `wiringOnlyMixinKeys` for why the other
   // body-elsewhere kinds cannot be judged from the inventory, and which one the engine backstops instead).
   let wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
@@ -247,6 +301,7 @@ export function* run(rawInput, io = {}) {
         described,
         uncoveredKeys,
         wiringOnly,
+        rejectedTriggers,
         sharedCardList,
         messageRegister: ctx.sharedCore?.messageRegister || [],
       }),
@@ -296,11 +351,21 @@ export function* run(rawInput, io = {}) {
       note: 'repair round: the rows the arithmetic says are not described yet',
     })).filter(Boolean)
     described = [...described, ...repaired]
+    rejectedTriggers.push(...rejectTriggers(repaired, allKeys, log))
     covered = coveredKeys(described, allKeys)
     uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
     wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
+    // Re-unioned, not carried: the line above recomputes from `covered` alone, and a row that came back a SECOND
+    // time with a still-invalid trigger has a card — so without this the repair recompute drops it silently.
+    uncoveredKeys = withRejectedTriggers(uncoveredKeys, rejectedTriggers, allKeys, described)
     log(`coverage after repair: ${covered.size}/${allKeys.size} · ${uncoveredKeys.length} still uncovered · ${wiringOnly.length} mixin row(s) still missing the body card`)
   }
+
+  // The override-only scopes' answers, separated by KEY KIND before the Merge phase sees them. They carry
+  // `<schema>::override:<method>` keys, which resolve to no digest key at all, so they were already invisible to
+  // every coverage number above — this only makes them visible to the report.
+  const overrideFindings = overrideEntries(described)
+  if (overrideFindings.length) log(`${overrideFindings.length} override finding(s) from the override-only scope(s) — reported as their own report section, NOT as coverage of any digest row`)
 
   phase('Merge')
   const [merged] = yield step({
@@ -317,6 +382,8 @@ export function* run(rawInput, io = {}) {
         total: allKeys.size,
         uncoveredKeys,
         wiringOnly,
+        rejectedTriggers,
+        overrideFindings,
         outDir: input.outDir,
         censusNote: ctx.censusNote,
       }),
@@ -340,12 +407,33 @@ export function* run(rawInput, io = {}) {
     ? `complete: ${covered.size}/${allKeys.size} rows described`
     : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
   log(verdictLine)
+  // THE TWO NUMBERS, SIDE BY SIDE — and the sentence that says why they differ. The verdict above counts DIGEST
+  // rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one
+  // of them as "N of M" read as a surface census it never was.
+  const ledger = typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null
+  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
+  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
 
   return {
     surface: SURFACE,
     reportPath: merged?.reportPath || `${input.outDir}/customizations.md`,
     indexPath: merged?.indexPath || `${input.outDir}/behaviour-index.json`,
-    coverage: { described: covered.size, total: allKeys.size, complete, uncovered: uncoveredKeys, wiringOnly },
+    // THE DIGEST IS A WORKLIST, NOT A SURFACE CENSUS. `digestRows` counts the rows this run was handed;
+    // `ledgerMembers` is the engine's own member ledger for the scope it mapped (`result.coverage.total`,
+    // travelling in `totals`), which is a LARGER population — measured on the Applicants run: 10 digest method
+    // names against 11 definitions, 2 virtual attributes of 5, 3 members of 88. `total` is kept as an alias of
+    // `digestRows` for one release, because the parity golden and SKILL.md still read it.
+    coverage: {
+      described: covered.size,
+      digestRows: allKeys.size,
+      total: allKeys.size,
+      ledgerMembers: typeof input.totals?.ledgerMembers === 'number' ? input.totals.ledgerMembers : null,
+      complete, uncovered: uncoveredKeys, wiringOnly,
+    },
+    rejectedTriggers,
+    // Replacing-layer overrides found in scopes the digest gave 0 rows. NOT coverage of anything: their keys
+    // (`<schema>::override:<method>`) match no digest key, so they are reported beside the count, never inside it.
+    overrideFindings,
     scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: s.rows })),
     describeAgents: batches.length,
     cardCount: merged?.cardCount ?? null,

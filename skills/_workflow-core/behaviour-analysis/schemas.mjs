@@ -4,6 +4,12 @@
 // answer; prose only where a human reads it. A host without structured output
 // cannot run this workflow at all, which is why `structuredOutput` is a REQUIRED
 // capability rather than a degradable one.
+//
+// The reported-trigger vocabulary lives in `helpers.mjs` (the leaf module), so the SCHEMA that advertises it and
+// the VALIDATOR that enforces it read one list. The generator inlines helpers before schemas into one scope and
+// strips every `import`, so this line ships as nothing at all.
+
+import { REPORTED_TRIGGERS } from './helpers.mjs'
 
 export const SCOPE = {
   type: 'object',
@@ -66,10 +72,22 @@ export const INDEX_ENTRY = {
     ac: { type: 'array', items: { type: 'string' } },
     bodyCard: { type: 'string' },          // the body's OWN card, when the behaviour is defined outside this scope
     bodyAc: { type: 'array', items: { type: 'string' } },
-    trigger: { type: 'string' },           // only when this run resolved one the engine could not
+    // Only when this run resolved one the engine could not — and only from the CLOSED vocabulary. A bare string
+    // let `{"trigger":"internal","from":"init"}` through on the row named `init`, which rendered as an answered
+    // trigger and cleared the row out of the plan's unresolved count. The enum is the host-side half of the
+    // check; `validateReportedTrigger` is the arithmetic half, because hosts vary in how much of a JSON schema
+    // they actually enforce.
+    trigger: { type: 'string', enum: REPORTED_TRIGGERS },
     from: { type: 'string' },
     note: { type: 'string' },
+    // The analysis agent's own admission that it could NOT establish the behaviour. An entry carrying `false` is
+    // not coverage (see `behaviourEstablished` in helpers.mjs) and the engine keeps the row's `⚠ not described`.
+    behaviourEstablished: { type: 'boolean' },
   },
+  // `from` is REQUIRED the moment `trigger` is present — an origin-less reported trigger answers nothing. Stated
+  // in the schema for hosts that honour `dependentRequired`, and re-checked arithmetically in the core for the
+  // ones that do not.
+  dependentRequired: { trigger: ['from'] },
 }
 
 export const DESCRIBE_SCHEMA = {
