@@ -8,6 +8,30 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.10.0 (2026-09-04)
+
+**Your Classic pages are now read from their real source before a migration plan is written.** A plan run can also no longer report a partial surface as complete. This release ships the plan-time half of migration stage 2: a new `classic-ui-expert` skill that describes every customization on a Classic surface with the source that proves it, a shared Freedom mapping table the whole engine agrees on, and a behaviour-analysis workflow that runs the same way on Claude and Codex. The build-time half (the Freedom build executor and its build queue) is not in this release.
+
+### 🔍 Classic behaviour analysis
+
+- **A new `classic-ui-expert` skill** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). Ask what a Classic section, record page, mini page or detail actually does, and you get every customization with what it does, why it exists in business terms, and the exact source that proves it. It reads the stand only, and it declines instead of guessing when a source is unreachable.
+- **The analysis runs as a workflow, not as a single long prompt.** `classic-behaviour-analysis.workflow.js` and its host-neutral core (`skills/_workflow-core/`) split the surface into work items with their own run state, so a long analysis survives a dead call and replays identically instead of starting over. Claude and Codex adapters run the same core; a CI drift gate fails the build if the generated workflow stops matching its source.
+- **A run that can only see part of the surface stops instead of announcing full coverage** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). On a measured run the analysis returned 1 of 18 declared scopes and still logged `547/547` after 1h51m. It now stops with a named cause before spending a single description.
+- **Method names are counted per schema.** Six schemas each having an `onSaved` used to collapse into one row, so 413 rows were counted as 399 and one description closed six of them. Keys are qualified at one point, and an answer that cannot be attributed is named rather than dropped.
+- **The merge phase is retried** — it was the only phase whose death left full coverage and no deliverable — and **a page reachable from several parents is handed off once**, not two or three times.
+
+### 🗺️ Migration planning
+
+- **One mapping table for Classic → Freedom, checked against a registry** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). Element recognition, target selection and the generated component index come from the same source, so the plan and the engine can no longer disagree about what a Classic element becomes.
+- **The plan says what it could not place.** A coverage gate, imperative-logic and imperative-members worklists, section boundary resolution and a placement gate all run at plan time, so unplaceable behaviour is listed for you instead of quietly disappearing between plan and build.
+- **List pages are planned as their own change set**, and the `--stubs` handoff folds analysis results back into the plan.
+
+### 🛠️ Developer tooling
+
+- Bundled workflows are mirrored by the installer, generated output is excluded from Sonar analysis, and `.gitattributes` pins the generated files to LF so a Windows checkout runs them unchanged.
+
+---
+
 ## 1.9.0 (2026-09-03)
 
 **Every toolkit workflow now reports product telemetry, not only app creation, and a host-side hook makes sure a session is counted even when the agent forgets to.** Edit, migration, mobile-conversion and branding runs were invisible to usage analytics; this release makes them countable with the same opt-in consent, the same privacy rules and no change to how you work. It requires clio **8.1.0.119** or newer (`dotnet tool update clio -g`).
