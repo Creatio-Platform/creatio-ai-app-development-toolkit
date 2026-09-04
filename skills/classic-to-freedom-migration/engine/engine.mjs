@@ -244,6 +244,17 @@ function resolveEnumMember(table, key, aliases = null) {
   }
   return { found: false, key: canonical, value: null };
 }
+// Would the RUNTIME property read answer `member` with a number? Mirrors `resolveEnumTerminal` exactly — the same
+// two `Object.hasOwn` lookups, in the same order: the pinned member itself, then the ONE exact-case alias map.
+// `"exact"` / `"alias"` when it would answer (so a wrong number really is applied to elements a body declares
+// with that spelling), `null` when it would not (a mere CASE variant: the runtime reads `undefined`, so no
+// element of the run can carry the wrong number). Kept beside `resolveEnumMember` on purpose — these two lookups
+// drifted apart once already, which is the whole reason the drift guard mis-classified `STRING`.
+function runtimeSpelling(table, member, aliases = null) {
+  if (Object.hasOwn(table, member)) return "exact";
+  if (aliases && Object.hasOwn(aliases, member) && Object.hasOwn(table, aliases[member])) return "alias";
+  return null;
+}
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
@@ -255,9 +266,13 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 // Severities are deliberately unequal:
 //  • MISMATCH on a member both sides carry UNDER THE SAME NAME ⇒ blocking. The engine's number is wrong for this
 //    stand, so every element of that kind is mis-read and there is no safe partial reading.
-//  • A disagreement on a member that resolved only by ALIAS or by CASE (`Guid` against pinned `GUID`) ⇒ advisory.
-//    The engine reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has
-//    no element it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
+//  • A disagreement on a member the engine resolves through an EXACT-CASE ALIAS (`STRING`, which the runtime read
+//    really does resolve to pinned `TEXT`) ⇒ blocking, exactly like a same-name mismatch. The body CAN name
+//    `STRING`, the engine DOES answer it, and if the stand's `STRING` is not the number the engine returns then
+//    every element declared with it is mis-read.
+//  • A disagreement on a member that resolved only by CASE (`Guid` against pinned `GUID`) ⇒ advisory. The engine
+//    reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has no element
+//    it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
 //    see the reasoning at the comparison itself.
 //  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
 //    stop every migration on the day a release adds a member.
@@ -274,22 +289,25 @@ function driftIssuesForEnum(enumName, standTable, pinned, aliases, out) {
     const resolved = resolveEnumMember(pinned, member, aliases);
     if (!resolved.found) { out.newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
     if (resolved.value === standValue) continue;               // same member, same number — nothing to report
-    // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
-    // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
-    // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
-    // member the body names. Two defects came from ignoring that:
-    //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
-    //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
-    //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
-    //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
-    //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
-    //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
-    // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
-    // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
-    if (resolved.key === member) out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    // ENG-96571 (review 2, finding 1) — BLOCK ON EVERY SPELLING THE RUNTIME READ ANSWERS. What decides the
+    // severity is not "is the spelling identical" but "would `resolveEnumTerminal` have returned a number for
+    // THIS spelling" — that is the read a page body performs, so that is the read whose number can be wrong.
+    // `runtimeSpelling` is literally those two lookups (see it). Review 1 (finding K) got the case arm right and
+    // the alias arm wrong by collapsing both into `resolved.key === member`:
+    //   • `Guid: 5` must NOT block: the engine reads `GUID`, never `Guid`, so no element of this run can be
+    //     mis-read by the disagreement. Blocking stopped every migration on a fact that cannot bite.
+    //   • `STRING: 2` MUST block: `STRING` is a real member of a real stand and `resolveEnumTerminal` answers it
+    //     with pinned `TEXT`'s 1. If this stand's `STRING` is 2, every attribute declared with it is read as the
+    //     wrong data type — same damage as a same-name mismatch, so the same severity.
+    // The blocking message names BOTH spellings for the alias arm, because the old text ("DataValueType.STRING:
+    // engine 1") asserted a pinned `STRING` whose value is 1: there is no pinned `STRING`, the 1 is `TEXT`'s, and
+    // an operator sent to `engine.mjs` to fix `STRING` found nothing to fix. Flat strings, no nested templates.
+    const spelling = runtimeSpelling(pinned, member, aliases);
+    if (spelling === "exact") out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    else if (spelling === "alias") out.mismatches.push(`${enumName}.${member} (alias of ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
     // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
-    // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
-    // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
+    // table" — and every clause of it is false for a case-variant row: the engine DOES pin the member (under
+    // the other case), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
     // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
     // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
     // which means the two categories cannot share one line.

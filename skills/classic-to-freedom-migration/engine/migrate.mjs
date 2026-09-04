@@ -262,7 +262,7 @@ const normalizeWarningText = (t) => String(t ?? "").trim().replace(/\s+/g, " ");
 // names the fact, it BLOCKS, and a disposition can be written against it verbatim. `""`, `null` and `{}` name no
 // fact at all and still fall through to being skipped.
 const bundleWarningFallbackText = (w) => (w && typeof w === "object" && Object.keys(w).length ? JSON.stringify(w) : "");
-export const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
+const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
 const bundleWarningText = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.message || w?.code || ""));
 // The only dispositions a bundle warning may carry — the same validated-enum rule as `WARNING_DISPOSITIONS` and
 // `MEMBER_DISPOSITIONS`, and for the same reason (a truthy `resolved` with a typo'd disposition would close a
@@ -399,11 +399,15 @@ function confirmDispositionsInput(manifest, opts) {
 // in their own advisory line, so the operator learns the answer belongs in the worklist that DOES carry the row
 // (`⚠ Imperative logic` / `⚠ Imperative members`, closed via `memberDispositions`) instead of believing it landed.
 // Returns `{ closed, invalid, notApplicable }` (arrays of keys) so a caller/test can see what the manifest did.
+// `seen` (ENG-96571 review 2, finding 3) is every BARE key this scope actually has a row for — the input the
+// unmatched report needs. It is collected here rather than re-derived by the caller so "what a key could have
+// matched" is read off the same loop that matches them, and the two cannot disagree.
 function applyConfirmDispositions(changeSet, declared, scopeSchema) {
-  const closed = [], invalid = [], notApplicable = [];
-  if (!Object.keys(declared).length) return { closed, invalid, notApplicable };
+  const closed = [], invalid = [], notApplicable = [], seen = [];
+  if (!Object.keys(declared).length) return { closed, invalid, notApplicable, seen };
   for (const n of changeSet?.needsDecision || []) {
     const key = confirmKeyOf(n);
+    seen.push(key);
     const dec = plainObject((scopeSchema ? declared[`${scopeSchema}::${key}`] : undefined) ?? declared[key]);
     if (dec.resolved !== true) continue;
     if (SHOWN_ELSEWHERE.has(n.kind)) { notApplicable.push(key); continue; }
@@ -417,16 +421,59 @@ function applyConfirmDispositions(changeSet, declared, scopeSchema) {
     n.note = typeof dec.note === "string" ? dec.note : null;
     closed.push(key);
   }
-  return { closed, invalid, notApplicable };
+  return { closed, invalid, notApplicable, seen };
+}
+
+// ENG-96571 review 2 (finding 4) — the FORM page's ChangeSet and the LIST page's are two scopes with ONE answer
+// map, and the renderers treat them alike (`renderListPage` calls `renderConfirmWorklist(result.listChangeSet)`).
+// The disposition pass ran over the form's rows only, so a `list-columns:…` / `list-add-routing:…` answer closed
+// nothing and was reported in none of `closed`/`invalid`/`notApplicable` — the operator's answer landed nowhere and
+// nothing said so. Merged into ONE result rather than published as a second field: `result.confirmDispositions` is
+// the run's report of what the manifest did, and a caller asking "was my key applied?" must not have to know which
+// of the two pages raised the row. `listChangeSet` is null in mini/child scope, which `applyConfirmDispositions`
+// already tolerates.
+function mergeConfirmResults(a, b) {
+  return {
+    closed: [...a.closed, ...b.closed], invalid: [...a.invalid, ...b.invalid],
+    notApplicable: [...a.notApplicable, ...b.notApplicable], seen: [...a.seen, ...b.seen],
+  };
+}
+
+// ENG-96571 review 2 (finding 3) — recorded keys that matched NO row in this scope: a typo in the kind or the item.
+// They closed nothing and appear in none of the three reported arrays (each of those needs a row to attach to), so
+// without this the answer is simply absent from the plan while the question still reads as open.
+//
+// WHICH scope reports which key is the whole difficulty, and the rule is "only the scope the key names":
+//   · a SCOPED key (`<schema>::<kind>:<item>`) is reported by the run whose `scopeSchema` IS that schema — at the
+//     root a `C1Child::…` key is not unmatched, it is simply not addressed to the root;
+//   · a BARE key is reported at the ROOT only, and only when the run has NO nested scope to inherit into. The
+//     inherited map reaches every child/typed/mini fold, and those folds run AFTER this pass — so a bare key that
+//     legitimately closes a row on a child page has, at this moment, matched nothing the root can see. Reporting it
+//     here would print a ⚠ about a key that worked, which is worse than the silence it replaces. A single-page run
+//     (the case where a typo is most likely and nothing else can explain the miss) still gets the report.
+function unmatchedConfirmKeys(declared, seen, scopeSchema, hasNested) {
+  const matched = new Set(seen);
+  const out = [];
+  for (const [k, v] of Object.entries(plainObject(declared))) {
+    if (plainObject(v).resolved !== true) continue;
+    const sep = k.indexOf("::");
+    const scope = sep === -1 ? null : k.slice(0, sep);
+    const bare = sep === -1 ? k : k.slice(sep + 2);
+    const mine = scope === null ? !scopeSchema && !hasNested : scope === scopeSchema;
+    if (mine && !matched.has(bare)) out.push(k);
+  }
+  return out;
 }
 
 // The `enum-drift-advisory` row's reason, or null when there is nothing advisory to say. Own fn (Sonar CC 15 in
 // `runMigration`, which has none to spare) and, more to the point, because the TWO advisory categories have
 // DIFFERENT remedies and must never share one sentence (ENG-96571 review 1, K):
 //   · a member only the STAND carries  → add it to the pinned table in engine.mjs;
-//   · a member the engine pins under ANOTHER SPELLING with a different number → do NOT add the stand's spelling;
-//     the engine reads a body by exact property name, so it never reads that spelling and no element of this run
-//     can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling still holds.
+//   · a member the engine pins under a DIFFERENT CASE only, with a different number → do NOT add the stand's
+//     spelling; the engine reads a body by exact property name, so it never reads that case variant and no element
+//     of this run can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling
+//     still holds. (An EXACT-CASE ALIAS such as `STRING` is NOT here — the runtime read answers it, so a
+//     disagreement on it lands in `mismatches` and BLOCKS; ENG-96571 review 2, finding 1.)
 // The old single sentence said "identified by name but has no numeric value, so add the member(s) to the pinned
 // table" over both, and every clause of it is false for the second category. Since an `enum-drift-advisory` row
 // can be CLOSED by a recorded disposition, this is the text an operator reads to decide — it has to be true.
@@ -435,7 +482,7 @@ function enumDriftAdvisoryReason(drift) {
   if (drift.newMembers.length)
     clauses.push(`the stand carries enum member(s) this engine does not pin: ${drift.newMembers.join("; ")}. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\``);
   if (drift.spellingDrift.length)
-    clauses.push(`the stand echoes a member this engine pins under ANOTHER SPELLING, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that spelling and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
+    clauses.push(`the stand echoes a member this engine pins under a DIFFERENT CASE only, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that case variant and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
   if (!clauses.length) return null;
   return `${clauses.join(" — and separately: ")}. What the engine DOES know is still correct — this does not block.`;
 }
@@ -482,7 +529,7 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   // of that kind, with no partially-correct reading to fall back to. A member only the stand carries is advisory.
   const drift = enumDriftIssues(manifest.enumVocabulary);
   if (drift.mismatches.length)
-    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning.`);
+    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning. Where a row reads \`X (alias of Y)\`, fix the value pinned for Y — do NOT add an X entry beside it, or the engine would then read the two spellings as two different numbers.`);
   return { blocked: reasons.length > 0, reasons };
 }
 
@@ -1299,6 +1346,17 @@ function publishPage(node, baseKey, alt, dedupeId, rowsFor) {
   node.pageKey = baseKey;
   node.pageRows = rowsFor(baseKey);
 }
+// ENG-96571 review 3 — THE ⚠ Confirm QUESTIONS THIS FOLDED SCOPE CLOSED, published on the node.
+// A folded sub-page node exposes `pageRows` (rendered under its own key) but NOT its `changeSet`: the rows were
+// built inside the fold and the ChangeSet stays there. `confirmWorklistRows` therefore already dropped the closed
+// rows before the parent ever saw them, so `pageUnits` — which reconciles `resolutions.json` against the whole
+// tree — had no way to know a sub-page question had been asked and answered by a disposition. Without this an
+// operator who used BOTH channels on a CHILD page's row got the same "an answer nobody asked for" ⚠ the root-level
+// defect produced. The RAW `kind`/`item` pair, never the joined key: `item` carries colons.
+// Per node and NOT aggregated upward — `subPageNodes` recurses through `childPages`, so every grandchild is
+// visited on its own and an aggregate here would double-count.
+const closedConfirmPairs = (cs) => (cs?.needsDecision || [])
+  .filter((n) => n.closed === true).map((n) => ({ kind: n.kind, item: n.item }));
 // Fold each child page (recursive sub-migration) via foldSubPage, writing the mapping onto each childPages entry.
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
@@ -1370,6 +1428,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // satisfy names the very schema the recommendation banner told it to build on. Dedupe on the RESOLVED schema
   // key: the memo hands the same `res` to every parent referencing this page.
   const childTpl = CHILD_TEMPLATE_SCHEMA[childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)] || null;
+  c.confirmClosed = closedConfirmPairs(res.changeSet);
   publishPage(c, pageKey, key, `child::${key}`,
     (k) => checklistGroups(res, subPageOpts(foldCtx, k, childTpl, { isChildPage: true })));
 }
@@ -1399,6 +1458,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
     // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
     // template row rather than one pinned to the parent's template, which a per-type form need not share.
+    t.confirmClosed = closedConfirmPairs(res.changeSet);
     publishPage(t, `typed:${t.schema}`, tkey, `typed::${tkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, t.template || null)));
   }
@@ -1431,6 +1491,7 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
     // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
     // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
+    miniPage.confirmClosed = closedConfirmPairs(res.changeSet);
     publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, CHILD_TEMPLATE_SCHEMA.mini, { isMiniPage: true })));
   }
@@ -2740,10 +2801,22 @@ export function runMigration(manifest, opts = {}) {
   // `closed` / `invalid` / `notApplicable` — so an operator who answered one saw the row come back unchanged on
   // every regenerate with nothing saying why. Still applied after `applyBehaviourIndex` for the reason it always
   // was: both annotate the SAME rows, and a row that is described AND answered must carry both facts.
-  const confirmDispositions = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  const formConfirm = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  // …and the LIST page's own rows, from the SAME map (finding 4 — see `mergeConfirmResults`).
+  const listConfirm = applyConfirmDispositions(listChangeSet, confirmDispositionsIn, opts.scopeSchema);
+  const confirmDispositions = mergeConfirmResults(formConfirm, listConfirm);
   // Published on the ChangeSet so `renderConfirmWorklist` can name the not-applicable keys without a second
   // argument — the same channel `featureSignals` uses, and the only place the renderer sees this run's answers.
-  changeSet.confirmNotApplicable = confirmDispositions.notApplicable;
+  // Per PAGE, not merged: each worklist names the keys aimed at rows IT prints.
+  changeSet.confirmNotApplicable = formConfirm.notApplicable;
+  if (listChangeSet) listChangeSet.confirmNotApplicable = listConfirm.notApplicable;
+  // The unmatched report is computed ONCE, over the union of both pages' rows: computed per page, each call would
+  // report the OTHER page's keys as unmatched. Published on the form page's ChangeSet — the ⚠ line is about the
+  // manifest, not about one of the two grids, and the form worklist is the one every scope renders.
+  const confirmUnmatched = unmatchedConfirmKeys(confirmDispositionsIn, confirmDispositions.seen, opts.scopeSchema,
+    childPages.length > 0 || typedPages.length > 0 || !!manifest.addRecordMiniPage);
+  changeSet.confirmUnmatched = confirmUnmatched;
+  confirmDispositions.unmatched = confirmUnmatched;
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -3125,6 +3198,16 @@ function unmatchedResolutionsNote(unmatched) {
   const more = unmatched.length > 5 ? ` | …and ${unmatched.length - 5} more` : "";
   return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
 }
+// ENG-96571 review 3 — an answer whose question a `manifest.confirmDispositions` entry had ALREADY CLOSED. NOT a
+// miss (the note above must not claim it is: the question was asked, and the documentation tells the operator to
+// fill both channels) and NOT work either — the row is closed, so nothing in `preflight[]` carries the answer to a
+// builder. Stated ℹ rather than ⚠ for exactly that reason: this is the documented double-channel answer, and the
+// only thing worth saying about it is which channel the run acted on.
+function closedResolutionsNote(closed) {
+  const named = closed.map((c) => `${c.kind}:${c.item}`).slice(0, 5).join(" | ");
+  const more = closed.length > 5 ? ` | …and ${closed.length - 5} more` : "";
+  return `migrate.mjs: ℹ ${closed.length} --resolutions answer(s) target questions already CLOSED by a disposition: ${named}${more}. The recorded disposition is what closed the row; the answer is kept in \`resolutionsClosed\` and is NOT counted in \`resolutionsMatched\`.\n`;
+}
 
 // An unknown `--page` key FAILS: a caller that asked for one page must never be handed the whole artifact as
 // though it were that page's slice. One message for both slicers below.
@@ -3328,6 +3411,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const planUnits = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
       if (planUnits.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(planUnits.resolutionsUnmatched));
       if (planUnits.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(planUnits.resolutionsConflicts));
+      if (planUnits.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(planUnits.resolutionsClosed));
     }
   }
   else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
@@ -3395,6 +3479,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
+    if (units.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(units.resolutionsClosed));
   }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
@@ -3586,7 +3671,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `plan.md`. It is generator guidance, not plan content: a delivered plan must not end by telling its reader to
   // fill `manifest.planMeta`. Printed on every `--plan` run (complete or not) because the "do not hand-edit the
   // generated tables" half applies to a COMPLETE plan too — that is the rule agents break.
-  if (planMode) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
+  // ENG-96571 review 2 (finding 5) — NOT on the `--out` path. There the same two sentences are already in the
+  // `plan.notes.md` this run wrote (`renderPlanNotes` renders them from `PLAN_AUTHORING_SENTENCES`, the one copy of
+  // the text), and stdout already points the agent at that file. Writing them again on stderr made the run state
+  // the rule twice, in two places, which is how an agent learns to read neither.
+  if (planMode && !outFile) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");

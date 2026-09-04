@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, deriveApplicationCode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE, PLAN_AUTHORING_SENTENCES } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 // ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
 // function the ENG-95468 identifiers gate compares it to. Two copies of "target package minus prefix" that are
@@ -2719,7 +2719,10 @@ check("ENG-96457 (item 6): the plan FILE carries no generator/authoring text —
   !/present this VERBATIM/i.test(cli.plan) && !/present the plan VERBATIM/i.test(cli.plan)
   && !/Supply the plan values/.test(cli.plan) && !/\*Adjustments\* list/.test(cli.plan));
 check("ENG-96457 (item 6): the authoring rule still REACHES the agent — `PLAN_AUTHORING_NOTE` carries both halves (supply planMeta + re-run, and do not edit the generated tables)",
-  /manifest\.planMeta` and re-run/.test(PLAN_AUTHORING_NOTE) && /present the plan VERBATIM/.test(PLAN_AUTHORING_NOTE)
+  // ENG-96571 review 2 (finding 5) — the wording is now the ONE copy shared with `renderPlanNotes`
+  // (`PLAN_AUTHORING_SENTENCES`), which names `plan.md` instead of the old "above". The assertion follows the text
+  // it pins rather than keeping a second wording alive.
+  /manifest\.planMeta` and re-run/.test(PLAN_AUTHORING_NOTE) && /present `plan\.md` VERBATIM/.test(PLAN_AUTHORING_NOTE)
   && /\*Adjustments\* list/.test(PLAN_AUTHORING_NOTE) && /do NOT edit, reorder, or drop/.test(PLAN_AUTHORING_NOTE));
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
@@ -7519,7 +7522,11 @@ const lifeRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
   behaviourIndex: { answered: { trigger: "attribute", from: "attributes.Stage.onChange", card: "C1", ac: ["AC-1"] } } });
 const lifeTrig = (m) => (lifeRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
 check("chain roots: the SETUP holds — the caller carries `lifecycle` while the row under test is still weak",
-  lifeTrig("hHelper")?.kind === "lifecycle" && lifeTrig("hHelper")?.from === "onSaved"
+  // ENG-96571 review 2 (finding 2) — `from` is the IMMEDIATE caller (`cHelper`) and the platform hook rides in
+  // `hook`. This assertion used to read `from === "onSaved"`, which pinned the defect: a composed lifecycle answer
+  // overwrote nothing, so the immediate caller was lost and the row folded under the platform hook.
+  lifeTrig("hHelper")?.kind === "lifecycle" && lifeTrig("hHelper")?.from === "cHelper"
+  && lifeTrig("hHelper")?.hook === "onSaved"
   // "still weak" = its OWN trigger is not the lifecycle answer. Under the B1 shape `kind === "internal"` IS that
   // statement (a lifecycle-answered row carries kind `lifecycle`), so no second field check is needed — and none is
   // possible: `propagateChainRoots` has already given this row its inherited root by the time it is read here.
@@ -7527,7 +7534,8 @@ check("chain roots: the SETUP holds — the caller carries `lifecycle` while the
   () => JSON.stringify([lifeTrig("hHelper"), lifeTrig("cHelper")]));
 check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
   lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.kind === "lifecycle"
-  && lifeTrig("cHelper")?.rootTrigger?.from === "onSaved",
+  // finding 2: the hook the inherited root carries lives in `hook`; `from` there is the immediate caller.
+  && lifeTrig("cHelper")?.rootTrigger?.hook === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
 check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
   /onSaved \(platform lifecycle\) → internal call/.test(
@@ -12050,6 +12058,19 @@ check("ENG-96571 (review 1, K): a CROSS-SPELLING drift row is REASONED as one �
 check("ENG-96571 (review 1, K): and it does NOT carry the stand-only-member remedy — 'has no numeric value, so add the member(s) to the pinned table' is false in every clause for this row, and the operator reads this text to pick a disposition",
   !/has no numeric value/.test(r1kSpelling) && !/add the member\(s\) to the pinned table/.test(r1kSpelling),
   () => r1kSpelling);
+/* ---- review 2, finding 1: an EXACT-CASE ALIAS disagreement BLOCKS THE GATE, it is not an advisory row ---- */
+// The engine-level classification is pinned in run.mjs; this is the consequence the finding is actually about —
+// `computeGate` must read an alias row out of `mismatches` and STOP the run, and the alias row must not appear
+// as an `enum-drift-advisory` the operator can simply close with a disposition.
+const r21aRun = runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: { DataValueType: { STRING: 2 } } });
+check("ENG-96571 review 2 (finding 1): an EXACT-CASE ALIAS disagreement BLOCKS the gate — `STRING: 2` against pinned `TEXT: 1` is a number the runtime read really returns, so every attribute declared with it is mis-typed",
+  r21aRun.gate.blocked === true
+  && r21aRun.gate.reasons.some((r) => /DataValueType\.STRING \(alias of TEXT\): engine 1, stand 2/.test(r)),
+  () => ({ blocked: r21aRun.gate.blocked, reasons: r21aRun.gate.reasons }));
+check("ENG-96571 review 2 (finding 1): and it raises NO `enum-drift-advisory` row — a blocking fact must not also arrive as a row a recorded disposition can close",
+  !r21aRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory"),
+  () => r21aRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory"));
 const r1kNew = r1kReason({ DataValueType: { SOME_FUTURE_MEMBER: 99 } });
 check("ENG-96571 (review 1, K) ANTI-VACUITY: a genuinely stand-only member still gets the ADD-IT remedy — the split gave each category its own sentence, it did not delete one",
   /does not pin: DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(r1kNew)
@@ -12504,6 +12525,317 @@ check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` writes 
   /ℹ Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
   && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || ""),
   () => (br1Plan.stderr || "").slice(0, 300));
+
+
+/* ================================================================================================
+   ENG-96571 review 2 — the plan-stage findings (1 · 2 · 3 · 4 · 5 · 6)
+   ================================================================================================ */
+
+/* ---- finding 1 (BLOCKER): a CLOSED ⚠ Confirm row is not an open evidence row ---- */
+// `confirmWorklistRows` filtered `SHOWN_ELSEWHERE` only, so a row an operator had ANSWERED through
+// `manifest.confirmDispositions` still came out of `--units`/`--checklist` as an OPEN evidence id. The plan said
+// "(N open, 1 closed)" while the machine artifact the executor reads carried the closed question as work.
+const R2_1_BODY = `define("R21Page",[],function(){return{entitySchemaName:"HRRequest",
+  diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const R2_1_KEY = "enum-drift-advisory:enumVocabulary";
+const r21Run = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R21Page", body: R2_1_BODY }],
+  enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r21Ids = (r) => pageUnits(r, {}).preflight.map((u) => u.id);
+const r21Open = r21Run(null);
+const r21Closed = r21Run({ [R2_1_KEY]: { resolved: true, disposition: "accepted", note: "checked" } });
+check("ENG-96571 review 2 (finding 1) SETUP: with no disposition the `enum-drift-advisory` row IS an open evidence row in `--units.preflight` and a row in the control table",
+  r21Ids(r21Open).includes(`main#confirm:${R2_1_KEY}`)
+  && /\[enum-drift-advisory\] enumVocabulary/.test(renderChecklist(r21Open, {})),
+  () => r21Ids(r21Open));
+check("ENG-96571 review 2 (finding 1) BLOCKER: once the row is CLOSED by a recorded disposition it is NOT published as an open evidence id any more — the plan and the machine artifact stated different amounts of work, and the extra unit could be closed by nothing",
+  r21Closed.confirmDispositions.closed.includes(R2_1_KEY)
+  && !r21Ids(r21Closed).includes(`main#confirm:${R2_1_KEY}`),
+  () => ({ closed: r21Closed.confirmDispositions, ids: r21Ids(r21Closed) }));
+check("ENG-96571 review 2 (finding 1): …and it is gone from the ⚠ Confirm worklist GROUP of the control table too — a `vk`-less row there would still render as `☐ confirm on-stand`, the same open item under another marker",
+  !/\[enum-drift-advisory\] enumVocabulary/.test(renderChecklist(r21Closed, {})),
+  () => renderChecklist(r21Closed, {}).split("\n").filter((l) => /enum-drift-advisory|Confirm worklist/.test(l)));
+check("ENG-96571 review 2 (finding 1): the ANSWER is not lost — the plan still prints the closed row with its note, which is the channel that carries it",
+  /CLOSED by a recorded disposition/.test(r21Closed.designSpec)
+  && /\*\*\[enum-drift-advisory\]\*\* enumVocabulary → \*\*accepted\*\*/.test(r21Closed.designSpec)
+  && /checked/.test(r21Closed.designSpec),
+  () => r21Closed.designSpec.split("\n").filter((l) => /CLOSED|enum-drift/.test(l)));
+
+/* ---- finding 2: a composed LIFECYCLE trigger keeps its immediate caller ---- */
+// `composeUpstream` returned the upstream lifecycle answer UNCHANGED, so on `onSaved → mid → leaf` the row for
+// `leaf` carried `from: "onSaved"`. `from` is what `foldParentLinks` folds by, so `leaf` folded under the platform
+// hook instead of under `mid`, `via` vanished, and the Freedom target read "port with `onSaved`".
+const r22Run = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+  `define("R22Page", [], function() { return { entitySchemaName: "Deal", methods: {
+    onSaved: function() { this.callParent(arguments); this.mid(); },
+    mid: function() { this.leaf(); },
+    leaf: function() { return 1; } },
+    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] });
+const r22Trig = (m) => (r22Run.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
+const r22Plan = renderPlan(r22Run, {});
+const r22Row = (m) => (r22Plan.split("\n").find((l) => l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "");
+check("ENG-96571 review 2 (finding 2): a composed `lifecycle` trigger carries the IMMEDIATE caller in `from` and the platform hook in `hook` — `from: onSaved` on a two-hop chain lost `mid` entirely",
+  r22Trig("leaf")?.kind === "lifecycle" && r22Trig("leaf")?.from === "mid" && r22Trig("leaf")?.hook === "onSaved",
+  () => JSON.stringify([r22Trig("mid"), r22Trig("leaf")]));
+check("ENG-96571 review 2 (finding 2): the ONE-hop answer is unchanged — `mid` is called by the hook itself, so its `from` IS the hook and `foldParentLinks`' `byName.has(from)` guard still keeps a filtered-out platform hook from folding",
+  r22Trig("mid")?.kind === "lifecycle" && r22Trig("mid")?.from === "onSaved",
+  () => JSON.stringify(r22Trig("mid")));
+check("ENG-96571 review 2 (finding 2): `leaf` folds under `mid` and its Freedom target says `port with \\`mid\\`` — it used to fold under the platform hook and name it as the thing to port with",
+  /↳/.test(r22Row("leaf")) && /port with `mid`/.test(r22Row("leaf"))
+  && !/port with `onSaved`/.test(r22Row("leaf")),
+  () => [r22Row("mid"), r22Row("leaf")]);
+check("ENG-96571 review 2 (finding 2): and the trigger CELL still names the platform hook — the answer to 'what starts this' is unchanged by the rebase",
+  /onSaved \(platform lifecycle\) → internal call/.test(r22Row("leaf")),
+  () => r22Row("leaf"));
+check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop — the hook in the cell, the immediate caller in `from`, the middle hops in `via`",
+  (() => {
+    const r = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+      `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
+        onSaved: function() { this.callParent(arguments); this.top(); },
+        top: function() { this.mid(); },
+        mid: function() { this.leaf(); },
+        leaf: function() { return 1; } },
+        diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] });
+    const t = (r.changeSet.handlerStubs.find((h) => h.sourceMethod === "leaf")?.triggers || [])[0];
+    const plan = renderPlan(r, {});
+    const row = plan.split("\n").find((l) => l.split("|")[1]?.replaceAll("↳", "").trim() === "leaf") || "";
+    return t?.from === "mid" && t?.hook === "onSaved" && (t?.via || []).join(",") === "top"
+      && /port with `mid`/.test(row) && /onSaved \(platform lifecycle\) → internal call via top/.test(row);
+  })(),
+  () => JSON.stringify((runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+    `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
+      onSaved: function() { this.callParent(arguments); this.top(); },
+      top: function() { this.mid(); }, mid: function() { this.leaf(); }, leaf: function() { return 1; } },
+      diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] })
+    .changeSet.handlerStubs.find((h) => h.sourceMethod === "leaf")?.triggers || [])[0]));
+check("ENG-96571 review 2 (finding 2) ANTI-VACUITY: a lifecycle-answered row is STILL not counted as `internalCallOnly` — the rebase moved a field, it did not turn the answer back into a weak hop",
+  r22Run.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(r22Run.stubIndex[0].counts));
+
+/* ---- finding 3: a recorded key that matches NO row is reported, not swallowed ---- */
+// A typo in the kind or the item closed nothing and appeared in none of closed/invalid/notApplicable, so the plan
+// neither showed the answer nor said it was not applied — the operator regenerated forever against a typo.
+const r23Run = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R21Page", body: R2_1_BODY }],
+  enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r23Typo = r23Run({ "enum-drift-advisory:enumVocabularyy": { resolved: true, disposition: "accepted", note: "typo" } });
+check("ENG-96571 review 2 (finding 3): a recorded key matching NO row in this scope is reported as `unmatched` and NAMED in a ⚠ line — it used to vanish from every channel",
+  r23Typo.confirmDispositions.unmatched.join("|") === "enum-drift-advisory:enumVocabularyy"
+  && r23Typo.confirmDispositions.closed.length === 0
+  && /recorded `confirmDispositions` key\(s\) matched NO ⚠ Confirm row in this scope/.test(r23Typo.designSpec)
+  && r23Typo.designSpec.includes("enum-drift-advisory:enumVocabularyy"),
+  () => ({ reported: r23Typo.confirmDispositions, lines: r23Typo.designSpec.split("\n").filter((l) => /matched NO/.test(l)) }));
+check("ENG-96571 review 2 (finding 3) ANTI-VACUITY: the CORRECT key is not reported unmatched — the report flags a miss, not every key",
+  r21Closed.confirmDispositions.unmatched.length === 0
+  && !/matched NO ⚠ Confirm row/.test(r21Closed.designSpec),
+  () => JSON.stringify(r21Closed.confirmDispositions));
+check("ENG-96571 review 2 (finding 3): a key with no `resolved: true` is NOT unmatched — an unfinished entry is not a wrong one, the same rule `invalid` follows",
+  r23Run({ "enum-drift-advisory:nope": { disposition: "accepted" } }).confirmDispositions.unmatched.length === 0);
+// SCOPE: a key addressed to ANOTHER schema is not this scope's to report, and a bare key is reported at the ROOT
+// only — the inherited map reaches child/typed/mini folds, which run AFTER this pass, so a bare key that closes a
+// row on a child page has matched nothing the root can see yet. Reporting it there would ⚠ about a key that worked.
+check("ENG-96571 review 2 (finding 3): a key scoped to ANOTHER schema is not reported by this scope — it is not addressed to it, so `unmatched` would be a wrong ⚠",
+  r23Run({ "OtherPage::enum-drift-advisory:enumVocabulary": { resolved: true, disposition: "accepted" } })
+    .confirmDispositions.unmatched.length === 0);
+check("ENG-96571 review 2 (finding 3): a SCOPED key is reported by the run whose `scopeSchema` it names, when it matches nothing there",
+  runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } },
+    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.join("|") === "R21Page::enum-drift-advisory:typo");
+check("ENG-96571 review 2 (finding 3) BLOCKER-AVOIDED: a BARE key that legitimately closes a row on a CHILD page is NOT reported unmatched at the root — the child fold runs after this pass, so a root-level report would be a ⚠ about an answer that worked",
+  (() => { const r = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+
+/* ---- finding 4: the LIST page's rows are closed by the same answer map ---- */
+// `applyConfirmDispositions` ran over the form page's ChangeSet only, while `renderListPage` renders
+// `renderConfirmWorklist(result.listChangeSet)` — so a `list-*` answer closed nothing AND was reported in none of
+// the three arrays: the operator's answer landed nowhere and no line said so.
+const R2_4_MAN = (dispositions) => ({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R24Page", body: `define("R24Page",[],function(){return{entitySchemaName:"HRRequest",
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: [{ pkg: "R24Section", body: `define("HRRequestSection",[],function(){return{entitySchemaName:"HRRequest",diff:[]};});` }],
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r24Open = runMigration(R2_4_MAN(null));
+const r24Key = (r24Open.listChangeSet?.needsDecision || []).map((n) => `${n.kind}:${n.item}`)[0];
+check("ENG-96571 review 2 (finding 4) SETUP: the fixture's LIST page really raises a ⚠ Confirm row of its own, and with no disposition it renders as open",
+  typeof r24Key === "string" && r24Key.length > 0
+  && !/CLOSED by a recorded disposition/.test(r24Open.designSpec),
+  () => (r24Open.listChangeSet?.needsDecision || []).map((n) => `${n.kind}:${n.item}`));
+const r24Closed = runMigration(R2_4_MAN({ [r24Key]: { resolved: true, disposition: "accepted", note: "the list answer" } }));
+check("ENG-96571 review 2 (finding 4): a LIST-page disposition now CLOSES its row and is reported on the result — the pass never touched `listChangeSet`, so the answer neither closed nor reported",
+  r24Closed.confirmDispositions.closed.includes(r24Key)
+  && (r24Closed.listChangeSet.needsDecision.find((n) => `${n.kind}:${n.item}` === r24Key) || {}).closed === true
+  && /the list answer/.test(r24Closed.designSpec),
+  () => JSON.stringify({ reported: r24Closed.confirmDispositions, want: r24Key }));
+check("ENG-96571 review 2 (finding 4): the list page publishes its OWN `confirmNotApplicable`, so its worklist names the keys aimed at rows IT prints",
+  Array.isArray(r24Closed.listChangeSet.confirmNotApplicable),
+  () => JSON.stringify(r24Closed.listChangeSet.confirmNotApplicable));
+check("ENG-96571 review 2 (finding 4): the unmatched report is computed over BOTH pages' rows — a valid list key is not reported unmatched by the form page's pass, and vice versa",
+  (r24Closed.confirmDispositions.unmatched || []).length === 0,
+  () => JSON.stringify(r24Closed.confirmDispositions));
+
+/* ---- finding 5: ONE copy of the authoring rule ---- */
+// `renderPlanNotes` hand-wrote the same two sentences `PLAN_AUTHORING_NOTE` carries, in its own wording, so the
+// rule existed twice and an edit to either left the other stating the old version of it.
+check("ENG-96571 review 2 (finding 5): `renderPlanNotes` renders the authoring rule FROM `PLAN_AUTHORING_SENTENCES` — the notes document and the stderr paragraph are one text, so neither can drift",
+  PLAN_AUTHORING_SENTENCES.length === 2
+  && PLAN_AUTHORING_SENTENCES.every((s) => renderPlanNotes({}).includes(s))
+  && PLAN_AUTHORING_SENTENCES.every((s) => PLAN_AUTHORING_NOTE.includes(s)),
+  () => renderPlanNotes({}));
+check("ENG-96571 review 2 (finding 5): on the `--out` path the rule is NOT also written to stderr — it is already in the `plan.notes.md` that run wrote, and stdout points the agent at that file",
+  (() => {
+    const f = path.join(os.tmpdir(), `r25-plan-${process.pid}.md`);
+    try {
+      const r = br1(["--plan", "--out", f]);
+      // BOTH sentences, verbatim: with the stderr line gone from this path the notes file is the ONLY carrier of
+      // the rule here, so a check that reads one half would let the other disappear unnoticed.
+      const notes = fs.readFileSync(path.join(path.dirname(f), path.basename(f, ".md") + ".notes.md"), "utf8");
+      return r.status === 0 && !/ℹ Supply the plan values/.test(r.stderr || "")
+        && PLAN_AUTHORING_SENTENCES.every((s) => notes.includes(s));
+    } finally { fs.rmSync(f, { force: true }); fs.rmSync(path.join(path.dirname(f), path.basename(f, ".md") + ".notes.md"), { force: true }); }
+  })(),
+  () => "see --plan --out on the BR1 fixture");
+
+/* ---- finding 6: "(0 open)", not "(0)", when the section's body is an advisory ---- */
+// The worklist renders when it has ANY of four things to say, and two of them are advisories about answers that
+// landed nowhere. With no open row the header read a bare `(0)`, which summarizes such a section as "zero
+// questions, nothing to see" — the opposite of what its body says. Driven off a hand-built ChangeSet because the
+// case is "no open rows AT ALL", which no real fixture of this suite reaches.
+const r26Spec = (cs) => renderDesignSpec({ entity: "HRRequest", changeSet: { viewConfigDiff: [], needsDecision: [], ...cs } }, {});
+check("ENG-96571 review 2 (finding 6): a worklist whose only content is a NOT-APPLICABLE advisory heads `(0 open)` — a bare `(0)` reads as 'nothing to see' above a ⚠ line about an answer that landed nowhere",
+  /#### ⚠ Confirm before I build \(0 open\)/.test(r26Spec({ confirmNotApplicable: ["method:onSaved"] })),
+  () => r26Spec({ confirmNotApplicable: ["method:onSaved"] }).split("\n").filter((l) => /Confirm before I build|does not print/.test(l)));
+check("ENG-96571 review 2 (finding 6): the same for an UNMATCHED-key advisory",
+  /#### ⚠ Confirm before I build \(0 open\)/.test(r26Spec({ confirmUnmatched: ["rule-condition:Nope"] })),
+  () => r26Spec({ confirmUnmatched: ["rule-condition:Nope"] }).split("\n").filter((l) => /Confirm before I build|matched NO/.test(l)));
+check("ENG-96571 review 2 (finding 6) ANTI-VACUITY: with NOTHING to say the worklist is still absent entirely, and with open rows the count is still the plain `(N)` the other goldens pin",
+  !/⚠ Confirm before I build/.test(r26Spec({}))
+  && /#### ⚠ Confirm before I build \(1\)/.test(r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })),
+  () => [r26Spec({}), r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })]);
+
+/* ================================================================================================
+   ENG-96571 review 3 — a question CLOSED by a disposition is still a question this run ASKED
+   ================================================================================================
+   Review 2's finding 1 stopped publishing a closed ⚠ Confirm row as an open evidence id — correct, and pinned
+   above. But `unmatchedResolutions` judges `resolutions.json` against `preflight[]`, so the removal turned an
+   ANSWER to that same question into "an answer nobody asked for": with the disposition recorded, the entry
+   landed in `resolutionsUnmatched` and `resolutionsMatched` fell to 0. That is the DOCUMENTED path —
+   `references/migration-documentation.md` tells the operator to fill BOTH channels for one question — so
+   following the documentation produced a ⚠ accusing the operator of answering nothing.
+
+   Same repro as finding 1 (`r21Run`), with an answers file added. Reproduced verbatim before the fix:
+     without a disposition → resolutionsUnmatched [] / resolutionsMatched 1
+     with    a disposition → resolutionsUnmatched [{kind:"enum-drift-advisory",item:"enumVocabulary",…}] / matched 0
+   ---- */
+const R3_RES = { resolutions: [{ kind: R2_1_KEY.split(":")[0], item: "enumVocabulary", answer: "checked on stand" }] };
+const r31Units = (r, resolutions) => pageUnits(r, resolutions ? { resolutions } : {});
+check("ENG-96571 review 3 SETUP: with NO disposition the answer matches the open question — `resolutionsUnmatched` is empty and `resolutionsMatched` counts it, which is the baseline the closed case must not fall below",
+  (() => { const u = r31Units(r21Open, R3_RES);
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsMatched === 1
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => { const u = r31Units(r21Open, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, matched: u.resolutionsMatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3 MAJOR: once a disposition CLOSES the row, an answer to that same question is NOT reported as an answer nobody asked for — the row left `preflight[]` and took the reconciliation's memory of the question with it, on the one path the documentation tells the operator to take",
+  (() => { const u = r31Units(r21Closed, R3_RES);
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = r31Units(r21Closed, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed, preflight: u.preflight.map((p) => p.id) }; });
+check("ENG-96571 review 3 MAJOR: the answer is REPORTED, not merely exempted — `resolutionsClosed` names the question it targets and its answer, so the operator's second-channel entry is auditable instead of silently dropped",
+  (() => { const c = r31Units(r21Closed, R3_RES).resolutionsClosed || [];
+    return c.length === 1 && c[0].kind === "enum-drift-advisory" && c[0].item === "enumVocabulary"
+      && c[0].answer === "checked on stand"; })(),
+  () => r31Units(r21Closed, R3_RES).resolutionsClosed);
+check("ENG-96571 review 3: and it is NOT counted in `resolutionsMatched` — that count means 'an OPEN question got an answer' and is the diagnostic that tells an answers-file-arrived-late run from a run with no answers, so an entry that closes nothing must not inflate it",
+  r31Units(r21Closed, R3_RES).resolutionsMatched === 0,
+  () => ({ matched: r31Units(r21Closed, R3_RES).resolutionsMatched, closed: r31Units(r21Closed, R3_RES).resolutionsClosed }));
+check("ENG-96571 review 3: the closed question is still NOT an open unit — the exemption is in the reconciliation only, so review 2's finding 1 is untouched: no `preflight[]` row, no `--verify` evidence id",
+  !r31Units(r21Closed, R3_RES).preflight.map((p) => p.id).includes(`main#confirm:${R2_1_KEY}`)
+  && !r31Units(r21Closed, R3_RES).evidenceRows.map((e) => e.id).includes(`main#confirm:${R2_1_KEY}`),
+  () => r31Units(r21Closed, R3_RES).preflight.map((p) => p.id));
+check("ENG-96571 review 3 ANTI-VACUITY: an answer to a genuinely UNASKED key is STILL unmatched — the exemption is scoped to questions this run asked and closed, and did not turn the report off",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3 ANTI-VACUITY: an orphan answer alongside a closed-question answer is reported on its own — one entry exempt, the other named, in the same run",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 1 && u.resolutionsClosed[0].item === "enumVocabulary"; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: the exemption covers BOTH key forms — an operator who answered the closed question by its PUBLISHED id is exempt too, which a pair-only guard left reporting through the `byId` loop (the asymmetry `unmatchedResolutions` warns about in its own comment)",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } });
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3: a row closed inside a CHILD fold is covered too — `pageUnits` splices every sub-page's confirm rows, so reading only the root scope's own report would have left the same defect one level down",
+  (() => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted", note: "child" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return u.resolutionsUnmatched.length === 0 && (u.resolutionsClosed || []).length === 1
+      && u.resolutionsClosed[0].item === "Job"; })(),
+  () => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: with no answers file at all `resolutionsClosed` is an EMPTY ARRAY, not absent — the same 'a consumer must not tell no-answers from an engine that publishes none' rule `runResolutions` and `resolution: null` already follow",
+  Array.isArray(pageUnits(r21Closed, {}).resolutionsClosed) && pageUnits(r21Closed, {}).resolutionsClosed.length === 0,
+  () => pageUnits(r21Closed, {}).resolutionsClosed);
+
+check("ENG-96571 review 3: a CLOSED question answered TWICE through the two key forms is reported in `resolutionsConflicts` too — `matchResolution` prefers the pair and discards the `id`-keyed answer there exactly as it does on an open question, so judging conflicts against `preflight` alone left that discard silent",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return u.resolutionsConflicts.length === 1 && u.resolutionsConflicts[0].used === "pair wins"
+      && u.resolutionsConflicts[0].discarded === "id discarded" && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return { conflicts: u.resolutionsConflicts, unmatched: u.resolutionsUnmatched }; });
+/* A pair closed on ONE page while the identical row stays OPEN on another. Pair matching is page-agnostic, so the
+   same `kind`+`item` can be both — a SCOPED disposition closes the child's row and leaves `main`'s standing. The
+   answer then DID reach an open question, so `resolutionsClosed` must stay empty: its stderr line says the answer
+   targets a question already CLOSED and is NOT counted in `resolutionsMatched`, and both are false in this run. */
+const R3_CROSS_CHILD = `define("C1Child",[],function(){return{entitySchemaName:"Shared",
+  diff:[{operation:"insert",name:"Job",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Job"}}]};});`;
+const r3Cross = runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: R3_CROSS_CHILD }] } },
+  confirmDispositions: { "C1Child::field-labels:(all fields)": { resolved: true, disposition: "accepted" } } });
+const r3CrossRes = { resolutions: [{ kind: "field-labels", item: "(all fields)", answer: "A" }] };
+check("ENG-96571 review 3 SETUP: the cross-page fixture really has the SAME `kind`+`item` closed on the child and still OPEN on `main` — without this the claim below is about a case no fixture reaches",
+  (() => { const p = pageUnits(r3Cross, {}).preflight;
+    return p.some((x) => x.pageKey === "main" && x.kind === "field-labels" && x.item === "(all fields)")
+      && (r3Cross.childPages[0].confirmClosed || []).some((n) => n.kind === "field-labels"); })(),
+  () => ({ preflight: pageUnits(r3Cross, {}).preflight.map((p) => `${p.pageKey} ${p.kind}:${p.item}`),
+    childClosed: r3Cross.childPages[0].confirmClosed }));
+check("ENG-96571 review 3: a pair closed on ONE page but still OPEN on another is NOT in `resolutionsClosed` — the answer reached an open question and IS counted in `resolutionsMatched`, so listing it would make this field's own ℹ line state two things that are false of that run",
+  (() => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return u.resolutionsMatched === 1 && (u.resolutionsClosed || []).length === 0
+      && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return { matched: u.resolutionsMatched, closed: u.resolutionsClosed, unmatched: u.resolutionsUnmatched }; });
+check("ENG-96571 review 3 ANTI-VACUITY: ONE answer to a closed question raises NO conflict — the report flags two entries fighting over one question, not every closed-question answer",
+  r31Units(r21Closed, R3_RES).resolutionsConflicts.length === 0,
+  () => r31Units(r21Closed, R3_RES).resolutionsConflicts);
+
+/* ---- the MINOR: the three-hop render comment now describes what actually renders ---- */
+// The comment above the `lifecycle` branch of `triggerText` claimed `onSaved → mid → leaf` reads
+// `onSaved (platform lifecycle) → internal call via mid`. It does not: `composeUpstream` peels the immediate
+// caller off the chain, so `via` is EMPTY at that depth and `mid` reaches the reader through the FOLD. Pinned as
+// behaviour so the corrected comment cannot drift back.
+check("ENG-96571 review 3 (MINOR): on `onSaved → mid → leaf` the trigger cell carries NO `via` — `mid` is the immediate caller, so it reaches the reader through the fold (``port with `mid` ``), not through this cell",
+  (r22Trig("leaf")?.via || []).length === 0
+  && /onSaved \(platform lifecycle\) → internal call(?! via)/.test(r22Row("leaf"))
+  && /port with `mid`/.test(r22Row("leaf")),
+  () => ({ trigger: r22Trig("leaf"), row: r22Row("leaf") }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
