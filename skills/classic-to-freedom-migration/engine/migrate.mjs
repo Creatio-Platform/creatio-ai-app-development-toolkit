@@ -74,12 +74,12 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
-import { GATE_KIND, gateForComponentType, APPROVALS_SIGNAL } from "./mapping-table.mjs";
+import { GATE_KIND, gateForComponentType, APPROVALS_SIGNAL, resolveFeatureRow } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS, renderPlanNotes,
-  boundaryChild } from "./designspec.mjs";
+  boundaryChild, SHOWN_ELSEWHERE } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -156,12 +156,17 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // carries no `targetPackage`, so at depth >= 2 the placement row silently vanished and `--units` published
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
+    // `inheritedConfirmDispositions` (ENG-96571 C1) rides along for the same reason and under the same memo rule as
+    // `inheritedSignals` below: the ⚠ Confirm answers are recorded ONCE on the ROOT manifest, so a child/typed/mini
+    // bundle (which carries none) saw `{}` and every scoped answer — `"<Child>::<kind>:<item>"`, the form SKILL.md
+    // documents as tried FIRST — closed nothing below the root. Deliberately NOT part of `extra`: a run has exactly
+    // ONE answer map, so it cannot vary between two folds of the same key and must not enter the memo key.
     // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
     // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
     // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConfirmDispositions: ctx.confirmDispositions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -203,13 +208,20 @@ function isStructuralDiag(d) {
 // never quietly demote itself to an advisory.
 const isCorrectnessWarning = (w) => (w?.severity ?? "correctness") === "correctness";
 
+// Sonar S1192 — the two disposition WORDS that recur across all four validated-enum sets below
+// (`WARNING_DISPOSITIONS`, `BUNDLE_WARNING_DISPOSITIONS`, `CONFIRM_DISPOSITIONS`, `MEMBER_DISPOSITIONS`). Declared
+// HERE, above the first set that reads them, because a module-level `const` is not hoisted — and named rather than
+// re-typed so a rename cannot leave one set answering a word the others no longer accept.
+const DISPOSITION_NA = "n/a";
+const DISPOSITION_ACCEPTED = "accepted";
+
 // The only dispositions `manifest.warningDispositions` may carry — same validated-enum rule as
 // `MEMBER_DISPOSITIONS`, and for the same reason: a truthy `resolved` with a typo'd disposition would clear a
 // warning with no valid answer behind it.
 //   accepted            — read, understood, and the unrepresented effect does not change the Freedom mapping
 //   reproduced-manually — it DOES change it, and the build reproduces that effect by hand (the note says how)
 //   n/a                 — the element this warning is about is not being migrated
-const WARNING_DISPOSITIONS = new Set(["accepted", "reproduced-manually", "n/a"]);
+const WARNING_DISPOSITIONS = new Set([DISPOSITION_ACCEPTED, "reproduced-manually", DISPOSITION_NA]);
 
 // The key a disposition is written under: `"<op>:<name>:<schema>"`, with `"<op>:<name>"` accepted as a bare
 // fallback — the same scoped-or-bare rule `memberDispositions` uses. The schema is part of the primary key because
@@ -236,8 +248,13 @@ const warningKeys = (w) => [`${w.op}:${w.name}:${w.schema}`, `${w.op}:${w.name}`
 //   "bundleWarnings": [ { "code": "unresolved-detail-entity", "message": "Could not determine…" }, "<raw string>" ]
 //   "bundleWarningDispositions": { "<code or the exact string>": { "resolved": true,
 //                                   "disposition": "resolved-manually"|"accepted"|"n/a", "note": "<what you did>" } }
-export const bundleWarningKey = (w) => (typeof w === "string" ? w : String(w?.code || w?.message || ""));
-const bundleWarningText = (w) => (typeof w === "string" ? w : String(w?.message || w?.code || ""));
+// Collapsed whitespace on BOTH sides of the comparison. A bundle warning's key is, in its string form, the
+// warning's own MESSAGE — text that travels through a tool response, a manifest and a hand copy-paste, any of
+// which can turn a single space into two or add a trailing one. An answer that differs from the warning by one
+// space closed nothing, and the plan kept blocking on a warning the operator had provably answered.
+const normalizeWarningText = (t) => String(t ?? "").trim().replace(/\s+/g, " ");
+export const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
+const bundleWarningText = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.message || w?.code || ""));
 // The only dispositions a bundle warning may carry — the same validated-enum rule as `WARNING_DISPOSITIONS` and
 // `MEMBER_DISPOSITIONS`, and for the same reason (a truthy `resolved` with a typo'd disposition would close a
 // warning nobody answered). The three words DIFFER from `WARNING_DISPOSITIONS` because the remedy differs: a
@@ -245,7 +262,7 @@ const bundleWarningText = (w) => (typeof w === "string" ? w : String(w?.message 
 //   resolved-manually — the fact the bundle could not read was looked up by hand (step 4.1) and is in this manifest
 //   accepted          — the gap is understood and does not change this plan (say WHY in `note`)
 //   n/a               — the elements the warning is about are not being migrated
-const BUNDLE_WARNING_DISPOSITIONS = new Set(["resolved-manually", "accepted", "n/a"]);
+const BUNDLE_WARNING_DISPOSITIONS = new Set(["resolved-manually", DISPOSITION_ACCEPTED, DISPOSITION_NA]);
 
 // Split `manifest.bundleWarnings` into OPEN (blocking) and CLOSED (a recorded answer → rendered `ℹ`, auditable,
 // never dropped — the same rule `applyWarningDispositions` follows for a fidelity note). Own fn, like
@@ -254,13 +271,16 @@ const BUNDLE_WARNING_DISPOSITIONS = new Set(["resolved-manually", "accepted", "n
 export function bundleWarningState(manifest) {
   const list = Array.isArray(manifest?.bundleWarnings) ? manifest.bundleWarnings : [];
   const declared = plainObject(manifest?.bundleWarningDispositions);
+  const normalized = Object.fromEntries(Object.entries(declared).map(([k, v]) => [normalizeWarningText(k), v]));
   const open = [], closed = [];
   for (const w of list) {
     const key = bundleWarningKey(w), text = bundleWarningText(w);
     if (!text) continue; // an empty entry names no fact — neither a gap nor an answer
     // Keyed by `code` first, with the exact message accepted as a bare fallback: the same scoped-or-bare rule
     // `warningKeys` uses, so a disposition written against either form of the warning resolves.
-    const dec = plainObject(declared[key] ?? declared[text]);
+    // The DISPOSITION side is normalized too — collapsing only the warning would leave a hand-written key with a
+    // double space unmatched, which is exactly the input this normalization exists for.
+    const dec = plainObject(normalized[key] ?? normalized[text]);
     if (dec.resolved === true && BUNDLE_WARNING_DISPOSITIONS.has(dec.disposition)) {
       closed.push({ key, text, disposition: dec.disposition, note: typeof dec.note === "string" ? dec.note : null });
     } else open.push({ key, text });
@@ -270,7 +290,7 @@ export function bundleWarningState(manifest) {
 // One blocking structure issue per OPEN bundle warning, QUOTING the warning verbatim — the rule `warningsReason`
 // already states: the single summary sentence that used to stand for every producer described a condition that was
 // provably absent on the run it blocked, and sent the remedy hunt to the wrong file for 12 hours.
-const bundleWarningIssue = (w) => `bundle warning from \`get-classic-page-sources\` — "${w.text}" — the BUNDLE itself says one of its lookups did not complete, so what it returned is NOT a verified "there is nothing". Re-run the bundle with the bound entity resolved, or fall back to step 4.1 manual lookup, and fold the answers into this manifest. Once you HAVE handled it, close it with manifest.bundleWarningDispositions["${w.key}"] = { "resolved": true, "disposition": "resolved-manually"|"accepted"|"n/a", "note": "<what you did>" } — an OPEN bundle warning BLOCKS structure, a closed one renders as ℹ and stays auditable.`;
+const bundleWarningIssue = (w) => `bundle warning from \`get-classic-page-sources\` — "${w.text}" — the BUNDLE itself says one of its lookups did not complete, so what it returned is NOT a verified "there is nothing". Re-run the bundle with the bound entity resolved, or fall back to step 4.1 manual lookup, and fold the answers into this manifest. Once you HAVE handled it, close it with manifest.bundleWarningDispositions[${JSON.stringify(w.key)}] = { "resolved": true, "disposition": "resolved-manually"|"accepted"|"n/a", "note": "<what you did>" } — an OPEN bundle warning BLOCKS structure, a closed one renders as ℹ and stays auditable.`;
 
 // Annotate each warning with the operator's recorded answer, in place of nothing. Returns a NEW array (the engine's
 // own array is not mutated) where a dispositioned FIDELITY warning carries `{ accepted: true, disposition, note }`.
@@ -307,7 +327,7 @@ function applyWarningDispositions(warnings, manifest) {
 //   reproduced-manually — it DOES change it, and the build reproduces the effect by hand (the note says how)
 //   n/a                 — the element this question is about is not being migrated
 //   resolved-on-stand   — the fact was looked up on the stand and the answer is in the note / this manifest
-const CONFIRM_DISPOSITIONS = new Set(["accepted", "reproduced-manually", "n/a", "resolved-on-stand"]);
+const CONFIRM_DISPOSITIONS = new Set([DISPOSITION_ACCEPTED, "reproduced-manually", DISPOSITION_NA, "resolved-on-stand"]);
 export const confirmKey = (n) => `${n.kind}:${n.item}`;
 
 // Annotate each `needsDecision` row with the operator's recorded answer, IN PLACE (the rows are already published on
@@ -316,14 +336,40 @@ export const confirmKey = (n) => `${n.kind}:${n.item}`;
 // because a truthy `resolved` with a typo'd word would clear a question nobody actually answered — the same
 // validated-enum rule `WARNING_DISPOSITIONS` and `MEMBER_DISPOSITIONS` already state.
 // Returns `{ closed, invalid }` (arrays of keys) so a caller/test can see what the manifest actually did.
-function applyConfirmDispositions(changeSet, manifest, scopeSchema) {
-  const declared = plainObject(manifest?.confirmDispositions);
-  const closed = [], invalid = [];
-  if (!Object.keys(declared).length) return { closed, invalid };
+// The `confirmDispositions` map THIS scope answers with. A nested child/typed/mini fold receives the CHILD bundle
+// as its `manifest`, and the operator records the answers ONCE on the ROOT manifest — so before this existed the
+// map was read off a bundle that never carries one and every scoped answer (`"<Child>::<kind>:<item>"`, the form
+// SKILL.md documents as tried FIRST) reached nothing below the root: the row asked the same question on every
+// regenerate and the recorded answer was reported as `closed: []`.
+//
+// MERGED, not `??`: a child bundle that carries `confirmDispositions: {}` is not nullish, so a nullish fallback
+// would drop every inherited answer on it. The child's own key still wins — the same rule (and the same wording)
+// `behaviourIndexInput` and `runSignals` already state for the two other inherited maps.
+function confirmDispositionsInput(manifest, opts) {
+  return { ...plainObject(opts?.inheritedConfirmDispositions), ...plainObject(manifest?.confirmDispositions) };
+}
+
+// Annotate each `needsDecision` row with the operator's recorded answer, IN PLACE (the rows are already published on
+// the ChangeSet the renderers read, exactly like `applyBehaviourIndex`'s `describedIn`). A disposition whose word is
+// not one of the four does NOT close the row: it is recorded as `dispositionInvalid` and named in an advisory line,
+// because a truthy `resolved` with a typo'd word would clear a question nobody actually answered — the same
+// validated-enum rule `WARNING_DISPOSITIONS` and `MEMBER_DISPOSITIONS` already state.
+//
+// A row whose KIND `renderConfirmWorklist` does not print (every `SHOWN_ELSEWHERE` kind — `method`, `card-action`,
+// `widget`, and every `IMPERATIVE_MEMBER_KINDS` member) is NOT closed and NOT counted as closed: that worklist is
+// the only place a `⚠ Confirm` row renders, so "closing" one there changed nothing while the run reported the key
+// in `closed` — a silent no-op reported as success. Those keys are reported separately as `notApplicable` and named
+// in their own advisory line, so the operator learns the answer belongs in the worklist that DOES carry the row
+// (`⚠ Imperative logic` / `⚠ Imperative members`, closed via `memberDispositions`) instead of believing it landed.
+// Returns `{ closed, invalid, notApplicable }` (arrays of keys) so a caller/test can see what the manifest did.
+function applyConfirmDispositions(changeSet, declared, scopeSchema) {
+  const closed = [], invalid = [], notApplicable = [];
+  if (!Object.keys(declared).length) return { closed, invalid, notApplicable };
   for (const n of changeSet?.needsDecision || []) {
     const key = confirmKey(n);
     const dec = plainObject((scopeSchema ? declared[`${scopeSchema}::${key}`] : undefined) ?? declared[key]);
     if (dec.resolved !== true) continue;
+    if (SHOWN_ELSEWHERE.has(n.kind)) { notApplicable.push(key); continue; }
     if (!CONFIRM_DISPOSITIONS.has(dec.disposition)) {
       n.dispositionInvalid = String(dec.disposition);
       invalid.push(key);
@@ -334,7 +380,7 @@ function applyConfirmDispositions(changeSet, manifest, scopeSchema) {
     n.note = typeof dec.note === "string" ? dec.note : null;
     closed.push(key);
   }
-  return { closed, invalid };
+  return { closed, invalid, notApplicable };
 }
 
 // The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
@@ -768,6 +814,29 @@ function describedInForMember(map, scopeSchema, n) {
   return mergeDescribedIn(refs);
 }
 
+// Fill an EMPTY trigger only, from the reported one. A traced trigger is body-proven; a reported one is a
+// description of it — and it is filled only when it PASSES `validateReportedTrigger`. A rejected one leaves
+// `h.triggers` empty, so the row keeps rendering `⚠ unresolved` and keeps counting in the header's open total, and
+// the rejection is published (`behaviourIndex.rejectedTriggers`) so a ⚠ plan banner can name it instead of it
+// vanishing. An entry that admits the behaviour was NOT established is not evidence for its ORIGIN either, so the
+// whole entry is skipped — the same reading the workflow's `entriesOf` gives it, which is the point: one entry, one
+// meaning on both legs. Without this the row would render a resolved trigger next to `⚠ not described`.
+//
+// Own fn (behaviour unchanged) because `applyBehaviourIndex` had no Sonar CC 15 headroom left — the same reason
+// `describedInForMember` is its own function.
+function fillReportedTrigger(h, entry, { triggersFilled, rejectedTriggers }) {
+  if ((h.triggers || []).length || entry.behaviourEstablished === false) return;
+  if (!entry.trigger && !entry.from) return;
+  const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: h.sourceMethod });
+  if (why) {
+    rejectedTriggers.push({ key: h.sourceMethod, trigger: entry.trigger ?? null, from: entry.from ?? null, why });
+    return;
+  }
+  h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
+    note: typeof entry.note === "string" ? entry.note : null }];
+  triggersFilled.push(h.sourceMethod);
+}
+
 function applyBehaviourIndex(changeSet, index, scopeSchema) {
   const map = plainObject(index);
   if (!Object.keys(map).length) return { triggersFilled: [], described: [] };
@@ -777,22 +846,7 @@ function applyBehaviourIndex(changeSet, index, scopeSchema) {
     if (!entry || typeof entry !== "object") continue;
     const d = describedInOf(entry);
     if (d) { h.describedIn = d; described.push(h.sourceMethod); }
-    // Fill an EMPTY trigger only. A traced trigger is body-proven; a reported one is a description of it — and it
-    // is filled only when it PASSES `validateReportedTrigger`. A rejected one leaves `h.triggers` empty, so the
-    // row keeps rendering `⚠ unresolved` and keeps counting in the header's open total, and the rejection is
-    // published (`behaviourIndex.rejectedTriggers`) so a ⚠ plan banner can name it instead of it vanishing.
-    // An entry that admits the behaviour was NOT established is not evidence for its ORIGIN either, so the whole
-    // entry is skipped — the same reading the workflow's `entriesOf` gives it, which is the point: one entry, one
-    // meaning on both legs. Without this the row would render a resolved trigger next to `⚠ not described`.
-    if (!(h.triggers || []).length && entry.behaviourEstablished !== false && (entry.trigger || entry.from)) {
-      const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: h.sourceMethod });
-      if (why) rejectedTriggers.push({ key: h.sourceMethod, trigger: entry.trigger ?? null, from: entry.from ?? null, why });
-      else {
-        h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
-          note: typeof entry.note === "string" ? entry.note : null }];
-        triggersFilled.push(h.sourceMethod);
-      }
-    }
+    fillReportedTrigger(h, entry, { triggersFilled, rejectedTriggers });
   }
   // ⚠ Confirm members — a `message` whose counterpart lives in another schema, a `mixin` whose members are defined
   // outside this body, the aggregated `module-dep` row. These are the row types step 5.1 exists for just as much as
@@ -863,7 +917,12 @@ function scopeDigestKeys(scopes) {
     for (const st of s.stubs) { seen.add(st.method); if (s.schema) seen.add(`${s.schema}::${st.method}`); }
     // BOTH key forms an answer may legitimately use: the member's own key, and — for an expanded aggregated row —
     // the whole row's key (`memberEntries`' `rowKey`), which `describedInForMember` still resolves.
-    for (const m of s.members) { seen.add(m.key); if (m.rowKey) seen.add(m.rowKey); }
+    // …and the BARE `<kind>:<item>` form. `m.key`/`m.rowKey` are SCOPED whenever the scope has a schema, but both
+    // readers of an answer — `describedInForMember` and `wiringOnlyKeys`' `memberKey` — accept the bare form as a
+    // fallback. So a bare member key written for a CHILD scope had its card folded into the row AND was reported in
+    // `behaviourIndex.unmatched`, printing "⚠ 1 behaviourIndex key matched no imperative row" about the key whose
+    // card the plan had just rendered — the same inverse-of-its-purpose banner the `rowKey` line above fixes.
+    for (const m of s.members) { seen.add(m.key); seen.add(`${m.kind}:${m.item}`); if (m.rowKey) seen.add(m.rowKey); }
   }
   return seen;
 }
@@ -1860,7 +1919,7 @@ const MEMBER_KINDS = ["diff-op", "method", "attribute", "message", "mixin", "mod
 // list; a module wrongly called inert is a silently dropped member, so it stays deliberately short.
 // The only dispositions `manifest.memberDispositions` may carry — the same four the gate's remediation line tells an
 // agent to use. Kept beside the ledger that reads them so the message and the check cannot drift apart.
-const MEMBER_DISPOSITIONS = new Set(["ported", "dropped", "blocked", "n/a"]);
+const MEMBER_DISPOSITIONS = new Set(["ported", "dropped", "blocked", DISPOSITION_NA]);
 const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
 // what a method contributes to its ledger row — kept out of the source table so the table stays scannable
 const methodLedgerDetail = (m) =>
@@ -1959,19 +2018,30 @@ function decidedNames(needsDecision) {
 // "nobody looked".
 export function approvalsSignalOf(eff, changeSet) {
   const evidence = [];
-  const addDetail = (nm) => {
-    if (!nm || !APPROVALS_SIGNAL.detailPattern.test(nm)) return;
+  // The detail half, resolved through the MAPPING TABLE rather than a regex of its own — see the note on
+  // `APPROVALS_SIGNAL` for the substring-vs-suffix divergence that removed `detailPattern`. `entity` is passed so a
+  // detail whose auto-generated schema name hides the feature still resolves by its entity, exactly as
+  // `matchDetailFeature` does in the mapper.
+  const isApprovalsDetail = (nm, entity) =>
+    resolveFeatureRow(nm || null, entity || null)?.meta?.feature === APPROVALS_SIGNAL.feature;
+  const addDetail = (nm, entity) => {
+    if (!nm || !isApprovalsDetail(nm, entity)) return;
     const e = `detail \`${nm}\``;
     if (!evidence.includes(e)) evidence.push(e);
   };
+  // The ATTRIBUTE half, SYMMETRIC with `buildCoverage`: that ledger classifies a `fromTemplate` attribute as
+  // `context` (`tpl: (a) => a.fromTemplate`) because no client schema touched it — the page body never shows it and
+  // a migration owes nothing for it. A `RecordVisaId` inherited from the base template is exactly that, so reading
+  // it as evidence raised a blocking Approvals signal off a member the same run had already excluded as untouched.
   for (const a of eff?.attributes || []) {
+    if (a.fromTemplate) continue;
     if (APPROVALS_SIGNAL.attributeNames.includes(a.name)) evidence.push(`attribute \`${a.name}\``);
   }
   // BOTH sides, because a detail the mapper dropped is exactly the case this gate exists for: `eff.details` is the
   // merged Classic truth (unmapped included), `changeSet.details` the mapped rows (a detail the merge only saw
   // through a resolved reference still shows up there).
-  for (const d of eff?.details || []) addDetail(d.schemaName || d.key);
-  for (const d of changeSet?.details || []) addDetail(d.detailSchema);
+  for (const d of eff?.details || []) addDetail(d.schemaName || d.key, d.entitySchemaName);
+  for (const d of changeSet?.details || []) addDetail(d.detailSchema, d.entity);
   return evidence.length ? [{ feature: APPROVALS_SIGNAL.feature, evidence }] : [];
 }
 
@@ -2432,7 +2502,11 @@ export function runMigration(manifest, opts = {}) {
   // `needsDecision`) is assembled and BEFORE anything renders, so `renderConfirmWorklist` can split open from
   // closed. Applied after `applyBehaviourIndex` for the same reason it exists: both annotate the SAME rows, and a
   // row that is described AND answered must carry both facts.
-  const confirmDispositions = applyConfirmDispositions(changeSet, manifest, opts.scopeSchema);
+  const confirmDispositionsIn = confirmDispositionsInput(manifest, opts);
+  const confirmDispositions = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  // Published on the ChangeSet so `renderConfirmWorklist` can name the not-applicable keys without a second
+  // argument — the same channel `featureSignals` uses, and the only place the renderer sees this run's answers.
+  changeSet.confirmNotApplicable = confirmDispositions.notApplicable;
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
@@ -2546,7 +2620,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, confirmDispositions: confirmDispositionsIn }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.

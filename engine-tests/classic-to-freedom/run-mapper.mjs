@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -11745,6 +11745,141 @@ check("ENG-96571 C1: an INVALID disposition word does not close the row, and an 
 check("ENG-96571 C1: `resolved` must be TRUE — a disposition word with no `resolved: true` neither closes nor is reported as invalid (it is an unfinished entry, not a wrong one)",
   runMigration(C1_MAN({ "rule-condition:Job": { disposition: "accepted" } })).confirmDispositions.closed.length === 0
   && runMigration(C1_MAN({ "rule-condition:Job": { disposition: "accepted" } })).confirmDispositions.invalid.length === 0);
+
+/* ===== ENG-96571 C1 (review) — the answers reach a NESTED fold, not just the root ===== */
+// THE BLOCKER this closes: `applyConfirmDispositions` read `manifest.confirmDispositions`, and a child/typed/mini
+// fold receives the CHILD bundle as its `manifest`. A child bundle carries no answer map, so every scoped answer —
+// `"<Child>::<kind>:<item>"`, the form SKILL.md documents as tried FIRST precisely so a per-page answer stays
+// per-page — reached NOTHING below the root: the child page asked the same question on every regenerate while the
+// run reported `closed: []`. The tests above all drive `runMigration` with an explicit `scopeSchema`, which is the
+// ROOT's own call shape; only a real fold exercises the inheritance.
+const C1_CHILD_BODY = `define("C1Child", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "Shared",
+  rules: { "Job": { "JobRequired": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.REQUIRED,
+    "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } } },
+  diff: [{ operation: "insert", name: "Job", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Job" } }] }; });`;
+const C1_NESTED = (dispositions) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: C1_CHILD_BODY }] } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const c1NestSpecOf = (r) => r.childPages.find((c) => c.spec)?.spec || "";
+
+const c1NestOpen = runMigration(C1_NESTED(null));
+check("ENG-96571 C1 (review) SETUP: the CHILD page raises its own `rule-condition` row, open, so the assertions below are about a row that really exists",
+  /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestOpen))
+  && !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestOpen)),
+  () => c1NestSpecOf(c1NestOpen).split("\n").filter((l) => /rule-condition|Confirm before/.test(l)));
+
+// The SCOPED key, recorded on the ROOT manifest, closes the row on the CHILD page.
+const c1NestScoped = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "resolved-on-stand", note: "child answered on-stand" } }));
+check("ENG-96571 C1 (review) BLOCKER: a SCOPED `<ChildSchema>::<kind>:<item>` key on the ROOT manifest closes the row on the CHILD page — the child bundle carries no answer map, so before this the answer reached nothing below the root",
+  /\(\d+ open, 1 closed\)/.test(c1NestSpecOf(c1NestScoped))
+  && /\*\*\[rule-condition\]\*\* Job → \*\*resolved-on-stand\*\*/.test(c1NestSpecOf(c1NestScoped))
+  && /child answered on-stand/.test(c1NestSpecOf(c1NestScoped)),
+  () => c1NestSpecOf(c1NestScoped).split("\n").filter((l) => /rule-condition|Confirm before|CLOSED/.test(l)));
+
+// …and a key scoped to a DIFFERENT schema still closes nothing on the child: the inheritance carries the map, it
+// does not widen the precedence.
+const c1NestWrong = runMigration(C1_NESTED({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "not this page" } }));
+check("ENG-96571 C1 (review): inheriting the map does NOT widen it — a key scoped to another schema leaves the child's row OPEN",
+  !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestWrong))
+  && /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestWrong)),
+  () => c1NestSpecOf(c1NestWrong).split("\n").filter((l) => /rule-condition|CLOSED/.test(l)));
+
+// PRECEDENCE, on the row itself: with BOTH forms present the SCOPED one is the answer that lands. This is what
+// SKILL.md's "the SCOPED form is tried FIRST" sentence asserts, and it is now true at every depth.
+const c1NestBoth = runMigration(C1_NESTED({
+  "rule-condition:Job": { resolved: true, disposition: "accepted", note: "the BARE answer" },
+  "C1Child::rule-condition:Job": { resolved: true, disposition: "n/a", note: "the SCOPED answer" } }));
+check("ENG-96571 C1 (review): with BOTH a bare and a scoped key present the SCOPED one WINS on the child row — the documented `tried FIRST` precedence, now true below the root too",
+  /\*\*\[rule-condition\]\*\* Job → \*\*n\/a\*\*/.test(c1NestSpecOf(c1NestBoth))
+  && /the SCOPED answer/.test(c1NestSpecOf(c1NestBoth))
+  && !/the BARE answer/.test(c1NestSpecOf(c1NestBoth)),
+  () => c1NestSpecOf(c1NestBoth).split("\n").filter((l) => /rule-condition|CLOSED/.test(l)));
+
+// A BARE key still reaches the child — that is the documented scoped-OR-bare fallback, and the inherited map must
+// not quietly become scoped-only.
+const c1NestBare = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+check("ENG-96571 C1 (review): a BARE key still closes the child's row when no scoped key exists — the fallback half of the scoped-or-bare rule survives the inheritance",
+  /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(c1NestBare))
+  && /one answer for the whole surface/.test(c1NestSpecOf(c1NestBare)),
+  () => c1NestSpecOf(c1NestBare).split("\n").filter((l) => /rule-condition|CLOSED/.test(l)));
+
+/* ===== ENG-96571 C1 (review) — a disposition aimed at a row the worklist does NOT print ===== */
+// `applyConfirmDispositions` looped over EVERY `needsDecision` row, but `renderConfirmWorklist` prints only the
+// kinds outside `SHOWN_ELSEWHERE` (`method`, `card-action`, `widget`, `module-dep`, `mixin`, `message`, every
+// `IMPERATIVE_MEMBER_KINDS`…). So a disposition on one of those set `closed: true` on a row nothing renders: the
+// plan was unchanged and the run reported the key as CLOSED — a silent no-op reported as success.
+const C1_NA_BODY = `define("NAPage",[],function(){return{entitySchemaName:"HRRequest",
+  mixins: { StepOne: "Terrasoft.UsrExternalMixin" },
+  methods: {},
+  diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } }]};});`;
+const c1NaRun = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "NAPage", body: C1_NA_BODY }], ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const c1NaKinds = [...new Set((c1NaRun(null).changeSet.needsDecision || []).map((n) => n.kind))];
+const c1NaKey = (c1NaRun(null).changeSet.needsDecision || []).filter((n) => SHOWN_ELSEWHERE.has(n.kind)).map((n) => `${n.kind}:${n.item}`)[0];
+check("ENG-96571 C1 (review) SETUP: the fixture really raises a needsDecision row of a kind the ⚠ Confirm worklist does NOT print — otherwise the assertion below proves nothing",
+  typeof c1NaKey === "string" && c1NaKey.length > 0,
+  () => c1NaKinds);
+const c1Na = c1NaRun({ [c1NaKey]: { resolved: true, disposition: "accepted", note: "thought this closed it" } });
+check("ENG-96571 C1 (review): a disposition on a kind the worklist does NOT print is reported as `notApplicable`, NOT as `closed` — it changed nothing, and reporting it closed was a silent no-op reported as success",
+  c1Na.confirmDispositions.notApplicable.join("|") === c1NaKey
+  && c1Na.confirmDispositions.closed.length === 0
+  && c1Na.confirmDispositions.invalid.length === 0,
+  () => JSON.stringify(c1Na.confirmDispositions));
+check("ENG-96571 C1 (review): the not-applicable key is NAMED in one advisory line that points at the map which CAN carry it — a disposition the operator wrote must never be silently absent from the plan",
+  /recorded `confirmDispositions` key\(s\) address rows this worklist does not print/.test(c1Na.designSpec)
+  && c1Na.designSpec.includes(c1NaKey)
+  && /manifest\.memberDispositions/.test(c1Na.designSpec),
+  () => c1Na.designSpec.split("\n").filter((l) => /does not print|Confirm before/.test(l)));
+
+/* ===== ENG-96571 A3 (review) — a PARTIAL condition gap is a gap, and an object MAP is readable ===== */
+// `conditionGap` returned `sane.every(degenerate)`, so a rule with ONE readable condition and one unread one
+// reported as fully read: the rendered cell then stated half of what the classic page evaluated. A count that does
+// not reach `conditionsDeclared` is the same defect from the other side.
+const READABLE = `{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }`;
+const DEGENERATE = `{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }`;
+const a3GapRow = (r) => (r.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job");
+const a3RuleEntry = (r) => (r.changeSet.pageBusinessRules || []).find((x) => x.element === "Job");
+
+const a3Mixed = a3Run(`[${READABLE}, ${DEGENERATE}]`);
+check("ENG-96571 A3 (review): TWO conditions of which ONE is degenerate is a parse gap — `every` reported it fully read, and the cell then stated half of what the classic page evaluated",
+  a3GapRow(a3Mixed) && a3RuleEntry(a3Mixed)?.conditionsIncomplete === true,
+  () => JSON.stringify([a3GapRow(a3Mixed), a3RuleEntry(a3Mixed)]));
+
+// declared 3 / sane 2 — the sanitizer DROPPED one (a null hole), so what is left is readable but incomplete.
+const a3Short = a3Run(`[${READABLE}, null, ${READABLE}]`);
+check("ENG-96571 A3 (review): declared 3 / sanitized 2 is a parse gap — a dropped condition leaves a readable-looking set that is short of what the source declared",
+  a3GapRow(a3Short) && a3RuleEntry(a3Short)?.conditionsIncomplete === true
+  && a3RuleEntry(a3Short)?.conditions.length === 2,
+  () => JSON.stringify([a3GapRow(a3Short), a3RuleEntry(a3Short)?.conditions]));
+
+// The control: all conditions readable and none dropped → NOT a gap. Without it the two checks above would pass on
+// a `conditionGap` that simply returns true for everything.
+const a3AllGood = a3Run(`[${READABLE}, ${READABLE}]`);
+check("ENG-96571 A3 (review) ANTI-VACUITY: two FULLY readable conditions are NOT a gap — the two checks above are not passing off a predicate that flags everything",
+  !a3GapRow(a3AllGood) && a3RuleEntry(a3AllGood)?.conditionsIncomplete === undefined,
+  () => JSON.stringify([a3GapRow(a3AllGood), a3RuleEntry(a3AllGood)]));
+
+// The object-MAP form with READABLE conditions. `declaredConditionCount` counted its keys while
+// `sanitizeConditions` returned `[]` for any non-array, so `declared > 0` with an empty set made EVERY object-map
+// rule a permanent parse gap — a ⚠ row no re-read could clear, because the gap was in the reader.
+const a3Map = a3Run(`{ "c1": ${READABLE} }`);
+check("ENG-96571 A3 (review): an object-MAP `conditions` with a readable condition renders the CONDITION, not a parse gap — the shape was a permanent ⚠ nobody could clear",
+  !a3GapRow(a3Map)
+  && a3RuleEntry(a3Map)?.conditionsIncomplete === undefined
+  && a3RuleEntry(a3Map)?.conditions.length === 1
+  && a3RuleEntry(a3Map)?.conditions[0].left.attribute === "Stage"
+  && /when Stage/.test(a3Row(a3Map)),
+  () => [a3GapRow(a3Map), a3RuleEntry(a3Map)?.conditions, a3Row(a3Map)]);
+// …and an object map whose entries are UNREADABLE is still a gap: the shape being readable must not turn every
+// object map green.
+const a3MapBad = a3Run(`{ "c1": ${DEGENERATE} }`);
+check("ENG-96571 A3 (review): an object-MAP whose entry is DEGENERATE is still a parse gap — reading the shape did not turn every object map into a resolved condition",
+  a3GapRow(a3MapBad) && a3RuleEntry(a3MapBad)?.conditionsIncomplete === true,
+  () => JSON.stringify([a3GapRow(a3MapBad), a3RuleEntry(a3MapBad)]));
 
 /* ================= ENG-96571 B1 — the `lifecycle` trigger kind renders its own text ================= */
 const b1Life = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:

@@ -113,10 +113,26 @@ function reportCritique(critique, critiqueReturned, log) {
 // A rejected trigger is STRIPPED from the entry (so nothing downstream can read it) while the ENTRY stays — its
 // card may be perfectly good. The row goes back through the repair round, because the trigger is what was asked
 // for and is still missing.
+// The BARE tail of a possibly schema-qualified key: `HRApplicantPage::init` -> `init`. An index key carries the
+// scope when two pages of one surface declare the same method name, and the engine's own leg
+// (`applyBehaviourIndex` in migrate.mjs) validates against the BARE `h.sourceMethod` — so a `from` naming the row
+// itself was caught there and NOT here, where the full key was compared. Measured shape:
+// `{trigger:'internal', from:'init', methodName:'HRApplicantPage::init'}` passed this run, so no repair round ran
+// and `coverage.complete` went true on the exact self-referential trigger the validator exists to reject.
+const bareTail = (key) => String(key).split('::').pop()
+
+// Both readings of the key, because either one naming the row itself is the same defect. The mirrored
+// `validateReportedTrigger` is NOT changed for this — it is compared byte-for-byte against the engine's copy, and
+// the divergence was in the caller's argument, not in the rule.
+function rejectionFor(entry) {
+  return validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    || validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: bareTail(entry.key) })
+}
+
 function rejectTriggers(results, allKeys, log) {
   const rejected = []
   for (const entry of entriesOf(results)) {
-    const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    const why = rejectionFor(entry)
     if (!why) continue
     rejected.push({ key: entry.key, digestKey: digestKeyOf(entry.key, allKeys), trigger: entry.trigger ?? null, from: entry.from ?? null, why })
     delete entry.trigger

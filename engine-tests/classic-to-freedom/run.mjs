@@ -933,12 +933,21 @@ check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and saniti
   && a3Degenerate.conditions[0].left.attribute === null && a3Degenerate.conditions[0].left.path === null
   && a3Degenerate.conditions[0].right.value === true,
   () => JSON.stringify(a3Degenerate.conditions));
-// (iii) DECLARED but DROPPED — a non-array `conditions` (the object-map form). `sanitizeConditions` returns `[]`,
-// which is why the declared count has to be recorded separately: it is the only thing left saying they existed.
+// (iii) the object-MAP form — a non-array `conditions`. It is READ, through the same `safeKeys` the declared count
+// uses, so the two halves agree: 2 declared / 2 sanitized. Before the ENG-96571 review `sanitizeConditions`
+// returned `[]` for it while `declaredConditionCount` counted its keys, so `conditionGap` saw `declared > 0` with
+// an empty set and every object-map rule was a PERMANENT parse gap — a ⚠ row no re-read could ever clear, because
+// the gap was in the reader, not in the body.
 const a3Dropped = a3Rule(`{ "c1": { "comparisonType": 3 }, "c2": { "comparisonType": 4 } }`);
-check("ENG-96571 A3: an object-MAP `conditions` block declares its keys even though the sanitized set comes back empty",
-  a3Dropped.conditionsDeclared === 2 && a3Dropped.conditions.length === 0,
+check("ENG-96571 A3 (review): an object-MAP `conditions` block is READ, not dropped — declared and sanitized counts AGREE, so it is not a permanent parse gap",
+  a3Dropped.conditionsDeclared === 2 && a3Dropped.conditions.length === 2
+  && a3Dropped.conditions.map((c) => c.comparison).join(",") === "3,4",
   () => JSON.stringify(a3Dropped));
+// …and a shape that is neither an array NOR an object still declares nothing and sanitizes to nothing, so a
+// garbage `conditions` cannot become a phantom two-entry condition set.
+const a3Garbage = a3Rule(`"not a condition block"`);
+check("ENG-96571 A3 (review): a `conditions` value that is neither array nor object declares 0 and sanitizes to 0",
+  a3Garbage.conditionsDeclared === 0 && a3Garbage.conditions.length === 0, () => JSON.stringify(a3Garbage));
 // (iv) genuinely unconditional — nothing declared, nothing sanitized. This is the ONLY shape that may render `always`.
 const a3None = a3Rule(`[]`);
 check("ENG-96571 A3: a rule that declares NO conditions is 0 declared — the only shape a renderer may call `always`",

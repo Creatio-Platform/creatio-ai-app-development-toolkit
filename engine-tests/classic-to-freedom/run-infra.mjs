@@ -6766,7 +6766,11 @@ check("workflow: the app unit closes only on its FULL deliverable — the planne
     && /const needsSectionPage = unit\.sectionHost !== 'pages-only-no-menu'/.test(wfSrc)
     && /the app unit did not finish/.test(wfSrc));
 check("engine: `memberDispositions` accepts only the four dispositions the gate's own remediation text names — any string counted as resolved, so a typo cleared a member",
-  /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", "n\/a"\]\)/.test(mgSrc)
+  // The literal `"n/a"` is now the shared `DISPOSITION_NA` const (Sonar S1192 — the word recurred across all four
+  // validated-enum sets). The pin follows the constant, and ALSO pins the const's own value, so replacing the
+  // literal with a name cannot quietly change which word the gate accepts.
+  /const DISPOSITION_NA = "n\/a"/.test(mgSrc)
+    && /const MEMBER_DISPOSITIONS = new Set\(\["ported", "dropped", "blocked", DISPOSITION_NA\]\)/.test(mgSrc)
     && /MEMBER_DISPOSITIONS\.has\(dec\.disposition\)/.test(mgSrc));
 
 // --- round 4 of the branch review. All three are things a run does WRONG while reporting fine.
@@ -7737,7 +7741,11 @@ check("ENG-96147 review (executed, negative control): a run with no route on fil
 
   check("ENG-96571: APPROVALS_SIGNAL is exported with the expected shape (attribute half of the Approvals signal for the wave-2 mapper/gate)",
     Array.isArray(APPROVALS_SIGNAL.attributeNames) && APPROVALS_SIGNAL.attributeNames.includes("RecordVisaId")
-      && APPROVALS_SIGNAL.detailPattern instanceof RegExp
+      // `detailPattern` is GONE (ENG-96571 A7 review): it was a SUBSTRING test where the mapper matches through
+      // `resolveFeatureRow`'s SUFFIX rule, so the signal fired on names the mapper never maps to Approvals and the
+      // plan blocked on a feature the page does not carry. Its ABSENCE is pinned, not just unasserted — a
+      // re-added regex would silently restore the divergence.
+      && APPROVALS_SIGNAL.detailPattern === undefined
       && APPROVALS_SIGNAL.feature === "Approvals"
       && APPROVALS_SIGNAL.target === "crt.ApprovalList"
       && APPROVALS_SIGNAL.moduleComponentType === "crt.Approval",
@@ -7880,6 +7888,45 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         bundleWarningDispositions: { m1: { resolved: true, disposition: "accepted" } } })));
   }
 
+  /* ---- A5 (review): the key is WHITESPACE-NORMALIZED on both sides ---- */
+  // A bundle warning's key is, in its string form, the warning's own MESSAGE — text that travels through a tool
+  // response, a manifest and a hand copy-paste, any of which can double a space or leave a trailing one. An answer
+  // that differed from the warning by ONE space closed nothing, and the plan kept blocking on a warning the
+  // operator had provably answered, with no line anywhere saying the two strings differ.
+  {
+    const RAW = "Could not determine  the bound entity   for 3 details.";
+    const SPACED = "  Could not determine the bound   entity for 3 details.  ";
+    const stNorm = mg.bundleWarningState({ bundleWarnings: [RAW],
+      bundleWarningDispositions: { [SPACED]: { resolved: true, disposition: "resolved-manually", note: "looked all three up by hand" } } });
+    check("ENG-96571 A5 (review): a disposition key whose WHITESPACE differs from the warning still CLOSES it — both sides are collapsed to single spaces, so a doubled or trailing space in a copy-pasted message is not a warning nobody can answer",
+      () => stNorm.open.length === 0 && stNorm.closed.length === 1
+        && stNorm.closed[0].disposition === "resolved-manually"
+        && stNorm.closed[0].key === "Could not determine the bound entity for 3 details.",
+      () => JSON.stringify(stNorm));
+    check("ENG-96571 A5 (review) guard-can-fail: a disposition key differing by an actual WORD still leaves the warning OPEN — the normalization collapses whitespace only, it does not fuzzy-match the message",
+      () => {
+        const st = mg.bundleWarningState({ bundleWarnings: [RAW],
+          bundleWarningDispositions: { "Could not determine the bound entity for 4 details.": { resolved: true, disposition: "accepted" } } });
+        return st.open.length === 1 && st.closed.length === 0;
+      },
+      () => JSON.stringify(mg.bundleWarningState({ bundleWarnings: [RAW],
+        bundleWarningDispositions: { "Could not determine the bound entity for 4 details.": { resolved: true, disposition: "accepted" } } })));
+    // The remedy hint has to stay PASTEABLE. A message containing a double quote used to be interpolated straight
+    // into `bundleWarningDispositions["<text>"]`, producing a line whose own quoting was broken at the quote.
+    check("ENG-96571 A5 (review): the remedy hint's key is JSON-ENCODED, so a warning message containing a double quote still yields a PASTEABLE `bundleWarningDispositions[...]` line instead of one broken at the quote",
+      () => {
+        const quoted = 'the detail "Visa" has no bound entity';
+        const issue = (mg.runMigration({ entity: "PE", noParentTemplate: true,
+          schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+          bundleWarnings: [quoted] }).structure.issues || []).find((i) => i.startsWith("bundle warning"));
+        return !!issue && issue.includes(`bundleWarningDispositions[${JSON.stringify(quoted)}]`)
+          && !issue.includes(`bundleWarningDispositions["${quoted}"]`);
+      },
+      () => (mg.runMigration({ entity: "PE", noParentTemplate: true,
+        schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+        bundleWarnings: ['the detail "Visa" has no bound entity'] }).structure.issues || []).filter((i) => i.startsWith("bundle warning")));
+  }
+
   /* ---- A6: one digest row per module, one ⚠ Confirm row for the set ---- */
   {
     const depsManifest = (behaviourIndex) => {
@@ -7948,6 +7995,43 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       () => stray.json?.behaviourIndex?.unmatched);
   }
 
+  /* ---- A6 (review): the BARE member key form, on a real CHILD scope ---- */
+  // `scopeDigestKeys` counted `m.key` and `m.rowKey` — both SCOPED once a scope has a schema — while BOTH readers
+  // of an answer (`describedInForMember`, and `wiringOnlyKeys`' `memberKey`) accept the bare `<kind>:<item>` form
+  // as a fallback. So a bare member key written for a CHILD scope had its card FOLDED INTO the row and was ALSO
+  // reported in `behaviourIndex.unmatched`: the plan printed "⚠ 1 behaviourIndex key matched no imperative row"
+  // about the key whose card it had just rendered — the exact inverse of what that banner is for.
+  //
+  // The A6 block above only exercises the ROOT scope (`schema: null`), where `m.key` IS the bare form, so the
+  // defect was invisible there. This one needs a real child fold.
+  {
+    const C4_CHILD = { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body:
+      `define("C4Child",["UsrChildDep"],function(){return{entitySchemaName:"Shared",methods:{},diff:[{operation:"insert",name:"G",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"G"}}]};});` }] };
+    const c4Manifest = (behaviourIndex) => ({ entity: "PE", noParentTemplate: true,
+      schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+      detailSchemas: { D1: { entity: "Shared", editPage: "C4Child" } },
+      childPageSchemas: { C4Child: C4_CHILD },
+      ...(behaviourIndex ? { behaviourIndex } : {}) });
+    const c4Scope = (mg.runMigration(c4Manifest(null)).stubIndex || []).find((x) => x.role === "child page");
+    check("ENG-96571 A6 (review) preconditions: the CHILD scope's member keys really are SCHEMA-SCOPED — `m.key` and `m.rowKey` both carry `C4Child::`, which is why the bare form the readers accept was not in the digest",
+      () => c4Scope?.schema === "C4Child"
+        && (c4Scope.members || []).length === 1
+        && c4Scope.members[0].key === "C4Child::module-dep:UsrChildDep"
+        && c4Scope.members[0].rowKey === "C4Child::module-dep:UsrChildDep",
+      () => c4Scope);
+    const c4Bare = mg.runMigration(c4Manifest({ "module-dep:UsrChildDep": { card: "child/C01", ac: ["AC1"] } }));
+    const c4Spec = (c4Bare.childPages || []).find((c) => c.spec)?.spec || "";
+    check("ENG-96571 A6 (review): a BARE member key answering a CHILD scope lands its card AND is counted MATCHED — it used to do both at once, landing the card and reporting the same key as `unmatched`, so the plan denied the answer it had just rendered",
+      () => (c4Bare.behaviourIndex?.unmatched || []).length === 0 && /child\/C01/.test(c4Spec),
+      () => ({ unmatched: c4Bare.behaviourIndex?.unmatched, cardLanded: /child\/C01/.test(c4Spec) }));
+    // GUARD-CAN-FAIL: a bare key naming a member NO scope declares is still reported unmatched, so the quiet
+    // `unmatched` above is the bare form being counted rather than the banner being unreachable on this fixture.
+    const c4Stray = mg.runMigration(c4Manifest({ "module-dep:UsrNotDeclaredAnywhere": { card: "child/C09" } }));
+    check("ENG-96571 A6 (review) guard-can-fail: a bare key naming a member NO scope declares IS still reported unmatched — adding the bare form to the digest did not blanket-silence the banner",
+      () => (c4Stray.behaviourIndex?.unmatched || []).join(",") === "module-dep:UsrNotDeclaredAnywhere",
+      () => c4Stray.behaviourIndex?.unmatched);
+  }
+
   /* ---- A7: Approvals, forgotten ---- */
   {
     const withAttribute = () => {
@@ -7994,6 +8078,42 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       () => dispRun.json?.coverage?.complete === true
         && (dispRun.json.coverage.issues || []).every((i) => !/declares approvals infrastructure/.test(i)),
       () => ({ complete: dispRun.json?.coverage?.complete, issues: (dispRun.json?.coverage?.issues || []).slice(0, 2) }));
+    // ---- A7 (review): the DETAIL half now resolves through the MAPPING TABLE, not a regex of its own ----
+    // `detailPattern: /Visa ?Detail/i` was a SUBSTRING test where the mapper matches these details through
+    // `resolveFeatureRow`'s SUFFIX rule. So a schema name that CONTAINS `VisaDetail` without ending in it raised
+    // the signal, the mapper mapped no Approvals feature, and the coverage gate blocked the plan on a feature the
+    // page does not carry — with a remedy ("map it to crt.ApprovalList") nobody could act on.
+    check("ENG-96571 A7 (review) preconditions: `VisaDetailArchive` really is the divergence — the removed SUBSTRING regex matched it while the mapping table's SUFFIX rule does not, so the check below is about a real disagreement",
+      () => /Visa ?Detail/i.test("VisaDetailArchive") && resolveFeatureRow("VisaDetailArchive", null) === null,
+      () => ({ regex: /Visa ?Detail/i.test("VisaDetailArchive"), row: resolveFeatureRow("VisaDetailArchive", null) }));
+    check("ENG-96571 A7 (review): a detail the MAPPING TABLE does not resolve to Approvals raises NO signal — the signal half and the table now agree by construction, so the gate can no longer block on a feature the mapper never mapped",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "VisaDetailArchive" }] }, {}).length === 0
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrVisaDetailSettings" }] }, {}).length === 0
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "Visa Detail" }] }, {}).length === 0,
+      () => ["VisaDetailArchive", "UsrVisaDetailSettings", "Visa Detail"]
+        .map((n) => [n, mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: n }] }, {})]));
+    check("ENG-96571 A7 (review) ANTI-VACUITY: a name the table DOES resolve to Approvals still signals — `ApplicantVisaDetailV2` and a plain `*VisaDetail` suffix both do, so the check above narrowed the matcher rather than switching it off",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "ApplicantVisaDetailV2" }] }, {}).length === 1
+        && mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrWorkVisaDetail" }] }, {}).length === 1,
+      () => [mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "ApplicantVisaDetailV2" }] }, {}),
+        mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "UsrWorkVisaDetail" }] }, {})]);
+    // The ENTITY fallback is kept: an auto-named detail whose schema name hides the feature still resolves by its
+    // entity, exactly as `matchDetailFeature` does in the mapper.
+    check("ENG-96571 A7 (review): an entity that resolves to a NON-Approvals feature raises no Approvals signal — `resolveFeatureRow` can match a row without it being this feature, and only `meta.feature === 'Approvals'` counts",
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "SomeFileDetailV2" }] }, {}).length === 0,
+      () => mg.approvalsSignalOf({ attributes: [], details: [{ schemaName: "SomeFileDetailV2" }] }, {}));
+    // The ATTRIBUTE half, made SYMMETRIC with `buildCoverage`: that ledger classifies a `fromTemplate` attribute as
+    // `context` because no client schema touched it. A `RecordVisaId` inherited from the base template is exactly
+    // that, so reading it as evidence raised a BLOCKING signal off a member the same run had already excluded.
+    check("ENG-96571 A7 (review): a TEMPLATE-OWNED `RecordVisaId` raises NO signal — `buildCoverage` already classifies an untouched `fromTemplate` attribute as `context`, and the signal half must not block on the member the ledger excludes",
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: true }], details: [] }, {}).length === 0,
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: true }], details: [] }, {}));
+    check("ENG-96571 A7 (review) ANTI-VACUITY: the SAME attribute on the page's OWN schema still signals — the template exclusion is scoped to `fromTemplate`, not a blanket mute of the attribute half",
+      () => mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: false }], details: [] }, {}).length === 1
+        && mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [] }, {}).length === 1,
+      () => [mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId", fromTemplate: false }], details: [] }, {}),
+        mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [] }, {})]);
+
     check("ENG-96571 A7: `approvalsSignalOf` reads BOTH halves off the effective page directly, and a page with neither yields `[]` — driven in-process so the matcher is pinned independently of the CLI",
       () => {
         const hit = mg.approvalsSignalOf({ attributes: [{ name: "RecordVisaId" }], details: [{ schemaName: "VisaDetailV2" }] }, {});

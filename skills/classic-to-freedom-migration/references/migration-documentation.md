@@ -73,7 +73,10 @@ page is handed it. An answer here closes no `--verify` row; the deliverable is s
 ANSWER a build agent acts on; `confirmDispositions` is the machine channel that marks the ⚠ Confirm row itself
 answered, so the next `--plan` run prints it as closed instead of asking again. Keyed exactly as the worklist
 prints the row — `"<kind>:<item>"`, or `"<schema>::<kind>:<item>"` when the same question is asked on more than
-one page of the run and each page's answer is its own:
+one page of the run and each page's answer is its own. The SCOPED form is tried FIRST, with the bare form as the
+fallback, at EVERY depth: record the whole map ONCE on the ROOT manifest and each folded child / typed / mini page
+inherits it (a nested bundle's own key still wins), which is what makes a `"<ChildPage>::<kind>:<item>"` answer
+reach the page it names instead of the root alone:
 
 ```jsonc
 { "confirmDispositions": {
@@ -85,6 +88,15 @@ one page of the run and each page's answer is its own:
 leaves the row OPEN and the plan names the word that was rejected — a typo must not clear a question nobody
 answered. A closed row is never dropped: it prints as `ℹ … CLOSED by a recorded disposition` with its note, and
 the header reads `(N open, M closed)`, so an answer stays auditable.
+
+**This map only answers rows the ⚠ Confirm worklist actually PRINTS.** The kinds carried by another worklist —
+every imperative member (`method`, `mixin`, `message`, `module-dep`, `referenced-module`), plus `widget`,
+`card-action`, `standard-feature`, `process-launch`, `detail-editpage` and `attribute-dependency` — render in
+`⚠ Imperative logic` / `⚠ Imperative members` (or the Layout / Child-pages tables), and a `confirmDispositions`
+key naming one of them closes NOTHING there. Such a key is reported as `confirmDispositions.notApplicable` and
+named in a `⚠` advisory line rather than silently ignored; its home is **`memberDispositions`**, whose key the
+coverage gate's own issue text hands you. This is stated because it used to be a silent no-op that the run
+reported as a successful close.
 
 **`decisions.md` is still the source of record.** The disposition map is how the ENGINE learns the decision; the
 decision itself is a `decisions.md` entry with a date and who made it. And note what the plan's `Adjustments` list

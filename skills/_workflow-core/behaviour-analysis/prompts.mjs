@@ -4,6 +4,11 @@
 // on the item rather than passed to a host API. Keeping them pure is also what
 // lets the suite assert the text a phase actually receives — a prompt that lost
 // its read-only clause is a safety regression no coverage arithmetic would catch.
+//
+// The one import: `overrideKey`, so the key shape this file INSTRUCTS an agent to write is produced by the same
+// constant that recognises it downstream. Stripped by the generator (helpers.mjs is inlined into the same scope
+// ahead of this file), which is why it may only name a helper, never introduce a new dependency.
+import { overrideKey } from './helpers.mjs'
 
 // Shared preamble. Embedded so no phase depends on another skill's files being
 // loaded in its context — except `classic-ui-expert` itself, which every Describe
@@ -58,7 +63,7 @@ The digest lists no row for these scopes because the engine already mapped every
 - Return the REPLACING LAYERS of the scope's parent chain (\`ExtendParent=true\` layers, base → top).
 - Write ONE card per override that is not a bare \`callParent\` passthrough — an override that drops \`callParent\`, reorders it, or adds work around it changes visible behaviour, and that is the whole reason this leg exists.
 - Where the chain genuinely overrides nothing behavioural, say so as a COUNTED ZERO: how many layers you read, how many overrides they carry, and that every one of them passes through to the parent.
-- Key each such entry \`<schema>::override:<method>\` — the scope's schema, verbatim, then \`::override:\` then the method name. A bare method name would be matched onto a real digest row and counted as coverage of it; a qualified key cannot be.
+- Key each such entry \`${overrideKey('<schema>', '<method>')}\` — the scope's schema, verbatim, then \`::override:\` then the method name. A bare method name would be matched onto a real digest row and counted as coverage of it; a qualified key cannot be.
 These entries are NOT coverage of any digest row and no coverage number counts them. They are reported as their own section.
 `
 }

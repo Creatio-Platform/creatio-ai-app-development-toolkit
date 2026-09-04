@@ -519,7 +519,13 @@ export function featureVerifyExtraTypes(featureName) {
 export const APPROVALS_SIGNAL = Object.freeze({
   feature: "Approvals",
   attributeNames: Object.freeze(["RecordVisaId"]),
-  detailPattern: /Visa ?Detail/i,
+  // `detailPattern: /Visa ?Detail/i` was REMOVED (ENG-96571 A7 review). It was a SUBSTRING test while the mapper
+  // matches these details through `resolveFeatureRow`'s SUFFIX rule, so the two disagreed on every name that
+  // CONTAINS `VisaDetail` without ending in it (`VisaDetailArchive`, `UsrVisaDetailSettings`, the spaced
+  // `Visa Detail`): the signal fired, the mapper mapped no Approvals feature, and the plan blocked on a feature the
+  // page does not carry. The detail half now resolves each detail through `resolveFeatureRow` and takes the signal
+  // only when the resolved row's `meta.feature` IS `Approvals` — so the signal and the mapping agree by
+  // construction rather than by two hand-kept rules, which is the only thing that can keep them from drifting.
   target: featureVerifyType("Approvals"),
   moduleComponentType: FEATURE_SECOND_HALF.Approvals[0],
 });

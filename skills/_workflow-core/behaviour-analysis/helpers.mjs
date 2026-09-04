@@ -253,9 +253,18 @@ export function planBatches(worked, totalRows, rowsPerAgent, maxDescribe) {
 // question. APPENDED, never unshifted — `batch.scopes[0].label` names the part
 // file and the work-item id, and both must stay a worked scope. Round-robin over
 // the array order (never a Set) so two runs of the same input attach identically.
+// WITH NO BATCHES THIS THROWS rather than returning the scopes unattached. `core.mjs` guards the case: its
+// `if (!worked.length)` exit returns before `planBatches`, so `batches` is non-empty at every real call site. The
+// old silent `return attached` could therefore only be reached by a future caller that dropped that guard — and it
+// returned scopes that LOOK attached (the caller logs "N scope(s) ... attached as OVERRIDE-ONLY") while no agent
+// was ever asked to describe them. That is precisely the failure this function was written to fix, reintroduced
+// silently. Zero scopes with zero batches stays quiet: there is nothing to attach and nothing was lost.
 export function attachOverrideOnly(batches, empty) {
   const attached = (empty || []).map((s) => ({ ...s, overrideOnly: true }))
-  if (!batches.length) return attached
+  if (!attached.length) return attached
+  if (!batches.length) {
+    throw new Error(`attachOverrideOnly: ${attached.length} override-only scope(s) (${attached.map((s) => s.label).join(', ')}) but NO batches to attach them to - they would be reported as attached while no Describe agent was asked to look at them. The caller must exit on an empty worked-scope inventory (core.mjs's !worked.length guard) before reaching here.`)
+  }
   attached.forEach((s, i) => batches[i % batches.length].scopes.push(s))
   return attached
 }
@@ -265,6 +274,11 @@ export function attachOverrideOnly(batches, empty) {
 // `rowSelected` would resolve to the digest key `MainPage::rowSelected` and be
 // counted as real coverage of a row nobody described. Qualifying with the scope
 // AND the `override:` kind puts the key outside every digest key by construction.
+// USED by `prompts.mjs`'s `overrideOnlyBlock` to spell the key shape it instructs the agent to write. The prompt
+// used to re-type the literal, so the machine constant that RECOGNISES the key (`OVERRIDE_KEY_RX` below, and every
+// reader of it) and the prompt that ASKS for it were two hand-kept copies of one format. The generator inlines
+// `helpers.mjs` before `prompts.mjs` into one scope, and `overrideOnlyBlock` reads it at CALL time (not at module
+// evaluation), so the un-hoisted `const` is initialized by then.
 export const overrideKey = (schema, method) => `${schema}::override:${method}`
 
 // The override findings, picked back out of what the describe agents returned.

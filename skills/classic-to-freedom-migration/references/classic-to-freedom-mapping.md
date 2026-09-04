@@ -170,7 +170,7 @@ longest suffix wins), **or** a `RecordVisaId` attribute on the page — the attr
 matching detail schema at all, which is exactly the case a QA colleague found on a built Applicants section
 (Classic page had `VisaDetailV2` **and** `RecordVisaId`; the Freedom page came out with no `crt.ApprovalList`
 because only the detail half was checked). `APPROVALS_SIGNAL` in `../engine/mapping-table.mjs` is the single
-source for the attribute half (`attributeNames: ["RecordVisaId"]`, `detailPattern: /Visa ?Detail/i`,
+source for the attribute half (`attributeNames: ["RecordVisaId"]`, the detail half resolved through `resolveFeatureRow` so the signal and the mapping table cannot disagree,
 `target: "crt.ApprovalList"`, `moduleComponentType: "crt.Approval"`) — the mapper's signal collection and the
 plan-time coverage gate both import it, so a page that carries the signal (by either half) but ends up with no
 Approvals feature in the plan must fail the coverage gate rather than silently ship without Approvals.

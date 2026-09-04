@@ -444,7 +444,10 @@ function planBatches(worked, totalRows, rowsPerAgent, maxDescribe) {
 
 function attachOverrideOnly(batches, empty) {
   const attached = (empty || []).map((s) => ({ ...s, overrideOnly: true }))
-  if (!batches.length) return attached
+  if (!attached.length) return attached
+  if (!batches.length) {
+    throw new Error(`attachOverrideOnly: ${attached.length} override-only scope(s) (${attached.map((s) => s.label).join(', ')}) but NO batches to attach them to - they would be reported as attached while no Describe agent was asked to look at them. The caller must exit on an empty worked-scope inventory (core.mjs's !worked.length guard) before reaching here.`)
+  }
   attached.forEach((s, i) => batches[i % batches.length].scopes.push(s))
   return attached
 }
@@ -654,7 +657,7 @@ The digest lists no row for these scopes because the engine already mapped every
 - Return the REPLACING LAYERS of the scope's parent chain (\`ExtendParent=true\` layers, base → top).
 - Write ONE card per override that is not a bare \`callParent\` passthrough — an override that drops \`callParent\`, reorders it, or adds work around it changes visible behaviour, and that is the whole reason this leg exists.
 - Where the chain genuinely overrides nothing behavioural, say so as a COUNTED ZERO: how many layers you read, how many overrides they carry, and that every one of them passes through to the parent.
-- Key each such entry \`<schema>::override:<method>\` — the scope's schema, verbatim, then \`::override:\` then the method name. A bare method name would be matched onto a real digest row and counted as coverage of it; a qualified key cannot be.
+- Key each such entry \`${overrideKey('<schema>', '<method>')}\` — the scope's schema, verbatim, then \`::override:\` then the method name. A bare method name would be matched onto a real digest row and counted as coverage of it; a qualified key cannot be.
 These entries are NOT coverage of any digest row and no coverage number counts them. They are reported as their own section.
 `
 }
@@ -806,10 +809,17 @@ function reportCritique(critique, critiqueReturned, log) {
   return ran
 }
 
+const bareTail = (key) => String(key).split('::').pop()
+
+function rejectionFor(entry) {
+  return validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    || validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: bareTail(entry.key) })
+}
+
 function rejectTriggers(results, allKeys, log) {
   const rejected = []
   for (const entry of entriesOf(results)) {
-    const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    const why = rejectionFor(entry)
     if (!why) continue
     rejected.push({ key: entry.key, digestKey: digestKeyOf(entry.key, allKeys), trigger: entry.trigger ?? null, from: entry.from ?? null, why })
     delete entry.trigger

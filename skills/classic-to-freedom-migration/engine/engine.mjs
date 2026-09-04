@@ -1512,12 +1512,26 @@ function declaredConditionCount(conds) {
 
 // Extract a rule's condition tree (leftExpression attribute/path, comparison, rightExpression value)
 // so the mapper can emit COMPLETE business rules (not just an action + prose note).
+// The condition ENTRIES a rule declares, whichever of the two shapes it uses. `safeKeys` is what
+// `declaredConditionCount` counts, so the values are taken through the SAME keys: reading the map with a different
+// key rule would let the two halves disagree on the count and — now that `conditionGap` treats
+// `sane.length < declared` as a gap — raise a phantom parse gap on the exact object-map input this exists to read.
+function conditionEntries(conds) {
+  if (Array.isArray(conds)) return conds;
+  if (conds && typeof conds === "object") return safeKeys(conds).map((k) => conds[k]);
+  return [];
+}
+
 function sanitizeConditions(conds) {
-  if (!Array.isArray(conds)) return [];
+  // An object MAP of conditions (a shape some bodies use instead of an array) is READ, not dropped. Returning `[]`
+  // for it made `declaredConditionCount` (which counts its keys) and this function permanently disagree, so every
+  // object-map rule rendered as a condition parse gap that no re-read could ever clear.
+  const list = conditionEntries(conds);
+  if (!list.length) return [];
   // Drop null/non-object entries (a sparse hole or unresolved spread inside a rule's `conditions`). Without this,
   // `c.comparisonType` below threw an UNCAUGHT TypeError here in mergeHierarchy — breaking the documented
   // `runMigration ... does NOT throw` contract (a hostile/malformed body would crash the CLI with a raw stack).
-  return conds.filter((c) => c && typeof c === "object").map(c => {
+  return list.filter((c) => c && typeof c === "object").map(c => {
     const l = c.leftExpression || {}, r = c.rightExpression || {};
     return {
       comparison: typeof c.comparisonType === "number" ? c.comparisonType : null,

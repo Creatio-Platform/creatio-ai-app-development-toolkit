@@ -1519,6 +1519,25 @@ function buildCallerIndex(methods) {
 // answer, "called from X", which still beats `⚠ unresolved`.
 //
 // `seen` breaks cycles (mutual recursion is common in classic helpers) and the
+// An UPSTREAM answer, re-based onto the immediate caller. Own fn (behaviour unchanged) so
+// `resolveInternalTrigger` keeps Sonar CC 15 headroom — the branch plus the chain construction sat two levels deep
+// inside its loop.
+//
+// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the hook is what
+// `from` carries on a `lifecycle` trigger. Overwriting `from` with the immediate caller (which is what the generic
+// composition below does, and what the old shape could afford because the hook sat in its own `lifecycle` field)
+// would make the cell name the wrong method — "cHelper (platform lifecycle)" for a hook called `onSaved`. So the
+// lifecycle answer is passed through unchanged; the immediate caller was never rendered for this shape anyway.
+function composeUpstream(up, caller, all) {
+  if (up.kind === "lifecycle") return { ...up, ...all };
+  // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat `from`
+  // (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the trigger
+  // already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
+  const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
+    .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
+  return { ...up, from: caller, via: chain.slice(1), ...all };
+}
+
 // caller sets are sorted so the result never depends on iteration order.
 function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
   if (seen.has(name)) return null;
@@ -1539,21 +1558,7 @@ function resolveInternalTrigger(name, callerIdx, byName, seen = new Set()) {
     if (STANDARD_CLASSIC_METHODS.has(caller)) return { kind: "lifecycle", from: caller, ...all };
     partial ||= { kind: "internal", from: caller, ...all };
     const up = resolveInternalTrigger(caller, callerIdx, byName, seen);
-    if (up) {
-      // ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the hook is
-      // what `from` carries on a `lifecycle` trigger. Overwriting `from` with the immediate caller (which is what
-      // the generic composition below does, and what the old shape could afford because the hook sat in its own
-      // `lifecycle` field) would make the cell name the wrong method — "cHelper (platform lifecycle)" for a hook
-      // called `onSaved`. So the lifecycle answer is passed through unchanged; the immediate caller was never
-      // rendered for this shape anyway.
-      if (up.kind === "lifecycle") return { ...up, ...all };
-      // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat
-      // `from` (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the
-      // trigger already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
-      const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
-        .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
-      return { ...up, from: caller, via: chain.slice(1), ...all };
-    }
+    if (up) return composeUpstream(up, caller, all);
   }
   return partial;
 }
@@ -1808,7 +1813,12 @@ function conditionGap(r) {
   if (!sane.length) return true;
   const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
     || (!c?.left?.attribute && !c?.left?.path);
-  return sane.every(degenerate);
+  // `every` missed every PARTIAL gap: two declared conditions of which one sanitized away, or three declared and
+  // two readable, left `sane` non-empty with at least one readable entry and reported the rule as fully read. The
+  // rendered cell then stated a condition that is only half of what the classic page evaluated — the same class of
+  // wrong answer as rendering `always` for case (b), and wrong in the same direction. A gap in ANY entry, or a
+  // count that does not reach what the source declared, is a gap in the rule.
+  return sane.length < declared || sane.some(degenerate);
 }
 
 // The worklist line a condition gap raises. Its own const so the wording is written once and the test can pin it.

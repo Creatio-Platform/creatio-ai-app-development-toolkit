@@ -45,6 +45,10 @@ import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAll
 } from "../../skills/_workflow-core/build-executor/helpers.mjs";
 import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
 import * as prompts from "../../skills/_workflow-core/behaviour-analysis/prompts.mjs";
+// The prompt module's own SOURCE — the override-only block's example key is asserted to be BUILT from
+// `overrideKey` rather than re-typed, which is a fact about the source text, not about the rendered output (the
+// rendered output is byte-identical either way, which is exactly why the drift went unnoticed).
+const promptsSrc = readFileSync(fileURLToPath(new URL("../../skills/_workflow-core/behaviour-analysis/prompts.mjs", import.meta.url)), "utf8");
 // The ENGINE's own producer of the plan-gap entries. This suite otherwise knows the engine only by path, but
 // the plan-gap vocabulary is a string-typed contract BETWEEN the two modules (PR review, F1): the engine writes
 // the entries and `planGapKinds` above re-derives their taxonomy by containment. Asserting each side against
@@ -885,6 +889,51 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     () => String(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })));
 }
 {
+  // ENG-96571 (review) — `attachOverrideOnly` with NO BATCHES. It used to `return attached` silently, handing back
+  // scopes that LOOK attached while no Describe agent was ever asked to look at them: the caller then logs
+  // "N scope(s) … attached as OVERRIDE-ONLY" and the run reports a finished analysis of a scope nobody read. That
+  // is the exact failure the function was written to fix, reintroduced silently.
+  let threw = null;
+  try { helpers.attachOverrideOnly([], [{ role: "section", label: "DealSectionV2", rows: 0 }]); }
+  catch (e) { threw = e; }
+  check("ENG-96571 (review): `attachOverrideOnly` THROWS when there are scopes but no batches to attach them to — the old silent return handed back scopes the caller then reported as attached while no agent was asked to describe them",
+    threw instanceof Error && /override-only scope\(s\)/.test(threw.message) && /DealSectionV2/.test(threw.message),
+    () => String(threw));
+  check("ENG-96571 (review): the error names the CALLER'S guard, so the repair does not start by re-reading this helper",
+    /!worked\.length/.test(threw?.message || ""),
+    () => String(threw?.message));
+  // ZERO scopes with ZERO batches stays QUIET — there is nothing to attach and nothing was lost, so throwing there
+  // would turn a correct no-op into a crash.
+  let quiet = "did not run";
+  try { quiet = helpers.attachOverrideOnly([], []); } catch (e) { quiet = e; }
+  check("ENG-96571 (review): ZERO override-only scopes with zero batches returns `[]` and does NOT throw — the guard fires on scopes that would be LOST, not on an empty call",
+    Array.isArray(quiet) && quiet.length === 0,
+    () => String(quiet));
+  // …and the normal path is untouched.
+  const batches = [{ scopes: [{ role: "main page", label: "DealPage" }] }];
+  const attached = helpers.attachOverrideOnly(batches, [{ role: "section", label: "DealSectionV2", rows: 0 }]);
+  check("ENG-96571 (review) ANTI-VACUITY: with a batch present the scope is still APPENDED and flagged `overrideOnly` — the throw is scoped to the case where the scope had nowhere to go",
+    attached.length === 1 && attached[0].overrideOnly === true
+    && batches[0].scopes.length === 2 && batches[0].scopes[1].label === "DealSectionV2",
+    () => JSON.stringify({ attached, batchScopes: batches[0].scopes }));
+}
+{
+  // ENG-96571 (review) — the PROMPT's example key is BUILT from the machine constant. The prompt used to re-type
+  // `<schema>::override:<method>` while `OVERRIDE_KEY_RX` / `overrideKey` own that format, so the key the agent is
+  // ASKED to write and the key the core RECOGNISES were two hand-kept copies of one thing.
+  check("ENG-96571 (review): `overrideKey` is no longer a dead export — `prompts.mjs` builds the override-only block's example key from it, so the prompt and the recogniser cannot drift",
+    /overrideKey\('<schema>', '<method>'\)/.test(promptsSrc)
+    // Scoped to the INSTRUCTION line — other lines in this prompt name the shape as prose, which is fine; what
+    // must not come back is a re-typed literal in the line that tells the agent what to write.
+    && !/- Key each such entry \\`<schema>::override:<method>\\`/.test(promptsSrc),
+    () => promptsSrc.split("\n").filter((l) => /override:/.test(l)));
+  const built = helpers.overrideKey("<schema>", "<method>");
+  check("ENG-96571 (review): the built key is BYTE-IDENTICAL to the literal the prompt used to carry — the substitution changed no prompt text, and a real key still matches the recogniser",
+    built === "<schema>::override:<method>"
+    && /(^|::)override:/.test(helpers.overrideKey("DealSectionV2", "rowSelected")),
+    () => built);
+}
+{
   // The core's own leg: a rejected trigger is STRIPPED, logged, and the row goes back through the repair round.
   const selfOrigin = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
     (e.key === "onSaved" ? { ...e, trigger: "internal", from: "onSaved" } : e)) };
@@ -909,6 +958,55 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
   check("ENG-96571 A2: the rejected trigger reaches the Critique AND Merge prompts — a merge agent that never heard about it would write it back into the index",
     asked.filter((i) => ["Critique", "Merge"].includes(i.phase)).every((i) => /REJECTED/.test(i.prompt) && /onSaved/.test(i.prompt)),
     () => asked.filter((i) => ["Critique", "Merge"].includes(i.phase)).map((i) => i.phase).join(","));
+}
+// The SCOPED-KEY fixture for the two checks below: the DIGEST key itself is schema-qualified, which is how the
+// engine publishes a mini-page / child-page scope's rows (two pages of one surface may declare the same method
+// name, so the bare form would collide). `digestKeyOf` resolves a bare ENTRY key onto a scoped digest key; the
+// reverse never happens, so the entry has to carry the qualified key for this to be the real shape.
+const CTX_SCOPED = { ...CTX, scopes: [
+  { role: "main page", schema: null, methodKeys: ["onSaved", "reload"], memberKeys: ["mixin:LeadMixin"], unresolvedCount: 0 },
+  { role: "mini page", schema: "DealMini", methodKeys: ["DealMini::initMini"], memberKeys: [], unresolvedCount: 0 },
+] };
+const SCOPED_ENTRY = (trigger, from) => ({ ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) =>
+  (e.key === "initMini" ? { key: "DealMini::initMini", card: "DealMini/C01", trigger, from } : e)) });
+const SCOPED_SELF_ORIGIN = SCOPED_ENTRY("internal", "initMini");
+const SCOPED_GOOD = SCOPED_ENTRY("attribute", "attributes.Stage.onChange");
+
+{
+  // ENG-96571 A2 (review) — A SCHEMA-QUALIFIED KEY. `rejectTriggers` passed `entry.key` as the `methodName`, so on a
+  // scoped key the "a row cannot be its own origin" comparison ran against `DealMini::initMini` while the reported
+  // `from` said `initMini` — they differ as strings, the trigger PASSED, no repair round ran and `coverage.complete`
+  // went true on exactly the self-referential trigger the validator exists to reject. The ENGINE's mirrored leg
+  // (`applyBehaviourIndex`) compares against the BARE `h.sourceMethod`, so it caught this and the workflow did not:
+  // one entry, two verdicts, which is the divergence the byte-for-byte parity test exists to prevent.
+  const { result, logs, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_SCOPED };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: structuredClone(SCOPED_SELF_ORIGIN) };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A2 (review): a SCHEMA-QUALIFIED key whose reported `from` names its own BARE tail is REJECTED — comparing only against the full key let `{from:'initMini'}` on `DealMini::initMini` pass here while the engine's leg rejected it, so the run reported coverage complete on a row nobody answered",
+    result.rejectedTriggers.some((r) => r.key === "DealMini::initMini" && /row itself/.test(r.why))
+    && result.coverage.complete === false
+    && logs.some((l) => /rejected the reported trigger on 'DealMini::initMini'/.test(l))
+    && asked.some((i) => i.id.startsWith("repair.")),
+    () => JSON.stringify({ rejected: result.rejectedTriggers, complete: result.coverage.complete }));
+  check("ENG-96571 A2 (review): the reason names the BARE tail it actually collided with, not the qualified key — the repair has to say which string was the row's own name",
+    /'initMini'/.test(result.rejectedTriggers.find((r) => r.key === "DealMini::initMini")?.why || ""),
+    () => result.rejectedTriggers.map((r) => r.why));
+}
+{
+  // ANTI-VACUITY for the review fix: a scoped key with a GENUINELY different origin still PASSES. Without this the
+  // check above would be satisfied by a caller that rejects every scoped key outright.
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_SCOPED };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: structuredClone(SCOPED_GOOD) };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("ENG-96571 A2 (review) ANTI-VACUITY: a SCOPED key reporting a genuinely different origin is NOT rejected — the bare-tail comparison narrowed the check, it did not start refusing every qualified key",
+    result.rejectedTriggers.length === 0 && result.coverage.complete === true,
+    () => JSON.stringify({ rejected: result.rejectedTriggers, coverage: result.coverage }));
 }
 {
   // TWO ROUNDS, STILL INVALID. `uncoveredKeys` is recomputed after the repair round from `covered` alone, and the

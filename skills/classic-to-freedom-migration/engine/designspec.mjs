@@ -657,7 +657,10 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // omits (the handler method carries it there). The checklist proves completeness member by member, and the
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
-const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
+// EXPORTED because `migrate.mjs` needs the SAME set: `applyConfirmDispositions` must not report closing a row this
+// worklist never prints (the disposition would be a silent no-op reported as success). A re-typed second copy is
+// exactly the drift this set exists to prevent, so there is one set and two readers.
+export const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
   // Imperative MEMBERS have their own worklist (⚠ Imperative members), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
@@ -689,7 +692,11 @@ function renderConfirmWorklist(cs) {
   // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
   // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
   // Do not re-add a render-time push: a question the renderer invents is a question with nowhere to record an answer.
-  if (!confirm.length && !closedRows.length && !invalid.length) return [];
+  // ENG-96571 C1 — dispositions aimed at a row this worklist does NOT print (a `SHOWN_ELSEWHERE` kind). They
+  // closed nothing, so they are named here rather than silently absent: the operator wrote an answer and, without
+  // this line, would read a plan that neither shows the answer nor says it was not applied.
+  const notApplicable = cs.confirmNotApplicable || [];
+  if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length) return [];
   // The header counts BOTH halves, and says which is which: "(3)" on a run where two of the three were answered
   // reads as three open questions. The closed half is only mentioned when there IS one, so an unanswered run's
   // header is unchanged.
@@ -704,6 +711,9 @@ function renderConfirmWorklist(cs) {
   // does not, and the row above still says it is open. Naming the word is what makes that discrepancy fixable.
   if (invalid.length) {
     L.push("", `> ⛔ ${invalid.length} recorded disposition(s) were NOT applied — ${invalid.map((d) => `\`${esc(confirmKeyOf(d))}\` → \`${esc(d.dispositionInvalid)}\``).join(", ")}: that word is not one of \`accepted\` | \`reproduced-manually\` | \`n/a\` | \`resolved-on-stand\`, so the row stays OPEN. Fix the word in \`manifest.confirmDispositions\` and re-run.`);
+  }
+  if (notApplicable.length) {
+    L.push("", `> ⚠ ${notApplicable.length} recorded \`confirmDispositions\` key(s) address rows this worklist does not print — ${notApplicable.map((k) => `\`${esc(k)}\``).join(", ")}: those kinds are carried by the ⚠ Imperative logic / ⚠ Imperative members worklists (or the Layout / Child-pages tables), so a \`confirmDispositions\` answer closes NOTHING there. Record them in \`manifest.memberDispositions\` instead — the coverage gate's issue text gives the exact key.`);
   }
   return [...L, ""];
 }
@@ -1554,7 +1564,7 @@ export function renderPlanNotes(result) {
     "",
     "### Presenting the plan",
     "",
-    "- Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
+    "- Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` slots in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
     "- Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
     "- The Plan-vs-Done control table is NOT part of `plan.md`: produce it with `--checklist` AFTER implementation, and close the build with `--verify --built <file>`.",
   ];
