@@ -331,6 +331,17 @@ function buildScenarios() {
     // parity green, the exact divergence class recorded on this PR. These two differential scenarios drive both.
     { name: "PR #159 (Major 5): a MIXED round — a catalog answer beside a stand-confirmed defect — stops as unvalidated AND carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
     { name: "PR #159 (Major 5): a catalog answer that is ALSO resolved:false drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Blocker, RC-12) — the whole `reconcileShapeErrors` ARRIVAL check (and with it
+    // `componentSweepFaults`) was dropped from the frozen mirror while the shipped script kept it: a malformed
+    // Reconcile answer was refused-and-retried there and silently accepted here, and no scenario submitted one, so
+    // parity stayed green with the two copies divergent. These three drive each of `componentSweepFaults`' three
+    // faults through BOTH scripts — a well-formed answer never reaches them, so only the fault path is exercised.
+    // Each malformed answer is re-asked on all three attempts (the mock clamps to the last `reconciles` entry) and
+    // then stops `reconcile-failed`; deleting the sweep faults (or the whole check) from the mirror alone lets the
+    // baseline ACCEPT on the first attempt, so its dispatch diverges and parity fails — the drift is now mechanical.
+    { name: "PR #159 (RC-12): a BLANK resolvedFrom is REFUSED and retried on both copies (componentSweepFaults FAULT 1)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "", resolved: true, note: "" }] })] }) },
+    { name: "PR #159 (RC-12): an EMPTY sweep against published types is REFUSED and retried on both copies (componentSweepFaults FAULT 2)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [] })] }) },
+    { name: "PR #159 (RC-12): a stand claim its own note contradicts is REFUSED and retried on both copies (componentSweepFaults FAULT 3)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "probe-error" }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the

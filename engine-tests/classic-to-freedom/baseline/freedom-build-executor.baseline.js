@@ -2728,12 +2728,187 @@ const carryNow = () => ({ parked, proposals, blocked: blockedItems, discrepancie
 // run onto the Agent route, which is where the divergent state of A2 came from. One retry is what turns that from a
 // route switch into a hiccup. Bounded and never silent: each attempt is logged, and exhausting them is still the
 // honest `reconcile-failed` stop, not a run that proceeds on a state nobody produced.
+// ── ARRIVAL-SHAPE VALIDATION (PR #159, RC-12) ──────────────────────────────────────────────────────
+// Hand-ported from the core to mirror the shipped workflow. The 4096-byte classifier cap forces `RECONCILE_SCHEMA`
+// to declare its nested objects loosely, so every nested field the prompt lists is checked HERE, on arrival, and an
+// answer short of the shape is refused-and-retried rather than accepted with a hole in it. The baseline rewrite that
+// added the provenance sweep dropped this whole subsystem while the shipped script kept it and GAINED
+// `componentSweepFaults` — so a malformed Reconcile answer (a BLANK `resolvedFrom`, a `stand` claim its own note
+// contradicts, or a published component sweep that resolves NONE of its types) was refused there and silently
+// accepted here. The parity suite could not see the drift because every scenario submitted a well-formed answer;
+// restored verbatim so the two copies refuse the same answers, and pinned by a scenario that submits an empty sweep.
+const CATALOG_NOTE_TOKENS = /probe-error|latest-fallback/i
+
+const describeValue = (v) => {
+  if (v === null) return 'null'
+  if (Array.isArray(v)) return 'an array'
+  return typeof v
+}
+
+const SHAPE_KINDS = new Set(['array', 'object', 'object-or-null'])
+const SHAPE_TYPES = new Set(['string', 'boolean', 'integer', 'string-or-null', 'string[]'])
+
+const shapeTypeOk = (v, t) => {
+  if (t === 'string') return typeof v === 'string'
+  if (t === 'boolean') return typeof v === 'boolean'
+  if (t === 'integer') return Number.isInteger(v)
+  if (t === 'string-or-null') return v === null || typeof v === 'string'
+  if (t === 'string[]') return Array.isArray(v) && v.every((x) => typeof x === 'string')
+  return false
+}
+
+function shapeRequiredErrors(where, obj, spec, out) {
+  for (const k of spec.required || []) {
+    if (obj[k] === undefined) out.push(`${where}.${k}: required, and it is absent`)
+  }
+}
+function shapeTypedErrors(where, obj, spec, out) {
+  for (const [k, t] of Object.entries(spec.types || {})) {
+    if (!SHAPE_TYPES.has(t)) {
+      out.push(`${where}.${k}: unknown type token '${t}' — a defect in the shape table, not in the answer`)
+      continue
+    }
+    if (obj[k] !== undefined && !shapeTypeOk(obj[k], t)) out.push(`${where}.${k}: expected ${t}, got ${describeValue(obj[k])}`)
+  }
+}
+function shapeNestedErrors(where, obj, spec, out) {
+  for (const [k, sub] of Object.entries(spec.nested || {})) {
+    if (obj[k] !== undefined) shapeValueErrors(`${where}.${k}`, obj[k], sub, out)
+  }
+}
+function shapeMapErrors(where, obj, spec, out) {
+  for (const [k, sub] of Object.entries(spec.map || {})) {
+    const m = obj[k]
+    if (m === undefined) continue
+    if (m === null || typeof m !== 'object' || Array.isArray(m)) {
+      out.push(`${where}.${k}: expected an object keyed by name, got ${describeValue(m)}`)
+      continue
+    }
+    for (const [mk, mv] of Object.entries(m)) shapeObjectErrors(`${where}.${k}["${mk}"]`, mv, sub, out)
+  }
+}
+function shapeObjectErrors(where, obj, spec, out) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    out.push(`${where}: expected an object, got ${describeValue(obj)}`)
+    return
+  }
+  shapeRequiredErrors(where, obj, spec, out)
+  shapeTypedErrors(where, obj, spec, out)
+  shapeNestedErrors(where, obj, spec, out)
+  shapeMapErrors(where, obj, spec, out)
+}
+
+function shapeValueErrors(where, value, spec, out) {
+  if (!SHAPE_KINDS.has(spec.kind)) {
+    out.push(`${where}: unknown kind '${spec.kind}' — a defect in the shape table, not in the answer`)
+    return
+  }
+  if (spec.kind === 'array') {
+    if (!Array.isArray(value)) {
+      out.push(`${where}: expected an array, got ${describeValue(value)}`)
+      return
+    }
+    value.forEach((item, n) => shapeObjectErrors(`${where}[${n}]`, item, spec, out))
+    return
+  }
+  if (spec.kind === 'object-or-null' && value === null) return
+  shapeObjectErrors(where, value, spec, out)
+}
+
+const RECONCILE_ANSWER_MAX_BYTES = 16000
+
+const RECONCILE_SHAPE = {
+  approval: { kind: 'object', required: ['found'],
+    types: { found: 'boolean', version: 'string', date: 'string', who: 'string', recordedIn: 'string', quote: 'string' } },
+  packageCreatedByRun: { kind: 'object-or-null', required: ['package', 'appUnitComplete'],
+    types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
+  orphanedPagesOnFile: { kind: 'array', required: ['schema'],
+    types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
+  sectionRouteByRun: { kind: 'object-or-null', required: ['route', 'schemaName'],
+    types: { route: 'string', schemaName: 'string', sectionHost: 'string-or-null', planVersion: 'string-or-null' } },
+  componentResolution: { kind: 'array', required: ['type', 'resolved', 'resolvedFrom'],
+    types: { type: 'string', resolved: 'boolean', resolvedFrom: 'string', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
+  templateResolution: { kind: 'array', required: ['name', 'resolved'],
+    types: { name: 'string', resolved: 'boolean', note: 'string' } },
+  reachability: { kind: 'array', required: ['key', 'appliesWhen'],
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null' } },
+  preflightItems: { kind: 'array', required: ['id', 'pageKey'],
+    types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },
+    nested: { resolution: { kind: 'object-or-null', required: ['answer'],
+      types: { answer: 'string', decidedBy: 'string', date: 'string' } } } },
+  resolutionsUnmatched: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  resolutionsConflicts: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
+  proposals: { kind: 'array', required: ['deviation', 'why'],
+    types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
+  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
+    types: { unit: 'string', id: 'string', kind: 'string', claim: 'string', found: 'string', round: 'integer' } },
+  unconsumedResolutions: { kind: 'array', required: ['unit', 'id', 'source'],
+    types: { unit: 'string', id: 'string', kind: 'string', answer: 'string', why: 'string', source: 'string' } },
+  resolutionsReopened: { kind: 'array', required: ['unit', 'id'], types: { unit: 'string', id: 'string' } },
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pages'],
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer' },
+    map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer' } } } },
+}
+
+function componentSweepFaults(state, out) {
+  const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
+  const blankRows = []
+  rows.forEach((c, i) => { if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() === '') blankRows.push(i) })
+  if (blankRows.length) {
+    const which = blankRows.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (blankRows.length > 3 ? ', …' : '')
+    out.push(blankRows.length + ' component resolution entr' + (blankRows.length === 1 ? 'y has' : 'ies have') + ' a BLANK `resolvedFrom` (' + which + '). Report `stand` when this environment answered or `catalog` when it did not — an empty string is the token observed dropped in transit on this answer, so it is refused rather than read as "did not reach the stand"')
+  }
+  const contradictory = []
+  rows.forEach((c, i) => { if (c && isStandProvenance(c.resolvedFrom) && typeof c.note === 'string' && CATALOG_NOTE_TOKENS.test(c.note)) contradictory.push(i) })
+  if (contradictory.length) {
+    const which = contradictory.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (contradictory.length > 3 ? ', …' : '')
+    out.push(contradictory.length + ' component resolution entr' + (contradictory.length === 1 ? 'y claims' : 'ies claim') + ' `resolvedFrom: stand` but the entry\'s own `note` carries clio\'s catalog-fallback token (`probe-error` / `latest-fallback`) (' + which + '). That is a bundled-catalog answer, not a stand answer: report `catalog` when the note says the environment could not be probed, so the round is not read as validated against a stand it never reached')
+  }
+  const published = (Array.isArray(state.componentTypes) ? state.componentTypes : []).filter((t) => typeof t === 'string')
+  if (!published.length) return
+  const swept = new Set(rows.filter((c) => c && typeof c.type === 'string').map((c) => c.type))
+  if (published.some((t) => swept.has(t))) return
+  out.push('componentResolution: the plan publishes ' + published.length + ' component type(s) and this answer resolves NONE of them. Return one entry per published type with `resolvedFrom` — `catalog` on every entry if the whole sweep fell back to the bundled catalog. Do NOT omit the entries: an omitted entry reads as un-swept, and this run would then build on a round that checked nothing about the stand')
+}
+function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) {
+    return [`the answer is not an object (got ${describeValue(state)})`]
+  }
+  const out = []
+  if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
+    out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
+  }
+  componentSweepFaults(state, out)
+  const size = encodedAsciiBytes(JSON.stringify(state))
+  if (size > maxBytes) {
+    const worst = Object.keys(state)
+      .map((k) => [k, encodedAsciiBytes(JSON.stringify(state[k]))])
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([k, n]) => `${k} (${n} B)`).join(', ')
+    out.push(String.raw`the answer encodes to ${size} ASCII bytes on the wire (the \uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+  }
+  for (const [key, spec] of Object.entries(shape)) {
+    if (state[key] === undefined) continue
+    shapeValueErrors(key, state[key], spec, out)
+    if (out.length >= limit) break
+  }
+  return out.slice(0, limit)
+}
+
 const RECONCILE_ATTEMPTS = 3
 // The last attempt's host rejection, held for the failure text to name — a rejected agent call arrives as a thrown
 // error, never as null, and only a catch inside the loop can spend an attempt on it.
 let lastHostRejection = ''
+// The last attempt's SHAPE faults (this script's own arrival check, not the host's) — set when an answer arrived but
+// was short of `RECONCILE_SHAPE`, so the next attempt's prompt can name the offending fields and the exhaustion text
+// can say the transcription, not the host, is what failed.
+let lastShapeFaults = []
 async function reconcileAgent(roundNo, label) {
   lastHostRejection = ''
+  lastShapeFaults = []
   for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
     // Sequential by definition: attempt 2 exists only because attempt 1 returned nothing (same shape as the
     // round's own `await dispatchUnit(...)` loop, which is sequential for the same reason).
@@ -2742,7 +2917,18 @@ async function reconcileAgent(roundNo, label) {
     // the try is the host call itself.
     const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
     let attemptPrompt = base
-    if (lastHostRejection) {
+    if (lastShapeFaults.length) {
+      // This script's OWN arrival check rejected the last answer — not the host, and not for its content. Name the
+      // offending fields, ask for the SAME answer with them filled, and carve `componentResolution` out of the
+      // generic "leave the object out" advice, which would steer the sweep straight into the un-swept hole this
+      // fault exists to close (PR #159, RC-12).
+      const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
+      const sweepFaulted = lastShapeFaults.some((f) => /componentResolution[[:]/.test(f))
+      const sweepRule = sweepFaulted
+        ? ' **This does NOT apply to `componentResolution`:** do not drop those entries. Return one entry per published component type, with `resolvedFrom` on every one — `catalog` on every entry if the whole sweep fell back to the bundled catalog. An omitted entry is read as un-swept and this run would then build on a round it never validated, which is the failure this field exists to prevent.'
+        : ''
+      attemptPrompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}`
+    } else if (lastHostRejection) {
       attemptPrompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
     }
     let answer
@@ -2756,16 +2942,29 @@ async function reconcileAgent(roundNo, label) {
       // above the try, so the only throw that can land here is the host call's own failure. There is no driver
       // channel whose delivered-outcome mark (`workItemOutcome` in the core) could separate a host failure from a
       // local bug — nothing local is left inside the try to conflate.
+      lastShapeFaults = []
       lastHostRejection = String(e?.message || e)
       if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call: ${lastHostRejection}`)
       else log(`Reconcile (${label}) was REJECTED by the host on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built: ${lastHostRejection}`)
       continue
     }
     if (answer) {
-      // The EMPTY prefix's wire form, decoded back to `''` on acceptance — hand-ported from the core.
-      if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
-      return answer
+      // This script's OWN arrival check, mirroring the shipped workflow: an answer short of `RECONCILE_SHAPE` is
+      // refused and retried rather than accepted with a hole in it, so the frozen mirror rejects exactly the
+      // malformed answers the shipped script does (PR #159, RC-12).
+      const faults = reconcileShapeErrors(answer)
+      if (!faults.length) {
+        // The EMPTY prefix's wire form, decoded back to `''` on acceptance — hand-ported from the core.
+        if (answer.schemaNamePrefixEmpty === true && answer.schemaNamePrefix == null) answer.schemaNamePrefix = ''
+        return answer
+      }
+      lastHostRejection = ''
+      lastShapeFaults = faults
+      if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} but the answer is short of the shape this script computes on — retrying: ${faults.join(' · ')}`)
+      else log(`Reconcile (${label}) answered on attempt ${attempt} of ${RECONCILE_ATTEMPTS} and is STILL short of the shape this script computes on — giving up, nothing was built: ${faults.join(' · ')}`)
+      continue
     }
+    lastShapeFaults = []
     lastHostRejection = ''
     if (attempt < RECONCILE_ATTEMPTS) log(`Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — retrying the SAME call; a rejection here has been transient before, and switching routes over it is what split the state file`)
   }
@@ -2778,9 +2977,15 @@ const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches
 const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent may be transient (a rejected structured answer, a dropped connection): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
 // A host REJECTION carries the host's own error verbatim — that message, not this script's paraphrase, is what the
 // operator triages on.
-const reconcileFailedNext = () => (lastHostRejection
-  ? `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
-  : RECONCILE_FAILED_NEXT)
+const reconcileFailedNext = () => {
+  if (lastHostRejection) {
+    return `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
+  }
+  if (lastShapeFaults.length) {
+    return `the Reconcile agent answered on all ${RECONCILE_ATTEMPTS} attempts and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host is not blocking anything, so re-run this build on the SAME route. If the same field is missing every time, the prompt's list of that object's fields and \`RECONCILE_SHAPE\` disagree about it, which is a defect in this script rather than in the run. Nothing was built`
+  }
+  return RECONCILE_FAILED_NEXT
+}
 
 // ENG-95884 — `packageCreatedByRun` is deliberately NOT required on RECONCILE_SCHEMA (ENG-95850: "an agent that
 // cannot read the file must be able to say nothing rather than guess"), so a Reconcile call that silently dropped
@@ -4509,7 +4714,9 @@ while (true) {
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
       next: `re-run this build on the SAME route to refresh the queue state; the built file and the verdict from this round are on disk. ${lastHostRejection
         ? `The host REJECTED the answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}). ${REPEATED_REJECTION_TRIAGE}`
-        : `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`}`,
+        : lastShapeFaults.length
+          ? `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
+          : `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`}`,
     })
   }
   const stopAfterRound = await acceptReconciled(next, `round ${round}'s Reconcile`)
