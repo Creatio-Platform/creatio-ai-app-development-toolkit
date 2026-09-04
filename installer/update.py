@@ -211,10 +211,12 @@ def refresh_claude_named_workflows(home: Path | None = None) -> list[str]:
         return install_module.provision_named_workflows(cache_root, home / ".claude")
     except (OSError, RuntimeError, ImportError) as error:
         # Every refusal from the provisioner itself is real and must be visible. RuntimeError in
-        # particular is what the hardened provisioner raises for the three security rejections - an
-        # unusable meta.name, two scripts claiming one name, and a destination resolving outside
-        # ~/.claude/workflows/. Swallowing those printed nothing on any channel, so an unattended
-        # update looked like it had provisioned the workflows it had just refused.
+        # particular is what the provisioner raises for the security rejections - an unusable name,
+        # two scripts claiming one name, and a destination resolving outside ~/.claude/workflows/ -
+        # and, since the identity moved into the generated manifest, for a cache tree that carries
+        # no manifest or a script the manifest does not declare. Swallowing those printed nothing on
+        # any channel, so an unattended update looked like it had provisioned the workflows it had
+        # just refused.
         print(f"WARNING: named workflows were not provisioned: {error}", file=sys.stderr)
         return []
 

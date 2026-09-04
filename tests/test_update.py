@@ -348,6 +348,20 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
             f"export const meta = {{\n  name: '{meta_name}',\n}}\n{body}",
             encoding="utf-8",
         )
+        # The identity the provisioner reads comes from the GENERATED manifest, not from the
+        # script text (PR #147 review) - a cached tree without it is a separate, tested failure.
+        manifest = root / "skills" / "_workflow-core" / "workflows.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps({
+                "workflows": [{
+                    "name": meta_name,
+                    "script": "skills/some-skill/some.workflow.js",
+                    "phases": ["Describe"],
+                }]
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
         return root
 
     def test_picks_the_highest_cached_version_not_the_lexical_one(self):
@@ -370,8 +384,11 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
 
     def test_a_broken_cached_script_never_fails_the_update(self):
         root = self._write_cached_plugin("1.0.0", "creatio-x")
-        (root / "skills" / "some-skill" / "some.workflow.js").write_text(
-            "export const meta = { description: 'no name' }\n", encoding="utf-8"
+        # A cached tree whose manifest does not declare the script it ships: the provisioner has no
+        # name for it and refuses, which is the shape a partial or hand-edited cache produces now
+        # that the identity is published rather than parsed out of the script.
+        (root / "skills" / "_workflow-core" / "workflows.json").write_text(
+            json.dumps({"workflows": []}) + "\n", encoding="utf-8"
         )
         # A RuntimeError from the provisioner never fails the update - the plugin update itself
         # succeeded and the scriptPath fallback still resolves in-tree - but it is the ONE signal an
@@ -381,7 +398,8 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             self.assertEqual(self.upd.refresh_claude_named_workflows(self.home), [])
         self.assertIn("WARNING: named workflows were not provisioned", stderr.getvalue())
-        self.assertIn("meta.name", stderr.getvalue())
+        self.assertIn("skills/some-skill/some.workflow.js", stderr.getvalue())
+        self.assertIn("workflows.json", stderr.getvalue())
 
     def test_a_runtime_without_a_provisioner_stays_silent(self):
         """The ImportError arm is deliberately quiet: a surface that ships no `installer/` is the

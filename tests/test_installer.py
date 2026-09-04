@@ -49,7 +49,11 @@ def write_release_manifest(repo_root, plugin_runtime=None):
 
 
 def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, body=""):
-    """Write a `skills/<skill>/<stem>.workflow.js` declaring `meta.name`."""
+    """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
+
+    The manifest is what the installer reads: the script's own `meta.name` is still written so the
+    fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
+    """
     skill_dir = source_root / "skills" / skill_dir_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     script = skill_dir / f"{script_stem}.workflow.js"
@@ -57,7 +61,27 @@ def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, 
         f"export const meta = {{\n  name: '{meta_name}',\n}}\n{body}",
         encoding="utf-8",
     )
+    add_workflow_manifest_entry(source_root, script, meta_name)
     return script
+
+
+def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describe",)):
+    """Append `{name, script, phases}` to `skills/_workflow-core/workflows.json`."""
+    installer = load_installer()
+    manifest_path = source_root / installer.WORKFLOW_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.is_file()
+        else {"workflows": []}
+    )
+    manifest["workflows"].append({
+        "name": meta_name,
+        "script": script.relative_to(source_root).as_posix(),
+        "phases": list(phases),
+    })
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
 
 
 def write_minimal_plugin_checkout(repo_root):
@@ -633,117 +657,103 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 installer.provision_named_workflows(source_root, claude_home)
 
-    def test_reads_the_name_from_the_meta_block_not_the_first_matching_line(self):
-        # These scripts inline core modules and prompt text, so a later line beginning `name:` must
-        # not be able to supply the destination filename.
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            source_root = Path(temp) / "src"
-            script = write_bundled_workflow(
-                source_root,
-                "a-skill",
-                "build",
-                "creatio-real",
-                body="const agentSpec = {\n"
-                "name: 'creatio-../../evil',\n"
-                "}\n",
-            )
-
-            self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
-
-    def test_reads_the_name_when_the_meta_block_comment_contains_an_apostrophe(self):
-        # The meta block opens with a multi-line prose comment, and prose carries apostrophes and
-        # backticks. Treating `//` as code flipped the scanner's quote state at the apostrophe, so
-        # every later quote was out of phase and each phases[] `{` was swallowed as string content:
-        # the block then read as unterminated (a hard failure on every install and every unattended
-        # update) or ended at a wrong index that ran past `meta` into the inlined prompt text.
+    def test_reads_the_name_from_the_manifest_not_from_the_script_text(self):
+        # PR #147 review — the identity comes from the generated manifest, so a line beginning
+        # `name:` anywhere in the inlined prompt text or core modules cannot supply the destination
+        # filename, and no JavaScript is parsed to find out. The script here declares one name in
+        # its own `meta` and a decoy further down; only the manifest decides.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
             skill_dir = source_root / "skills" / "a-skill"
-            skill_dir.mkdir(parents=True, exist_ok=True)
+            skill_dir.mkdir(parents=True)
             script = skill_dir / "build.workflow.js"
             script.write_text(
                 "export const meta = {\n"
-                "  // Named so it matches the host's own scope, and the `phases` below\n"
-                "  /* mirror the driver's phase list - don't reorder them. */\n"
-                "  name: 'creatio-real',\n"
-                "  phases: [{ title: 'Describe' }, { title: 'Merge' }],\n"
+                "  // the host's own scope, with a `template ${literal}` and a /regex{/ in prose\n"
+                "  name: 'creatio-ignored-by-the-consumer',\n"
                 "}\n"
                 "const agentSpec = {\n"
                 "name: 'creatio-../../evil',\n"
                 "}\n",
                 encoding="utf-8",
             )
+            add_workflow_manifest_entry(source_root, script, "creatio-real")
+            claude_home = Path(temp) / "home" / ".claude"
 
-            self.assertEqual(installer.workflow_meta_name(script), "creatio-real")
-
-    def _meta_name_of(self, temp: str, source: str) -> str:
-        installer = load_installer()
-        skill_dir = Path(temp) / "src" / "skills" / "a-skill"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        script = skill_dir / "build.workflow.js"
-        script.write_text(source, encoding="utf-8")
-        return installer.workflow_meta_name(script)
-
-    # The three `-1` exits and the index arithmetic in `_skip_comment` / `_skip_string` matter more
-    # than ordinary coverage: a wrong index here does not crash, it returns a slice running past
-    # `meta` into the inlined prompt text - which re-opens the "first line-initial `name:` anywhere
-    # in the file wins" hole, and that name becomes a path under ~/.claude/workflows/.
-
-    def test_a_brace_inside_a_block_comment_does_not_change_the_scanner_depth(self):
-        with tempfile.TemporaryDirectory() as temp:
-            name = self._meta_name_of(
-                temp,
-                "export const meta = {\n"
-                "  /* a stray { and } live in this prose, and must not move depth */\n"
-                "  name: 'creatio-real',\n"
-                "}\n"
-                "const agentSpec = {\n"
-                "name: 'creatio-../../evil',\n"
-                "}\n",
+            self.assertEqual(
+                installer.provision_named_workflows(source_root, claude_home), ["creatio-real"]
             )
-            self.assertEqual(name, "creatio-real")
+            self.assertTrue((claude_home / "workflows" / "creatio-real.js").exists())
 
-    def test_an_unterminated_block_comment_refuses_rather_than_harvesting_a_later_name(self):
+    def test_a_tree_with_no_manifest_refuses_rather_than_falling_back_to_a_parser(self):
+        # Fails CLOSED, with the remedy named. A fallback parser no test exercises would preserve
+        # exactly the coupling the manifest replaced.
+        installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaises(RuntimeError) as raised:
-                self._meta_name_of(
-                    temp,
-                    "export const meta = {\n"
-                    "  /* this comment is never closed\n"
-                    "  name: 'creatio-real',\n"
-                    "}\n"
-                    "const agentSpec = {\n"
-                    "name: 'creatio-../../evil',\n"
-                    "}\n",
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "build.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-real',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "carries no workflow manifest"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+            self.assertFalse((Path(temp) / ".claude" / "workflows").exists())
+
+    def test_a_script_missing_from_the_manifest_refuses_and_names_it(self):
+        # The drift gate in `scripts/build-workflows.mjs --check` is what stops this reaching a
+        # release; the installer still refuses rather than guessing a name from the filename.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            unlisted = source_root / "skills" / "skill-b"
+            unlisted.mkdir(parents=True)
+            (unlisted / "two.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-two',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "skills/skill-b/two.workflow.js"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_an_unreadable_manifest_refuses_rather_than_provisioning_part_of_the_tree(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                "{ not json", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "could not be read as JSON"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_without_a_workflows_list_refuses(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                '{"generatedBy": "x"}\n', encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "no `workflows` list"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_entry_missing_name_or_script_refuses(self):
+        installer = load_installer()
+        for entry in ({"name": "creatio-one"}, {"script": "skills/a/b.workflow.js"}, "not-an-object"):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+                (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                    json.dumps({"workflows": [entry]}) + "\n", encoding="utf-8"
                 )
-            self.assertIn("unterminated", str(raised.exception))
-            self.assertNotIn("evil", str(raised.exception))
 
-    def test_a_line_comment_on_a_final_line_with_no_newline_refuses_rather_than_guessing(self):
-        # `_skip_comment` returns -1 when a `//` has no closing newline. The block is genuinely
-        # unterminated at that point, so refusing is the safe answer; the assertion exists so the
-        # index arithmetic cannot start returning a slice instead.
-        with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaises(RuntimeError) as raised:
-                self._meta_name_of(temp, "export const meta = {\n  name: 'creatio-real', // trailing")
-            self.assertIn("unterminated", str(raised.exception))
-
-    def test_an_unterminated_string_literal_refuses_rather_than_harvesting_a_later_name(self):
-        with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaises(RuntimeError) as raised:
-                self._meta_name_of(
-                    temp,
-                    "export const meta = {\n"
-                    "  description: 'never closed,\n"
-                    "  name: 'creatio-real',\n"
-                    "const agentSpec = {\n"
-                    "name: 'creatio-../../evil',\n"
-                    "}\n",
-                )
-            self.assertIn("unterminated", str(raised.exception))
-            self.assertNotIn("evil", str(raised.exception))
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, Path(temp) / ".claude")
 
     def test_provisions_every_bundled_workflow(self):
         installer = load_installer()
@@ -796,7 +806,9 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
                 [],
             )
 
-    def test_workflow_without_meta_name_is_a_hard_error(self):
+    def test_a_script_the_generator_never_declared_is_a_hard_error(self):
+        # Was "a script with no `meta.name`". The identity no longer lives in the script, so the
+        # equivalent failure is a script the generator's `TARGETS` table never declared.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
@@ -805,7 +817,10 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
             (skill_dir / "broken.workflow.js").write_text(
                 "export const meta = { description: 'no name' }\n", encoding="utf-8"
             )
-            with self.assertRaisesRegex(RuntimeError, "no `meta.name`"):
+            add_workflow_manifest_entry(
+                source_root, skill_dir / "other.workflow.js", "creatio-other"
+            )
+            with self.assertRaisesRegex(RuntimeError, "has no entry in"):
                 installer.provision_named_workflows(source_root, Path(temp) / ".claude")
 
 
@@ -816,9 +831,10 @@ class ShippedWorkflowScriptTests(unittest.TestCase):
         installer = load_installer()
         scripts = installer.discover_workflow_scripts(ROOT)
         self.assertTrue(scripts, "the repository ships no *.workflow.js")
+        declared = installer.workflow_manifest_names(ROOT)
         for script in scripts:
             with self.subTest(script=script.name):
-                name = installer.workflow_meta_name(script)
+                name = declared[script.relative_to(ROOT).as_posix()]
                 # ~/.claude/workflows/ is shared across every project and
                 # plugin, and project scope wins a name collision.
                 self.assertTrue(
@@ -840,9 +856,10 @@ class ShippedWorkflowScriptTests(unittest.TestCase):
         targets, but it must not lead.
         """
         installer = load_installer()
+        declared = installer.workflow_manifest_names(ROOT)
         for script in installer.discover_workflow_scripts(ROOT):
             with self.subTest(script=script.name):
-                name = installer.workflow_meta_name(script)
+                name = declared[script.relative_to(ROOT).as_posix()]
                 skill_doc = (script.parent / "SKILL.md").read_text(encoding="utf-8")
                 self.assertIn("scriptPath", skill_doc)
                 self.assertIn(f'name: "{name}"', skill_doc)

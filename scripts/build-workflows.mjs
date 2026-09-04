@@ -24,6 +24,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE = path.join(ROOT, 'skills', '_workflow-core')
 
+// The workflow IDENTITY manifest: the one structured place a consumer reads `{name, script, phases}` from.
+// PR #147 review (architecture) — the installer used to recover `meta.name` by lexing the generated JavaScript
+// with a hand-written sub-lexer in Python, so the consumer parsed the producer's output language and the producer
+// published nothing structured, while `TARGETS` below held the same data in structured form at emit time. That is
+// what AGENTS.md forbids: a generated artifact is a verification tool, never a source to reverse-engineer format
+// rules from, and CLI/source text is not a substitute for a source that returns the same data as fields. The
+// manifest is generated from `TARGETS` by the same run that writes the scripts and is covered by the same
+// `--check` drift gate, so a mapping cannot go stale without failing CI.
+const MANIFEST_OUT = 'skills/_workflow-core/workflows.json'
+
 const BEGIN = '// ---8<--- PURE DECISION HELPERS ---8<---'
 const END = '// ---8<--- END PURE DECISION HELPERS ---8<---'
 const PLACEHOLDER = '/*@INLINE@*/'
@@ -202,6 +212,18 @@ function build(target) {
   return text
 }
 
+// The manifest text, from the SAME `TARGETS` table the scripts are generated from. Sorted by name so the file is
+// a function of the table's content and not of its order.
+export function buildManifest(targets = TARGETS) {
+  return `${JSON.stringify({
+    generatedBy: 'scripts/build-workflows.mjs',
+    note: 'GENERATED — do not edit. The identity of each shipped workflow script, for consumers that must not parse the generated JavaScript. Run `node scripts/build-workflows.mjs` to regenerate; `--check` fails CI when it drifts.',
+    workflows: [...targets]
+      .map((t) => ({ name: t.name, script: t.out, phases: [...t.phases] }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  }, null, 2)}\n`
+}
+
 // Only when run as a program. Importing this module (the offline suite does, to reach
 // `stripImports`) must not write the shipped files or call `process.exit`.
 //
@@ -249,6 +271,27 @@ if (isMain) {
     // `break`, or a target skipped by a future guard, all of which would otherwise exit 0 while proving nothing.
     handled++
   }
+  // The identity manifest is held to the SAME drift gate as the scripts, and for the stronger reason: a stale
+  // mapping does not fail a test, it fails an INSTALL — `provision_named_workflows` refuses a script the manifest
+  // does not carry, so a target added here without regenerating breaks provisioning for everyone.
+  {
+    const manifestPath = path.join(ROOT, MANIFEST_OUT)
+    const nextManifest = buildManifest()
+    const currentManifest = safeRead(manifestPath)
+    if (check) {
+      if (currentManifest !== nextManifest) {
+        failed++
+        process.stderr.write(`❌ ${MANIFEST_OUT} is out of sync with TARGETS — run \`node scripts/build-workflows.mjs\`\n`)
+        process.stderr.write(`   ${firstDifference(currentManifest, nextManifest)}\n`)
+      } else {
+        process.stdout.write(`✅ ${MANIFEST_OUT} matches TARGETS\n`)
+      }
+    } else {
+      writeFileSync(manifestPath, nextManifest, 'utf8')
+      process.stdout.write(`${currentManifest === nextManifest ? '=' : '→'} ${MANIFEST_OUT}\n`)
+    }
+  }
+
   // A run that did not complete EVERY target can never pass as green: an exit 0 here asserts that each shipped
   // artifact was compared against the core, and a partial run does not support that claim.
   if (handled !== TARGETS.length) {

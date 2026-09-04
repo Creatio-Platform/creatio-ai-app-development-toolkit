@@ -14,7 +14,7 @@ import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/e
 import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
-import { stripImports } from "../../scripts/build-workflows.mjs";
+import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
@@ -678,6 +678,38 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("cli.mjs: every `advance(...)` replay carries the workflow's WORKFLOW_REQUIRES — a run-level gate enforced on one command and not the others is a guarantee in name only",
     advanceCalls.length >= 2 && withoutRequires.length === 0,
     () => ({ calls: advanceCalls.length, withoutRequires: withoutRequires.map((c) => c.slice(0, 120)) }));
+}
+
+/* PR #147 REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
+   `installer/install.py` used to recover each workflow's name by lexing the generated JavaScript with a
+   hand-written JS sub-lexer in Python - the consumer parsing the producer's output language, while
+   `TARGETS` held `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
+   now emits `skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
+   Asserted here as well as in the drift gate, because the consequence of a stale row is not a red test:
+   `provision_named_workflows` refuses a script the manifest does not carry, so it is a failed INSTALL. */
+{
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const manifestPath = path.join(repoRoot, "skills/_workflow-core/workflows.json");
+  const shipped = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
+  check("build-workflows: the shipped workflow manifest is exactly what TARGETS generates — a stale mapping fails an install, not a test, so it is pinned on both sides",
+    shipped === buildManifest(), () => `shipped ${shipped === null ? "MISSING" : `${shipped.length} bytes`} vs generated ${buildManifest().length} bytes`);
+  const manifest = shipped ? JSON.parse(shipped) : { workflows: [] };
+  check("build-workflows: every manifest row names a script that EXISTS, and every shipped `*.workflow.js` has a row — a row without a file provisions nothing, a file without a row refuses to install",
+    () => {
+      const rows = manifest.workflows.map((w) => w.script);
+      const onDisk = readdirSync(path.join(repoRoot, "skills"))
+        .flatMap((skill) => {
+          const dir = path.join(repoRoot, "skills", skill);
+          if (!statSync(dir).isDirectory()) return [];
+          return readdirSync(dir).filter((f) => f.endsWith(".workflow.js")).map((f) => `skills/${skill}/${f}`);
+        });
+      return rows.every((r) => existsSync(path.join(repoRoot, r)))
+        && onDisk.every((f) => rows.includes(f)) && rows.length === onDisk.length;
+    },
+    () => JSON.stringify({ rows: manifest.workflows.map((w) => w.script) }));
+  check("build-workflows: every manifest name is usable as a filename under ~/.claude/workflows/ — the installer writes `<name>.js` there, and the name arrives with a marketplace tree",
+    manifest.workflows.every((w) => /^creatio-[A-Za-z0-9._-]+$/.test(w.name) && !w.name.includes("/")),
+    () => manifest.workflows.map((w) => w.name).join(", "));
 }
 
 /* ENG-96483 REVIEW (Major) — THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
