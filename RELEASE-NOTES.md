@@ -8,6 +8,24 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.9.0 (2026-09-03)
+
+**Every toolkit workflow now reports product telemetry, not only app creation, and a host-side hook makes sure a session is counted even when the agent forgets to.** Edit, migration, mobile-conversion and branding runs were invisible to usage analytics; this release makes them countable with the same opt-in consent, the same privacy rules and no change to how you work. It requires clio **8.1.0.119** or newer (`dotnet tool update clio -g`).
+
+### 📊 Telemetry for every flow
+
+- **One stage vocabulary for all workflows** ([#96](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/96)). Agents report the same stages for every flow (`workflow_started`, `plan_approved`, `build_started`, `work_item_completed`, `workflow_completed`, ...) plus a `workflow` field naming the flow, so app maintenance, Classic to Freedom migration, mobile page conversion and branding land in the same funnel as app creation. The vocabulary is owned by clio (`get-guidance name=product-telemetry`); the toolkit only says where each flow emits and what counts as a unit of work.
+- **A guaranteed floor on Claude Code.** A small hook runs after the first clio MCP call of a session, records one session-start event and reminds the agent which session id and toolkit version to report. It is also registered for the prompt and response events, which Claude Code fires in every project; in a session that never calls clio it returns at once and writes nothing. Cursor gets the same rules through an always-applied rule the installer writes, Codex through `AGENTS.md`; Copilot CLI has the skills only.
+- **Session cost is reported from the host's own transcript**, once per response, as the real total rather than a guess made inside the run.
+- **Consent and privacy are unchanged.** Nothing is sent before you grant telemetry consent, the hook never answers that question for you, events carry no prompts, generated content or credentials, and `withdraw-telemetry-consent` turns everything off at any time.
+
+### 🛠️ Fixes
+
+- **clio installed under `C:\Program Files` is found again** ([#96](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/96)). A `CLIO_CMD` path with spaces was split at the space and clio was reported as missing on the default Windows install location.
+- **An older clio degrades quietly.** If the installed clio does not accept the new vocabulary, the toolkit reports nothing for that run and writes one diagnostic line naming the cause; upgrading clio restores reporting.
+
+---
+
 ## 1.8.0 (2026-09-03)
 
 **Your Freedom UI web pages can now become mobile pages — in beta, if you opt in.** The Web → Mobile page converter is open for beta testing behind a clio feature flag that stays off until you turn it on, so nothing changes for anyone who does not ask for it. The same release lands a long reliability pass on Classic → Freedom migration: the plan is checked against the real stand before a build starts, `--verify` no longer reports success it cannot back up, and the whole workflow now runs the same way on Claude, Codex and Copilot.
