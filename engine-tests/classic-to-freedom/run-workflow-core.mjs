@@ -1145,6 +1145,26 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli: the stop is RECORDED on the run — `stopped` with the missing capability and the phase that needed it, so the reason survives the process",
       stopState.status === "stopped" && stopState.stop.missing.join(",") === "independentRoles" && /Critique/.test(stopState.stop.where),
       () => JSON.stringify(stopState.stop));
+    // PR #147 review — the OTHER half of the same stop, and the reason this block exists one assertion longer
+    // than it did: `status` is the only non-mutating command in the published `start | next | submit | status |
+    // resume` surface, and a capability stop is the single condition an operator or a JSON-parsing wrapper runs
+    // it for. Routing it through the mutating commands' `process.exit(3)` meant it printed prose to stderr,
+    // nothing to stdout, and its own catch was dead code for the only error class that path can produce.
+    const stopStatus = cli("status", stopRun);
+    let stopDoc = null;
+    try { stopDoc = JSON.parse(stopStatus.stdout) } catch { stopDoc = null }
+    check("cli status: a run stopped on a capability still emits a PARSABLE state document on stdout and exits 0 — it was asked to describe state, not to perform work, and it changed nothing",
+      stopStatus.status === 0 && stopDoc !== null, () => `exit ${stopStatus.status} · stdout ${JSON.stringify(stopStatus.stdout.slice(0, 200))}`);
+    check("cli status: the document NAMES the missing capability, the phase that needed it and the same remedy `next` prints — an orchestrating host has to read the reason, not a prose paragraph on stderr",
+      stopDoc?.pending?.missing?.join(",") === "independentRoles" && /Critique/.test(stopDoc?.pending?.where || "")
+        && /mutually blind/.test(stopDoc?.pending?.capabilityStop || ""),
+      () => JSON.stringify(stopDoc?.pending));
+    check("cli status: the work already recorded is still reported alongside the stop — the run's history is what the operator decides from, and the stop must not cost them it",
+      stopDoc?.executed === 2 && stopDoc?.host === "codex", () => JSON.stringify({ executed: stopDoc?.executed, host: stopDoc?.host }));
+    check("cli status: describing a stopped run does NOT rewrite the run file — `status` is read-only, and an inspection that mutates the journal is the one thing an operator cannot undo",
+      readFileSync(stopRun, "utf8") === JSON.stringify(stopState, null, 2) + "\n"
+        || JSON.parse(readFileSync(stopRun, "utf8")).status === stopState.status,
+      () => JSON.parse(readFileSync(stopRun, "utf8")).status);
 
     // The RUN-level gate, on every replay path. `next` passed WORKFLOW_REQUIRES and `submit`/`status`
     // did not, so negotiateRun ran against `requires = []` there and always answered ok: a run-level
@@ -1158,13 +1178,19 @@ console.log("\n===== the migration-workflow CLI =====");
     const gateStatus = cli("status", runGateRun);
     // NOTE on what this pins and what it does not: `subAgents` is BOTH in WORKFLOW_REQUIRES and on the
     // steps' own `requires`, so the stop it proves on `submit`/`status` is reachable through the
-    // step-level gate too. What it does pin is that `status` now routes through advanceOrExplain -
-    // exit 3 and the operator remedy, instead of the raw message stuffed into `pending.error`.
-    // Isolating the run-level gate behaviourally needs a workflow whose WORKFLOW_REQUIRES names a
-    // capability no step repeats; the static assertion in run-infra.mjs guards the wiring until then.
-    check("cli: a capability stop is reported the same way on `next`, `submit` AND `status` — exit 3 with the remedy, so a REFUSED host never looks like a broken CLI on whichever path the operator took",
-      [gateNext, gateSubmit, gateStatus].every((r) => r.status === 3 && /subAgents/.test(r.stderr) && /Nothing was executed/.test(r.stderr)),
-      () => [gateNext, gateSubmit, gateStatus].map((r) => `${r.status}:${r.stderr.slice(0, 120)}`).join(" || "));
+    // step-level gate too. What it does pin is that all three commands MEET the gate rather than one
+    // silently accepting a host the others refuse. Isolating the run-level gate behaviourally needs a
+    // workflow whose WORKFLOW_REQUIRES names a capability no step repeats; the static assertion in
+    // run-infra.mjs guards that argument until then.
+    check("cli: the two MUTATING commands refuse a host that cannot honour the run's guarantees — exit 3 with the remedy, so a REFUSED host never looks like a broken CLI on whichever path the operator took",
+      [gateNext, gateSubmit].every((r) => r.status === 3 && /subAgents/.test(r.stderr) && /Nothing was executed/.test(r.stderr)),
+      () => [gateNext, gateSubmit].map((r) => `${r.status}:${r.stderr.slice(0, 120)}`).join(" || "));
+    // PR #147 review — and `status` meets the SAME gate without inheriting the exit policy: it reports the
+    // stop in its document. Read-only, so exit 0; a script that branches on the exit code of a query verb
+    // learns nothing about the run, and one that parses its stdout learns everything.
+    check("cli status: the read-only command reports the same stop STRUCTURALLY instead of exiting — the gate is met on every replay path, and only the two mutating paths terminate",
+      gateStatus.status === 0 && JSON.parse(gateStatus.stdout).pending?.missing?.includes("subAgents"),
+      () => `exit ${gateStatus.status} · ${gateStatus.stdout.slice(0, 200)}`);
 
     // A TAIL-PARTIAL BATCH, one `cli submit` per item. The only shape the CLI/Codex path can produce for a
     // multi-item batch, and the one every scenario above missed: the 2-scope INPUT yields ONE describe item, so

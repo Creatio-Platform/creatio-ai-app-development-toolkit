@@ -127,7 +127,7 @@ async function cmdNext(argv) {
   } catch (e) {
     writeJson(file, run)
     if (e instanceof CapabilityError) {
-      process.stderr.write(`\nSTOPPED — this host cannot honour a guarantee this phase depends on:\n${explainMissing(e.missing)}\n\nNothing was executed. Re-run on a host that provides it, or declare the capability if the host does have it.\n`)
+      process.stderr.write(capabilityStopText(e))
       process.exit(3)
     }
     throw e
@@ -222,7 +222,18 @@ function missingRequired(schema, value) {
 // The one place a capability stop is turned into an operator-facing answer. `next` and `submit` both replay the run
 // to find what is pending, so both meet the same gate; reporting it two different ways (a remedy on one, a raw
 // stack and exit 1 on the other) made a REFUSED host look like a broken CLI on whichever path the operator took.
-async function advanceOrExplain(run) {
+// ONE owner for the operator-facing stop text. `next` and the replay helper below wrote it out
+// separately, so the remedy an operator reads depended on which command they happened to run.
+const capabilityStopText = (e) =>
+  `\nSTOPPED — this host cannot honour a guarantee this phase depends on:\n${explainMissing(e.missing)}\n\nNothing was executed. Re-run on a host that provides it, or declare the capability if the host does have it.\n`
+
+// PR #147 review — `onCapabilityStop` is the CALLER's decision, and the default is the mutating one.
+// `next` and `submit` were ASKED to perform work, so a capability stop is a failure of the command and
+// exits 3. `status` was asked to DESCRIBE state, and exiting before its document reached stdout made the
+// one non-mutating command in the published surface print nothing on the single condition an operator, or
+// a wrapper script parsing its JSON, runs it for. `report` hands the error back so the caller can fold it
+// into that document.
+async function advanceOrExplain(run, { onCapabilityStop = 'exit' } = {}) {
   try {
     // `requires` is what makes the comment above TRUE. Without it negotiateRun ran against the
     // default `requires = []` and always answered ok, so a run-level guarantee that no step
@@ -236,8 +247,8 @@ async function advanceOrExplain(run) {
       requires: workflowOf(run).WORKFLOW_REQUIRES,
     })
   } catch (e) {
-    if (e instanceof CapabilityError) {
-      process.stderr.write(`\nSTOPPED — this host cannot honour a guarantee this phase depends on:\n${explainMissing(e.missing)}\n\nNothing was executed. Re-run on a host that provides it, or declare the capability if the host does have it.\n`)
+    if (e instanceof CapabilityError && onCapabilityStop === 'exit') {
+      process.stderr.write(capabilityStopText(e))
       process.exit(3)
     }
     throw e
@@ -253,13 +264,21 @@ async function cmdStatus(argv) {
   if (run.status !== 'done') {
     try {
       // Routed through advanceOrExplain so `status` meets the same run-level gate as `next` and
-      // `submit`, and so a capability stop reaches the operator as the remedy text plus exit 3
-      // rather than being stuffed into `pending.error` as a raw message.
-      const res = await advanceOrExplain(run)
+      // `submit` — with `report`, so the stop is DESCRIBED here instead of exiting the process. A
+      // read-only diagnostic inheriting a mutating command's terminating error policy meant the state
+      // document below was never written on a capability stop, and the catch was dead for the only
+      // error class that path could produce.
+      const res = await advanceOrExplain(run, { onCapabilityStop: 'report' })
       pending = res.status === 'pending' ? { phase: res.step.items[0].phase, items: res.pending } : null
       if (res.status === 'done') s.status = 'done'
     } catch (e) {
-      pending = { error: e.message }
+      // Both arms are live. A capability stop is STRUCTURED — the missing capabilities, the phase that
+      // needed them and the same remedy text `next` prints — because that is what an orchestrating host
+      // has to read to decide anything. `status` still exits 0: it answered the question it was asked,
+      // and it changed nothing (the run file is not rewritten here, unlike `next`).
+      pending = e instanceof CapabilityError
+        ? { capabilityStop: explainMissing(e.missing), missing: e.missing, where: e.where }
+        : { error: e.message }
     }
   }
   process.stdout.write(`${JSON.stringify({ ...s, pending, result: run.result }, null, 2)}\n`)

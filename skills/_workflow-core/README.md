@@ -186,6 +186,13 @@ Declare the session honestly: `--parallelism N` if items can run concurrently,
 then stops the run with the remedy and exit code 3, which is the intended answer —
 not something to work around.
 
+That exit code is for the commands that were asked to perform work — `next`,
+`resume` and `submit`. `status` answers the same gate but REPORTS it: exit 0 and
+its usual JSON document on stdout, with the missing capabilities, the phase that
+needed them and the same remedy text under `pending.capabilityStop`. It is the
+one non-mutating verb, and a capability stop is exactly when a wrapper script
+needs to read the reason rather than a paragraph on stderr.
+
 `submit` refuses a result that misses a required key of the item's
 `responseSchema`, and refuses a result for an item the core is not waiting for. A
 result the core would misread must not enter the journal.

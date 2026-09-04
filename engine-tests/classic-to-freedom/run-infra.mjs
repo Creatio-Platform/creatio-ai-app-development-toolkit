@@ -663,8 +663,12 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // `advanceOrExplain` (used by `submit`) did not, so negotiateRun ran there against the default
 // `requires = []` and always answered ok - a run-level guarantee that no step happens to repeat
 // (`persistentState`, `humanApproval`) was refused on one path and silently accepted on the others.
-// Asserted statically because isolating it behaviourally needs a workflow whose WORKFLOW_REQUIRES
-// names a capability no step repeats, which `behaviour-analysis` does not.
+// The BEHAVIOUR is now covered end to end in `run-workflow-core.mjs`: the stop-run block proves `next`
+// and `submit` exit 3 with the remedy and `status` reports the same stop as a parsable document, and the
+// run-gate block proves all three commands meet the run-level gate. What that cannot isolate is the
+// `requires` ARGUMENT itself - it needs a workflow whose WORKFLOW_REQUIRES names a capability no step
+// repeats, which `behaviour-analysis` does not - so this stays as the cheap wiring guard for exactly that,
+// and no longer as the only thing standing behind the gate.
 {
   const cliSrc = readFileSync(path.join(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
