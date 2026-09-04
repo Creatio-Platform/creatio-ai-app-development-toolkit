@@ -268,6 +268,22 @@ function isProfileCardModule(c) {
   if (!c.masterColumnName || c.hasDashboardConfig) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
+// ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
+// STRUCTURALLY by the two coordinates the migrator needs to convert it: BOTH `recordId` (the SysWidgetDashboard
+// record) and `widgetKey` (which widget in it) must be present. A module missing EITHER cannot be converted, so
+// it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
+// the widget catalog already owns is excluded so a known base-chrome widget is never mistaken for a card widget.
+function isCardWidgetModule(c) {
+  if (!c?.recordId || !c?.widgetKey) return false;
+  // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
+  // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
+  // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
+  // decision AND a card-widget decision (a double decision R1 forbids), because mapWidgets never sees
+  // mapProfileCards' accountedFor. Genuine card widgets carry no `masterColumnName`, so this excludes ONLY the
+  // ambiguous overlap and lets the profile-card phase win — never a real card widget.
+  if (isProfileCardModule(c)) return false;
+  return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
+}
 // standard card actions (from the classic ACTIONS menu / toolbar) -> Freedom card actions (B7).
 const KNOWN_ACTION_ITEMS = new Set([
   "PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton",
@@ -410,8 +426,8 @@ export function mapToFreedom(eff, opts = {}) {
   _pc.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
-  const _w = mapWidgets(eff, { signals: opts.signals });
-  const { widgets, chromeWidgets } = _w;
+  const _w = mapWidgets(eff, { signals: opts.signals, index, profileAnchors });
+  const { widgets, chromeWidgets, cardWidgets } = _w;
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
@@ -457,6 +473,10 @@ export function mapToFreedom(eff, opts = {}) {
     profileCards,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
+    // ENG-95806 — record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
+    // recordId) and resolved region: the agent groups them by recordId and converts each group via the migrator's
+    // ConvertCardWidgetsProcess, placing the returned Freedom element — never hand-building a chart.
+    cardWidgets,
     // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
     chromeWidgets,
     // image/photo components (generator-based) → Freedom image component.
@@ -1014,9 +1034,11 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
   // charts/widgets not in the catalog -> B9/B10 (generic). An embedded PROFILE CARD is excluded: mapProfileCards
   // already mapped it to a concrete component, so repeating it here as "propose the closest component" would both
-  // duplicate the worklist and read as if the target were still unknown.
+  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET (ENG-95806) is likewise
+  // excluded: mapWidgets emitted a concrete card-widget decision for it, so a generic component entry here would
+  // duplicate the worklist and re-vague a target that is now actionable.
   for (const c of payloadComponents)
-    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName]) && !isProfileCardModule(c)) needsDecision.push({ kind: "component", item: c.key,
+    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName]) && !isProfileCardModule(c) && !isCardWidgetModule(c)) needsDecision.push({ kind: "component", item: c.key,
       // name the embedded schema when the config carries one (`config.schemaName`) — a real classic body rarely
       // sets `moduleName`, so the old text degraded to a useless "module '?'".
       reason: `module '${c.moduleName || c.schemaName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
@@ -1381,10 +1403,16 @@ function mapProfileCards(ctx) {
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
-// Returns its own needsDecision[] / accountedFor[]; the orchestrator merges them.
+// ENG-95806 — ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
+// runs BEFORE the base-chrome catalog and bypasses its `seenWidget` dedup / evidence gating entirely (a card
+// widget is genuine page content keyed by coordinates, not inherited chrome). `opts.index` (the layout tree) +
+// `opts.profileAnchors` let it resolve each widget's region the same way mapProfileCards does.
+// Returns its own needsDecision[] / accountedFor[] / cardWidgets[]; the orchestrator merges them.
 function mapWidgets(eff, opts = {}) {
-  const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [];
+  const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [], cardWidgets = [];
   const seenWidget = new Set();
+  const index = opts.index instanceof Map ? opts.index : new Map();
+  const profileAnchors = opts.profileAnchors;
   // A widget catalog entry maps a base-template CONTAINER/MODULE (e.g. ESNFeedContainer, DcmActionsDashboard…)
   // to a Freedom analog. But the base Freedom template DEFINES all of these universally, so their mere presence
   // in the merged page is NOT evidence the classic page actually had the widget — emitting on presence leaked
@@ -1437,9 +1465,35 @@ function mapWidgets(eff, opts = {}) {
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
-  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
+  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it emits unconditionally (no seenWidget dedup,
+  // no base-chrome evidence gate). Resolve its region by climbing the host diff item's parent chain (mirrors
+  // mapProfileCards); an unresolved chain (or no host diff item, e.g. a module-only declaration) falls back to
+  // the top area, where analytical indicators sit. Account for BOTH the module key AND the host diff-item name so
+  // mapUnmappedDrop does not later re-report the widget as an unknown dropped component (the double-report trap).
+  const emitCardWidget = (c) => {
+    const host = index.get(c.key);
+    const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : null;
+    let region;
+    if (own?.kind === "tab") region = own.tab;
+    else if (own?.kind === "profile") region = "SideAreaProfileContainer";
+    else region = "Header / top";
+    accountedFor.push(c.key);
+    if (host?.name) accountedFor.push(host.name);
+    cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region, fromTemplate: !!c.fromTemplate });
+    // The decision names the CONCRETE conversion action (call ConvertCardWidgetsProcess with the coordinates and
+    // place the returned Freedom element) — NOT the old "propose the closest component". Contract details of the
+    // migrator are assumed; the SKILL.md / mapping-reference recipe flags them "verify against released migrator".
+    needsDecision.push({
+      kind: "card-widget", item: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region,
+      reason: `card widget '${c.widgetKey}' (record-scoped indicator from SysWidgetDashboard, record '${c.recordId}') → convert it: group by recordId and call ConvertCardWidgetsProcess (pass the recordId + widgetKey), then place the returned Freedom element config in ${region}. Do NOT hand-build a chart; a Failed conversion stays TODO/BLOCKED with the migrator's reason. [verify the process contract against the released migrator]`,
+    });
+  };
+  for (const c of (eff.components || [])) {
+    if (isCardWidgetModule(c)) { emitCardWidget(c); continue; }
+    addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
+  }
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
-  return { widgets, chromeWidgets, needsDecision, accountedFor };
+  return { widgets, chromeWidgets, needsDecision, accountedFor, cardWidgets };
 }
 
 function categorize(name) {

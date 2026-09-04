@@ -692,6 +692,13 @@ function normalizeModules(m) {
       // `dashboardConfig`, never on `viewModelConfig` itself. Recording the key lets the mapper exclude that
       // shape instead of mistaking every dashboard for a profile card.
       hasDashboardConfig: vmc.dashboardConfig != null && typeof vmc.dashboardConfig === "object",
+      // ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart stored in SysWidgetDashboard, e.g. the
+      // KPI charts on a Campaign page) carries the two coordinates the migrator needs to convert it: `recordId`
+      // (the SysWidgetDashboard record) and `widgetKey` (which widget in it). normalizeModules dropped both as
+      // non-boolean values, leaving the widget an unconvertible generic `component`. Keep them so mapWidgets can
+      // recognise the widget and emit a concrete card-widget decision; a module missing EITHER stays generic.
+      widgetKey: strOrNull(vmc.widgetKey),
+      recordId: strOrNull(vmc.recordId),
       // display flags the classic card toggled (IsPhoneVisible, …) — booleans on viewModelConfig. They say
       // WHICH extra values the card showed, which the Freedom native card may not cover.
       displayFlags: Object.fromEntries(Object.entries(vmc).filter(([, v]) => typeof v === "boolean")),

@@ -92,6 +92,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 | Action Dashboard = **Case progress bar** + **Next steps** (two components) | `widgets` (`Case progress bar` / `Next steps`) | **The default Freedom form template ships NEITHER — you must ADD them** when the object has a configured DCM case: the **progress bar** on the page top, and **Next steps** as a **NEW tab in the tab container, next to the Feed tab**. Both **auto-populate from the object's case** — do not hand-author stages/steps. **Check on-stand whether the object has a DCM case:** DCM cases are `SysSchema` records with **`ManagerName = 'DcmSchemaManager'`** (the case-schema manager) — query `SysSchema` filtered by `ManagerName eq 'DcmSchemaManager'` and find the case for your entity (match via the case caption/metadata and the object's own `Stage`/case-stage column; a DCM-driven object carries one). Some cases have an active + previous version sharing one caption (e.g. `Recruiting_v11` active, `Recruiting_v1` previous) — take the active one. **A hit ⇒ add both components; no hit ⇒ nothing to add.** ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — that name is wrong, returns 0 rows, and reads as a false "no case". | treat them as template-provided / "nothing to migrate", or hand-author stage/step lists per page. Conclude "no case" from a query that returned 0 without confirming the filter used `DcmSchemaManager` (not `CaseSchemaManager`). |
 | Recommendations (side widget) | `chromeWidgets` (hidden by default) | inherited base-template container (`BasePageV2`), **empty by default**, filled at runtime by `RecommendationModuleUtilities` (the **Next-Best-Offer / product recommendations**, `RecommendedProduct`). The engine classifies it as base **chrome and HIDES it from the plan** (kept in `chromeWidgets`). Surface it manually ONLY if the live page actually renders recommendations (NBO rules configured for the entity) → then wire the Freedom product-selection / recommendations component. | treat it as page content just because it is in the schema — it's always present but usually empty. |
 | **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
+| **Card widget** — a record-scoped indicator/chart embedded by `modules` config, its data stored per record in **`SysWidgetDashboard`** (e.g. the KPI charts on a Campaign page). The module carries `widgetKey` (which widget) + `recordId` (its `SysWidgetDashboard` record). | `cardWidgets[]` + a `card-widget` ⚠ item (carries `widgetKey`, `recordId`, `region`) | **converted by the migrator, never hand-built.** Group the widgets by `recordId`; per group make ONE `ConvertCardWidgetsProcess` call (batch the group's `widgetKeys`) and place the returned `freedomElementConfig` in the widget's `region`. Full recipe below. | hand-build a chart/list as a substitute; make one process call per widget instead of one per `recordId`; confuse it with a **section dashboard** (`SysDashboard`, the analytics section) — that is a different store and out of scope here. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
 | Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action — **only if a process is connected to the section**. Check `ProcessInModules` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) — that is what fills the menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the name. None connected ⇒ **drop the button**; if some are, name each in the plan. | fabricate a process name, or migrate the button when nothing is connected. The base `ProcessButton` names none; only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. `SysProcessEntity`/`VwSysProcessEntity` ("Object in process") are runtime process↔record instances — NOT the section config. |
 | Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button**. | migrate the Print button when the section has no printables (it would be a dead button). |
@@ -313,6 +314,57 @@ NOT `Applicant` columns. Build each such companion as a **read-only field bound 
 companions is exactly what collapses the island to a single lookup. If an island/group ends up with **one
 field**, treat it as a red flag (ui-guidelines flags the lone-field anti-pattern) and recover its
 auto-filled/companion fields before shipping.
+
+### Card widgets (record-scoped SysWidgetDashboard indicators) → the migrator, never hand-built
+
+A Classic page can embed **card widgets** — small record-scoped indicators/charts whose data is stored **per
+record in `SysWidgetDashboard`** (e.g. three KPI charts on a Campaign page). This is **not** the analytics
+**section dashboard** (`SysDashboard`, a whole dashboard section) and **not** the DCM action dashboard (rows
+above) — it is a different store, and only these `SysWidgetDashboard` card widgets are in scope here. The engine
+recognises each one and emits `changeSet.cardWidgets[]` plus a `card-widget` ⚠ item; this section is the build
+recipe.
+
+> The migrator process `ConvertCardWidgetsProcess` and the clio `run-process` MCP tool are separate, sibling
+> subtasks. **Every process/tool name, parameter, and result field below is the ASSUMED contract — verify each
+> against the released migrator before relying on it.** If either dependency is not yet available on the stand,
+> the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
+
+**Recognise it — the Classic side.** In the page's `modules` block, a `CardWidgetModule` whose
+`config.parameters.viewModelConfig` carries **both** `widgetKey` and `recordId`:
+
+```js
+modules: /**SCHEMA_MODULES*/{
+    "KpiChart": {
+        "moduleName": "CardWidgetModule",
+        "config": { "parameters": { "viewModelConfig": {
+            "widgetKey": "KpiChart",                              // which widget in the dashboard record
+            "recordId": "b1e2c3d4-0000-4000-8000-000000000001"   // its SysWidgetDashboard record
+        } } }
+    }
+}
+```
+
+A module missing **either** coordinate cannot be converted, so the engine deliberately leaves it as the old
+generic `component` ⚠ item (no silent drop) — do not treat that as a card widget.
+
+**Ordered steps (assumed contract — verify against the released migrator).**
+
+1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)
+   / the `card-widget` ⚠ items. Do not re-derive the coordinates by hand.
+2. **Group by `recordId`.** All widgets that share one `recordId` are one `SysWidgetDashboard` record, so they
+   convert in **one** process call — batch their `widgetKeys` together. N distinct `recordId`s ⇒ N calls.
+3. **Call the migrator once per group** via the clio `run-process` MCP tool (*verify the tool name/shape*):
+   run `ConvertCardWidgetsProcess` (*verify the process name*) with inputs `SysWidgetDashboardId` = the group's
+   `recordId` and `WidgetKeys` = the batched keys, requesting the `["ConversionResult"]` output parameter
+   (*verify these input/output parameter names*).
+4. **Read `ConversionResult` per widget** (*verify the result shape — assumed: a per-widget `status` in
+   `{Success, Partial, Failed}`, a `freedomElementConfig` carrying view/viewModel/model diffs, and a `reason`*):
+   - `Success` / `Partial` → **place the returned `freedomElementConfig`** into the widget's `region`. Placement
+     follows `creatio-ui-guidelines`; you merge the returned diffs and **build nothing by hand**.
+   - `Failed` → leave the widget **`TODO`/`BLOCKED`** in `worklog.md` with the migrator's `reason`. **Never
+     substitute a hand-built chart/list** — a failed conversion stays blocked until the migrator can convert it.
+5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<widgetKey>` to `true` (placed) or `false`
+   (failed-and-blocked) so `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one.
 
 ## Data And Binding Mapping
 
