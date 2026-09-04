@@ -10,7 +10,9 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ## 1.10.0 (2026-09-04)
 
-**Your Classic pages are now read from their real source before a migration plan is written.** A plan run can also no longer report a partial surface as complete. This release ships the plan-time half of migration stage 2: a new `classic-ui-expert` skill that describes every customization on a Classic surface with the source that proves it, a shared Freedom mapping table the whole engine agrees on, and a behaviour-analysis workflow that runs the same way on Claude and Codex. The build-time half (the Freedom build executor and its build queue) is not in this release.
+![Classic pages read from their source, mapped, and planned into Freedom UI](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.10.0-banner.png)
+
+**Your Classic pages are now read from their real source before a migration plan is written.** A plan run can also no longer report a partial surface as complete. This release sharpens the analysis and planning side of Classic → Freedom migration: a new `classic-ui-expert` skill that describes every customization on a Classic surface with the source that proves it, a shared Freedom mapping table the whole engine agrees on, and a behaviour-analysis workflow that runs the same way on Claude and Codex. Building the Freedom pages themselves is unchanged in this release.
 
 ### 🔍 Classic behaviour analysis
 
