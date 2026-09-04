@@ -1435,14 +1435,16 @@ function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
 }
 // The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
 // Returns the lines. Extracted for Sonar CC 15.
-// The Type a per-type form is for, as a heading/row suffix. The agent resolves the Type-column GUIDs on-stand
-// (before `--plan`) and puts the readable name on each `typedPages` entry as `typeName`; when only the raw
-// `typeColumnValue` GUID is present, the plan shows it with a ⚠ to resolve it — a bare GUID tells the approver
-// nothing about which Type the form is for (ENG-96327). A `type` that is already a readable string shows as-is.
+// The Type a per-type form is for, as a heading/row suffix. `list-entity-client-schemas` resolves the Type NAME
+// on-stand (ENG-96553) and the agent puts it on each `typedPages` entry as `typeName` (mapped from the tool's
+// `typeColumnDisplayValue`); `typeColumnDisplayValue` is ALSO accepted verbatim so the tool's field can pass through.
+// When only the raw `typeColumnValue` GUID is present (the tool could not resolve it), the plan shows it with a ⚠ to
+// resolve it — a bare GUID tells the approver nothing about which Type the form is for (ENG-96327). A `type` that is
+// already a readable string shows as-is.
 function typedTypeSuffix(t) {
-  const label = t.typeName || t.type;
+  const label = t.typeName || t.typeColumnDisplayValue || t.type;
   if (!label) return "";
-  const guid = !t.typeName && typeof t.type === "string" && GUID_VALUE.test(t.type);
+  const guid = !t.typeName && !t.typeColumnDisplayValue && typeof t.type === "string" && GUID_VALUE.test(t.type);
   return ` — type "${esc(label)}"${guid ? " ⚠ resolve the type name on-stand" : ""}`;
 }
 function renderTypedPageRows(typed) {

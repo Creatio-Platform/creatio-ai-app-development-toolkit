@@ -4942,13 +4942,16 @@ const typedTypeRun = runMigration({
   typedPages: [
     { schema: "XICPage", type: "1b2f4d6e-0000-4000-8000-000000000001", typeName: "Retirement plan" },
     { schema: "XOCPage", type: "1b2f4d6e-0000-4000-8000-000000000002" },
+    { schema: "XDVPage", type: "1b2f4d6e-0000-4000-8000-000000000003", typeColumnDisplayValue: "Tax return" },
   ],
-  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField") },
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField"), XDVPage: typedBundle("XDVPage", "TaxField") },
   addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-check("ENG-96327 typed type: a resolved typeName shows the NAME; an unresolved Type-GUID shows the GUID + ⚠ resolve on-stand",
+check("ENG-96327/ENG-96553 typed type: typeName shows the NAME; typeColumnDisplayValue (the list-entity-client-schemas field) is accepted verbatim too; an unresolved Type-GUID shows the GUID + ⚠ resolve on-stand",
   /#### Typed form: XICPage — type "Retirement plan"/.test(typedTypeRun.plan)
   && !/Retirement plan[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XDVPage — type "Tax return"/.test(typedTypeRun.plan)
+  && !/Tax return[^\n]*⚠ resolve/.test(typedTypeRun.plan)
   && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedTypeRun.plan),
   () => typedTypeRun.plan.split("\n").filter((l) => /Typed form/.test(l)));
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
