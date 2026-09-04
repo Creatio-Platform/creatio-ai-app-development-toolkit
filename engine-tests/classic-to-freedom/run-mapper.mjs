@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings} from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND} from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -2112,6 +2112,115 @@ check("ENG-95503: the `lookup-value` question is PUBLISHED in `--units.preflight
     return hit?.resolution?.answer?.startsWith("InProgress")
       && answered.resolutionsUnmatched.length === 0 && answered.resolutionsConflicts.length === 0; },
   () => pageUnits(resGuidCs, checklistOpts({})).preflight.map((p) => ({ id: p.id, kind: p.kind, item: p.item })));
+/* ---- ENG-96204 — RUN-SCOPED ANSWERS in the same file, and SEVERITY on every open verify row.
+   Two data contracts the checkpoint modes are built on, both testable with no stand:
+   (1) an answer of kind `run` resolves a RUN-level question (the control mode, a round authorisation) and must
+       never be reported as an answer nobody asked for — the report exists to mean the opposite;
+   (2) every OPEN row declares `correctness` or `fidelity`, so the stop can RANK what is open instead of listing it
+       in table order, and a layout polish can never be presented above a missing field. ---- */
+const RUN_KIND = "run";
+const runOpts = (resolutions) => ({ ...lpOpts, resolutions });
+const runFile = (entries) => ({ schemaVersion: 1, resolutions: entries });
+check("ENG-96204 (T4): an entry of kind `run` and item `control-mode` is republished at `--units.runResolutions` with its answer, `decidedBy` and `date` — the ONE channel the mode choice travels through, the same file the ⚠ Confirm answers use",
+  () => { const u = pageUnits(lpEmptySection, runOpts(runFile([
+      { kind: RUN_KIND, item: "control-mode", answer: "round1", decidedBy: "operator", date: "2026-09-02" }])));
+    const hit = (u.runResolutions || []).find((r) => r.item === "control-mode");
+    return !!hit && hit.answer === "round1" && hit.decidedBy === "operator" && hit.date === "2026-09-02"; },
+  () => pageUnits(lpEmptySection, runOpts(runFile([{ kind: RUN_KIND, item: "control-mode", answer: "round1" }]))).runResolutions);
+check("ENG-96204 (T4): a run-scoped answer is NEVER in `resolutionsUnmatched` — it answers no ⚠ Confirm question by construction, so reporting it would call the one entry the run is about to act on an answer nobody asked for",
+  () => { const u = pageUnits(lpEmptySection, runOpts(runFile([
+      { kind: RUN_KIND, item: "control-mode", answer: "layout-first" },
+      { kind: RUN_KIND, item: "round-2", answer: "yes" }])));
+    return u.resolutionsUnmatched.length === 0 && u.runResolutions.length === 2
+      && u.runResolutions.map((r) => r.item).join(",") === "control-mode,round-2"; },
+  () => ({ unmatched: pageUnits(lpEmptySection, runOpts(runFile([{ kind: RUN_KIND, item: "control-mode", answer: "layout-first" }]))).resolutionsUnmatched,
+    run: pageUnits(lpEmptySection, runOpts(runFile([{ kind: RUN_KIND, item: "control-mode", answer: "layout-first" }]))).runResolutions }));
+check("ENG-96204: a run-scoped entry that ALSO carries an `id` is excluded from BOTH halves of the unmatched report — the entry is indexed under both key forms, and a guard on only one of them reports it through the other",
+  () => pageUnits(lpEmptySection, runOpts(runFile([
+    { id: "some#id-nobody-published", kind: RUN_KIND, item: "control-mode", answer: "guided" }]))).resolutionsUnmatched.length === 0,
+  () => pageUnits(lpEmptySection, runOpts(runFile([{ id: "some#id-nobody-published", kind: RUN_KIND, item: "control-mode", answer: "guided" }]))).resolutionsUnmatched);
+check("ENG-96204: the run-scoped `item` is normalised the way the pair index already trims — an operator types these by hand, so `  Control-Mode ` is the same answer as `control-mode`",
+  () => (pageUnits(lpEmptySection, runOpts(runFile([{ kind: " Run ", item: "  Control-Mode ", answer: "round1" }])))
+    .runResolutions || []).some((r) => r.item === "control-mode" && r.answer === "round1"),
+  () => pageUnits(lpEmptySection, runOpts(runFile([{ kind: " Run ", item: "  Control-Mode ", answer: "round1" }]))).runResolutions);
+check("ENG-96204: a PAGE-scoped answer nobody asked for is STILL reported — the run-scope exemption is scoped to the reserved kind and did not turn the unmatched report off generally",
+  () => { const u = pageUnits(lpEmptySection, runOpts(runFile([
+      { kind: RUN_KIND, item: "control-mode", answer: "round1" },
+      { kind: KIND_LIST_COLUMNS, item: "nope", answer: "orphan" }])));
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nope"; },
+  () => pageUnits(lpEmptySection, runOpts(runFile([{ kind: RUN_KIND, item: "control-mode", answer: "round1" }, { kind: KIND_LIST_COLUMNS, item: "nope", answer: "orphan" }]))).resolutionsUnmatched);
+check("ENG-96204: with no resolutions at all `runResolutions` is an EMPTY ARRAY, not absent — a consumer must not have to tell \"no run-level answers\" apart from \"this engine does not publish them\", which is exactly the distinction `resolution: null` exists for elsewhere",
+  () => Array.isArray(pageUnits(lpEmptySection, lpOpts).runResolutions) && pageUnits(lpEmptySection, lpOpts).runResolutions.length === 0,
+  () => pageUnits(lpEmptySection, lpOpts).runResolutions);
+check("ENG-96204: a run-scoped answer changes NOTHING about the gate — the same opts that publish it leave `renderVerify` byte-identical, so a mode choice can never close a deliverable",
+  () => { const built = { pages: { list: false }, evidence: {}, judge: {} };
+    const withRun = renderVerify(lpEmptySection, runOpts(runFile([{ kind: RUN_KIND, item: "control-mode", answer: "round1" }])), built);
+    return renderVerify(lpEmptySection, lpOpts, built).markdown === withRun.markdown; },
+  () => "renderVerify must not consume runResolutions");
+/* SEVERITY (T3). The bare `--verify` over an empty built payload is the round-1 shape: the coverage/logic rows are
+   open because nothing is built, and the two quality-gate rows are open because no design-pass record is filed.
+   That is one open list carrying both severities, which is what makes the ranking claim testable. */
+const sevVerify = renderVerify(lpEmptySection, lpOpts, { pages: { list: false }, evidence: {}, judge: {} });
+const sevRows = Object.values(verifyReport(lpEmptySection, sevVerify).pages || {}).flatMap((p) => p.openRows || []);
+check("ENG-96204 (T3): EVERY open verify row declares a severity, and only the two legal values exist — the same axis and the same two tokens ENG-95862 put on `eff.warnings`, imported rather than re-declared",
+  () => sevRows.length > 0 && sevRows.every((r) => r.severity === "correctness" || r.severity === "fidelity"),
+  () => sevRows.filter((r) => r.severity !== "correctness" && r.severity !== "fidelity").map((r) => ({ d: r.deliverable, s: r.severity })));
+check("ENG-96204 (T3): the mandatory design-pass rows are the FIDELITY side — the page carries its content and the shortfall is about how well it presents, so it is worth fixing and never worth fixing first",
+  () => { const qg = sevRows.filter((r) => /#quality-gates$/.test(String(r.id ?? "")));
+    return qg.length >= 1 && qg.every((r) => r.severity === "fidelity"); },
+  () => sevRows.map((r) => ({ id: r.id, s: r.severity })));
+check("ENG-96204 (T3): a missing DELIVERABLE is correctness — a coverage/logic/placement row names something absent from the customer's page, and the remedy is to build it",
+  () => { const notQg = sevRows.filter((r) => !/#quality-gates$/.test(String(r.id ?? "")));
+    return notQg.length >= 1 && notQg.every((r) => r.severity === "correctness"); },
+  () => sevRows.filter((r) => !/#quality-gates$/.test(String(r.id ?? ""))).map((r) => ({ d: r.deliverable, s: r.severity })));
+check("ENG-96204 (T3): `rankOpenRows` puts EVERY correctness item before ANY fidelity item, and keeps the engine's own row order inside each band — a stable sort, so the ranked list still reads as the table",
+  () => { const ranked = rankOpenRows(sevRows);
+    const firstFidelity = ranked.findIndex((r) => r.severity === "fidelity");
+    const lastCorrectness = ranked.reduce((acc, r, i) => (r.severity === "correctness" ? i : acc), -1);
+    const correctness = sevRows.filter((r) => r.severity === "correctness").map((r) => r.n);
+    const rankedCorrectness = ranked.filter((r) => r.severity === "correctness").map((r) => r.n);
+    return ranked.length === sevRows.length
+      && (firstFidelity === -1 || firstFidelity > lastCorrectness)
+      && correctness.join(",") === rankedCorrectness.join(","); },
+  () => rankOpenRows(sevRows).map((r) => `${r.n}:${r.severity}`).join(" "));
+check("ENG-96204 (T3): `rowSeverity` DEFAULTS to correctness for a vk type nobody classified — a producer that forgot to answer the severity question must fail loud at the top of the operator's list, never sink quietly to the bottom of it",
+  () => rowSeverity({ type: "a-type-this-map-never-heard-of" }) === "correctness"
+    && rowSeverity(undefined) === "correctness"
+    && rowSeverity({ type: "evidence", id: "main#confirm:list-columns:cols" }) === "correctness"
+    && rowSeverity({ type: "evidence", id: "main#quality-gates" }) === "fidelity",
+  () => ({ unknown: rowSeverity({ type: "zzz" }), confirm: rowSeverity({ type: "evidence", id: "main#confirm:x:y" }) }));
+check("ENG-96204 (T3): the severity rides into `verifyDigest` too — the digest is what the workflow's Reconcile actually transcribes, so a field present only in the full report would be absent on the one path the run reads",
+  () => { const dig = verifyDigest(lpEmptySection, sevVerify);
+    const rows = Object.values(dig.pages || {}).flatMap((p) => p.openRows || []);
+    return rows.length > 0 && rows.every((r) => r.severity === "correctness" || r.severity === "fidelity"); },
+  () => Object.values(verifyDigest(lpEmptySection, sevVerify).pages || {}).flatMap((p) => (p.openRows || []).map((r) => r.severity)));
+/* ENG-96204 (AC 2, Part C) — THE SEVERITY COUNTS ARE PUBLISHED PER PAGE, IN THE COUNTS-ONLY SUMMARY. The stop
+   downstream tallies `correctness`/`fidelity` off `verifySummary`, which used to publish only the outcome axis, so
+   `fidelity` was structurally 0 and every page row landed in `unstamped`. The two integers are derived from the SAME
+   per-row stamp the checks above pin — counted, never re-classified — so they equal the stamped rows by construction. */
+{
+  const sevReport = verifyReport(lpEmptySection, sevVerify);
+  const sevSummary = verifySummary(lpEmptySection, sevVerify);
+  const pageKeys = Object.keys(sevReport.pages || {});
+  const stampedCount = (k, band) => (sevReport.pages[k].openRows || []).filter((r) => r.severity === band).length;
+  check("ENG-96204 (AC 2): `verifySummary` publishes `openCorrectness` and `openFidelity` as INTEGERS on every page — the severity axis crosses the counts-only boundary as two numbers, not as rows",
+    () => pageKeys.length > 0 && pageKeys.every((k) => Number.isInteger(sevSummary.pages[k].openCorrectness) && Number.isInteger(sevSummary.pages[k].openFidelity)),
+    () => Object.fromEntries(pageKeys.map((k) => [k, sevSummary.pages[k]])));
+  check("ENG-96204 (AC 2): on every page the two counts EQUAL the rows stamped with that band in the full report — derived from the same `rowSeverity` stamp, so the summary cannot disagree with `verify.json`",
+    () => pageKeys.every((k) => sevSummary.pages[k].openCorrectness === stampedCount(k, "correctness") && sevSummary.pages[k].openFidelity === stampedCount(k, "fidelity")),
+    () => pageKeys.map((k) => ({ k, summary: [sevSummary.pages[k].openCorrectness, sevSummary.pages[k].openFidelity], stamped: [stampedCount(k, "correctness"), stampedCount(k, "fidelity")] })));
+  check("ENG-96204 (AC 2): and they SUM to the page's open rows (`missing + unverified`) — every open row is in exactly one band, so the severity axis and the outcome axis count the same rows",
+    () => pageKeys.every((k) => sevSummary.pages[k].openCorrectness + sevSummary.pages[k].openFidelity === sevSummary.pages[k].missing + sevSummary.pages[k].unverified),
+    () => pageKeys.map((k) => ({ k, sev: sevSummary.pages[k].openCorrectness + sevSummary.pages[k].openFidelity, open: sevSummary.pages[k].missing + sevSummary.pages[k].unverified })));
+  check("ENG-96204 (AC 2): the fresh-stand fixture has BOTH bands non-zero on the page carrying the design-pass row — so the checks above are not satisfied by an all-correctness page, and `fidelity` is reachable from the engine side",
+    () => pageKeys.some((k) => sevSummary.pages[k].openFidelity > 0) && pageKeys.some((k) => sevSummary.pages[k].openCorrectness > 0),
+    () => Object.fromEntries(pageKeys.map((k) => [k, [sevSummary.pages[k].openCorrectness, sevSummary.pages[k].openFidelity]])));
+  check("ENG-96204 (AC 2): the summary is STILL counts-only after the addition — no `openRows`, no per-row prose, and each page entry is a fixed set of booleans and integers",
+    () => { const s = JSON.stringify(sevSummary); return !/openRows/.test(s) && !/deliverable/.test(s)
+      && pageKeys.every((k) => Object.values(sevSummary.pages[k]).every((v) => typeof v === "boolean" || Number.isInteger(v) || v === undefined)); },
+    () => JSON.stringify(sevSummary).slice(0, 300));
+}
+
 check("ENG-95218: under `pages-only-no-menu` the DESIGN SPEC leads the List page block with the not-built decision — the plan is the artifact the operator approves, so it may not present a full build spec for a page the run does not build",
   () => { const spec = renderDesignSpec(lpRun, lpNoMenuOpts);
     const at = spec.indexOf("### List page");
@@ -7871,6 +7980,18 @@ const evJudgedYes = renderVerify({ changeSet: { viewConfigDiff: [{ name: "Contac
 check("ENG-94975 D7 evidence: a filed record with NO judge entry is `⚠ verify` (a record nobody reviewed is not a closed row) — an absent judge is NOT consent",
   evNoJudge.unverified === 1 && evNoJudge.missing === 0 && evNoJudge.complete === false && /but NOT judged/.test(evNoJudge.markdown),
   () => ({ u: evNoJudge.unverified, m: evNoJudge.missing, row: evNoJudge.markdown.split("\n").filter((l) => /judge/.test(l)).map((l) => l.slice(-140)) }));
+// ENG-96204 (AC 2, Part C) — the one-open-row page above is the quality-gates row ALONE: its summary must read as
+// pure fidelity. This is the case the executor's stop used to report as `unstamped` (or, worse, as correctness had
+// it guessed), and the reason the counts are published from here rather than inferred downstream.
+check("ENG-96204 (AC 2): a page whose ONLY open row is the design-pass (`#quality-gates`) row publishes `openFidelity: 1, openCorrectness: 0` in `verifySummary` — a polish outstanding on a complete page is fidelity, not a missing deliverable",
+  () => { const s = verifySummary({}, evNoJudge).pages.main; return s.openFidelity === 1 && s.openCorrectness === 0 && s.missing === 0 && s.unverified === 1; },
+  () => verifySummary({}, evNoJudge).pages.main);
+check("ENG-96204 (AC 2): once the judge closes that row the page publishes 0/0 — the counts fall with the rows, and a complete page carries no phantom severity",
+  () => { const s = verifySummary({}, evJudgedYes).pages.main; return s.openFidelity === 0 && s.openCorrectness === 0 && s.complete === true; },
+  () => verifySummary({}, evJudgedYes).pages.main);
+check("ENG-96204 (AC 2): a judge REJECTION on that row moves the SAME row to `missing` and it STAYS fidelity — the severity is the row's kind, not its outcome, exactly as `rowSeverity` decides it",
+  () => { const s = verifySummary({}, evJudgedNo).pages.main; return s.openFidelity === 1 && s.openCorrectness === 0 && s.missing === 1; },
+  () => verifySummary({}, evJudgedNo).pages.main);
 check("ENG-94975 D7 evidence: tri-state — `convincing: false` is a HARD ❌ MISSING (with the reason surfaced), `convincing: true` on a complete record closes the row",
   evJudgedNo.missing === 1 && /judge REJECTED/.test(evJudgedNo.markdown) && /ran on one page only/.test(evJudgedNo.markdown)
   && evJudgedYes.missing === 0 && evJudgedYes.unverified === 0,

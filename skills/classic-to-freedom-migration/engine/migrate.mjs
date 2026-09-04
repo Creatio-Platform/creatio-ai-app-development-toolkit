@@ -2559,7 +2559,9 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
-  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`";
+  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
+  '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
+  " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
 // absent ⇒ a stderr note and `null` (the normal first run, NOT an error) · unparseable ⇒ exit 1 · unusable
 // entries ⇒ exit 1, each named. Never let either failure degrade into the absent case.
@@ -2721,6 +2723,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
+  // ENG-96204 — the SAME file also carries the RUN-LEVEL answers, under the reserved kind `run`: `{"kind":"run",
+  // "item":"control-mode","answer":"round1"}` chooses this invocation's control mode, and `item: "round-<N>"`
+  // authorises round N. They are republished verbatim at `--units.runResolutions` and are deliberately NOT judged
+  // here — the executor owns the mode vocabulary, and an engine that rejected an unknown mode would be a second
+  // place that vocabulary lives. They are excluded from the unmatched report: they answer no ⚠ Confirm question by
+  // construction, so reporting them would call a correctly-recorded mode choice an answer nobody asked for.
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
