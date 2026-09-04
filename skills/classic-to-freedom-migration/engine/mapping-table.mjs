@@ -280,6 +280,15 @@ const FEATURE_ROWS = [
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
     componentType: "crt.ApprovalList", uiShape: "component",
     notes: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." }),
+  // ENG-96571 — a real Applicant section carried a *plain* `VisaDetail` (no `V2` suffix) and the table missed it:
+  // only the `V2`-suffixed row above matched, so a page with the un-versioned detail fell through unrecognised
+  // and the built page came out with no Approvals component at all. Same Approvals meta as the V2 row above —
+  // `resolveFeatureRow`'s longest-suffix rule (see its own comment) keeps `VisaDetailV2` winning wherever a
+  // schema name could satisfy both (an `…VisaDetailV2` name does not end in the shorter `VisaDetail` suffix, so
+  // the two rows do not actually overlap on any real schema name, but the ordering rule still applies on principle).
+  feature("VisaDetail", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
+    componentType: "crt.ApprovalList", uiShape: "component",
+    notes: "Same Approvals feature as `VisaDetailV2` (see that row) — a plain `*VisaDetail` schema (no `V2` suffix) is still the Visa/approval infrastructure. Add BOTH the approval MODULE (`crt.Approval`, above the profile island) and the approval LIST (`crt.ApprovalList`). Do not downgrade to a generic related list." }),
   feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
     uiShape: "component", templateProvided: true }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
@@ -495,6 +504,33 @@ const FEATURE_SECOND_HALF = { Approvals: ["crt.Approval"] };
 export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
 }
+
+// ENG-96571 — the ATTRIBUTE half of the Approvals signal. The detail-schema half is the two `feature("VisaDetail…")`
+// rows above (`VisaDetailV2` / `VisaDetail`, matched via `resolveFeatureRow`); a page can ALSO carry the Approvals
+// infrastructure through a `RecordVisaId` attribute with no matching detail schema on the page at all (a real
+// Applicant page did — Classic carried `VisaDetailV2` + a `RecordVisaId` attribute, and only the detail was
+// recognised). The mapper-side signal collection and the plan-time coverage gate (wave 2, mapper.mjs/migrate.mjs)
+// import this constant so both signal halves and the gate agree on ONE target instead of two hand-kept copies.
+// `target`/`moduleComponentType` mirror the Approvals row above: `componentType: "crt.ApprovalList"` is
+// `verify.componentType` on the `VisaDetail`/`VisaDetailV2` rows, and `moduleComponentType: "crt.Approval"` is
+// the second half from `FEATURE_SECOND_HALF` — both read live rather than re-typed so the two halves cannot
+// drift apart. There is no separate "Approvals tab": the built page places the approval MODULE as its own
+// container ABOVE the profile island and the approval LIST beside/below it (see the build recipe in
+// `references/classic-to-freedom-mapping.md`) — this constant deliberately carries no `tab` field so nobody
+// invents a tab that does not exist in the real layout.
+export const APPROVALS_SIGNAL = Object.freeze({
+  feature: "Approvals",
+  attributeNames: Object.freeze(["RecordVisaId"]),
+  // `detailPattern: /Visa ?Detail/i` was REMOVED (ENG-96571 A7 review). It was a SUBSTRING test while the mapper
+  // matches these details through `resolveFeatureRow`'s SUFFIX rule, so the two disagreed on every name that
+  // CONTAINS `VisaDetail` without ending in it (`VisaDetailArchive`, `UsrVisaDetailSettings`, the spaced
+  // `Visa Detail`): the signal fired, the mapper mapped no Approvals feature, and the plan blocked on a feature the
+  // page does not carry. The detail half now resolves each detail through `resolveFeatureRow` and takes the signal
+  // only when the resolved row's `meta.feature` IS `Approvals` — so the signal and the mapping agree by
+  // construction rather than by two hand-kept rules, which is the only thing that can keep them from drifting.
+  target: featureVerifyType("Approvals"),
+  moduleComponentType: FEATURE_SECOND_HALF.Approvals[0],
+});
 
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for
 // that member. This is what lets a golden witness the 29-member coverage instead of leaving it to a reader's

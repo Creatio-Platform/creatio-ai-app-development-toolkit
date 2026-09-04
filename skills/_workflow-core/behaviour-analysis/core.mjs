@@ -28,6 +28,7 @@ import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, merge
 import {
   normalizeScopes, planBatches, packBatches, repairKeys, isComplete, wiringOnlyMixinKeys, coveredKeys, entriesOf,
   declaredNothingToDo, isCritiqueShape, critiqueDeathLine, retryOnDeath, itemId, partFile,
+  validateReportedTrigger, digestKeyOf, attachOverrideOnly, overrideEntries,
   DEFAULT_ROWS_PER_AGENT, DEFAULT_MAX_DESCRIBE,
 } from './helpers.mjs'
 
@@ -77,12 +78,17 @@ const noop = () => {}
 // the same thing about the same surface, so they compose it in one place: an empty worklist is DONE, not
 // incomplete, and the two must never drift into disagreeing about that.
 const NOTHING_TO_DESCRIBE = 'the row digest carries no imperative rows (no methods, no message/mixin members) — step 5.1 does not apply'
-function skippedReturn(surface, extra = {}) {
+// `ledgerMembers` is a fact the CALLER supplied (the engine's own member ledger for the surface it mapped), not
+// something this run computes — so a skip must pass it THROUGH. It used to be hard-coded `null`, which read as
+// "the ledger is unknown" on a run that had been told the number, and the worked path (see `ledger` below) then
+// reported a figure the skip path erased. The skip itself is unchanged: an all-zero surface still skips.
+const ledgerOf = (totals) => (typeof totals?.ledgerMembers === 'number' ? totals.ledgerMembers : null)
+function skippedReturn(surface, totals, extra = {}) {
   return {
     surface,
     skipped: true,
     reason: NOTHING_TO_DESCRIBE,
-    coverage: { described: 0, total: 0, complete: true, uncovered: [], wiringOnly: [] },
+    coverage: { described: 0, digestRows: 0, total: 0, ledgerMembers: ledgerOf(totals), complete: true, uncovered: [], wiringOnly: [] },
     describeAgents: 0,
     ...extra,
   }
@@ -103,6 +109,68 @@ function reportCritique(critique, critiqueReturned, log) {
   return ran
 }
 
+// REPORTED TRIGGERS, VALIDATED BEFORE THEY TRAVEL. A trigger this run reports is a DESCRIPTION of an origin the
+// engine could not trace, and the engine fills the row's empty trigger cell from it — so an unusable one does not
+// stay harmless: it renders as `<kind> (from <x>) — reported` and clears the row out of the plan header's "no
+// trigger yet" count. Measured: the Applicants index carried `"init": {"trigger":"internal","from":"init"}` and
+// the header went from "8 row(s) have no trigger yet" to "0 … 8 answered by the behaviour run".
+//
+// A rejected trigger is STRIPPED from the entry (so nothing downstream can read it) while the ENTRY stays — its
+// card may be perfectly good. The row goes back through the repair round, because the trigger is what was asked
+// for and is still missing.
+// The BARE tail of a possibly schema-qualified key: `HRApplicantPage::init` -> `init`. An index key carries the
+// scope when two pages of one surface declare the same method name, and the engine's own leg
+// (`applyBehaviourIndex` in migrate.mjs) validates against the BARE `h.sourceMethod` — so a `from` naming the row
+// itself was caught there and NOT here, where the full key was compared. Measured shape:
+// `{trigger:'internal', from:'init', methodName:'HRApplicantPage::init'}` passed this run, so no repair round ran
+// and `coverage.complete` went true on the exact self-referential trigger the validator exists to reject.
+const bareTail = (key) => String(key).split('::').pop()
+
+// Both readings of the key, because either one naming the row itself is the same defect. The mirrored
+// `validateReportedTrigger` is NOT changed for this — it is compared byte-for-byte against the engine's copy, and
+// the divergence was in the caller's argument, not in the rule.
+function rejectionFor(entry) {
+  return validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: entry.key })
+    || validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: bareTail(entry.key) })
+}
+
+function rejectTriggers(results, allKeys, log) {
+  const rejected = []
+  for (const entry of entriesOf(results)) {
+    const why = rejectionFor(entry)
+    if (!why) continue
+    rejected.push({ key: entry.key, digestKey: digestKeyOf(entry.key, allKeys), trigger: entry.trigger ?? null, from: entry.from ?? null, why })
+    delete entry.trigger
+    delete entry.from
+    log(`⚠ rejected the reported trigger on '${entry.key}': ${why} — the row stays UNRESOLVED and goes back through the repair round`)
+  }
+  return rejected
+}
+
+// Rows whose reported trigger was rejected are UNCOVERED for this run's purposes even when their card is fine —
+// the trigger is what step 5.1 was asked for. Applied at every site that recomputes `uncoveredKeys`, including
+// after the repair round: the plain recompute reads `covered` alone, and a row that came back a SECOND time with
+// a still-invalid trigger HAS a card, so it would be dropped and `complete` would go true on the row that was
+// never answered.
+//
+// A rejection is CURRENT, not historical: only invalid triggers are stripped from the entries, so an entry still
+// carrying a trigger is one that passed. A row whose repair round came back with a valid trigger therefore closes
+// — a rejection is a repairable state, and a sticky union would leave the run permanently incomplete on a row
+// that got its answer one round later.
+function withRejectedTriggers(uncovered, rejected, allKeys, results) {
+  const answered = new Set(entriesOf(results).filter((e) => e.trigger).map((e) => digestKeyOf(e.key, allKeys)))
+  const keys = rejected.map((r) => r.digestKey).filter((k) => k && allKeys.has(k) && !answered.has(k))
+  return [...new Set([...uncovered, ...keys])]
+}
+
+// Small pure helpers hoisted OUT of `run` (Sonar S3776): each ternary inside `run` — and doubly so inside one of
+// its nested item builders — counted against the generator's cognitive complexity while saying nothing about the
+// orchestration the function is actually about. Named here, `run` reads as the phase sequence it is.
+const positiveOr = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
+const roundKind = (repair) => (repair ? 'repair' : 'describe')
+const critiqueIdSuffix = (attempt) => (attempt > 1 ? `retry${attempt}` : '')
+const critiqueLabel = (attempt) => (attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage')
+
 export function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -111,8 +179,8 @@ export function* run(rawInput, io = {}) {
   assertInput(input)
 
   const SURFACE = input.sectionSchema || '(surface not named)'
-  const ROWS_PER_AGENT = Number(input.rowsPerAgent) > 0 ? Number(input.rowsPerAgent) : DEFAULT_ROWS_PER_AGENT
-  const MAX_DESCRIBE = Number(input.maxDescribeAgents) > 0 ? Number(input.maxDescribeAgents) : DEFAULT_MAX_DESCRIBE
+  const ROWS_PER_AGENT = positiveOr(input.rowsPerAgent, DEFAULT_ROWS_PER_AGENT)
+  const MAX_DESCRIBE = positiveOr(input.maxDescribeAgents, DEFAULT_MAX_DESCRIBE)
 
   // A surface with NO imperative rows is the common case, not an edge case: a section built in the wizard often
   // carries `methods: {}`, no `messages` and no `mixins` at all — measured on a real custom section, where the
@@ -122,7 +190,7 @@ export function* run(rawInput, io = {}) {
   // The same check runs again after Context for a caller that did not pass `totals`.
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE)
+    return skippedReturn(SURFACE, input.totals)
   }
 
   const RULES = rules({ surface: SURFACE, environment: input.environment, outDir: input.outDir, digest: input.digest, manifest: input.manifest })
@@ -154,7 +222,7 @@ export function* run(rawInput, io = {}) {
       skipped: false,
       stopped: 'context-failed',
       reason: 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
-      coverage: { described: 0, total: null, complete: false, uncovered: [], wiringOnly: [] },
+      coverage: { described: 0, digestRows: null, total: null, ledgerMembers: null, complete: false, uncovered: [], wiringOnly: [] },
       conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
     }
   }
@@ -163,13 +231,12 @@ export function* run(rawInput, io = {}) {
   const worked = scopes.filter((s) => s.rows > 0)
   const empty = scopes.filter((s) => s.rows === 0)
   const totalRows = worked.reduce((n, s) => n + s.rows, 0)
-  if (empty.length) log(`${empty.length} scope(s) carry no rows and get no agent: ${empty.map((s) => s.label).join(', ')}`)
 
   // Same verdict as the pre-Context check above, for a caller that did not pass `totals`: an empty worklist is
   // DONE. Reached only when Context has already run, so its census and shared-core reading are still reported back.
   if (!worked.length) {
     log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE, {
+    return skippedReturn(SURFACE, input.totals, {
       scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
       censusNote: ctx.censusNote || null,
       refusals: ctx.refusals || [],
@@ -182,11 +249,21 @@ export function* run(rawInput, io = {}) {
   if (plan.note) log(plan.note)
   if (plan.capped) log(plan.capped)
 
+  // A ZERO-ROW SCOPE STILL GETS DESCRIBED. It used to be filtered out with a log
+  // line saying it "gets no agent"; the Applicants run then missed a replacing
+  // layer whose `rowSelected` override changes visible behaviour (see
+  // `attachOverrideOnly`). The scopes are appended to the batches as
+  // `overrideOnly`, which adds no keys to `allKeys` — every coverage number below
+  // is arithmetically unchanged, and what comes back is reported as its own
+  // section rather than as coverage.
+  const overrideOnly = attachOverrideOnly(batches, empty)
+  if (overrideOnly.length) log(`${overrideOnly.length} scope(s) carry no digest rows and are attached as OVERRIDE-ONLY scopes (replacing layers only, reported outside the coverage count): ${overrideOnly.map((s) => s.label).join(', ')}`)
+
   const sharedCardList = (ctx.sharedCore?.cards || []).map((c) => `${c.id} — ${c.title}`).join('\n') || '(none returned)'
   const sharedCorePath = ctx.sharedCore?.path || sharedCoreDefault
 
   const describeItem = (batch, i, { repair = false, roundNote = '' } = {}) => ({
-    id: itemId(repair ? 'repair' : 'describe', i + 1, batch.scopes.map((s) => s.label).join('+')),
+    id: itemId(roundKind(repair), i + 1, batch.scopes.map((s) => s.label).join('+')),
     phase: 'Describe',
     // The analysis contract itself — the member ledger, counted zeros, refusals
     // and acceptance criteria a card must close with — is the `classic-ui-expert`
@@ -204,9 +281,14 @@ export function* run(rawInput, io = {}) {
     inputFiles: [input.digest, sharedCorePath],
     responseSchema: DESCRIBE_SCHEMA,
     access: ACCESS.STAND_READ_ONLY,
-    label: `${repair ? 'repair' : 'describe'}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
+    label: `${roundKind(repair)}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
   })
 
+  // FOLLOW-UP, NOT DONE HERE: running Context and Describe in parallel would cut the wall clock further, and it is
+  // not attemptable as the phases stand — every Describe item consumes `ctx.sharedCore.path` and `sharedCardList`,
+  // which only exist once Context has returned. Overlapping them would mean either handing Describe a path to a
+  // file not yet written or letting each scope re-read the shared core, which is the duplicate-carding failure the
+  // Context phase exists to prevent. Revisit only with a shared-core contract that does not depend on the file.
   phase('Describe')
   let described = (yield step({
     items: batches.map((b, i) => describeItem(b, i)),
@@ -217,8 +299,9 @@ export function* run(rawInput, io = {}) {
 
   // --- Coverage is COMPUTED, never asserted ----------------------------------
   const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
+  const rejectedTriggers = rejectTriggers(described, allKeys, log)
   let covered = coveredKeys(described, allKeys)
-  let uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
+  let uncoveredKeys = withRejectedTriggers([...allKeys].filter((k) => !covered.has(k)), rejectedTriggers, allKeys, described)
   // The computed floor under the two-card rule (mixin only — see `wiringOnlyMixinKeys` for why the other
   // body-elsewhere kinds cannot be judged from the inventory, and which one the engine backstops instead).
   let wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
@@ -238,7 +321,7 @@ export function* run(rawInput, io = {}) {
   // and buy nothing. Accepted, because the alternative is no retry at all.
   const critiqueStep = (attempt) => step({
     items: [{
-      id: itemId('critique', 'coverage', attempt > 1 ? `retry${attempt}` : ''),
+      id: itemId('critique', 'coverage', critiqueIdSuffix(attempt)),
       phase: 'Critique',
       role: 'general-purpose',
       prompt: critiquePrompt({
@@ -247,13 +330,14 @@ export function* run(rawInput, io = {}) {
         described,
         uncoveredKeys,
         wiringOnly,
+        rejectedTriggers,
         sharedCardList,
         messageRegister: ctx.sharedCore?.messageRegister || [],
       }),
       inputFiles: described.map((r) => r.reportPart).filter(Boolean),
       responseSchema: CRITIQUE_SCHEMA,
       access: ACCESS.STAND_READ_ONLY,
-      label: attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage',
+      label: critiqueLabel(attempt),
     }],
     // The adversarial pass is only worth anything from a context that did not
     // write the cards it is checking. A host that cannot give it one is STOPPED
@@ -296,11 +380,21 @@ export function* run(rawInput, io = {}) {
       note: 'repair round: the rows the arithmetic says are not described yet',
     })).filter(Boolean)
     described = [...described, ...repaired]
+    rejectedTriggers.push(...rejectTriggers(repaired, allKeys, log))
     covered = coveredKeys(described, allKeys)
     uncoveredKeys = [...allKeys].filter((k) => !covered.has(k))
     wiringOnly = wiringOnlyMixinKeys(entriesOf(described), allKeys)
+    // Re-unioned, not carried: the line above recomputes from `covered` alone, and a row that came back a SECOND
+    // time with a still-invalid trigger has a card — so without this the repair recompute drops it silently.
+    uncoveredKeys = withRejectedTriggers(uncoveredKeys, rejectedTriggers, allKeys, described)
     log(`coverage after repair: ${covered.size}/${allKeys.size} · ${uncoveredKeys.length} still uncovered · ${wiringOnly.length} mixin row(s) still missing the body card`)
   }
+
+  // The override-only scopes' answers, separated by KEY KIND before the Merge phase sees them. They carry
+  // `<schema>::override:<method>` keys, which resolve to no digest key at all, so they were already invisible to
+  // every coverage number above — this only makes them visible to the report.
+  const overrideFindings = overrideEntries(described)
+  if (overrideFindings.length) log(`${overrideFindings.length} override finding(s) from the override-only scope(s) — reported as their own report section, NOT as coverage of any digest row`)
 
   phase('Merge')
   const [merged] = yield step({
@@ -317,6 +411,8 @@ export function* run(rawInput, io = {}) {
         total: allKeys.size,
         uncoveredKeys,
         wiringOnly,
+        rejectedTriggers,
+        overrideFindings,
         outDir: input.outDir,
         censusNote: ctx.censusNote,
       }),
@@ -340,12 +436,33 @@ export function* run(rawInput, io = {}) {
     ? `complete: ${covered.size}/${allKeys.size} rows described`
     : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
   log(verdictLine)
+  // THE TWO NUMBERS, SIDE BY SIDE — and the sentence that says why they differ. The verdict above counts DIGEST
+  // rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one
+  // of them as "N of M" read as a surface census it never was.
+  const ledger = ledgerOf(input.totals)
+  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
+  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
 
   return {
     surface: SURFACE,
     reportPath: merged?.reportPath || `${input.outDir}/customizations.md`,
     indexPath: merged?.indexPath || `${input.outDir}/behaviour-index.json`,
-    coverage: { described: covered.size, total: allKeys.size, complete, uncovered: uncoveredKeys, wiringOnly },
+    // THE DIGEST IS A WORKLIST, NOT A SURFACE CENSUS. `digestRows` counts the rows this run was handed;
+    // `ledgerMembers` is the engine's own member ledger for the scope it mapped (`result.coverage.total`,
+    // travelling in `totals`), which is a LARGER population — measured on the Applicants run: 10 digest method
+    // names against 11 definitions, 2 virtual attributes of 5, 3 members of 88. `total` is kept as an alias of
+    // `digestRows` for one release, because the parity golden and SKILL.md still read it.
+    coverage: {
+      described: covered.size,
+      digestRows: allKeys.size,
+      total: allKeys.size,
+      ledgerMembers: ledgerOf(input.totals),
+      complete, uncovered: uncoveredKeys, wiringOnly,
+    },
+    rejectedTriggers,
+    // Replacing-layer overrides found in scopes the digest gave 0 rows. NOT coverage of anything: their keys
+    // (`<schema>::override:<method>`) match no digest key, so they are reported beside the count, never inside it.
+    overrideFindings,
     scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: s.rows })),
     describeAgents: batches.length,
     cardCount: merged?.cardCount ?? null,

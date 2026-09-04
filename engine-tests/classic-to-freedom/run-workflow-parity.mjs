@@ -36,6 +36,28 @@
 // current behaviour is now pinned byte for byte. The value of this file is always forward-looking, which is why
 // replacing it is a reviewed act and not a build step.
 //
+// WHAT THE `classic-behaviour-analysis` BASELINE IS, as of ENG-96571: also the PREVIOUSLY SHIPPED script — and it
+// was replaced once, in commit 291019c, for the same kind of reason and with one honesty caveat this file has to
+// state. The plan-stage findings (commit a85b084) changed the run's RETURN SHAPE on purpose: `coverage.digestRows`
+// and `coverage.ledgerMembers` joined it (the two coverage numbers answer different questions and one of them was
+// being read as both), `rejectedTriggers` joined it (an unusable reported trigger is now published rather than
+// silently filled), and `overrideFindings` joined it (a zero-row scope is described as an override-only scope and
+// its findings are reported OUTSIDE the coverage count). None of those can be declared as an allowed divergence
+// here: this runner compares the return value whole, and the three fields are additions to the object every
+// scenario returns, so every scenario diverged and there is no per-field waiver to write.
+//
+// THE CAVEAT, stated rather than glossed: the snapshot taken in 291019c is the POST-change script — the generated
+// artifact of a85b084, not the pre-PR predecessor. So this runner says NOTHING about a85b084's own changes; the
+// differential evidence for that commit is the review of its diff, plus the executed suites in `run.mjs`,
+// `run-mapper.mjs` and `run-workflow-core.mjs`. What the baseline does give, from here on, is the forward-looking
+// half: the whole prompt text and return shape of the current behaviour, pinned byte for byte, so the NEXT change
+// to the core cannot move them unnoticed.
+//
+// The review-1 pass over this PR (findings E, F, H, plus the tests in `run-workflow-core.mjs`) did NOT replace this
+// baseline again: those changes touch `validateReportedTrigger`'s rejection reasons, `OVERRIDE_KEY_RX`'s strictness
+// and the skip path's `coverage.ledgerMembers`, none of which any scenario in this runner reaches, and the 456
+// checks here stayed green through all of them.
+//
 // WHAT THE `freedom-build-executor` SCENARIOS NOW COVER (ENG-96204, folding in ENG-96475): besides the `auto`-mode
 // runs the suite always had, `buildScenarios()` drives every control-mode outcome a caller can observe — a `round1`
 // run to `paused-at-round`; a `layout-first` LAYOUT pass to its stop, and the RESUMED logic pass (marker and count

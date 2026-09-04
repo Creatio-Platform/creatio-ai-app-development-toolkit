@@ -17,6 +17,15 @@ line each, closing with the attributed/unattributed count. Do not add a second i
 restates it. When a caller supplied a row digest, `behaviour-index.json` (`SKILL.md`) is the keyed,
 machine-readable form of the same mapping; the ledger stays the human-readable proof.
 
+**A row digest is a WORKLIST, not a census of the surface.** It carries the rows the migration engine
+could not answer, and the engine's own member ledger for the same scope is a larger population
+(measured: 10 digest method names against 11 definitions, 2 virtual attributes of 5, 3 members of 88).
+Describing every digest row proves the worklist was worked — never that the surface is fully
+understood; the stand census is what speaks to the surface. For the same reason, an entry whose card
+could not establish the behaviour carries `behaviourEstablished: false` in `behaviour-index.json` (see
+the card-fields table below): without it the row is counted as described by the coverage arithmetic,
+by the migration plan's `Described in` cell and by the plan's `N of M carry a behaviour card` header.
+
 Write the report to `migrations/<section-slug>/customizations.md` in the current
 workspace — the same per-project folder convention the toolkit's migration
 documentation uses, so a later migration run on the same section finds the report
@@ -35,6 +44,7 @@ no target-platform recommendations, nothing addressed to a particular consumer
 | **sourceRef** | mandatory | Every code location that implements it. Table form (below). Source wins on conflict with your reading. |
 | **Code** | mandatory | The unit's own members, **verbatim from the fetched bodies**. Section below. |
 | **Assumption?** | mandatory when non-empty | Each unproven reading, each unresolved name, each runtime-only question — every entry with **the query that would settle it**. A bare "unknown" with no closing query is a defect. |
+| **Behaviour established?** | mandatory when the answer is NO | Write `behaviourEstablished: false` on the card AND on its `behaviour-index.json` entry when the card ends without establishing what the behaviour actually is (the source was unreachable, the body was inconclusive, the trigger never resolved). A card that says so in prose while its index entry names a card is counted as coverage by every consumer — measured: a migration plan read "10 of 10 carry a behaviour card" while the first card said the behaviour was NOT established. The field is the machine-readable form of that admission; absent means established. |
 | **Acceptance criteria** | mandatory | The behaviour restated as numbered, independently checkable requirements, each citing the sourceRef row that proves it. Section below. |
 | **Mechanism notes** | supporting, **omit when empty** | Only a fragile or surprising construct a rebuilder would otherwise trip on (a shared mixin driving two surfaces, a sizing hack, a value written by a path the sourceRef rows do not make obvious). Never the authoritative claim, and never a restatement of the sourceRef "what it contributes" column — if that is all you have, leave the field out. |
 

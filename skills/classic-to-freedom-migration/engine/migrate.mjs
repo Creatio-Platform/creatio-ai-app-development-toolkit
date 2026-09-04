@@ -74,12 +74,12 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
-import { GATE_KIND, gateForComponentType } from "./mapping-table.mjs";
+import { GATE_KIND, gateForComponentType, APPROVALS_SIGNAL, resolveFeatureRow } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
-  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
+  pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS, renderPlanNotes,
+  boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -156,12 +156,20 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // carries no `targetPackage`, so at depth >= 2 the placement row silently vanished and `--units` published
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
+    // `inheritedConfirmDispositions` (ENG-96571 C1) rides along for the same reason and under the same memo rule as
+    // `inheritedSignals` below: the ⚠ Confirm answers are recorded ONCE on the ROOT manifest, so a child/typed/mini
+    // bundle (which carries none) saw `{}` and every scoped answer — `"<Child>::<kind>:<item>"`, the form SKILL.md
+    // documents as tried FIRST — closed nothing below the root. Deliberately NOT part of `extra`, on the stated
+    // ASSUMPTION that the map is recorded once on the ROOT manifest and threaded down unchanged: under that
+    // assumption two folds of the same key always see the same answers, so the map adds nothing to the memo key.
+    // (It is an assumption, not an invariant of the data structure — a caller that started varying the map
+    // between folds of one key would be served the first fold's spec, and the map would have to join the key.)
     // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
     // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
     // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedResolutions: ctx.resolutions, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedConfirmDispositions: ctx.confirmDispositions, inheritedResolutions: ctx.resolutions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -203,18 +211,128 @@ function isStructuralDiag(d) {
 // never quietly demote itself to an advisory.
 const isCorrectnessWarning = (w) => (w?.severity ?? "correctness") === "correctness";
 
+// Sonar S1192 — the two disposition WORDS that recur across the validated-enum sets below
+// (`WARNING_DISPOSITIONS`, `BUNDLE_WARNING_DISPOSITIONS`, `MEMBER_DISPOSITIONS`; the ⚠ Confirm set is
+// `CONFIRM_DISPOSITION_WORDS` in `designspec.mjs`, which is where its recital to the operator is rendered). Declared
+// HERE, above the first set that reads them, because a module-level `const` is not hoisted — and named rather than
+// re-typed so a rename cannot leave one set answering a word the others no longer accept.
+const DISPOSITION_NA = "n/a";
+const DISPOSITION_ACCEPTED = "accepted";
+
 // The only dispositions `manifest.warningDispositions` may carry — same validated-enum rule as
 // `MEMBER_DISPOSITIONS`, and for the same reason: a truthy `resolved` with a typo'd disposition would clear a
 // warning with no valid answer behind it.
 //   accepted            — read, understood, and the unrepresented effect does not change the Freedom mapping
 //   reproduced-manually — it DOES change it, and the build reproduces that effect by hand (the note says how)
 //   n/a                 — the element this warning is about is not being migrated
-const WARNING_DISPOSITIONS = new Set(["accepted", "reproduced-manually", "n/a"]);
+const WARNING_DISPOSITIONS = new Set([DISPOSITION_ACCEPTED, "reproduced-manually", DISPOSITION_NA]);
 
 // The key a disposition is written under: `"<op>:<name>:<schema>"`, with `"<op>:<name>"` accepted as a bare
 // fallback — the same scoped-or-bare rule `memberDispositions` uses. The schema is part of the primary key because
 // the same op on the same element in a DIFFERENT layer is a different fact and must be answered separately.
 const warningKeys = (w) => [`${w.op}:${w.name}:${w.schema}`, `${w.op}:${w.name}`];
+
+// ⛔ BUNDLE WARNINGS (ENG-96571 A5) — `clio get-classic-page-sources` reports what ITS OWN lookups could not do
+// in a `warnings` array: an unresolved bound entity ("…so their child pages were not looked up in SysModuleEdit.
+// That is NOT the same as 'they have no child page'."), a child-page lookup that hit the rowCount cap. Nothing in
+// this engine read them, so a bundle that truncated its own child-page list still produced
+// `structure.complete: true` — the plan asserted an input completeness the bundle itself denied.
+//
+// NOT `eff.warnings`. That array is the MERGE engine's own per-op notes (`correctness`/`fidelity`, keyed
+// `<op>:<name>:<schema>`, closed via `manifest.warningDispositions`), populated by `mergeHierarchy`. These come
+// from the TOOL that fetched the bodies, are keyed by their own code/text, and are closed via
+// `manifest.bundleWarningDispositions`. Two arrays, two key spaces, two disposition maps — conflating them would
+// let one map's key clear the other's warning.
+//
+// They are INPUT incompleteness — the same category as an unfetched detail schema — so they land in
+// `validateStructure` and an OPEN one BLOCKS structure. Deliberately UNSCOPED: a nested child bundle carrying
+// `bundleWarnings` blocks THAT child's structure, because the truncation is a fact about that fetch.
+//
+// Manifest shape (both accepted; `{code,message}` is the DOCUMENTED one, so the disposition key stays short):
+//   "bundleWarnings": [ { "code": "unresolved-detail-entity", "message": "Could not determine…" }, "<raw string>" ]
+//   "bundleWarningDispositions": { "<code or the exact string>": { "resolved": true,
+//                                   "disposition": "resolved-manually"|"accepted"|"n/a", "note": "<what you did>" } }
+// Collapsed whitespace on BOTH sides of the comparison. A bundle warning's key is, in its string form, the
+// warning's own MESSAGE — text that travels through a tool response, a manifest and a hand copy-paste, any of
+// which can turn a single space into two or add a trailing one. An answer that differs from the warning by one
+// space closed nothing, and the plan kept blocking on a warning the operator had provably answered.
+const normalizeWarningText = (t) => String(t ?? "").trim().replace(/\s+/g, " ");
+// ENG-96571 (review 1, S-ii) — the last-resort identity of a warning whose shape this engine does not recognise
+// (`{ warning: "…" }`, `{ detail: … }` — shapes a future tool version can emit). Its own JSON: ugly, but it
+// names the fact, it BLOCKS, and a disposition can be written against it verbatim. `""`, `null` and `{}` name no
+// fact at all and still fall through to being skipped.
+const bundleWarningFallbackText = (w) => (w && typeof w === "object" && Object.keys(w).length ? JSON.stringify(w) : "");
+export const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
+const bundleWarningText = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.message || w?.code || ""));
+// The only dispositions a bundle warning may carry — the same validated-enum rule as `WARNING_DISPOSITIONS` and
+// `MEMBER_DISPOSITIONS`, and for the same reason (a truthy `resolved` with a typo'd disposition would close a
+// warning nobody answered). The three words DIFFER from `WARNING_DISPOSITIONS` because the remedy differs: a
+// fidelity note is answered by a mapping decision, a bundle warning by a re-read.
+//   resolved-manually — the fact the bundle could not read was looked up by hand (step 4.1) and is in this manifest
+//   accepted          — the gap is understood and does not change this plan (say WHY in `note`)
+//   n/a               — the elements the warning is about are not being migrated
+const BUNDLE_WARNING_DISPOSITIONS = new Set(["resolved-manually", DISPOSITION_ACCEPTED, DISPOSITION_NA]);
+
+// Split `manifest.bundleWarnings` into OPEN (blocking) and CLOSED (a recorded answer → rendered `ℹ`, auditable,
+// never dropped — the same rule `applyWarningDispositions` follows for a fidelity note). Own fn, like
+// `detailSchemaIssues`, so `validateStructure` stays a flat sequence (Sonar CC 15). Exported so a test can drive
+// the split without a whole run.
+export function bundleWarningState(manifest) {
+  const list = Array.isArray(manifest?.bundleWarnings) ? manifest.bundleWarnings : [];
+  const declared = plainObject(manifest?.bundleWarningDispositions);
+  // NULL PROTOTYPE (ENG-96571, review 2 minor 3) — the keys are the warnings' own `code`/message text, which comes
+  // from `get-classic-page-sources` output: UNTRUSTED. On a normal object a warning whose key is `constructor` /
+  // `toString` / `valueOf` resolved to a native function instead of missing. It failed safe (`plainObject` of a
+  // function is `{}`, so the warning stayed open and blocking), but the read is now genuinely own-keys-only, which
+  // is the `Object.hasOwn` discipline the drift guard and the tag automaton in this same change already state.
+  const normalized = Object.assign(Object.create(null),
+    Object.fromEntries(Object.entries(declared).map(([k, v]) => [normalizeWarningText(k), v])));
+  const open = [], closed = [];
+  for (const w of list) {
+    // The KEY takes the same fallback as the text below — otherwise an unrecognised shape blocks under an EMPTY
+    // key, which no disposition can be written against: a warning nobody can clear is the other half of the
+    // silent-drop defect, not a fix for it.
+    const key = bundleWarningKey(w) || bundleWarningFallbackText(w);
+    // ENG-96571 (review 1, S-ii) — AN ENTRY WITH NEITHER `code` NOR `message` IS NOT NOTHING. `bundleWarningText`
+    // returns `""` for `{ warning: "…" }` or `{ detail: … }` — a shape a future tool version can emit — and the
+    // entry was then dropped with no trace at all: the bundle said one of its lookups did not complete and the
+    // plan reported `structure.complete: true` anyway, which is the exact failure this whole channel exists to
+    // stop. So an unrecognised shape falls back to its JSON, which is ugly and BLOCKS, instead of being pretty
+    // and silent. A genuinely empty entry (`""`, `null`, `{}`) still names no fact and is still skipped.
+    const text = bundleWarningText(w) || bundleWarningFallbackText(w);
+    if (!text) continue; // an empty entry names no fact — neither a gap nor an answer
+    // Keyed by `code` first, with the exact message accepted as a bare fallback: the same scoped-or-bare rule
+    // `warningKeys` uses, so a disposition written against either form of the warning resolves.
+    // The DISPOSITION side is normalized too — collapsing only the warning would leave a hand-written key with a
+    // double space unmatched, which is exactly the input this normalization exists for.
+    const dec = plainObject(normalized[key] ?? normalized[text]);
+    if (dec.resolved === true && BUNDLE_WARNING_DISPOSITIONS.has(dec.disposition)) {
+      closed.push({ key, text, disposition: dec.disposition, note: typeof dec.note === "string" ? dec.note : null });
+    } else {
+      // ENG-96571 (review 1, D) — A TYPO'D WORD IS NAMED, NOT SWALLOWED. `resolved: true` with a disposition
+      // outside the vocabulary (`resolved-manualy`, `accepted.`, `N/A `) landed in `open` indistinguishably from a
+      // warning nobody had answered: the operator had written an answer, the engine kept blocking on it, and
+      // nothing in the plan said which word was wrong. The same naming rule `applyConfirmDispositions` /
+      // `renderConfirmWorklist` already apply to `dispositionInvalid`.
+      const invalid = dec.resolved === true && dec.disposition !== undefined && dec.disposition !== null
+        && !BUNDLE_WARNING_DISPOSITIONS.has(dec.disposition);
+      open.push(invalid ? { key, text, dispositionInvalid: String(dec.disposition) } : { key, text });
+    }
+  }
+  return { open, closed };
+}
+// The words a bundle warning's disposition may carry, rendered for the operator: `` `a` | `b` | `c` ``. Read from
+// the SET rather than re-typed, so a fourth word cannot leave the blocking text reciting three.
+const bundleWordList = () => [...BUNDLE_WARNING_DISPOSITIONS].map((w) => `"${w}"`).join(" | ");
+// One blocking structure issue per OPEN bundle warning, QUOTING the warning verbatim — the rule `warningsReason`
+// already states: the single summary sentence that used to stand for every producer described a condition that was
+// provably absent on the run it blocked, and sent the remedy hunt to the wrong file for 12 hours.
+// A recorded-but-INVALID disposition is stated FIRST, because it changes what the operator has to do: the answer
+// exists and the word is what stopped it, so re-doing the lookup would be wasted work.
+const bundleDispositionPrefix = (w) => (w.dispositionInvalid
+  ? `a disposition was recorded with the word "${w.dispositionInvalid}", which is not one of ${bundleWordList()}, so it closed nothing — fix the word in \`manifest.bundleWarningDispositions\` and re-run. `
+  : "");
+const bundleWarningIssue = (w) => `${bundleDispositionPrefix(w)}bundle warning from \`get-classic-page-sources\` — "${w.text}" — the BUNDLE itself says one of its lookups did not complete, so what it returned is NOT a verified "there is nothing". Re-run the bundle with the bound entity resolved, or fall back to step 4.1 manual lookup, and fold the answers into this manifest. Once you HAVE handled it, close it with manifest.bundleWarningDispositions[${JSON.stringify(w.key)}] = { "resolved": true, "disposition": "resolved-manually"|"accepted"|"n/a", "note": "<what you did>" } — an OPEN bundle warning BLOCKS structure, a closed one renders as ℹ and stays auditable.`;
 
 // Annotate each warning with the operator's recorded answer, in place of nothing. Returns a NEW array (the engine's
 // own array is not mutated) where a dispositioned FIDELITY warning carries `{ accepted: true, disposition, note }`.
@@ -230,6 +348,96 @@ function applyWarningDispositions(warnings, manifest) {
     if (isCorrectnessWarning(w)) return { ...w, dispositionRefused: "a correctness warning cannot be dispositioned — it names an item no lower schema defined; fix the schema order (F1) or the base seed (F2)" };
     return { ...w, accepted: true, disposition: dec.disposition, note: typeof dec.note === "string" ? dec.note : null };
   });
+}
+
+// ⚠ CONFIRM DISPOSITIONS (ENG-96571 C1) — the machine channel for an answered `⚠ Confirm before I build` row.
+// The row was previously answerable only by hand-appending to the plan's *Adjustments* list, and `--plan --out`
+// REWRITES that file: every regenerate lost the answer and asked the same question again. `decisions.md` stays the
+// source of record (a human reads it); this map is what makes an answer survive a re-run of the engine.
+//
+// Keyed `"<kind>:<item>"` — the same pair the worklist prints — with `"<schema>::<kind>:<item>"` accepted as the
+// SCOPED form, tried first, exactly the precedence `applyBehaviourIndex` / `describedInForMember` use: without it a
+// single answer would close the same question on two different pages of one migration.
+//
+//   "confirmDispositions": { "<kind>:<item>": { "resolved": true,
+//        "disposition": "accepted"|"reproduced-manually"|"n/a"|"resolved-on-stand", "note": "<what you decided>" } }
+//
+// A closed row is NEVER dropped — it renders as `ℹ … CLOSED by a recorded disposition` with its note, the same
+// rule `applyWarningDispositions` follows, so an answer stays auditable instead of making the question vanish.
+//
+// The four words themselves are documented beside `CONFIRM_DISPOSITION_WORDS` in `designspec.mjs`.
+//
+// `CONFIRM_DISPOSITIONS` (the word set) and `confirmKey` (the key shape) both live in `designspec.mjs` and are
+// IMPORTED, not re-typed: the renderer recites the word list and names the key back to the operator, this
+// function enforces both, and two hand-kept copies of a key the operator writes by hand is the one drift that
+// silently closes nothing. There is no import cycle — `designspec.mjs` imports nothing from this module.
+export { confirmKeyOf as confirmKey } from "./designspec.mjs";
+
+// The `confirmDispositions` map THIS scope answers with. A nested child/typed/mini fold receives the CHILD bundle
+// as its `manifest`, and the operator records the answers ONCE on the ROOT manifest — so before this existed the
+// map was read off a bundle that never carries one and every scoped answer (`"<Child>::<kind>:<item>"`, the form
+// SKILL.md documents as tried FIRST) reached nothing below the root: the row asked the same question on every
+// regenerate and the recorded answer was reported as `closed: []`.
+//
+// MERGED, not `??`: a child bundle that carries `confirmDispositions: {}` is not nullish, so a nullish fallback
+// would drop every inherited answer on it. The child's own key still wins — the same rule (and the same wording)
+// `behaviourIndexInput` and `runSignals` already state for the two other inherited maps.
+function confirmDispositionsInput(manifest, opts) {
+  return { ...plainObject(opts?.inheritedConfirmDispositions), ...plainObject(manifest?.confirmDispositions) };
+}
+
+// Annotate each `needsDecision` row with the operator's recorded answer, IN PLACE (the rows are already published on
+// the ChangeSet the renderers read, exactly like `applyBehaviourIndex`'s `describedIn`). A disposition whose word is
+// not one of the four does NOT close the row: it is recorded as `dispositionInvalid` and named in an advisory line,
+// because a truthy `resolved` with a typo'd word would clear a question nobody actually answered — the same
+// validated-enum rule `WARNING_DISPOSITIONS` and `MEMBER_DISPOSITIONS` already state.
+//
+// A row whose KIND `renderConfirmWorklist` does not print (every `SHOWN_ELSEWHERE` kind — `method`, `card-action`,
+// `widget`, and every `IMPERATIVE_MEMBER_KINDS` member) is NOT closed and NOT counted as closed: that worklist is
+// the only place a `⚠ Confirm` row renders, so "closing" one there changed nothing while the run reported the key
+// in `closed` — a silent no-op reported as success. Those keys are reported separately as `notApplicable` and named
+// in their own advisory line, so the operator learns the answer belongs in the worklist that DOES carry the row
+// (`⚠ Imperative logic` / `⚠ Imperative members`, closed via `memberDispositions`) instead of believing it landed.
+// Returns `{ closed, invalid, notApplicable }` (arrays of keys) so a caller/test can see what the manifest did.
+function applyConfirmDispositions(changeSet, declared, scopeSchema) {
+  const closed = [], invalid = [], notApplicable = [];
+  if (!Object.keys(declared).length) return { closed, invalid, notApplicable };
+  for (const n of changeSet?.needsDecision || []) {
+    const key = confirmKeyOf(n);
+    const dec = plainObject((scopeSchema ? declared[`${scopeSchema}::${key}`] : undefined) ?? declared[key]);
+    if (dec.resolved !== true) continue;
+    if (SHOWN_ELSEWHERE.has(n.kind)) { notApplicable.push(key); continue; }
+    if (!CONFIRM_DISPOSITIONS.has(dec.disposition)) {
+      n.dispositionInvalid = String(dec.disposition);
+      invalid.push(key);
+      continue;
+    }
+    n.closed = true;
+    n.disposition = dec.disposition;
+    n.note = typeof dec.note === "string" ? dec.note : null;
+    closed.push(key);
+  }
+  return { closed, invalid, notApplicable };
+}
+
+// The `enum-drift-advisory` row's reason, or null when there is nothing advisory to say. Own fn (Sonar CC 15 in
+// `runMigration`, which has none to spare) and, more to the point, because the TWO advisory categories have
+// DIFFERENT remedies and must never share one sentence (ENG-96571 review 1, K):
+//   · a member only the STAND carries  → add it to the pinned table in engine.mjs;
+//   · a member the engine pins under ANOTHER SPELLING with a different number → do NOT add the stand's spelling;
+//     the engine reads a body by exact property name, so it never reads that spelling and no element of this run
+//     can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling still holds.
+// The old single sentence said "identified by name but has no numeric value, so add the member(s) to the pinned
+// table" over both, and every clause of it is false for the second category. Since an `enum-drift-advisory` row
+// can be CLOSED by a recorded disposition, this is the text an operator reads to decide — it has to be true.
+function enumDriftAdvisoryReason(drift) {
+  const clauses = [];
+  if (drift.newMembers.length)
+    clauses.push(`the stand carries enum member(s) this engine does not pin: ${drift.newMembers.join("; ")}. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\``);
+  if (drift.spellingDrift.length)
+    clauses.push(`the stand echoes a member this engine pins under ANOTHER SPELLING, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that spelling and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
+  if (!clauses.length) return null;
+  return `${clauses.join(" — and separately: ")}. What the engine DOES know is still correct — this does not block.`;
 }
 
 // The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
@@ -388,7 +596,11 @@ function detailSchemaIssues(changeSet, suppliedDetailKeys) {
 
 function validateStructure({ manifest, changeSet, childPages, typedPages, section, miniPage, miniPageVerified, visited, listColumnIssue }) {
   const suppliedDetailKeys = new Set(Object.keys(manifest.detailSchemas || {}));
-  const issues = [...detailSchemaIssues(changeSet, suppliedDetailKeys), ...profileSchemaIssues(manifest, changeSet)];
+  // The FETCH's own warnings first: everything below reasons about what the bundle returned, and an unfinished
+  // lookup is the reason that content may be short in the first place.
+  const bundleWarnings = bundleWarningState(manifest);
+  const issues = [...bundleWarnings.open.map(bundleWarningIssue),
+    ...detailSchemaIssues(changeSet, suppliedDetailKeys), ...profileSchemaIssues(manifest, changeSet)];
   // A recoverable list-column read failure (see `normalizeResolvedListColumns`) is INPUT incompleteness, not a
   // crash: the plan still renders, with the cause and the remedy named here instead of on stderr.
   if (listColumnIssue) issues.push(listColumnIssue);
@@ -397,7 +609,10 @@ function validateStructure({ manifest, changeSet, childPages, typedPages, sectio
   for (const c of childPages) { const issue = childPageIssue(c); if (issue) issues.push(issue); }
   for (const t of typedPages) { const issue = typedPageIssue(t); if (issue) issues.push(issue); }
   if (section) { const issue = miniPageIssue(miniPage, miniPageVerified); if (issue) issues.push(issue); }
-  return { complete: issues.length === 0, issues };
+  // `bundleWarningsClosed` is ADDITIVE and is NOT in `issues`: `complete` is `issues.length === 0`, so a closed
+  // warning listed there would BLOCK — the exact opposite of what recording an answer means. It rides on the
+  // object so the renderer can print the ℹ line (`renderBundleWarningNotes`) and the answer stays auditable.
+  return { complete: issues.length === 0, issues, bundleWarningsClosed: bundleWarnings.closed };
 }
 
 // Normalize manifest.typedPages ([name | {schema,type,…}]) → [{schema,…}] and raise the typed-page decision.
@@ -461,10 +676,33 @@ function stubDigestOf(changeSet) {
 // the behaviour run's coverage `Set` counted two distinct rows as one described row, and `applyBehaviourIndex`
 // applied ONE card to BOTH pages — two different behaviours closing the gate on a single answer.
 // `kind` and `item` stay on the entry: the prompts render them, and only the KEY needed disambiguating.
+//
+// ONE ROW, MANY MEMBERS (ENG-96571 A6). A kind in `AGGREGATED_DECISION_KINDS` carries a deliberately joined
+// comma list as its `item` (`module-dep` → `"ConfigurationConstants, ContactUtilities"`): ONE ⚠ Confirm row,
+// because the operator decides the dependency set as one decision. The step-5.1 handoff needs the OPPOSITE
+// granularity — a behaviour card describes ONE module — so the DIGEST expands the row into one entry per name,
+// each keyed on its own `<schema>::module-dep:<name>`.
+//
+// The two granularities differ ON PURPOSE and neither is derived from the other: `changeSet.needsDecision` is
+// untouched (the ⚠ Confirm list still prints one aggregated row, and `decidedNames` still splits it for the
+// coverage ledger), while the digest — and therefore `behaviourIndex.unmatched` — knows the per-module keys.
+// `applyBehaviourIndex` accepts BOTH forms, so a per-module card lands its `describedIn` on the aggregated row.
+function memberEntries(n, scopeSchema) {
+  const keyOf = (item) => (scopeSchema ? `${scopeSchema}::${n.kind}:${item}` : `${n.kind}:${item}`);
+  if (!AGGREGATED_DECISION_KINDS.has(n.kind)) return [{ kind: n.kind, item: n.item, key: keyOf(n.item) }];
+  // Plain `split(",")` + trim, the same ReDoS discipline `decidedNames` states for the same text.
+  const names = String(n.item ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  // `rowKey` — the WHOLE row's own key (`module-dep:A, B, C`), carried on every expanded entry and set ONLY for an
+  // aggregated kind. `describedInForMember` still ACCEPTS that form (an index written before this expansion keys the
+  // answer that way), so `scopeDigestKeys` has to keep counting it as a known key: without it the plan rendered
+  // "⚠ 1 behaviourIndex key matched no imperative row" about a key whose card it had just folded in — the exact
+  // inverse of what that banner is for, on the most likely real input.
+  return names.map((item) => ({ kind: n.kind, item, key: keyOf(item), rowKey: keyOf(n.item) }));
+}
+
 function memberDigestOf(changeSet, scopeSchema) {
   return (changeSet?.needsDecision || []).filter((n) => HANDOFF_MEMBER_KINDS.has(n.kind))
-    .map((n) => ({ kind: n.kind, item: n.item,
-      key: scopeSchema ? `${scopeSchema}::${n.kind}:${n.item}` : `${n.kind}:${n.item}` }));
+    .flatMap((n) => memberEntries(n, scopeSchema));
 }
 
 // The *Section chain as its OWN stub scope — 0 or 1 of them, so the caller spreads the result with no branch of
@@ -508,7 +746,9 @@ function stubScope(role, schema, changeSet, standardMethodsFiltered) {
       // calling method, not what starts the chain. Still behaviour-analysis work — kept out of `unresolvedTrigger`
       // so the two states are distinguishable, and published so a handoff prompt cannot mistake one for the other.
       internalCallOnly: stubs.filter((s) => s.triggers.length &&
-        s.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length,
+        // ENG-96571 B1 — a lifecycle-answered chain is its OWN kind now, so the `!t.lifecycle` exception that used
+        // to sit here is carried by the kind test itself.
+        s.triggers.every((t) => t.kind === "internal" && !t.rootTrigger)).length,
       externalRef: stubs.filter((s) => s.externalRef).length,
       trivial: stubs.filter((s) => s.trivial).length,
       members: members.length,
@@ -546,7 +786,52 @@ const cardRef = (v) => (typeof v === "string" && v.trim().length ? v : null);
 // entry (a note, a trigger) is read at its own call site. `bodyCard`/`bodyAc` name the body's OWN card when the
 // behaviour is defined outside the owning scope — the criteria that gate a behaviour usually live there, not in
 // the wiring card (see wiringOnlyKeys below for the computed check).
+// The reported-trigger vocabulary and its check, MIRRORED from
+// `_workflow-core/behaviour-analysis/helpers.mjs`. EDIT ONE, LOOK AT THE OTHER — the same standing as the
+// `wiringOnlyKeys` / `wiringOnlyMixinKeys` pair above: the workflow script is evaluated as a function body and
+// may not `import`, so the two programs cannot share a module. engine-tests/classic-to-freedom/run-workflow-core.mjs
+// checks the two copies on BOTH axes: a table-driven parity test comparing the returned REASON STRINGS row by row,
+// and a NORMALISED SOURCE-TEXT comparison of the two function bodies (quote style, semicolons, line comments and
+// whitespace normalised away, everything else required to match) — the table alone left a branch no row reached
+// free to diverge.
+//
+// WHY THE ENGINE CHECKS AT ALL, rather than trusting the workflow that already did: `manifest.behaviourIndex` is
+// a hand-editable file merged by an agent, and this is the leg that FILLS the plan's trigger cell. An unchecked
+// `{"init": {"trigger":"internal","from":"init"}}` rendered as `internal (from init) — reported` and moved the
+// header from "8 row(s) have no trigger yet" to "0 … 8 answered by the behaviour run" — a row naming itself as
+// its own origin, counted as answered.
+export const REPORTED_TRIGGERS = ["attribute", "detail", "entity-filter", "message", "lifecycle", "internal", "external"];
+const DECLARATION_PATH_RX = /^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)*$/;
+const DECLARATION_KINDS = new Set(["attribute", "detail", "entity-filter"]);
+export function validateReportedTrigger({ trigger, from, methodName } = {}) {
+  const declaredFrom = typeof from === "string" ? from.trim() : "";
+  if (trigger === null || trigger === undefined || trigger === "") {
+    // A `from` WITHOUT a `trigger` is not "no trigger reported" — it is half an answer, and the half that is
+    // missing is the only part the engine renders as a kind. The engine's `applyBehaviourIndex` recorded
+    // `{kind:"reported", reportedKind:null}` for it and the row counted as RESOLVED, so an entry naming an origin
+    // and never saying what kind of origin it is cleared the plan header's "no trigger yet" count on nothing.
+    if (!declaredFrom) return null;   // neither half reported: nothing to validate
+    return `\`from\` names '${declaredFrom}' but no \`trigger\` says what kind of origin that is — half an answer resolves nothing`;
+  }
+  if (typeof trigger !== "string" || !REPORTED_TRIGGERS.includes(trigger)) {
+    return `trigger '${String(trigger)}' is not one of ${REPORTED_TRIGGERS.join(", ")}`;
+  }
+  const origin = declaredFrom;
+  if (!origin) return `trigger '${trigger}' names no \`from\` — a reported trigger without its origin answers nothing`;
+  if (methodName && origin === methodName) return `\`from\` is the row itself ('${origin}') — a row cannot be its own origin`;
+  if (DECLARATION_KINDS.has(trigger) && !DECLARATION_PATH_RX.test(origin)) {
+    return `trigger '${trigger}' must name a declaration as \`attributes.<name>\` or \`details.<key>\`, not '${origin}'`;
+  }
+  return null;
+}
+
 function describedInOf(entry) {
+  // `behaviourEstablished: false` — the analysis agent's own admission that it could NOT establish the behaviour.
+  // The card may exist and still say nothing was established (measured: the Applicants plan read "10 of 10 carry
+  // a behaviour card" while the `init` card said the behaviour was NOT established), so the row keeps its
+  // `⚠ not described` cell and is not counted as described anywhere. Read the same way by the workflow's
+  // `behaviourEstablished` helper, so one entry cannot be coverage on one leg and not on the other.
+  if (entry.behaviourEstablished === false) return null;
   const card = cardRef(entry.card);
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
@@ -565,37 +850,83 @@ function describedInOf(entry) {
 //
 // Accepting both a scoped and a bare form is the rule `memberDispositions` already uses; without the scoped one,
 // a single answer would be folded onto two different bodies that happen to share a method name.
+// Several answers, ONE row. An aggregated `module-dep` row can be answered by a card per module, so the refs are
+// merged and the row is counted described EXACTLY ONCE — pushing one `described` entry per matching key would
+// inflate the "N of M described" header the plan prints (`renderMemberWorklist`) beyond the number of rows.
+// First non-null wins for the single-valued refs; the `ac` lists are an order-preserving deduped union.
+function mergeDescribedIn(refs) {
+  if (refs.length <= 1) return refs[0] || null;
+  const uniq = (a) => [...new Set(a)];
+  return {
+    card: refs.find((r) => r.card)?.card || null,
+    ac: uniq(refs.flatMap((r) => r.ac || [])),
+    bodyCard: refs.find((r) => r.bodyCard)?.bodyCard || null,
+    bodyAc: uniq(refs.flatMap((r) => r.bodyAc || [])),
+  };
+}
+
+// The entry(ies) describing ONE member row: its own `<kind>:<item>` key first, then — for an AGGREGATED row — each
+// member NAME's own key, because `memberEntries` published exactly those into the digest and a behaviour card is
+// written per module. Each key is tried scoped-then-bare, the precedence `memberDispositions` and the method
+// lookup already use (the bare fallback keeps a `behaviour-index.json` written before keys carried a scope working).
+// Own fn because `applyBehaviourIndex` has no Sonar CC 15 headroom left.
+function describedInForMember(map, scopeSchema, n) {
+  const keys = [...new Set([`${n.kind}:${n.item}`, ...memberEntries(n, null).map((e) => e.key)])];
+  const refs = [];
+  for (const k of keys) {
+    const entry = (scopeSchema ? map[`${scopeSchema}::${k}`] : undefined) ?? map[k];
+    if (!entry || typeof entry !== "object") continue;
+    const d = describedInOf(entry);
+    if (d) refs.push(d);
+  }
+  return mergeDescribedIn(refs);
+}
+
+// Fill an EMPTY trigger only, from the reported one. A traced trigger is body-proven; a reported one is a
+// description of it — and it is filled only when it PASSES `validateReportedTrigger`. A rejected one leaves
+// `h.triggers` empty, so the row keeps rendering `⚠ unresolved` and keeps counting in the header's open total, and
+// the rejection is published (`behaviourIndex.rejectedTriggers`) so a ⚠ plan banner can name it instead of it
+// vanishing. An entry that admits the behaviour was NOT established is not evidence for its ORIGIN either, so the
+// whole entry is skipped — the same reading the workflow's `entriesOf` gives it, which is the point: one entry, one
+// meaning on both legs. Without this the row would render a resolved trigger next to `⚠ not described`.
+//
+// Own fn (behaviour unchanged) because `applyBehaviourIndex` had no Sonar CC 15 headroom left — the same reason
+// `describedInForMember` is its own function.
+function fillReportedTrigger(h, entry, { triggersFilled, rejectedTriggers }) {
+  if ((h.triggers || []).length || entry.behaviourEstablished === false) return;
+  if (!entry.trigger && !entry.from) return;
+  const why = validateReportedTrigger({ trigger: entry.trigger, from: entry.from, methodName: h.sourceMethod });
+  if (why) {
+    rejectedTriggers.push({ key: h.sourceMethod, trigger: entry.trigger ?? null, from: entry.from ?? null, why });
+    return;
+  }
+  h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
+    note: typeof entry.note === "string" ? entry.note : null }];
+  triggersFilled.push(h.sourceMethod);
+}
+
 function applyBehaviourIndex(changeSet, index, scopeSchema) {
   const map = plainObject(index);
   if (!Object.keys(map).length) return { triggersFilled: [], described: [] };
-  const triggersFilled = [], described = [];
+  const triggersFilled = [], described = [], rejectedTriggers = [];
   for (const h of changeSet?.handlerStubs || []) {
     const entry = (scopeSchema ? map[`${scopeSchema}::${h.sourceMethod}`] : undefined) ?? map[h.sourceMethod];
     if (!entry || typeof entry !== "object") continue;
     const d = describedInOf(entry);
     if (d) { h.describedIn = d; described.push(h.sourceMethod); }
-    // Fill an EMPTY trigger only. A traced trigger is body-proven; a reported one is a description of it.
-    if (!(h.triggers || []).length && (entry.trigger || entry.from)) {
-      h.triggers = [{ kind: "reported", reportedKind: entry.trigger || null, from: entry.from || null,
-        note: typeof entry.note === "string" ? entry.note : null }];
-      triggersFilled.push(h.sourceMethod);
-    }
+    fillReportedTrigger(h, entry, { triggersFilled, rejectedTriggers });
   }
   // ⚠ Confirm members — a `message` whose counterpart lives in another schema, a `mixin` whose members are defined
   // outside this body, the aggregated `module-dep` row. These are the row types step 5.1 exists for just as much as
   // an unresolved method, and they carry no trigger — only the card that describes them.
   for (const n of changeSet?.needsDecision || []) {
-    // Scoped first, bare second — the same precedence the method lookup uses, and the bare fallback is what keeps a
-    // `behaviour-index.json` written before member keys carried a scope still resolving.
-    const entry = (scopeSchema ? map[`${scopeSchema}::${n.kind}:${n.item}`] : undefined) ?? map[`${n.kind}:${n.item}`];
-    if (!entry || typeof entry !== "object") continue;
-    const d = describedInOf(entry);
+    const d = describedInForMember(map, scopeSchema, n);
     if (d) { n.describedIn = d; described.push(`${n.kind}:${n.item}`); }
   }
   // Called from HERE, so it runs only when an index was supplied — which is exactly when it can pay off: without a
   // reported trigger every chain was already resolved (or left open) by resolveInternalTrigger during mapping.
   propagateChainRoots(changeSet);
-  return { triggersFilled, described };
+  return { triggersFilled, described, rejectedTriggers };
 }
 
 // A helper resolved only to its CALLER (`internal call from X`, no root, no lifecycle) is the weakest trigger the
@@ -611,7 +942,9 @@ function propagateChainRoots(changeSet) {
   // whatever order the schema declares its methods in, and keeps `rootTrigger` a real origin instead of another
   // composed `internal` trigger nested inside itself.
   const before = new Map(stubs.map((h) => [h.sourceMethod, (h.triggers || [])[0]]));
-  const weak = (t) => t?.kind === "internal" && !t.rootTrigger && !t.lifecycle;
+  // ENG-96571 B1 — "we still do not know what STARTS this chain". A `lifecycle` trigger is an answer and carries
+  // its own kind, so it is excluded by the kind test rather than by a second field check.
+  const weak = (t) => t?.kind === "internal" && !t.rootTrigger;
   // Walk up from one caller until something answers. `seen` breaks the mutual-recursion cycles classic helpers are
   // full of, exactly as resolveInternalTrigger does.
   const originFrom = (start, seen) => {
@@ -650,12 +983,26 @@ function scopeDigestKeys(scopes) {
   const seen = new Set();
   for (const s of scopes) {
     for (const st of s.stubs) { seen.add(st.method); if (s.schema) seen.add(`${s.schema}::${st.method}`); }
-    for (const m of s.members) seen.add(m.key);
+    // BOTH key forms an answer may legitimately use: the member's own key, and — for an expanded aggregated row —
+    // the whole row's key (`memberEntries`' `rowKey`), which `describedInForMember` still resolves.
+    // …and the BARE `<kind>:<item>` form. `m.key`/`m.rowKey` are SCOPED whenever the scope has a schema, but both
+    // readers of an answer — `describedInForMember` and `wiringOnlyKeys`' `memberKey` — accept the bare form as a
+    // fallback. So a bare member key written for a CHILD scope had its card folded into the row AND was reported in
+    // `behaviourIndex.unmatched`, printing "⚠ 1 behaviourIndex key matched no imperative row" about the key whose
+    // card the plan had just rendered — the same inverse-of-its-purpose banner the `rowKey` line above fixes.
+    for (const m of s.members) { seen.add(m.key); seen.add(`${m.kind}:${m.item}`); if (m.rowKey) seen.add(m.rowKey); }
   }
   return seen;
 }
+// OVERRIDE-ONLY FINDINGS ARE NOT UNMATCHED KEYS. `prompts.mjs`'s `overrideOnlyBlock` MANDATES the
+// `<schema>::override:<method>` key shape verbatim, precisely so the key collides with no digest row — a
+// replacing layer in a zero-row scope has no digest row to match by construction. Reading those keys as
+// `behaviourIndex.unmatched` printed "⚠ N behaviourIndex key(s) matched no imperative row" about keys the
+// contract requires to match none, on every run that found an override. Same regex form as `OVERRIDE_KEY_RX` in
+// `_workflow-core/behaviour-analysis/helpers.mjs` — edit one, look at the other.
+const OVERRIDE_KEY_RX = /^[^:]+::override:/;
 function unmatchedIndexKeys(index, stubIndex) {
-  const keys = Object.keys(plainObject(index));
+  const keys = Object.keys(plainObject(index)).filter((k) => !OVERRIDE_KEY_RX.test(k));
   if (!keys.length) return [];
   const seen = scopeDigestKeys(stubIndex);
   return keys.filter((k) => !seen.has(k));
@@ -692,6 +1039,10 @@ function wiringOnlyKeys(index, stubIndex) {
   if (!Object.keys(map).length) return [];
   const isWiringOnly = (key) => {
     const e = map[key];
+    // `behaviourEstablished: false` is NOT a wiring-only row — it is an undescribed one, and `describedInOf`
+    // already keeps its `⚠ not described` cell. Both legs carry this exclusion (the workflow's via `entriesOf`),
+    // so one entry cannot be undescribed on one leg and wiring-only on the other.
+    if (e && typeof e === "object" && e.behaviourEstablished === false) return false;
     return !!e && typeof e === "object" && !!cardRef(e.card) && !cardRef(e.bodyCard);
   };
   // Same scoped-key-first lookup applyBehaviourIndex uses, so both read the same entry for one row.
@@ -1709,7 +2060,7 @@ const MEMBER_KINDS = ["diff-op", "method", "attribute", "message", "mixin", "mod
 // list; a module wrongly called inert is a silently dropped member, so it stays deliberately short.
 // The only dispositions `manifest.memberDispositions` may carry — the same four the gate's remediation line tells an
 // agent to use. Kept beside the ledger that reads them so the message and the check cannot drift apart.
-const MEMBER_DISPOSITIONS = new Set(["ported", "dropped", "blocked", "n/a"]);
+const MEMBER_DISPOSITIONS = new Set(["ported", "dropped", "blocked", DISPOSITION_NA]);
 const INERT_MODULE_RX = /^(?:terrasoft|ext-base|Ext|sandbox|css!)/;
 // what a method contributes to its ledger row — kept out of the source table so the table stays scannable
 const methodLedgerDetail = (m) =>
@@ -1794,6 +2145,59 @@ function decidedNames(needsDecision) {
     }
   }
   return decided;
+}
+
+// ⚠ APPROVALS, FORGOTTEN (ENG-96571 A7). A Classic page carries approvals as INFRASTRUCTURE, not as a control: a
+// `RecordVisaId` attribute and/or a `*VisaDetail*` detail. Neither is a field, so a page could map cleanly with the
+// whole approvals surface missing from the plan and every gate green. This reads the SIGNAL off the effective page
+// — both halves, mapped or not — and publishes it as `changeSet.featureSignals` so the plan can name the evidence.
+//
+// Computed OUTSIDE `buildCoverage` on purpose: that function is exported and driven directly by goldens as a pure
+// ledger computation, so writing a new ChangeSet field from inside it would be a side effect its callers do not
+// expect. `[]` (not absent) when there is no signal — a counted zero is a ledger entry, the same discipline
+// `coverage.zeros` applies: "the plan says nothing about approvals" must never be indistinguishable from
+// "nobody looked".
+export function approvalsSignalOf(eff, changeSet) {
+  const evidence = [];
+  // The detail half, resolved through the MAPPING TABLE rather than a regex of its own — see the note on
+  // `APPROVALS_SIGNAL` for the substring-vs-suffix divergence that removed `detailPattern`. `entity` is passed so a
+  // detail whose auto-generated schema name hides the feature still resolves by its entity, exactly as
+  // `matchDetailFeature` does in the mapper.
+  const isApprovalsDetail = (nm, entity) =>
+    resolveFeatureRow(nm || null, entity || null)?.meta?.feature === APPROVALS_SIGNAL.feature;
+  const addDetail = (nm, entity) => {
+    if (!nm || !isApprovalsDetail(nm, entity)) return;
+    const e = `detail \`${nm}\``;
+    if (!evidence.includes(e)) evidence.push(e);
+  };
+  // The ATTRIBUTE half, SYMMETRIC with `buildCoverage`: that ledger classifies a `fromTemplate` attribute as
+  // `context` (`tpl: (a) => a.fromTemplate`) because no client schema touched it — the page body never shows it and
+  // a migration owes nothing for it. A `RecordVisaId` inherited from the base template is exactly that, so reading
+  // it as evidence raised a blocking Approvals signal off a member the same run had already excluded as untouched.
+  for (const a of eff?.attributes || []) {
+    if (a.fromTemplate) continue;
+    if (APPROVALS_SIGNAL.attributeNames.includes(a.name)) evidence.push(`attribute \`${a.name}\``);
+  }
+  // BOTH sides, because a detail the mapper dropped is exactly the case this gate exists for: `eff.details` is the
+  // merged Classic truth (unmapped included), `changeSet.details` the mapped rows (a detail the merge only saw
+  // through a resolved reference still shows up there).
+  for (const d of eff?.details || []) addDetail(d.schemaName || d.key, d.entitySchemaName);
+  for (const d of changeSet?.details || []) addDetail(d.detailSchema, d.entity);
+  return evidence.length ? [{ feature: APPROVALS_SIGNAL.feature, evidence }] : [];
+}
+
+// The gate leg: a published signal with no mapped `Approvals` standardFeature row is a PLAN-time coverage issue —
+// plan-blocking like every other coverage issue, never a `--verify` row (nothing on the stand can answer it; the
+// mapping is what is short). Closable the way every other coverage row is: a `memberDispositions` entry, keyed
+// `feature:Approvals` in the same `<kind>:<name>` form the ledger uses, so no second disposition map is invented.
+function approvalsIssue(changeSet, declared) {
+  const sig = (changeSet.featureSignals || []).find((s) => s.feature === APPROVALS_SIGNAL.feature);
+  if (!sig) return null;
+  if ((changeSet.standardFeatures || []).some((f) => f.feature === APPROVALS_SIGNAL.feature)) return null;
+  const id = `feature:${APPROVALS_SIGNAL.feature}`;
+  const dec = plainObject(declared[id]);
+  if (dec.resolved === true && MEMBER_DISPOSITIONS.has(dec.disposition)) return null;
+  return `the page declares approvals infrastructure (${sig.evidence.join(", ")}) but no Approvals feature was mapped — map it to \`${APPROVALS_SIGNAL.target}\` + \`${APPROVALS_SIGNAL.moduleComponentType}\`, or record a disposition: manifest.memberDispositions["${id}"] = { "resolved": true, "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "<why>" }.`;
 }
 
 export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) {
@@ -1891,8 +2295,12 @@ export function buildCoverage({ eff, changeSet, manifest, childCoverage = [] }) 
   // Counted zeros are ledger entries too (03-member-ledger.md): a kind with no members is recorded as verified
   // empty rather than omitted, so "the plan says nothing about messages" can never mean "nobody looked".
   const zeros = MEMBER_KINDS.filter((k) => !rows.some((r) => r.kind === k));
-  const issues = unaccounted.map((r) =>
-    `${r.kind} '${r.name}' is UNACCOUNTED — the engine produced no Freedom artifact and no decision for it. Either it maps (then the mapping must appear in the ChangeSet) or it needs a recorded answer: add manifest.memberDispositions["${r.id}"] = { "resolved": true, "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "<why>" }. Do NOT leave it silent.`);
+  // The FEATURE-level gap first: it is not a member row (no `eff` list carries "approvals"), so it would appear in
+  // no ledger row at all. The evidence is folded into the string because `renderPlanBanners` prints
+  // `coverage.issues` verbatim — that is how the ⚠ section names it, with no second renderer to keep in step.
+  const approvals = approvalsIssue(changeSet, declared);
+  const issues = [...(approvals ? [approvals] : []), ...unaccounted.map((r) =>
+    `${r.kind} '${r.name}' is UNACCOUNTED — the engine produced no Freedom artifact and no decision for it. Either it maps (then the mapping must appear in the ChangeSet) or it needs a recorded answer: add manifest.memberDispositions["${r.id}"] = { "resolved": true, "disposition": "ported"|"dropped"|"blocked"|"n/a", "note": "<why>" }. Do NOT leave it silent.`)];
   // SUBTREE AGGREGATION — the migration is a page TREE (Contract rule 4, step 7.3), and every other gate
   // aggregates it: `gate` blocks on `childBlocked`/`blockedTyped`/`miniPage.blocked`, `structure` on each
   // sub-page's own structure issues. Without the same here, a `Rebuild (child)` page whose methods and attributes
@@ -2222,12 +2630,19 @@ export function runMigration(manifest, opts = {}) {
     ownSignals: plainObject(manifest.signals), // …and THIS bundle's own keys alone, so a child page can tell an answer recorded for ITS entity from the parent's
   });
   attachDetailAddModes(changeSet, detailSchemas);
+  // ENG-96571 A7 — the standard-feature SIGNALS this page carries in its infrastructure rather than in a control.
+  // Published on the ChangeSet (always an array, `[]` when none) BEFORE `buildCoverage` reads it for the gate.
+  changeSet.featureSignals = approvalsSignalOf(eff, changeSet);
   // Fold the step-5.1 answers into the rows BEFORE anything renders, so the generated `⚠ Imperative logic` table
   // carries them. Hand-appending them to the plan's `Adjustments` did not survive a re-run: `--plan --out` rewrites
   // the file, so the only link from a worklist row to the behaviour that describes it was lost on every regenerate.
   // A sub-run inherits the root manifest's answers (one report covers the whole surface) and may override them.
   const behaviourIndexInput = { ...plainObject(opts.inheritedBehaviourIndex), ...plainObject(manifest.behaviourIndex) };
   const behaviourIndex = applyBehaviourIndex(changeSet, behaviourIndexInput, opts.scopeSchema);
+  // ENG-96571 C1 — the recorded ⚠ Confirm answers, READ here (the fold context below hands them to every
+  // sub-page) but APPLIED further down, right after the last producer of `needsDecision` rows. See the
+  // `applyConfirmDispositions` call after `enumerateChildPages`.
+  const confirmDispositionsIn = confirmDispositionsInput(manifest, opts);
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
     // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
@@ -2283,9 +2698,14 @@ export function runMigration(manifest, opts = {}) {
   // engine's table is short before a page depends on it. Computed here rather than in `computeGate` precisely so it
   // cannot be mistaken for a gate reason.
   const driftAdvisory = enumDriftIssues(manifest.enumVocabulary);
-  if (driftAdvisory.newMembers.length)
-    changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary",
-      reason: `the stand carries enum member(s) this engine does not pin: ${driftAdvisory.newMembers.join("; ")}. What the engine DOES know is still correct — this does not block. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\`.` });
+  // TWO ADVISORY CATEGORIES, TWO REMEDIES — and never one sentence over both (ENG-96571 review 1, K). A member
+  // only the stand carries is repaired by ADDING it to the pinned table; a member the engine pins under ANOTHER
+  // SPELLING whose value disagrees is not, because the engine already has the member and a number for it. Adding
+  // `Guid: 5` beside `GUID: 0` would be the wrong edit; the open question is whether THIS stand's `GUID` is 5.
+  // A row an operator can CLOSE by recorded disposition is a row whose text they read to decide, so the two
+  // categories get their own clause each, and the row exists when either is non-empty.
+  const driftReason = enumDriftAdvisoryReason(driftAdvisory);
+  if (driftReason) changeSet.needsDecision.push({ kind: "enum-drift-advisory", item: "enumVocabulary", reason: driftReason });
   const resolvedGates = reportRegistryFindings(changeSet, manifest, baseDir);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
@@ -2310,6 +2730,20 @@ export function runMigration(manifest, opts = {}) {
   // child pages (recursion): each CUSTOM detail's related list opens the child entity's edit form on
   // add/edit — a separate migration. Enumerate them so the plan is a tree (parent + one sub-plan each).
   const childPages = enumerateChildPages(changeSet, detailSchemas);
+  // ENG-96571 C1 — FOLD THE RECORDED ⚠ Confirm ANSWERS IN, and do it HERE: after the LAST producer of
+  // `needsDecision` rows and before anything renders, so `renderConfirmWorklist` can split open from closed.
+  //
+  // It used to run right after `applyBehaviourIndex`, which is BEFORE six kinds of row are pushed —
+  // `parse-gap:*` (reportRemainingDiagnostics), `enum-drift-advisory` (just above), `registry-*`
+  // (reportRegistryFindings) and `typed-page:*` (normalizeTypedPages). Those rows printed in the ⚠ Confirm
+  // worklist as OPEN questions that no manifest answer could ever close, and their keys were reported in none of
+  // `closed` / `invalid` / `notApplicable` — so an operator who answered one saw the row come back unchanged on
+  // every regenerate with nothing saying why. Still applied after `applyBehaviourIndex` for the reason it always
+  // was: both annotate the SAME rows, and a row that is described AND answered must carry both facts.
+  const confirmDispositions = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  // Published on the ChangeSet so `renderConfirmWorklist` can name the not-applicable keys without a second
+  // argument — the same channel `featureSignals` uses, and the only place the renderer sees this run's answers.
+  changeSet.confirmNotApplicable = confirmDispositions.notApplicable;
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -2345,7 +2779,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, resolutions: specOpts.resolutions }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, confirmDispositions: confirmDispositionsIn, resolutions: specOpts.resolutions }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -2473,6 +2907,9 @@ export function runMigration(manifest, opts = {}) {
     // `behaviourIndex` records what came BACK and was folded in — including keys that matched no row.
     stubIndex,
     behaviourIndex,
+    // ENG-96571 C1 — what `manifest.confirmDispositions` actually did on this run: the keys it CLOSED and the ones
+    // whose disposition word was not one of the four (recorded, never silently ignored).
+    confirmDispositions,
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
@@ -2490,6 +2927,9 @@ export function runMigration(manifest, opts = {}) {
   out.planVersion = computePlanVersion(manifest, bodyOf);
   out.designSpec = renderDesignSpec(out, specOpts);
   out.plan = renderPlan(out, specOpts);
+  // ENG-96571 C3 — the agent-facing half of the plan, published as its OWN artifact so `plan.md` carries only what
+  // the approver needs. The CLI writes it to `<out-basename>.notes.md` beside the plan (or echoes it to stderr).
+  out.planNotes = renderPlanNotes(out);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
@@ -2619,6 +3059,22 @@ function valueFlagArg(argv, flag, example, onBad) {
 // the run is incomplete. Telling the agent not to present it left the CLI and the skill contradicting each
 // other on the same file, with the agent free to pick either. Own fn (not another inline branch) for the same
 // reason `valueFlagArg` is one: the CLI block does not grow a branch every time a case is added.
+// ENG-96571 C3 — the plan's agent-facing notes, written BESIDE the plan: `<dir>/<basename without extension>.notes.md`,
+// so `--out plan.md` yields `plan.notes.md` and `--out out/applicant-plan.md` yields `out/applicant-plan.notes.md`.
+// Derived from the plan path rather than a second flag: the two files are one artifact pair, and a flag would let a
+// run write the plan and silently skip its notes. Written on a BLOCKED run too — the plan is still printed then,
+// so it still has notes. Own fn so the `if (outFile)` block stays a flat sequence (Sonar CC 15).
+function planNotesPath(outFile) {
+  const ext = path.extname(outFile);
+  return path.join(path.dirname(outFile), path.basename(outFile, ext) + ".notes.md");
+}
+function writePlanNotes(result, outFile, fail) {
+  const notesFile = planNotesPath(outFile);
+  try { fs.writeFileSync(notesFile, result.planNotes); }
+  catch (e) { fail(`cannot write the plan notes '${notesFile}': ${e.message}`); }
+  process.stdout.write(`migrate.mjs: the agent-facing plan notes are in ${notesFile} — read those; they are NOT part of the plan you present.\n`);
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (verifyMode) {
@@ -2907,6 +3363,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         members: result.stubIndex.reduce((n, s) => n + s.counts.members, 0),
         unresolvedTrigger: result.stubIndex.reduce((n, s) => n + s.counts.unresolvedTrigger, 0),
         externalRef: result.stubIndex.reduce((n, s) => n + s.counts.externalRef, 0),
+        // THE ENGINE'S OWN MEMBER LEDGER, travelling with the worklist. The digest is the rows the engine could
+        // NOT answer; the ledger is every member it accounted for in the scope it mapped, and it is a LARGER
+        // population (measured on a real run: 10 digest method names against 11 definitions, 2 virtual
+        // attributes of 5, 3 members of 88). Without this number reaching the analysis run, that run's
+        // `described / digestRows` was the only figure anyone had and it read as a surface census.
+        // `totals` is what the workflow core already receives as `input.totals`, so no new channel is needed.
+        ledgerMembers: result.coverage?.total ?? null,
+        ledgerUnaccounted: (result.coverage?.issues || []).length,
       },
       scopes: result.stubIndex,
     }, null, 2) + "\n";
@@ -3050,8 +3514,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { fs.writeFileSync(outFile, output); }
     catch (e) { fail(`cannot write --out '${outFile}': ${e.message}`); }
     process.stdout.write(outFileNote(label, outFile, notReady, verifyMode));
+    if (planMode) writePlanNotes(result, outFile, fail);
   } else {
     process.stdout.write(output);
+    // No `--out`, so there is no file to put them beside — stderr, never stdout: stdout IS the plan the agent
+    // presents verbatim, and notes there would end up inside the document this split exists to keep clean.
+    if (planMode) process.stderr.write(`migrate.mjs: ℹ plan notes (agent-facing; NOT part of the plan — with \`--out plan.md\` these are written to plan.notes.md instead):\n${result.planNotes}`);
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");

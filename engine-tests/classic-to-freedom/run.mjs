@@ -2,8 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSchema, mergeHierarchy, CONTENT_TYPE } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { parseSchema, mergeHierarchy, CONTENT_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
 import { makeSchema } from "./_testkit.mjs";
+// review 1, finding N — the REAL validator, not a re-typed copy of its regex. The engine's traced `from` paths
+// travel through the same renderers and the same step-5.1 handoff digest as a REPORTED trigger, so they are held
+// to the same rule; asserting against a local copy of the grammar meant a change to the rule left this suite green.
+import { validateReportedTrigger } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(DIR, "fixtures");
@@ -737,6 +741,320 @@ check("ENG-95862: EVERY warning declares a severity, and only the two legal valu
 check("ENG-95862: every warning also carries a `hint` — the gate quotes it, so a producer that names its text differently renders as `undefined`",
   everyWarning.every((w) => typeof w.hint === "string" && w.hint.length > 0),
   () => everyWarning.map((w) => ({ op: w.op, name: w.name, hint: w.hint })));
+
+/* ================= ENG-96571 / A4: DataValueType alias (STRING→TEXT), and the TWO lookups that are NOT the same
+   The pinned DATA_VALUE_TYPE table has TEXT:1 (no STRING) and GUID:0. There are two different questions asked of
+   it, and review 1 (finding B) split them apart because collapsing them into one case-insensitive resolve was
+   wrong on the second:
+
+   • `enumDriftIssues` compares two VOCABULARIES — the stand's echo against the pinned table. `Guid` and `GUID`
+     are two spellings of one member there, so the comparison is case-insensitive and alias-aware.
+   • `walkTagAutomaton` models a JavaScript PROPERTY READ the browser performs at runtime, and JS property
+     access is case-sensitive. `Terrasoft.ViewItemType.Grid` is `undefined` on a real stand, and Classic reads a
+     missing `itemType` as a FIELD — so a case-insensitive resolve had the engine confidently map that item as a
+     GRID, and `DataValueType.Guid` as 0 rather than leaving it unresolved. The lookup there is exact-case, with
+     `DATA_VALUE_TYPE_ALIASES` (STRING→TEXT) as the ONE exception, itself exact-case: `STRING` is a real member
+     on a real stand, so the runtime read genuinely succeeds and it is the pinned table that is short. */
+console.log("\n===== ENG-96571 A4: DataValueType alias + the two lookups (vocabulary vs runtime property read) =====");
+
+// 1) manifest.enumVocabulary drift guard: STRING:1 and Guid:0 are the SAME members as pinned TEXT:1/GUID:0 —
+//    resolved via alias + case-insensitive match, so neither is a mismatch nor a stand-only "new member".
+const okVocab = { DataValueType: { STRING: 1, Guid: 0 } };
+const okDrift = enumDriftIssues(okVocab);
+check("A4: STRING:1 and Guid:0 from manifest.enumVocabulary produce no diagnostics",
+  okDrift.mismatches.length === 0 && okDrift.newMembers.length === 0 && okDrift.spellingDrift.length === 0, () => okDrift);
+
+// 2) STRING:2 disagrees with pinned TEXT:1 — but ACROSS SPELLINGS (review 1, finding K). The engine reads a body
+//    by exact property name, so it never reads a pinned `STRING`; there is no element the wrong number could be
+//    applied to, and blocking every migration on it would be blocking on a fact that cannot bite. It is advisory,
+//    and the text names BOTH spellings — the old message said "DataValueType.STRING: engine 1", naming a member
+//    the pinned table does not carry and sending the repair hunt after a `STRING` entry that does not exist.
+const badVocab = { DataValueType: { STRING: 2 } };
+const badDrift = enumDriftIssues(badVocab);
+check("A4 (review 1, K): STRING:2 against pinned TEXT:1 is ADVISORY, not blocking — it resolved by ALIAS, so the engine reads no member called `STRING` and no element can be mis-read",
+  badDrift.mismatches.length === 0 && badDrift.spellingDrift.length === 1,
+  () => badDrift);
+check("A4 (review 1, K): a cross-SPELLING disagreement is its OWN list, never `newMembers` — `newMembers` has one remedy sentence ('add the member to the pinned table') and every clause of it is false here: the engine DOES pin the member, under `TEXT`, and it DOES have a number",
+  badDrift.newMembers.length === 0,
+  () => badDrift);
+check("A4 (review 1, K): the advisory entry names BOTH spellings and both numbers — 'stand STRING (engine TEXT): engine 1, stand 2' — instead of asserting a pinned member called `STRING` whose value is 1",
+  /DataValueType: stand STRING \(engine TEXT\): engine 1, stand 2/.test(badDrift.spellingDrift[0] || ""),
+  () => badDrift);
+
+// 2b) A CASE variant that disagrees is the same category — advisory, not blocking. `Guid: 5` used to block the
+//     whole migration on a member the engine never reads (it reads `GUID`).
+const caseDrift = enumDriftIssues({ DataValueType: { Guid: 5 } });
+check("A4 (review 1, K): a CASE-variant key with a different value is advisory too — `Guid: 5` names no member the engine reads, so it cannot block",
+  caseDrift.mismatches.length === 0 && caseDrift.newMembers.length === 0
+  && /DataValueType: stand Guid \(engine GUID\): engine 0, stand 5/.test(caseDrift.spellingDrift[0] || ""),
+  () => caseDrift);
+
+// 2c) ANTI-VACUITY — a mismatch on the SAME spelling still BLOCKS. This is the case where the engine's number
+//     really is the number applied to every element the body names, and there is no safe partial reading.
+const sameSpellingDrift = enumDriftIssues({ DataValueType: { TEXT: 2 } });
+check("A4 (review 1, K) ANTI-VACUITY: a mismatch on the SAME SPELLING still BLOCKS — pinned TEXT:1 against stand TEXT:2 is the case where every element of that kind is mis-read",
+  sameSpellingDrift.mismatches.length === 1 && /DataValueType\.TEXT: engine 1, stand 2/.test(sameSpellingDrift.mismatches[0])
+  && sameSpellingDrift.newMembers.length === 0 && sameSpellingDrift.spellingDrift.length === 0,
+  () => sameSpellingDrift);
+
+// 3) A stand-only member (not in the pinned table, no alias for it) stays advisory ("newMembers"), same as today.
+const standOnlyVocab = { DataValueType: { SOME_FUTURE_MEMBER: 99 } };
+const standOnlyDrift = enumDriftIssues(standOnlyVocab);
+check("A4: a stand-only member (no alias, not pinned) stays advisory (newMembers), not blocking",
+  standOnlyDrift.mismatches.length === 0 && standOnlyDrift.spellingDrift.length === 0 && standOnlyDrift.newMembers.length === 1 &&
+  /DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(standOnlyDrift.newMembers[0]), () => standOnlyDrift);
+
+// 4) A virtual attribute (no entity column) declared with `dataValueType: Terrasoft.DataValueType.STRING` must
+//    resolve to a NUMBER (TEXT=1) — no `unknown-enum-member` diagnostic — so mapper.mjs's virtualAttributeDecision
+//    reads it as a typed attribute-virtual, not a parse-gap.
+const stringAttrSrc = 'define("VA1",[],function(){return{entitySchemaName:"E",diff:[],attributes:{IsBusy:{dataValueType:Terrasoft.DataValueType.STRING,value:""}}};});';
+const stringAttrRes = parseSchema(stringAttrSrc, "VA1");
+const isBusy = stringAttrRes.attributeDefs.find(a => a.name === "IsBusy");
+check("A4: a virtual attribute declared with dataValueType: Terrasoft.DataValueType.STRING resolves to TEXT (1), no unknown-enum-member",
+  !!isBusy && isBusy.dataValueType === 1 && !stringAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
+  () => ({ isBusy, diagnostics: stringAttrRes.astDiagnostics }));
+
+// 5) THE CASE VARIANT IN A BODY IS NOT RESOLVED (review 1, finding B). `this.Terrasoft.DataValueType.Guid` reads
+//    `undefined` in the browser — the member is `GUID` — so the engine must NOT hand back 0. It stays an advisory
+//    `unknown-enum-member` with a null value, which is what the runtime actually does with it. Resolving it
+//    confidently is worse than not resolving it: the plan then asserts a type the page does not have.
+const guidAttrSrc = 'define("VA2",[],function(){return{entitySchemaName:"E",diff:[],attributes:{RecordVisaId:{dataValueType:this.Terrasoft.DataValueType.Guid}}};});';
+const guidAttrRes = parseSchema(guidAttrSrc, "VA2");
+const recordVisaId = guidAttrRes.attributeDefs.find(a => a.name === "RecordVisaId");
+check("A4 (review 1, B): `this.Terrasoft.DataValueType.Guid` is NOT resolved to 0 — JS property access is case-sensitive, so the browser reads `undefined` there and the engine reports `unknown-enum-member` (advisory, null) instead of asserting a type the page does not have",
+  !!recordVisaId && (recordVisaId.dataValueType === null || recordVisaId.dataValueType === undefined)
+  && guidAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member" && d.detail === "DataValueType.Guid"),
+  () => ({ recordVisaId, diagnostics: guidAttrRes.astDiagnostics }));
+
+// 5b) …and the exact-case member still resolves, so the exactness is not a blanket refusal.
+const guidExactSrc = 'define("VA2b",[],function(){return{entitySchemaName:"E",diff:[],attributes:{RecordVisaId:{dataValueType:this.Terrasoft.DataValueType.GUID}}};});';
+const guidExactRes = parseSchema(guidExactSrc, "VA2b");
+check("A4 (review 1, B) ANTI-VACUITY: the EXACT-case `DataValueType.GUID` still resolves to 0 with no diagnostic",
+  guidExactRes.attributeDefs.find(a => a.name === "RecordVisaId")?.dataValueType === 0
+  && !guidExactRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
+  () => ({ defs: guidExactRes.attributeDefs, diagnostics: guidExactRes.astDiagnostics }));
+
+// 5c) THE MEASURED CONSEQUENCE — `ViewItemType.Grid`. Classic treats a diff item with no readable `itemType` as a
+//     FIELD; a case-insensitive resolve turned this into a confident GRID. The itemType must stay unresolved.
+const gridSrc = 'define("VI1",[],function(){return{entitySchemaName:"E",diff:[{operation:"insert",name:"Thing",values:{itemType:Terrasoft.ViewItemType.Grid}}],attributes:{}};});';
+const gridRes = parseSchema(gridSrc, "VI1");
+const gridItem = (gridRes.diff || []).find((d) => d.name === "Thing");
+check("A4 (review 1, B): `Terrasoft.ViewItemType.Grid` is NOT mapped as a GRID — the member is `GRID`, the runtime read is `undefined`, and Classic reads a missing `itemType` as a FIELD; the engine reports `unknown-enum-member` rather than asserting a grid",
+  !!gridItem && (gridItem.values?.itemType === null || gridItem.values?.itemType === undefined)
+  && gridRes.astDiagnostics.some(d => d.kind === "unknown-enum-member" && d.detail === "ViewItemType.Grid"),
+  () => ({ gridItem, diagnostics: gridRes.astDiagnostics }));
+
+// 5d) `DataValueType.STRING` is the ONE exception, and it is exact-case: a real member of a real stand that the
+//     pinned table is simply missing. The lower-case spelling of the SAME alias is not a member of anything.
+const stringLowerSrc = 'define("VA2c",[],function(){return{entitySchemaName:"E",diff:[],attributes:{IsBusy:{dataValueType:Terrasoft.DataValueType.String}}};});';
+const stringLowerRes = parseSchema(stringLowerSrc, "VA2c");
+check("A4 (review 1, B): the alias itself is EXACT-case too — `DataValueType.String` reads `undefined` at runtime and is reported, while `DataValueType.STRING` (checked above) resolves to TEXT",
+  stringLowerRes.astDiagnostics.some(d => d.kind === "unknown-enum-member" && d.detail === "DataValueType.String"),
+  () => stringLowerRes.astDiagnostics);
+
+// 6) Guard-can-fail proof: a member that genuinely does not exist in the pinned table (with no alias) MUST still
+//    raise `unknown-enum-member` — proving the alias/case-insensitivity fix did not turn the guard into a no-op.
+const brokenAttrSrc = 'define("VA3",[],function(){return{entitySchemaName:"E",diff:[],attributes:{Broken:{dataValueType:Terrasoft.DataValueType.TOTALLY_NOT_A_REAL_MEMBER}}};});';
+const brokenAttrRes = parseSchema(brokenAttrSrc, "VA3");
+check("A4 guard-can-fail proof: a genuinely unknown DataValueType member still raises unknown-enum-member",
+  brokenAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member" && d.detail === "DataValueType.TOTALLY_NOT_A_REAL_MEMBER"),
+  () => brokenAttrRes.astDiagnostics);
+
+
+/* ================================================================================================
+   ENG-96571 B1 — the trigger tracer must read the declarations the parser ALREADY has.
+   Before this, `methodTriggers` looked only at `attributes[].dependencies[].methodName` and bound
+   diff-item handlers, `normalizeDetails` kept four fields (dropping `filterMethod`), and
+   `attributeFact` counted `lookupListConfig.filters` without keeping any method NAME. The result on
+   the Applicants run: the plan's ⚠ rows named four declarations the engine had parsed itself.
+   ================================================================================================ */
+
+// ---- parser: `details[].filterMethod`, in BOTH nesting positions real bodies use ----
+const detFilterSrc = 'define("D1",[],function(){return{entitySchemaName:"E",diff:[],details:{' +
+  'Emails:{schemaName:"ApplicantEmailDetailV2",entitySchemaName:"Activity",filterMethod:"getEmailDetailFilter"},' +
+  'Nested:{schemaName:"XDetail",filter:{filterMethod:"getNestedFilter"}},' +
+  'Plain:{schemaName:"YDetail",filter:{masterColumn:"Id",detailColumn:"E"}},' +
+  'Subs:{schemaName:"ZDetail",subscriberMethods:{onCardSaved:"reloadZ",onDelete:function(){return;}}}' +
+  '}};});';
+const detFilter = parseSchema(detFilterSrc, "D1");
+check("B1 parser: `details[].filterMethod` survives normalizeDetails — beside `schemaName` AND inside `filter` (both forms occur in real bodies)",
+  detFilter.details.Emails?.filterMethod === "getEmailDetailFilter"
+  && detFilter.details.Nested?.filterMethod === "getNestedFilter"
+  && detFilter.details.Plain?.filterMethod === null,
+  () => detFilter.details);
+check("B1 parser: `details[].subscriberMethods` keeps the STRING-valued entries and drops the function-valued one (its method has no name to carry)",
+  detFilter.details.Subs?.subscriberMethods?.onCardSaved === "reloadZ"
+  && !("onDelete" in (detFilter.details.Subs?.subscriberMethods || {}))
+  && detFilter.details.Plain?.subscriberMethods === null,
+  () => detFilter.details.Subs);
+
+// ---- parser: the string-valued handler slots on an `attributes` entry ----
+const attrHandlerSrc = 'define("A1",[],function(){return{entitySchemaName:"E",diff:[],attributes:{' +
+  'Contact:{onChange:"onContactChange"},' +
+  'Amount:{changeMethod:"recalcAmount"},' +
+  'Job:{lookupListConfig:{filter:"getJobFilter"}},' +
+  'Stage:{lookupListConfig:{filters:[{method:"getStageFilter"}]}},' +
+  // review 1, finding J: TWO string methods in one `filters[]`. `.find(isStr)` kept only the first.
+  'Multi:{lookupListConfig:{filters:[{method:"filterA"},{masterColumn:"Id"},{method:"filterB"}]}},' +
+  'Request:{lookupListConfig:{filter:function(){return this.getRequestStatusFilter();}}},' +
+  'Plain:{dataValueType:Terrasoft.DataValueType.STRING}' +
+  '}};});';
+const attrHandler = parseSchema(attrHandlerSrc, "A1");
+const af = (n) => attrHandler.attributeDefs.find(a => a.name === n);
+// review 1, finding J — each slot carries its NAME and its own real PATH (`{name, slot}`). The `slot` is what
+// `from` is built out of, and the old shape (names only) forced the trigger builder to hard-code `"onChange"` /
+// `"filter"`, so a `changeMethod` declaration was reported at a path the body does not have.
+check("B1 parser (review 1, J): a STRING `onChange` / `changeMethod` reaches `handlerMethods.onChange` as `{name, slot}` — and the SLOT names the spelling the body actually used, so `changeMethod` is not reported as `onChange`",
+  af("Contact")?.handlerMethods?.onChange?.name === "onContactChange"
+  && af("Contact")?.handlerMethods?.onChange?.slot === "onChange"
+  && af("Amount")?.handlerMethods?.onChange?.name === "recalcAmount"
+  && af("Amount")?.handlerMethods?.onChange?.slot === "changeMethod",
+  () => ({ Contact: af("Contact")?.handlerMethods, Amount: af("Amount")?.handlerMethods }));
+check("B1 parser (review 1, J): a STRING `lookupListConfig.filter` — and a `lookupListConfig.filters[].method` — reach `handlerMethods.lookupFilters` as a LIST, each entry naming its own slot",
+  JSON.stringify(af("Job")?.handlerMethods?.lookupFilters) === JSON.stringify([{ name: "getJobFilter", slot: "lookupListConfig.filter" }])
+  && JSON.stringify(af("Stage")?.handlerMethods?.lookupFilters) === JSON.stringify([{ name: "getStageFilter", slot: "lookupListConfig.filters.0.method" }]),
+  () => ({ Job: af("Job")?.handlerMethods, Stage: af("Stage")?.handlerMethods }));
+check("B1 parser (review 1, J): EVERY string method in `filters[]` is kept with its own INDEX — `.find(isStr)` kept only the first, so the second method read `⚠ unresolved` beside the declaration that calls it",
+  JSON.stringify(af("Multi")?.handlerMethods?.lookupFilters) === JSON.stringify([
+    { name: "filterA", slot: "lookupListConfig.filters.0.method" },
+    { name: "filterB", slot: "lookupListConfig.filters.2.method" }]),
+  () => af("Multi")?.handlerMethods);
+// The rule this protects: `04-units.md` forbids deriving a trigger from a method's NAME. A function-valued
+// slot has no name to carry, so it must produce NO `handlerMethods` entry — and must still be REPORTED, as a
+// dotted `fnKeys` path, so the imperative filter is visible without being invented.
+check("B1 parser: a FUNCTION-valued `lookupListConfig.filter` yields NO handlerMethods name — and is reported as the dotted fnKey `lookupListConfig.filter`",
+  af("Request")?.handlerMethods === null
+  && af("Request")?.fnKeys.includes("lookupListConfig.filter"),
+  () => ({ handlerMethods: af("Request")?.handlerMethods, fnKeys: af("Request")?.fnKeys }));
+check("B1 parser: an attribute declaring no handler slot at all carries `handlerMethods: null` (absent, not an empty shell)",
+  af("Plain")?.handlerMethods === null, () => af("Plain"));
+
+// ---- tracer: the three new trigger kinds, with `from` paths the reported-trigger grammar accepts ----
+// `from` must satisfy the same shape `validateReportedTrigger` enforces on a REPORTED trigger
+// (`^(attributes|details)\.[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)*$`), because both travel through the same
+// renderers and the same step-5.1 handoff digest.
+const trcSrc = 'define("T1",[],function(){return{entitySchemaName:"E",diff:[],' +
+  'details:{Emails:{schemaName:"ApplicantEmailDetailV2",filterMethod:"getEmailDetailFilter"},' +
+  'Subs:{schemaName:"ZDetail",subscriberMethods:{onCardSaved:"reloadZ"}}},' +
+  'attributes:{Contact:{onChange:"onContactChange"},Job:{lookupListConfig:{filter:"getJobFilter"}},' +
+  // review 1, finding J: a `changeMethod` spelling, and TWO methods in one `filters[]`.
+  'Stage:{changeMethod:"onStageChange"},' +
+  'Multi:{lookupListConfig:{filters:[{method:"filterA"},{masterColumn:"Id"},{method:"filterB"}]}}},' +
+  'methods:{onContactChange:function(){this.set("X",1);},getJobFilter:function(){return 1;},' +
+  'onStageChange:function(){return 5;},filterA:function(){return 6;},filterB:function(){return 7;},' +
+  'getEmailDetailFilter:function(){return 2;},reloadZ:function(){return 3;},lonely:function(){return 4;}}};});';
+const trc = mergeHierarchy([parseSchema(trcSrc, "T1")]);
+const trg = (n) => trc.methods.find(m => m.name === n)?.triggers || [];
+check("B1 tracer: `attributes.<Col>.onChange` yields {kind:'attribute'} naming the attribute and the declaration path",
+  trg("onContactChange").length === 1 && trg("onContactChange")[0].kind === "attribute"
+  && trg("onContactChange")[0].attribute === "Contact"
+  && trg("onContactChange")[0].from === "attributes.Contact.onChange",
+  () => trg("onContactChange"));
+check("B1 tracer: a STRING `attributes.<Col>.lookupListConfig.filter` yields {kind:'entity-filter'}",
+  trg("getJobFilter").length === 1 && trg("getJobFilter")[0].kind === "entity-filter"
+  && trg("getJobFilter")[0].attribute === "Job"
+  && trg("getJobFilter")[0].from === "attributes.Job.lookupListConfig.filter",
+  () => trg("getJobFilter"));
+check("B1 tracer: `details.<Key>.filterMethod` yields {kind:'detail'} naming the detail KEY (what the platform and the plan both call it)",
+  trg("getEmailDetailFilter").length === 1 && trg("getEmailDetailFilter")[0].kind === "detail"
+  && trg("getEmailDetailFilter")[0].detail === "Emails"
+  && trg("getEmailDetailFilter")[0].from === "details.Emails.filterMethod",
+  () => trg("getEmailDetailFilter"));
+check("B1 tracer: a `details.<Key>.subscriberMethods.<event>` entry yields {kind:'detail'} naming the event in the path",
+  trg("reloadZ").length === 1 && trg("reloadZ")[0].kind === "detail"
+  && trg("reloadZ")[0].from === "details.Subs.subscriberMethods.onCardSaved",
+  () => trg("reloadZ"));
+// review 1, finding J — the DECLARATION'S OWN SLOT, not a hard-coded word.
+check("B1 tracer (review 1, J): a method declared as `changeMethod` reports `attributes.Stage.changeMethod` — the old builder hard-coded `onChange`, naming a slot the body does not have, so the one thing `from` is for (look it up in the schema) failed",
+  trg("onStageChange").length === 1 && trg("onStageChange")[0].kind === "attribute"
+  && trg("onStageChange")[0].from === "attributes.Stage.changeMethod",
+  () => trg("onStageChange"));
+check("B1 tracer (review 1, J): BOTH methods in one `lookupListConfig.filters[]` are traced, each at its own INDEX — the second used to read `⚠ unresolved` while the declaration naming it sat in the same body",
+  trg("filterA").length === 1 && trg("filterA")[0].from === "attributes.Multi.lookupListConfig.filters.0.method"
+  && trg("filterB").length === 1 && trg("filterB")[0].from === "attributes.Multi.lookupListConfig.filters.2.method"
+  && trg("filterA")[0].kind === "entity-filter" && trg("filterB")[0].kind === "entity-filter",
+  () => ({ filterA: trg("filterA"), filterB: trg("filterB") }));
+
+// review 1, finding N — the REAL validator, per trigger, plus the TOTAL COUNT. The old form was
+// `names.every(n => trg(n).every(t => …))`: nested `every` over possibly-empty arrays passes VACUOUSLY, so a
+// tracer that emitted NO triggers at all satisfied it. The count is what makes the assertion have a subject.
+const TRACED = ["onContactChange", "getJobFilter", "onStageChange", "filterA", "filterB", "getEmailDetailFilter", "reloadZ"];
+const tracedTriggers = TRACED.flatMap(trg);
+check("B1 tracer (review 1, N): the tracer emitted exactly SEVEN triggers over the seven declared methods — asserted as a COUNT, because a nested `every` over empty arrays passes on a tracer that emitted nothing",
+  tracedTriggers.length === 7,
+  () => TRACED.map(n => [n, trg(n).map(t => t.from)]));
+check("B1 tracer (review 1, N): every emitted trigger PASSES the engine's own `validateReportedTrigger` — the real function, not a re-typed copy of its regex, and the row's own name is rejected as its origin",
+  TRACED.every(n => trg(n).every(t => validateReportedTrigger({ trigger: t.kind === "attribute-dependency" ? "attribute" : t.kind, from: t.from, methodName: n }) === null))
+  && tracedTriggers.length === 7,
+  () => TRACED.map(n => [n, trg(n).map(t => [t.from, validateReportedTrigger({ trigger: t.kind, from: t.from, methodName: n })])]));
+check("B1 tracer: a method NO declaration names still gets no trigger — the tracer reads declarations, it does not guess from names",
+  trg("lonely").length === 0, () => trg("lonely"));
+// The existing `dependencies`-based trigger is untouched, and coexists with a new one on the same attribute.
+const bothSrc = 'define("T2",[],function(){return{entitySchemaName:"E",diff:[],attributes:{' +
+  'Contact:{onChange:"onContactChange",dependencies:[{columns:["Account"],methodName:"onContactChange"}]}},' +
+  'methods:{onContactChange:function(){return 1;}}};});';
+const both = mergeHierarchy([parseSchema(bothSrc, "T2")]).methods.find(m => m.name === "onContactChange").triggers;
+check("B1 tracer: the pre-existing `attribute-dependency` trigger is NOT displaced — a column declaring both shapes yields both",
+  both.length === 2 && both.some(t => t.kind === "attribute-dependency" && t.attribute === "Contact")
+  && both.some(t => t.kind === "attribute" && t.from === "attributes.Contact.onChange"),
+  () => both);
+// Guard-can-fail: a detail KEY the `from` grammar cannot express must yield NO trigger rather than an
+// unusable path that the reported-trigger validator would reject downstream.
+const badKeySrc = 'define("T3",[],function(){return{entitySchemaName:"E",diff:[],' +
+  'details:{"Bad-Key.v2":{schemaName:"XDetail",filterMethod:"getXFilter"}},' +
+  'methods:{getXFilter:function(){return 1;}}};});';
+const badKey = mergeHierarchy([parseSchema(badKeySrc, "T3")]).methods.find(m => m.name === "getXFilter").triggers;
+check("B1 tracer guard: a detail key the declaration-path grammar cannot express emits NO trigger (an unusable `from` is worse than an honest blank)",
+  badKey.length === 0, () => badKey);
+
+/* ---- ENG-96571 A3: the parser records how many conditions a rule DECLARED ---- */
+// `sanitizeConditions` returns `[]` for both "no conditions" and "conditions this parser could not read", and those
+// two must render the OPPOSITE Trigger cell. `conditionsDeclared` is the fact that separates them, so it is recorded
+// where the source is read — here, not inferred downstream.
+const A3_SRC = (conds) => `define("A3Page", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "JobRequired": {
+    "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.REQUIRED,
+    "conditions": ${conds}
+  } } },
+  diff: []
+}; });`;
+const a3Rule = (conds) => mergeHierarchy([parseSchema(A3_SRC(conds), "A3Page")]).rules.find(r => r.key === "JobRequired");
+// (i) a COMPLETE condition — one entry, fully readable
+const a3Complete = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]`);
+check("ENG-96571 A3: a readable condition is recorded as 1 declared / 1 sanitized",
+  a3Complete.conditionsDeclared === 1 && a3Complete.conditions.length === 1
+  && a3Complete.conditions[0].left.attribute === "Stage" && a3Complete.conditions[0].comparison === 3,
+  () => JSON.stringify(a3Complete));
+// (ii) the REAL Job.JobRequired shape — declared, and sanitizes to a degenerate entry (symbolic comparison, a
+// CONSTANT left expression). The count says a condition WAS declared even though nothing readable came out of it.
+const a3Degenerate = a3Rule(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
+check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and sanitizes to a degenerate entry (no comparison, no left attribute)",
+  a3Degenerate.conditionsDeclared === 1 && a3Degenerate.conditions.length === 1
+  && a3Degenerate.conditions[0].comparison === null
+  && a3Degenerate.conditions[0].left.attribute === null && a3Degenerate.conditions[0].left.path === null
+  && a3Degenerate.conditions[0].right.value === true,
+  () => JSON.stringify(a3Degenerate.conditions));
+// (iii) the object-MAP form — a non-array `conditions`. It is READ, through the same `safeKeys` the declared count
+// uses, so the two halves agree: 2 declared / 2 sanitized. Before the ENG-96571 review `sanitizeConditions`
+// returned `[]` for it while `declaredConditionCount` counted its keys, so `conditionGap` saw `declared > 0` with
+// an empty set and every object-map rule was a PERMANENT parse gap — a ⚠ row no re-read could ever clear, because
+// the gap was in the reader, not in the body.
+const a3Dropped = a3Rule(`{ "c1": { "comparisonType": 3 }, "c2": { "comparisonType": 4 } }`);
+check("ENG-96571 A3 (review): an object-MAP `conditions` block is READ, not dropped — declared and sanitized counts AGREE, so it is not a permanent parse gap",
+  a3Dropped.conditionsDeclared === 2 && a3Dropped.conditions.length === 2
+  && a3Dropped.conditions.map((c) => c.comparison).join(",") === "3,4",
+  () => JSON.stringify(a3Dropped));
+// …and a shape that is neither an array NOR an object still declares nothing and sanitizes to nothing, so a
+// garbage `conditions` cannot become a phantom two-entry condition set.
+const a3Garbage = a3Rule(`"not a condition block"`);
+check("ENG-96571 A3 (review): a `conditions` value that is neither array nor object declares 0 and sanitizes to 0",
+  a3Garbage.conditionsDeclared === 0 && a3Garbage.conditions.length === 0, () => JSON.stringify(a3Garbage));
+// (iv) genuinely unconditional — nothing declared, nothing sanitized. This is the ONLY shape that may render `always`.
+const a3None = a3Rule(`[]`);
+check("ENG-96571 A3: a rule that declares NO conditions is 0 declared — the only shape a renderer may call `always`",
+  a3None.conditionsDeclared === 0 && a3None.conditions.length === 0, () => JSON.stringify(a3None));
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

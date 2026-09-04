@@ -357,6 +357,105 @@ zeros, so "the plan says nothing about messages" cannot mean "nobody looked". Me
 evidence read from the AST (framework calls made, attributes read/written, messages published/subscribed, line
 span, passthrough-vs-real, assigned-from-another-module) — the parser still never EXECUTES a body.
 
+**Declaration-backed triggers, and `lifecycle` as its own kind.** `methodTriggers` (engine.mjs) used to read a
+method's trigger off an attribute dependency or a bound control property only, so the two string-valued *handler
+declarations* the platform binds by name — `attributes.<Col>.onChange` and
+`attributes.<Col>.lookupListConfig.filter` — plus the detail-side `details.<Key>.filterMethod` and each
+`subscriberMethods` entry were parsed and then dropped: a method named by one of them read `⚠ unresolved` while the
+declaration that calls it sat in the same body. `attributeDeclarationTriggers` / `detailDeclarationTriggers` now
+emit them through `declTrigger`, whose `from` is the declaration PATH — the same string a behaviour-analysis run has
+to report for the row, so the traced and the reported answer are directly comparable. `declarationTriggerText`
+(designspec.mjs) renders one branch per kind; before it existed every one of these fell through to
+`${element}.${property}` and a kind carrying neither field printed a bare `.`. Separately, a chain that reaches a
+platform lifecycle method is now its own `lifecycle` kind on `resolveInternalTrigger` (mapper.mjs) rather than an
+`internal` trigger carrying a `lifecycle` field: it is a different ANSWER (the platform starts this chain), and
+`from` therefore names the lifecycle method, not the immediate caller. The rendered cell is deliberately unchanged
+by that rename — only the shape it is computed from is honest.
+
+**A REPORTED trigger is validated before it is believed (`validateReportedTrigger`).** `REPORTED_TRIGGERS` is
+`attribute`, `detail`, `entity-filter`, `message`, `lifecycle`, `internal`, `external`. An entry must name one of
+them, must carry a non-empty `from` that is not the row itself, and for the three DECLARATION-backed kinds that
+`from` must match the `attributes.<name>` / `details.<key>` path grammar. A trigger that fails leaves
+`h.triggers` empty — the row keeps rendering `⚠ unresolved` and keeps counting in the header's open total — and the
+rejection is published as `behaviourIndex.rejectedTriggers` for a ⚠ plan banner, so it cannot vanish. An entry
+carrying `behaviourEstablished: false` is skipped WHOLE: a run that admits the behaviour was not established is not
+evidence of its origin either. This function is MIRRORED — `helpers.mjs` (the workflow core) and `migrate.mjs` carry
+byte-identical copies, because a workflow script is evaluated as a function body and may not `import`; a
+table-driven parity test compares the two so they cannot diverge into "the workflow dropped it, the engine filled
+it". Note this validation applies ONLY to reported triggers: the engine's own traced kinds include
+`attribute-dependency` and `control`, which are deliberately outside `REPORTED_TRIGGERS` and never reach it.
+
+**`bundleWarnings` — the fetching TOOL's own incompleteness (`bundleWarningState`).** Distinct from `eff.warnings`,
+which is the merge engine's per-op `correctness`/`fidelity` notes keyed `<op>:<name>:<schema>` and closed via
+`manifest.warningDispositions`. These come from `get-classic-page-sources` itself (a truncated child-page list, a
+detail with no bound entity, a layer it could not read), are accepted as `{code, message}` objects (the documented
+form) or plain strings, and are closed via `manifest.bundleWarningDispositions` keyed by `code` with the exact
+`message` accepted as a bare fallback. Two arrays, two key spaces, two disposition maps — conflating them would let
+one map's key clear the other's warning. They are INPUT incompleteness, the same category as an unfetched detail
+schema, so they land in `validateStructure` and an OPEN one BLOCKS structure with the warning quoted verbatim;
+`BUNDLE_WARNING_DISPOSITIONS` (`resolved-manually` / `accepted` / `n/a`) closes one, which renders as `ℹ` and is
+reported additively as `bundleWarningsClosed` rather than being dropped. Deliberately UNSCOPED: a nested child
+bundle's warnings block THAT child's structure, because the truncation is a fact about that fetch.
+
+**`confirmDispositions` — a machine channel for an ANSWERED ⚠ Confirm row (`applyConfirmDispositions`).** The row
+was previously answerable only by hand-appending to the plan's *Adjustments* list, and `--plan --out` rewrites that
+file: every regenerate lost the answer and asked the same question again. Keyed `"<kind>:<item>"` — the pair the
+worklist prints — with `"<schema>::<kind>:<item>"` tried FIRST, the same precedence `applyBehaviourIndex` and
+`describedInForMember` use, so one answer cannot close the same question on two pages of one migration.
+`CONFIRM_DISPOSITIONS` is `accepted` / `reproduced-manually` / `n/a` / `resolved-on-stand`; a `resolved: true`
+carrying any other word does NOT close the row — it is recorded as `dispositionInvalid` and named in an advisory
+line. A closed row renders as `ℹ … CLOSED by a recorded disposition` with its note and is never dropped. The result
+`{ closed, invalid }` is published on the run as `confirmDispositions` so a caller can see what the manifest
+actually did. `decisions.md` remains the source of record; this map is only how the engine learns the decision.
+
+**The Approvals signal (`approvalsSignalOf` → `changeSet.featureSignals`).** A Classic page carries approvals as
+INFRASTRUCTURE, not as a control — a `RecordVisaId` attribute and/or a `*VisaDetail*` detail — and neither is a
+field, so a page could map cleanly with the whole approvals surface missing and every gate green. The signal is
+read off BOTH sides (`eff.details`, the merged Classic truth including what the mapper dropped, and
+`changeSet.details`, the mapped rows), and published as `[]` rather than absent when there is none — a counted zero,
+the same discipline `coverage.zeros` applies. Computed OUTSIDE `buildCoverage` on purpose: that function is exported
+and driven directly by goldens as a pure ledger computation, so writing a new ChangeSet field from inside it would
+be a side effect its callers do not expect. `approvalsIssue` then makes a published signal with no mapped
+`Approvals` standardFeature row a plan-blocking COVERAGE issue — never a `--verify` row, because nothing on the
+stand can answer it; the mapping is what is short — closable only by `memberDispositions["feature:Approvals"]`, in
+the `<kind>:<name>` form the ledger already uses, so no second disposition map is invented.
+
+**A declared-but-unreadable rule condition (`conditionGap` → `rule-condition`).** A business rule whose
+`conditionsDeclared` count is above zero while every sanitized condition is degenerate (no `comparison`, or no
+`left.attribute` and no `left.path`) is a PARSE GAP, not an unconditional rule. The action itself is mapped and in
+the ChangeSet; what is missing is WHEN it fires. Rendering `always` for that case told the builder to make a field
+unconditionally required where the classic page did not, so the row is raised as a `rule-condition` decision
+carrying `CONDITION_GAP_REASON`. A rule that declared NOTHING is not a gap — it is genuinely unconditional and
+stays `always`.
+
+**One ⚠ row, many digest members (`memberEntries`, `rowKey`).** A kind in `AGGREGATED_DECISION_KINDS` carries a
+joined comma list as its `item` (`module-dep` → `"ConfigurationConstants, ContactUtilities"`): ONE ⚠ Confirm row,
+because the operator decides the dependency set as one decision. The step-5.1 handoff needs the opposite
+granularity — a behaviour card describes ONE module — so the `--stubs` DIGEST expands the row into one entry per
+name, each keyed `<schema>::module-dep:<name>`. The two granularities differ on purpose and neither is derived from
+the other: `changeSet.needsDecision` is untouched. Every expanded entry also carries `rowKey`, the whole row's own
+aggregated key, set only for an aggregated kind: `describedInForMember` still accepts that older form, so
+`scopeDigestKeys` must keep counting it as known — without it the plan printed "⚠ 1 behaviourIndex key matched no
+imperative row" about a key whose card it had just folded in. `applyBehaviourIndex` accepts BOTH forms, so a
+per-module card lands its `describedIn` on the aggregated row.
+
+**`ledgerMembers` in the `--stubs` totals.** The digest is the rows the engine could NOT answer; the engine's own
+member ledger is every member it accounted for in the scope it mapped, and it is a LARGER population (measured on a
+real run: 10 digest method names against 11 definitions, 2 virtual attributes of 5, 3 members of 88). `totals` now
+carries `ledgerMembers` and `ledgerUnaccounted` alongside the worklist counts, travelling on the channel the
+workflow core already receives as `input.totals`. **`ledgerMembers` is the ENGINE-side `buildCoverage().total`** —
+the member-ledger population. Do not confuse it with the WORKFLOW-return `coverage.total`, a different object where
+`total` is kept for one release as an alias of `digestRows` (the worklist size). Same field name, two objects, two
+populations: engine `coverage.total` = ledger members, workflow-return `coverage.total` = digest rows. Without that number reaching the analysis run,
+`described / digestRows` was the only figure anyone had and it read as a surface census.
+
+**`<plan>.notes.md` — the agent-facing sibling of `--plan --out`.** `plan.md` carries user-facing text only. Every
+agent-facing remedy — which `planMeta` key is still missing behind a `<FILL: …>`, what to supply, any other
+instruction — is written to `<plan-basename>.notes.md` beside `--out` (`plan.md` → `plan.notes.md`), and echoed to
+stderr when no `--out` was given. The plan header also prints TWO coverage numbers (digest rows described vs. engine
+ledger members) because they answer different questions; `coverage.total` stays as an alias of `digestRows` for one
+release for anything still reading the old single number.
+
 ## Files
 
 - `engine.mjs` — `parseSchema()` (AST parse of a classic `define(...)` body — reads the returned object, never executes it) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
