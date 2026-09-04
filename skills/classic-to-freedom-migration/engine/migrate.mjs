@@ -262,7 +262,7 @@ const normalizeWarningText = (t) => String(t ?? "").trim().replace(/\s+/g, " ");
 // names the fact, it BLOCKS, and a disposition can be written against it verbatim. `""`, `null` and `{}` name no
 // fact at all and still fall through to being skipped.
 const bundleWarningFallbackText = (w) => (w && typeof w === "object" && Object.keys(w).length ? JSON.stringify(w) : "");
-export const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
+const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
 const bundleWarningText = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.message || w?.code || ""));
 // The only dispositions a bundle warning may carry — the same validated-enum rule as `WARNING_DISPOSITIONS` and
 // `MEMBER_DISPOSITIONS`, and for the same reason (a truthy `resolved` with a typo'd disposition would close a
@@ -469,9 +469,11 @@ function unmatchedConfirmKeys(declared, seen, scopeSchema, hasNested) {
 // `runMigration`, which has none to spare) and, more to the point, because the TWO advisory categories have
 // DIFFERENT remedies and must never share one sentence (ENG-96571 review 1, K):
 //   · a member only the STAND carries  → add it to the pinned table in engine.mjs;
-//   · a member the engine pins under ANOTHER SPELLING with a different number → do NOT add the stand's spelling;
-//     the engine reads a body by exact property name, so it never reads that spelling and no element of this run
-//     can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling still holds.
+//   · a member the engine pins under a DIFFERENT CASE only, with a different number → do NOT add the stand's
+//     spelling; the engine reads a body by exact property name, so it never reads that case variant and no element
+//     of this run can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling
+//     still holds. (An EXACT-CASE ALIAS such as `STRING` is NOT here — the runtime read answers it, so a
+//     disagreement on it lands in `mismatches` and BLOCKS; ENG-96571 review 2, finding 1.)
 // The old single sentence said "identified by name but has no numeric value, so add the member(s) to the pinned
 // table" over both, and every clause of it is false for the second category. Since an `enum-drift-advisory` row
 // can be CLOSED by a recorded disposition, this is the text an operator reads to decide — it has to be true.
@@ -480,7 +482,7 @@ function enumDriftAdvisoryReason(drift) {
   if (drift.newMembers.length)
     clauses.push(`the stand carries enum member(s) this engine does not pin: ${drift.newMembers.join("; ")}. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\``);
   if (drift.spellingDrift.length)
-    clauses.push(`the stand echoes a member this engine pins under ANOTHER SPELLING, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that spelling and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
+    clauses.push(`the stand echoes a member this engine pins under a DIFFERENT CASE only, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that case variant and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
   if (!clauses.length) return null;
   return `${clauses.join(" — and separately: ")}. What the engine DOES know is still correct — this does not block.`;
 }
@@ -527,7 +529,7 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   // of that kind, with no partially-correct reading to fall back to. A member only the stand carries is advisory.
   const drift = enumDriftIssues(manifest.enumVocabulary);
   if (drift.mismatches.length)
-    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning.`);
+    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning. Where a row reads \`X (alias of Y)\`, fix the value pinned for Y — do NOT add an X entry beside it, or the engine would then read the two spellings as two different numbers.`);
   return { blocked: reasons.length > 0, reasons };
 }
 

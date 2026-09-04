@@ -764,30 +764,43 @@ const okDrift = enumDriftIssues(okVocab);
 check("A4: STRING:1 and Guid:0 from manifest.enumVocabulary produce no diagnostics",
   okDrift.mismatches.length === 0 && okDrift.newMembers.length === 0 && okDrift.spellingDrift.length === 0, () => okDrift);
 
-// 2) STRING:2 disagrees with pinned TEXT:1 — but ACROSS SPELLINGS (review 1, finding K). The engine reads a body
-//    by exact property name, so it never reads a pinned `STRING`; there is no element the wrong number could be
-//    applied to, and blocking every migration on it would be blocking on a fact that cannot bite. It is advisory,
-//    and the text names BOTH spellings — the old message said "DataValueType.STRING: engine 1", naming a member
-//    the pinned table does not carry and sending the repair hunt after a `STRING` entry that does not exist.
+// 2) STRING:2 disagrees with pinned TEXT:1 and MUST BLOCK (review 2, finding 1 — this reverses the alias half of
+//    review 1's finding K). `STRING` is an EXACT-CASE ALIAS: `resolveEnumTerminal` answers a body's
+//    `Terrasoft.DataValueType.STRING` with pinned `TEXT`'s 1, so if this stand's `STRING` is 2 then every
+//    attribute declared with that spelling is read as the wrong data type — the same damage as a same-name
+//    mismatch, so the same severity. What review 1 fixed and this keeps is the TEXT: it names both spellings,
+//    because "DataValueType.STRING: engine 1" asserted a pinned `STRING` whose value is 1 and sent the repair
+//    hunt after an entry that does not exist.
 const badVocab = { DataValueType: { STRING: 2 } };
 const badDrift = enumDriftIssues(badVocab);
-check("A4 (review 1, K): STRING:2 against pinned TEXT:1 is ADVISORY, not blocking — it resolved by ALIAS, so the engine reads no member called `STRING` and no element can be mis-read",
-  badDrift.mismatches.length === 0 && badDrift.spellingDrift.length === 1,
+check("A4 (review 2, finding 1): STRING:2 against pinned TEXT:1 BLOCKS — `STRING` is an exact-case alias the runtime read really does resolve, so a wrong number IS applied to every element declared with it",
+  badDrift.mismatches.length === 1 && badDrift.spellingDrift.length === 0 && badDrift.newMembers.length === 0,
   () => badDrift);
-check("A4 (review 1, K): a cross-SPELLING disagreement is its OWN list, never `newMembers` — `newMembers` has one remedy sentence ('add the member to the pinned table') and every clause of it is false here: the engine DOES pin the member, under `TEXT`, and it DOES have a number",
-  badDrift.newMembers.length === 0,
-  () => badDrift);
-check("A4 (review 1, K): the advisory entry names BOTH spellings and both numbers — 'stand STRING (engine TEXT): engine 1, stand 2' — instead of asserting a pinned member called `STRING` whose value is 1",
-  /DataValueType: stand STRING \(engine TEXT\): engine 1, stand 2/.test(badDrift.spellingDrift[0] || ""),
+check("A4 (review 2, finding 1): the blocking entry names BOTH spellings and both numbers — 'DataValueType.STRING (alias of TEXT): engine 1, stand 2' — instead of asserting a pinned member called `STRING` whose value is 1",
+  /^DataValueType\.STRING \(alias of TEXT\): engine 1, stand 2$/.test(badDrift.mismatches[0] || ""),
   () => badDrift);
 
-// 2b) A CASE variant that disagrees is the same category — advisory, not blocking. `Guid: 5` used to block the
-//     whole migration on a member the engine never reads (it reads `GUID`).
+// 2b) A CASE variant that disagrees is the ADVISORY category — `Guid: 5` names no member the engine ever reads
+//     (it reads `GUID`), so no element of the run can carry the wrong number. This is also the standing guard
+//     against broadening the blocking predicate past exact-case: widen it and this assertion fails.
 const caseDrift = enumDriftIssues({ DataValueType: { Guid: 5 } });
-check("A4 (review 1, K): a CASE-variant key with a different value is advisory too — `Guid: 5` names no member the engine reads, so it cannot block",
+check("A4 (review 1, K; kept by review 2, finding 1): a CASE-variant key with a different value stays ADVISORY — `Guid: 5` names no member the engine reads, so it cannot block",
   caseDrift.mismatches.length === 0 && caseDrift.newMembers.length === 0
   && /DataValueType: stand Guid \(engine GUID\): engine 0, stand 5/.test(caseDrift.spellingDrift[0] || ""),
   () => caseDrift);
+check("A4 (review 1, K): a CASE-variant disagreement is its OWN list, never `newMembers` — `newMembers` has one remedy sentence ('add the member to the pinned table') and every clause of it is false here: the engine DOES pin the member, under `GUID`, and it DOES have a number",
+  caseDrift.newMembers.length === 0 && caseDrift.spellingDrift.length === 1,
+  () => caseDrift);
+
+// 2b-bis) THE BOUNDARY the new rule turns on: the alias is EXACT-CASE, so `String` is not it. The runtime reads
+//     `Terrasoft.DataValueType.String` as `undefined` (the alias map carries `STRING`, not `String`), therefore a
+//     disagreement on `String` can mis-read nothing and stays advisory. Without this case, "exact-case alias"
+//     would be indistinguishable from a case-insensitive "alias-aware" rule that over-blocks.
+const aliasCaseDrift = enumDriftIssues({ DataValueType: { String: 2 } });
+check("A4 (review 2, finding 1) BOUNDARY: the alias is EXACT-CASE — `String: 2` is a mere case variant of the alias, the runtime read returns `undefined` for it, so it is ADVISORY while `STRING: 2` blocks",
+  aliasCaseDrift.mismatches.length === 0 && aliasCaseDrift.newMembers.length === 0
+  && /DataValueType: stand String \(engine TEXT\): engine 1, stand 2/.test(aliasCaseDrift.spellingDrift[0] || ""),
+  () => aliasCaseDrift);
 
 // 2c) ANTI-VACUITY — a mismatch on the SAME spelling still BLOCKS. This is the case where the engine's number
 //     really is the number applied to every element the body names, and there is no safe partial reading.

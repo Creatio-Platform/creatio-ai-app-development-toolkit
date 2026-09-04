@@ -12058,6 +12058,19 @@ check("ENG-96571 (review 1, K): a CROSS-SPELLING drift row is REASONED as one �
 check("ENG-96571 (review 1, K): and it does NOT carry the stand-only-member remedy — 'has no numeric value, so add the member(s) to the pinned table' is false in every clause for this row, and the operator reads this text to pick a disposition",
   !/has no numeric value/.test(r1kSpelling) && !/add the member\(s\) to the pinned table/.test(r1kSpelling),
   () => r1kSpelling);
+/* ---- review 2, finding 1: an EXACT-CASE ALIAS disagreement BLOCKS THE GATE, it is not an advisory row ---- */
+// The engine-level classification is pinned in run.mjs; this is the consequence the finding is actually about —
+// `computeGate` must read an alias row out of `mismatches` and STOP the run, and the alias row must not appear
+// as an `enum-drift-advisory` the operator can simply close with a disposition.
+const r21aRun = runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: { DataValueType: { STRING: 2 } } });
+check("ENG-96571 review 2 (finding 1): an EXACT-CASE ALIAS disagreement BLOCKS the gate — `STRING: 2` against pinned `TEXT: 1` is a number the runtime read really returns, so every attribute declared with it is mis-typed",
+  r21aRun.gate.blocked === true
+  && r21aRun.gate.reasons.some((r) => /DataValueType\.STRING \(alias of TEXT\): engine 1, stand 2/.test(r)),
+  () => ({ blocked: r21aRun.gate.blocked, reasons: r21aRun.gate.reasons }));
+check("ENG-96571 review 2 (finding 1): and it raises NO `enum-drift-advisory` row — a blocking fact must not also arrive as a row a recorded disposition can close",
+  !r21aRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory"),
+  () => r21aRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory"));
 const r1kNew = r1kReason({ DataValueType: { SOME_FUTURE_MEMBER: 99 } });
 check("ENG-96571 (review 1, K) ANTI-VACUITY: a genuinely stand-only member still gets the ADD-IT remedy — the split gave each category its own sentence, it did not delete one",
   /does not pin: DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(r1kNew)
