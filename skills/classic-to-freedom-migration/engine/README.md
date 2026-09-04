@@ -15,6 +15,7 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --units  # the per-page BUILD QUEUE + the exact keys --built must use (JSON)
 node migrate.mjs <manifest.json> --units --resolutions r.json # …with the operator's ⚠ Confirm ANSWERS attached
+node migrate.mjs <manifest.json> --plan --resolutions r.json  # re-render the PLAN with those answers shown in it
 node migrate.mjs <manifest.json> --verify --built b.json --resolutions r.json # …applying `kind: "accepted"` decisions to verify rows
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
@@ -108,8 +109,9 @@ string the `decisions.md` approval entry names, and the string the delegated bui
 `plan.md` is engine-WRITTEN, so nothing else can put a version in it and survive the next `--plan --out`.
 
 `--verify-json <file>` (only with `--verify`) writes the verdict a CALLER computes on:
-`{ complete, missing, unverified, pending, accepted, planGaps, pages: { "<key>": { missing, unverified, pending,
-accepted, complete, buildComplete, openRows: [ { n, deliverable, status, evidence, outcome, rowKey, id? } ],
+`{ complete, missing, buildMissing, rejected, unfiled, unverified, pending, accepted, planGaps, pages: { "<key>": {
+missing, buildMissing, unverified, pending, accepted, complete, buildComplete,
+openRows: [ { n, deliverable, status, evidence, outcome, severity, rowKey, id? } ],
 pendingRows: [ { n, deliverable, rowKey } ] } } }`. It is ADDITIVE — stdout and `--out` still
 carry the Markdown table for the human. Read it instead of parsing the table: the table has no per-page counts at
 all, and the `⛔ VERIFY INCOMPLETE` stderr line lists at most six pages (the JSON lists every one, with its open
@@ -143,17 +145,32 @@ BUILDER owns) is the axis the SCOPED `--verify --page <key> --verify-json` gate 
 two fields answer different questions on the SAME per-page object, and both are always present. The axis is keyed on
 each row's `owner` (`"builder"` / `"verifier"`), NOT on its `missing`/`unverified` label: `unverified` is also what a
 PARTIAL or unread build resolves to (`0/N expected fields`, `k/N components`, "no `--built.pages` entry"), all of
-them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
+them the builder's own work. `builderOpen` counts exactly those rows and is what the scoped exit-2 line reports.
+
+ENG-95901 (reopened 2026-09-03) — the SAME split now applies to the ❌ rows, because `missing` folds two states
+together as well. A row the JUDGE rejected (`judge[id].convincing === false`), or one the verifier filed as `false`,
+is `❌ MISSING` and is **not** a deliverable short on the page: it is a record filed unconvincingly by the separate
+read-only verifier/judge, and re-filing it is their work, not the builder's. So `missing` keeps its old meaning
+(every ❌ row, and it is still what the human-facing verdict and the CLI exit code read), and three counters ride
+alongside it: `buildMissing` — the ❌ rows the BUILDER owns, the honest "my build is short" number; `rejected` — the
+❌ rows the verifier/judge owns; `unfiled` — the ⚠ rows the verifier owns (note that `unverified` is NOT the same
+number, since it also counts a partially-built page). `missing === buildMissing + rejected` always holds, so nothing
+is dropped from the totals. Per page only `buildMissing` is published alongside `missing` — the other two are
+derivable (`rejected = missing - buildMissing`) and every per-page field costs bytes on every page of the plan in
+the `--verify-summary` answer. The unscoped `⛔ VERIFY INCOMPLETE` stderr line now reads
+`N MISSING from the build + M evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`. **The build loop is `--units` → build → `--verify`.** `--units` publishes one entry per page the migration
 creates — `main`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>` — each with its expected template, target
 package and `expect` counts (including
-`expect.fieldNames`, the element names the fields check matches on), plus the six reachability keys with
+`expect.fieldNames`, the element names the fields check matches on, and `expect.fieldLayout`, each field's CELL as
+`{ name, row, column, colSpan?, rowSpan? }` — ENG-96457, so a unit that owns one page can place the fields the way
+the plan does), plus the six reachability keys with
 `appliesWhen` already decided by the engine, the evidence-record ids, the ⚠ Confirm preflight items and a
 leaf-first `buildOrder`. A key identifies exactly ONE physical page: when two distinct pages would land on the
 same key (two related lists opening the same entity, or two same-entity child pages on different branches) the
 engine appends a disambiguator — `@<Via>`, `@<Schema>`, `#2` — while one page reached along two paths keeps a
 single key. The suffix is derived by the engine, so **read every key from `--units`; never construct one.**
 
-`--resolutions <file>` (⚠ **`--units` and `--verify` only**) attaches the operator's ANSWERS to that run's ⚠ Confirm questions,
+`--resolutions <file>` (**`--units`, `--plan` and `--verify`**) attaches the operator's ANSWERS to that run's ⚠ Confirm questions,
 publishing each on its own queue item as `preflight[].resolution = { answer, decidedBy?, date? }` — `null` when the
 question is unanswered. **An answer is an INPUT to the build and closes no `--verify` row:** the row still needs a
 filed evidence record and a judge verdict. Key each entry on `kind` + `item` (the published `id` also works, but its
@@ -172,7 +189,12 @@ build and still closes no row. The row key to address is in `--verify-json`'s `o
 ```bash
 node migrate.mjs manifest.json --verify --built built.json --resolutions r.json
 ```
-Three reports keep a discarded answer from being silent, none of them fatal:
+Under `--plan` (ENG-96457, item 5) the same file is rendered INTO the document: each answered ⚠ row shows
+`**✅ answered:** <answer>` after its question (the question is kept, so a recorded decision is auditable and
+distinguishable from a guessed default), the worklist heading reads `(<n>, <k> answered)`, and an answered
+`list-columns` question replaces the engine's unresolved column line instead of leaving it reading as a fallback.
+It used to be `--units`-only, which is how an approved `plan.md` and the payload the builder acted on came to say
+different things. Three reports keep a discarded answer from being silent, none of them fatal:
 `resolutionsUnmatched` (answers matching no question this plan asks), `resolutionsConflicts` (one question answered
 by BOTH an `id` entry and a `kind`+`item` entry — the pair is applied and the `id` one is discarded), and a stderr
 warning for two entries under the SAME key form (the last wins). All three are named on stderr as well.

@@ -29,6 +29,10 @@ const check = (name, cond, detail) => {
 
 const BEX_INPUT = {
   manifest: "/mig/manifest.json", environment: "dev", outDir: "/mig", planFile: "/mig/plan.md",
+  // Required since the merge with ENG-96204: a run with no control mode from any source STOPS
+  // `mode-not-chosen` before it schedules anything. These suites are not about that gate, so they declare
+  // the non-interactive default explicitly.
+  mode: "auto",
   engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "ApplicantSection",
 };
 
@@ -48,14 +52,20 @@ const reconcileWith = (blocker) => ({
   // unconsumed-answer list must be PRESENT even when empty — an omitted one is a dropped grant or a
   // silently discarded operator answer, which is the failure that ticket exists to remove.
   resolutionsReopened: [], resolutionsPending: [], unconsumedResolutions: [],
+  // Required since the merge with ENG-96204: the folder's own round record travels as ONE object and
+  // `RECONCILE_SHAPE.roundState` requires `consumedRoundAnswers` inside it.
+  // Required since the merge with ENG-96204: the RUN-scoped answer channel (a control-mode / round
+  // authorisation the operator recorded) must be PRESENT even when empty.
+  runResolutions: [],
+  roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] },
   parkedUnits: [], proposals: [], blocked: [blocker], discrepancies: [], staleQueueKeys: [], newKeys: [],
   verify: {
-    complete: false, missing: 1, unverified: 0, pending: 0, planGaps: [],
+    complete: false, missing: 1, buildMissing: 1, unverified: 0, pending: 0, planGaps: [],
     pages: {
-      main: { complete: true, buildComplete: true },
+      main: { complete: true, buildComplete: true, buildMissing: 0 },
       // `list` is genuinely BUILD-open (a MISSING deliverable), so absent the source park it WOULD be dispatched
       // for a build — which is exactly what makes the contrast meaningful: the source park must stop that build.
-      list: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage" }] },
+      list: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage" }] },
     },
   },
   exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",

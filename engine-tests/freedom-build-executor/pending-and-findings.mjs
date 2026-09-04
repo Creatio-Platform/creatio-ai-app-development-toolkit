@@ -32,6 +32,10 @@ const check = (name, cond, detail) => {
 
 const BEX_INPUT = {
   manifest: "/mig/manifest.json", environment: "dev", outDir: "/mig", planFile: "/mig/plan.md",
+  // Required since the merge with ENG-96204: a run with no control mode from any source STOPS
+  // `mode-not-chosen` before it schedules anything. These suites are not about that gate, so they declare
+  // the non-interactive default explicitly.
+  mode: "auto",
   engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "BusinessRule1Section",
 };
 
@@ -50,10 +54,16 @@ const reconcileGreenWithPending = (pending) => ({
   // unconsumed-answer list must be PRESENT even when empty — an omitted one is a dropped grant or a
   // silently discarded operator answer, which is the failure that ticket exists to remove.
   resolutionsReopened: [], resolutionsPending: [], unconsumedResolutions: [],
+  // Required since the merge with ENG-96204: the folder's own round record travels as ONE object and
+  // `RECONCILE_SHAPE.roundState` requires `consumedRoundAnswers` inside it.
+  // Required since the merge with ENG-96204: the RUN-scoped answer channel (a control-mode / round
+  // authorisation the operator recorded) must be PRESENT even when empty.
+  runResolutions: [],
+  roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] },
   parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
   verify: {
-    complete: true, missing: 0, unverified: 0, pending: pending.length, planGaps: [],
-    pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0,
+    complete: true, missing: 0, buildMissing: 0, unverified: 0, pending: pending.length, planGaps: [],
+    pages: { main: { complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0,
       pending: pending.length, pendingRows: pending } },
   },
   exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
@@ -158,8 +168,8 @@ const reconcileOpenWithEvidence = () => ({
   ...reconcileGreenWithPending([]),
   evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: ["main#quality-gates"], evidenceFiled: ["main#quality-gates"],
   verify: {
-    complete: false, missing: 1, unverified: 0, pending: 0, planGaps: [],
-    pages: { main: { complete: false, buildComplete: false, missing: 1, unverified: 0, builderOpen: 1,
+    complete: false, missing: 1, buildMissing: 1, unverified: 0, pending: 0, planGaps: [],
+    pages: { main: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, builderOpen: 1,
       openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage", outcome: "missing", owner: "builder" }] } },
   },
   exitCode: 2,
@@ -181,7 +191,7 @@ const buildAnswers = (judge) => ({
   Refs: () => ({ written: true, files: [], sliceKeys: ["main"], notes: "" }),
   Build: (item) => ({ unit: "main", schemaName: "UsrBusinessRule_TopAreaFormPage", claimedBuilt: ["Field UsrStage"],
     guidelines: { ran: false, notRunWhy: "not the subject of this golden" },
-    selfCheck: { ran: true, complete: false, buildComplete: false, missing: 1, unverified: 0, fixAttempted: true },
+    selfCheck: { ran: true, complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, fixAttempted: true },
     proposals: [], blocked: [], _item: item.id }),
   Verify: () => ({ pagesWritten: ["main"], builtFile: "/mig/built.json", queueWritten: true,
     reachabilityWritten: {}, evidenceWritten: [], discrepancies: [], notes: "" }),
@@ -215,8 +225,8 @@ const reconcileNewApp = () => ({
   sectionHost: "new-app", packageState: "absent", targetPackage: "UsrBusinessRuleFreedom",
   unitKeys: ["main"], buildOrder: ["main"], pageSchemas: {},
   verify: {
-    complete: false, missing: 1, unverified: 0, pending: 0, planGaps: [],
-    pages: { main: { complete: false, buildComplete: false, missing: 1, unverified: 0, builderOpen: 1,
+    complete: false, missing: 1, buildMissing: 1, unverified: 0, pending: 0, planGaps: [],
+    pages: { main: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, builderOpen: 1,
       openRows: [{ deliverable: "Form page", status: "❌ MISSING", evidence: "not built", outcome: "missing", owner: "builder" }] } },
   },
   exitCode: 2,

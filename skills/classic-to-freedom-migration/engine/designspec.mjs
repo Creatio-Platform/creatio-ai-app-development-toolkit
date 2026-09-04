@@ -16,8 +16,8 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
-import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
-import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
+import { resourceKey, SEVERITY } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor); ENG-96204: ONE severity vocabulary, shared with the merge-replay warnings
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf, templateCapabilities, templateProvides } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -147,6 +147,57 @@ const addModeText = (am) => {
   return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
 };
 
+// ENG-96457 (item 1) — THE COORDINATES, IN THE TABLE. The mapper has always computed each field's Freedom cell
+// (`values.layoutConfig` = { column, row, colSpan, rowSpan }, converted from the classic 24-column grid), and the
+// Layout table has always thrown it away and printed the fields in the classic `diff`'s DECLARATION order. On the
+// ENG-96445 page the classic `Header` declares City1, Country1, City2, Country2 while placing them at
+// (r6,c0) (r7,c0) (r6,c12) (r7,c12) — two rows of two. A builder that read the table in order and filled a
+// 2-column grid produced `City1 | Country1` / `City2 | Country2`: the plan's own field pairing, wrong, and
+// faithfully built. So the table now (a) SORTS by the coordinates and (b) PRINTS them, and `--units` publishes them
+// per field. `null` for an element with no computed cell (a card action, a placed widget) — a dash, never a guess.
+// ENG-96457 (item 1) — THE PAIRING, SHOWN. Coordinates in a column are correct but still have to be assembled by
+// the reader; the failure being fixed is a builder reading the table top-to-bottom. So every MULTI-COLUMN region
+// also renders as its grid: one line per row, the row's fields in column order. On the ENG-96445 header the last
+// two lines read `City1 | City2` and `Country1 | Country2`, which is the pairing the classic page has and the
+// declaration order destroys. Single-column regions are skipped — a one-per-line grid restates the table above it.
+function gridMapTables(order, byRegion) {
+  const out = [];
+  for (const region of order) {
+    const placed = byRegion.get(region).filter((r) => r.layout && Number.isInteger(r.layout.row) && Number.isInteger(r.layout.column));
+    if (placed.length < 2) continue;
+    const cols = [...new Set(placed.map((r) => r.layout.column))].sort((a, b) => a - b);
+    if (cols.length < 2) continue;                       // one column ⇒ the table above already reads in order
+    const rows = [...new Set(placed.map((r) => r.layout.row))].sort((a, b) => a - b);
+    out.push(`##### Grid of \`${region}\` — ${cols.length} columns, ${rows.length} rows (build the fields at THESE cells)`,
+      "| Row | " + cols.map((c) => `Column ${c}`).join(" | ") + " |",
+      "| --- | " + cols.map(() => "---").join(" | ") + " |");
+    for (const r of rows) {
+      const cells = cols.map((c) => {
+        const hit = placed.filter((p) => p.layout.row === r && p.layout.column === c);
+        return hit.length ? hit.map((h) => h.cells[0]).join(" + ") : DASH;
+      });
+      out.push(`| ${r} | ${cells.join(" | ")} |`);
+    }
+    out.push("");
+  }
+  if (out.length) out.unshift("> **The grid below is the placement contract.** A field's row/column comes from the Classic page, NOT from the order of the Layout table above — build each field at its cell. Reading the table top-to-bottom into a multi-column container re-pairs the fields (that is exactly how `City1 | Country1` shipped instead of `City1 | City2`).", "");
+  return out;
+}
+// The published shape of a cell — exactly the four numbers, so `--units` carries no framework noise and a diff
+// against a built page's `layoutConfig` compares like with like.
+function pickCell(l) {
+  if (!l || typeof l !== "object") return {};
+  const out = {};
+  for (const k of ["row", "column", "colSpan", "rowSpan"]) if (Number.isInteger(l[k])) out[k] = l[k];
+  return out;
+}
+function placementCell(layoutConfig) {
+  const l = layoutConfig;
+  if (!l || !Number.isInteger(l.row) || !Number.isInteger(l.column)) return null;
+  const span = Number.isInteger(l.colSpan) && l.colSpan > 1 ? ` (span ${l.colSpan})` : "";
+  const rowSpan = Number.isInteger(l.rowSpan) && l.rowSpan > 1 ? ` (rows ${l.rowSpan})` : "";
+  return `r${l.row} · c${l.column}${span}${rowSpan}`;
+}
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
 function rowsForFields(fields, regionOf) {
@@ -161,7 +212,9 @@ function rowsForFields(fields, regionOf) {
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
-    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
+    const lc = v.layoutConfig || null;
+    return { region: regionOf(f.parentName), sort: 0, layout: lc, place: placementCell(lc),
+      cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
   });
 }
 function rowsForDetails(details, tabRegion) {
@@ -178,31 +231,75 @@ function rowsForDetails(details, tabRegion) {
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }
-function rowsForFeatures(standardFeatures, tabRegion) {
+function rowsForFeatures(standardFeatures, tabRegion, opts) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
     const type = isList ? "Related list" : esc(s.feature);
-    const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
+    // ENG-96457 (item 2) — `templateProvided` on the mapping row says "SOME Freedom form template ships this", which
+    // is not the same claim as "the template THIS plan chose ships it". Attachments carries that flag and
+    // `PageWithTopAreaAndTabsFreedomTemplate` ships none, so the flat "template-provided" cell was the same false
+    // promise the Feed row made. Route it through the measured capability table instead.
+    const nativeSrc = s.templateProvided
+      ? templateContextCell(opts, FEATURE_CAPABILITY[s.feature] || null, s.feature)
+      : "native — confirm component on-stand";
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
   });
 }
-function widgetSource(w) {
+// ENG-96457 (item 2) — THE FORM TEMPLATE THIS PLAN ASSERTS, and what it is known to ship. One reader for both the
+// Layout table's Source cells and the coverage rows, so the plan cannot say "provided by the template" in one place
+// and gate it as an explicit build in the other. `planMeta.formTemplate` is the plan's own choice;
+// `manifest.template` is the older single-value form of the same thing.
+// Which capability key a standard FEATURE needs from the template. Only the two the capability table tracks are
+// listed; every other feature resolves to `null` and therefore to "confirm on-stand", which is the truthful state.
+const FEATURE_CAPABILITY = { Feed: "feed", Attachments: "attachments" };
+// …and back: the capability key → the FEATURE name whose `crt.*` gate type the shared mapping table already holds.
+// Used to give a template-absent element its own machine-checkable expected count.
+const CAPABILITY_FEATURE = { feed: "Feed", attachments: "Attachments" };
+const formTemplateOf = (opts) => opts?.planMeta?.formTemplate || opts?.template || null;
+// The verdict for ONE base-declared element, given the capability key it needs:
+//   PROVIDED    the template was MEASURED and ships it → genuine template context
+//   ABSENT      the template was MEASURED and does NOT ship it → an explicit build step, with its own count
+//   UNCONFIRMED this template has never been measured (or no capability key) → confirm on-stand, never assert
+// Named, not bare strings: the three are compared in four places, and one typo'd comparison would silently turn an
+// unmeasured template back into an assertion — the very defect this replaces (and it keeps Sonar's S1192 quiet).
+const TPL = Object.freeze({ PROVIDED: "provided", ABSENT: "absent", UNCONFIRMED: "unconfirmed" });
+function templateVerdict(opts, capability) {
+  const tpl = formTemplateOf(opts);
+  if (!tpl || !capability) return TPL.UNCONFIRMED;
+  const p = templateProvides(tpl, capability);
+  if (p === true) return TPL.PROVIDED;
+  if (p === false) return TPL.ABSENT;
+  return TPL.UNCONFIRMED;
+}
+// The Source cell for a base-declared element the template may or may not ship. Replaces the flat
+// "template context — provided by the Freedom template" that was asserted without looking at the template.
+function templateContextCell(opts, capability, what) {
+  const tpl = formTemplateOf(opts);
+  const verdict = templateVerdict(opts, capability);
+  if (verdict === TPL.PROVIDED) return `template context — \`${esc(tpl)}\` ships ${what} (measured); re-bind it, do not rebuild`;
+  if (verdict === TPL.ABSENT) return `⚠ ADD — \`${esc(tpl)}\` ships NO ${what} (measured): build it explicitly. This is NOT template context, and it needs its own expected count`;
+  return tpl
+    ? `⚠ confirm on-stand — \`${esc(tpl)}\`'s capabilities are NOT measured, so whether it ships ${what} is unknown. Check the template before approval; if it ships none, this is an explicit build step`
+    : `⚠ confirm on-stand — no form template is named yet, so whether ${what} is template-provided is unknown`;
+}
+function widgetSource(w, opts) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
   if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
-  if (w.base) return "template context — provided by the Freedom template";
+  // ENG-96457 (item 2) — a base-declared widget is template context only if the CHOSEN template really ships it.
+  if (w.base) return templateContextCell(opts, w.capability, w.widget);
   return "native — confirm on-stand";
 }
-function rowsForWidgets(widgets) {
+function rowsForWidgets(widgets, opts) {
   return (widgets || []).map((w) => {
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
-    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w, opts), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
@@ -295,7 +392,8 @@ function rowsForImages(images, regionOf) {
     if (im.crossDs) note = "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column";
     else if (im.column) note = "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column";
     else note = "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
-    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
+    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, layout: im.layoutConfig || null, place: placementCell(im.layoutConfig || null),
+      cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
   });
 }
 
@@ -396,6 +494,29 @@ function stripNoteTail(note) {
   let end = note.length;
   while (end > 0 && (note[end - 1] === "." || note[end - 1] === ";" || /\s/.test(note[end - 1]))) end--;
   return note.slice(0, end);
+}
+// Which `list-columns` item the answer is filed under. The mapper publishes a FIXED literal per shape (an empty set
+// and a fallback set are answered separately), so the plan has to ask for the same one — a mismatch here would show
+// an answered question as unanswered, which is exactly the drift item 5 is about.
+// ENG-96457 (item 5) — the column line ONCE THE OPERATOR HAS ANSWERED IT. This is the line the ENG-96445 plan still
+// showed as an unresolved 1-column fallback after all four questions were answered, so the answer LEADS: the
+// approved document must state the decision, not re-ask it. The original question is kept behind the answer (in
+// parentheses) rather than dropped — an answer whose question is invisible cannot be audited, and a reader has no
+// way to tell a recorded decision from a guessed default.
+function answeredListColumnLine(section, resolutions, askedItem) {
+  const line = listColumnLine(section);
+  // The item comes from the question the run actually PUBLISHED, never re-derived here. A second copy of the
+  // mapper's literals drifted on two branches (PR #156 review): it ignored `listColumnsDecision`'s `!columns.length`
+  // precedence, and for `schema-default` — the shape that asks NOTHING — it returned "no list columns resolved", so a
+  // stale answers file carrying that key rendered `supersedes the engine's unresolved reading` over a column set the
+  // Classic section had declared. No published question means no answer to file: keep the plain line.
+  if (!askedItem) return line;
+  const r = matchResolution(resolutions, { kind: "list-columns", item: askedItem });
+  if (!r) return line;
+  // Strip the leading `- **List columns:** ` so the answer takes its place; whatever the line said becomes the
+  // parenthetical. The prefix is this module's own literal, so the slice is safe.
+  const asked = line.replace(/^- \*\*List columns:\*\* /, "");
+  return `- **List columns:** ${answeredText(r)} — supersedes the engine's unresolved reading (${asked})`;
 }
 function listColumnLine(section) {
   // Notes arrive from several producers (the on-stand resolver, the disagreement note), so their trailing
@@ -531,7 +652,8 @@ function renderListPageBlock(result, section, opts = {}) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    L.push(listColumnLine(section));
+    L.push(answeredListColumnLine(section, opts.resolutions || null,
+      (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
@@ -539,7 +661,7 @@ function renderListPageBlock(result, section, opts = {}) {
   const lcs = result.listChangeSet;
   // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
   // is an open question with an owner, not a note in prose.
-  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
+  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs, opts));
   L.push("");
   return L;
 }
@@ -641,7 +763,21 @@ function childFormRecommendation(cs, fields, opts) {
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
-  return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
+  const L = [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`];
+  // ENG-96457 (item 2) — the recommendation is made on ONE fact ("the Header is populated") and used to be stated
+  // with no reference to what the recommended template can actually hold. Check it against the MEASURED top-area
+  // column count: a 2-column Classic Header does not fit a one-column top area, and the plan has to say so here —
+  // at the point of the recommendation — rather than let a faithful build discover it.
+  const tpl = formTemplateOf(opts);
+  const caps = templateCapabilities(tpl);
+  const cols = Number.isInteger(cs.headerColumns) ? cs.headerColumns : null;
+  if (caps && cols && Number.isInteger(caps.topAreaColumns) && caps.topAreaColumns < cols) {
+    L.push(`> ⚠ **but \`${esc(tpl)}\`'s top area has ${caps.topAreaColumns} column(s) and this Classic Header has ${cols}** (both measured). The header's column pairing does NOT survive as-is: either add a \`crt.GridContainer\` with ${cols} columns inside the top area and place the fields by the coordinates in the Layout table, or accept a single-column header — **decide before building**, because a faithful ${caps.topAreaColumns}-column build re-pairs the fields.`);
+  } else if (cols && !caps && tpl) {
+    L.push(`> ⚠ \`${esc(tpl)}\`'s top-area column count is NOT measured, and this Classic Header has ${cols} columns — confirm on-stand that the top area can hold ${cols} before approving, or the header's pairing is lost.`);
+  }
+  L.push("");
+  return L;
 }
 
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
@@ -680,7 +816,25 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
   "attribute-dependency"]);
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
-function renderConfirmWorklist(cs) {
+// ENG-96457 (item 5) — THE ANSWER, IN THE DOCUMENT. `resolutions.json` used to reach only `--units`, so after all
+// four ⚠ questions were answered `plan.md` still showed the unanswered worklist (and the 1-column fallback table):
+// the artifact a human had approved and the payload the builder acted on said different things. With
+// `--plan --resolutions <file>` each answered row is rendered as its answer, with the question kept beneath it —
+// an answer with its question is auditable; an answer that replaces its question is not. Unanswered rows are
+// unchanged, so a partially answered plan still reads as partially answered.
+function resolutionSuffix(resolutions, kind, item) {
+  const r = matchResolution(resolutions, { kind, item });
+  if (!r) return "";
+  return ` · ${answeredText(r)}`;
+}
+// `**✅ answered:** <answer> _(who, when)_` — ONE renderer, so the ⚠ rows and the list-column line cannot drift into
+// two spellings of the same fact (they did: `✅ **answered:**` vs `**✅ answered:**`, and a test had to pick one).
+function answeredText(r) {
+  const who = [r.decidedBy, r.date].filter(Boolean).map(esc).join(", ");
+  const attribution = who ? ` _(${who})_` : "";
+  return `**✅ answered:** ${esc(r.answer)}${attribution}`;
+}
+function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
@@ -689,14 +843,26 @@ function renderConfirmWorklist(cs) {
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
   // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+  // ENG-96457 (item 5) — the operator's recorded answer, rendered after the question it answers.
+  const res = opts.resolutions || null;
+  let answered = 0;
+  const confirm = nd.map((d) => {
+    const suffix = resolutionSuffix(res, d.kind, d.item);
+    if (suffix) answered++;
+    return `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+      (d.describedIn ? ` · **described in** ${describedInText(d)}` : "") + suffix;
+  });
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
   // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
   // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
   // Do not re-add a render-time push: a question the renderer invents is a question with nowhere to record an answer.
+  // (It also means every kind that reaches this worklist can carry an answer — including this one.)
   if (!confirm.length) return [];
-  return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+  // The heading states BOTH numbers: "(4)" on a fully answered worklist reads as four open questions.
+  const head = answered
+    ? `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`
+    : `#### ⚠ Confirm before I build (${confirm.length})`;
+  return [head, ...confirm, ""];
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -729,8 +895,8 @@ export function renderDesignSpec(result, opts = {}) {
   const rows = [
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
-    ...rowsForFeatures(cs.standardFeatures, tabRegion),
-    ...rowsForWidgets(cs.widgets),
+    ...rowsForFeatures(cs.standardFeatures, tabRegion, opts),
+    ...rowsForWidgets(cs.widgets, opts),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
     ...rowsForTableElements(cs.tableElements, regionOf),
@@ -769,14 +935,19 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
     "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Region | Placement | Element | Type | Source | Rule | Additional |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const region of order) {
-    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
+    // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
+    // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
+      || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
+      || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
+      || a.i - b.i);
+    for (const it of items) L.push(`| ${region} | ${it.place || DASH} | ${it.cells.join(" | ")} |`);
   }
-  L.push("");
+  L.push("", ...gridMapTables(order, byRegion));
   // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
   // paragraph in every linked field's Additional cell.
   if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
@@ -814,7 +985,7 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs, opts),
     ...renderMemberLedger(result.coverage),
   );
 
@@ -1600,6 +1771,50 @@ function renderMiniPageMapping(result) {
   return lines;
 }
 
+// ENG-96457 (item 3) — THE IDENTIFIERS BLOCK. The plan used to name an application code and never say what package
+// that code would actually create, so the two could disagree without the document ever showing it (`create-app` is
+// handed a code and the stand prepends `SchemaNamePrefix`). Every line here is derived, not typed: the code is the
+// plan's own target package minus the stand's prefix, and the package is what that code will produce. A correction
+// is stated rather than applied silently, and a target package the prefix cannot produce is a ⚠ decision, because
+// no `create-app` code reaches it. Empty when the run records no app at all (a mini/child fold, `pages-only-no-menu`
+// with no app, or a plan whose placement was never recorded).
+// The `schemaNamePrefix` signal's line. Its own function (not a ternary inside the push): three genuinely different
+// states, and the unresolved one carries the query to run — a ternary chain here read as one unreadable expression.
+function schemaPrefixLine(sig) {
+  if (sig?.resolved !== true || typeof sig.value !== "string")
+    return "- **Schema name prefix:** ⚠ not resolved — read it on-stand (`query-sys-settings` code `SchemaNamePrefix`, or `odata-read SysSettings`) and record `signals.schemaNamePrefix = { resolved: true, value: \"<prefix>\" }`. Until then the app code below cannot be checked against the target package, and the build-time identifiers gate is the only thing left to catch a double prefix";
+  if (sig.value === "")
+    return "- **Schema name prefix:** none (checked on-stand → a code is used verbatim as the schema/package name)";
+  return `- **Schema name prefix:** \`${esc(sig.value)}\` (checked on-stand) — the stand PREPENDS it to every code \`create-app\`/\`create-page\` is given, so a code that already carries it produces a DOUBLE prefix`;
+}
+function renderIdentifiers(opts) {
+  const a = opts.appCode;
+  if (!a || (!a.code && !a.supplied)) return [];
+  const L = ["### Identifiers"];
+  // Not the minting case: the app already exists (`existing-app`), so its code is a FACT read off the stand and
+  // nothing prepends anything to it. State it, and say that — a prefix note here would read as arithmetic to apply.
+  if (!a.mints) {
+    L.push(`- **Application code:** \`${esc(a.code)}\` — an EXISTING app read off the stand; the section is registered into it and no code is minted, so \`SchemaNamePrefix\` does not apply to this value.`, "");
+    return L;
+  }
+  if (a.prefix == null) {
+    L.push(`- **Application code:** \`${esc(a.code || a.supplied)}\` — ⚠ the package it produces is UNKNOWN until \`signals.schemaNamePrefix\` is read: the stand prepends its \`SchemaNamePrefix\` to this code.`, "");
+    return L;
+  }
+  const pkgPart = a.prefix === "" ? "" : ` (prefix \`${esc(a.prefix)}\` + code)`;
+  L.push(`- **Application code:** \`${esc(a.code)}\` → package \`${esc(a.pkg)}\`${pkgPart}. Pass the CODE to \`create-app\`; the stand adds the prefix.`);
+  if (a.corrected) L.push(`  - ⚠ the manifest recorded \`${esc(a.supplied)}\`, which on this stand would have created \`${esc(a.prefix + a.supplied)}\` — a double prefix. The code above is derived from the target package and is what the plan asserts.`);
+  if (a.mismatch) L.push(`  - ⚠ **decide:** the target package \`${esc(opts.targetPackage || "")}\` does NOT start with this stand's prefix \`${esc(a.prefix)}\`, so NO \`create-app\` code can produce it — the app will land in \`${esc(a.pkg)}\` instead. Either accept that package name, or place the pages in an existing package instead of minting an app.`);
+  L.push("");
+  return L;
+}
+// ENG-96457 (item 6) — the AUTHORING guidance for the agent that RUNS the engine. It used to be the last line of
+// `plan.md` itself, where it read as plan content: a delivered plan ended by telling its reader to fill
+// `manifest.planMeta` and "present this VERBATIM". A plan is the artifact a human approves; instructions to the
+// generator are not part of it. `migrate.mjs --plan` writes this to STDERR (and the worklog) instead, so the agent
+// still gets the rule and the file stays free of it. Exported so there is exactly ONE copy of the text.
+export const PLAN_AUTHORING_NOTE = "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present the plan VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).";
+
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
   const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
@@ -1700,7 +1915,11 @@ export function renderPlan(result, opts = {}) {
     }
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), "");
+  // ENG-96457 (item 3) — the prefix is an on-stand signal like the four above (a value that lives on the stand and
+  // appears in no schema body), but it carries a STRING rather than present/absent, so it gets its own line shape.
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"),
+    sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"),
+    schemaPrefixLine(signals.schemaNamePrefix), "", ...renderIdentifiers(opts));
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -1743,7 +1962,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs));
   return P.join("\n");
 }
 
@@ -1775,9 +1994,59 @@ function buildLayoutGroupRows(cs, regionOf) {
     return { label: `${k} — ${parts.join(" · ")}` };
   });
 }
+// ENG-96457 (item 2) — AN ELEMENT THE CHOSEN TEMPLATE DOES NOT SHIP IS A DELIVERABLE, NOT CONTEXT. While the plan
+// called Feed "template context" it carried no expected count of its own, so `--verify` could not miss it and the
+// page's `Tabs — 1 expected` criterion actively argued against adding it. Every base-declared element the MEASURED
+// capability table says the template lacks gets its own count and its own `crt.*` gate here. Only the measured
+// `absent` verdict gates: `unconfirmed` stays a ⚠ in the Layout table, because a count no one has measured is not a
+// criterion. Own function so `buildCoverageRows` stays under Sonar CC 15.
+// The expected crt.ImageInput count. A value-bound `crt.ImageInput` emitted through the FIELD path (an entity
+// IMAGELOOKUP column laid out as a normal field) binds via `values.value`, so `isField` (control) misses it AND it
+// is not in `cs.images` (the generator/name-detected set) — count it here too, the SAME fieldImages fold the Layout
+// builder uses. Without it a page whose only image is an IMAGELOOKUP-column field gets NO image vk row,
+// `renderVerify` never runs the crt.ImageInput MISSING check, and a dropped image field passes `--verify` with
+// exit 0 (the AC2 gap two reviewers flagged). Own fn so `buildCoverageRows` stays under Sonar CC 15.
+function expectedImageCount(cs) {
+  const imgNames = new Set((cs.images || []).map((im) => im.classic));
+  const fieldImageCount = (cs.viewConfigDiff || [])
+    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
+  return (cs.images || []).length + fieldImageCount;
+}
+// ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected" rather
+// than one row per element. Without a vk row they are built but ungated: `--verify` would exit 0 on a page that
+// dropped every one of them, and the executor would never fetch their documentation. Own fn for Sonar CC 15.
+function tableElementRows(cs) {
+  const byType = new Map();
+  for (const el of cs.tableElements || []) {
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    e.n++; e.kinds.add(String(el.classicKind || "element"));
+    byType.set(el.componentType, e);
+  }
+  return [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([ctype, e]) => ({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
+      vk: { type: "element", ctype, n: e.n } }));
+}
+// Each field's published CELL, dropped where the mapper computed none (nothing to place by, and nothing to check).
+// Own function so `buildCoverageRows` stays under Sonar CC 15.
+function fieldLayoutOf(fieldOps) {
+  return fieldOps
+    .map((o) => ({ name: o.name, ...pickCell(o.values?.layoutConfig) }))
+    .filter((e) => Number.isInteger(e.row) && Number.isInteger(e.column));
+}
+function templateAbsentRows(cs, opts) {
+  const rows = [];
+  for (const w of cs.widgets || []) {
+    if (templateVerdict(opts, w.capability) !== TPL.ABSENT) continue;
+    const ctype = featureVerifyType(CAPABILITY_FEATURE[w.capability] || "");
+    if (!ctype) continue;
+    rows.push({ label: `${esc(w.widget)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly`,
+      vk: { type: "element", ctype, n: 1 } });
+  }
+  return rows;
+}
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
-function buildCoverageRows(cs, pm, result) {
+function buildCoverageRows(cs, pm, result, opts = {}) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -1791,29 +2060,19 @@ function buildCoverageRows(cs, pm, result) {
   // them deliberately) all sharing `control: "$col"`, so keying on the stripped control would collapse the
   // Set below and the gate could never reach ✅ for such a page. `o.name` is `col` / `col_2` — distinct and
   // identical to the built element names.
-  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name) } });
-  // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
-  // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
-  // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
-  // only image is an IMAGELOOKUP-column field gets NO image vk row, `renderVerify` never runs the crt.ImageInput
-  // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap two reviewers flagged).
-  const imgNames = new Set((cs.images || []).map((im) => im.classic));
-  const fieldImageCount = (cs.viewConfigDiff || [])
-    .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
-  const expImages = (cs.images || []).length + fieldImageCount;
+  // ENG-96457 (item 1) — the vk carries each field's CELL beside its name. The plan states the coordinates, so the
+  // queue must publish them (a builder that owns one unit sees only its row) and `--verify` must be able to check
+  // them: a page whose fields are all present but re-paired is not the page the plan approved.
+  if (expFields) cover.push({ label: `Fields — ${expFields} expected`, vk: { type: "fields", n: expFields, names: fieldOps.map((o) => o.name), layout: fieldLayoutOf(fieldOps) } });
+  // Why a value-bound `crt.ImageInput` is counted here too (the AC2 gap): see `expectedImageCount`'s doc.
+  const expImages = expectedImageCount(cs);
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   // ENG-95543 — the table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected"
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and the executor would never fetch their documentation.
-  const byType = new Map();
-  for (const el of cs.tableElements || []) {
-    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
-    e.n++; e.kinds.add(String(el.classicKind || "element"));
-    byType.set(el.componentType, e);
-  }
-  for (const [ctype, e] of [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])))
-    cover.push({ label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
-      vk: { type: "element", ctype, n: e.n } });
+  // ENG-96457 (item 2) — plus one row per base-declared element the MEASURED capability table says the chosen
+  // template does NOT ship: while Feed was "template context" it carried no expected count at all.
+  cover.push(...tableElementRows(cs), ...templateAbsentRows(cs, opts));
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -2328,7 +2587,7 @@ export function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, opts));
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
@@ -2453,7 +2712,12 @@ function pageExpect(rows) {
   const r = vkOfType(rows, "rule");
   const list = listExpect(rows);
   if (list) return list;
-  return { fields: n("fields"), fieldNames: [...(f?.names || [])], tabs: n("tabs"), details: n("details"), images: n("image"),
+  // `fieldLayout` (ENG-96457, item 1) — each expected field's CELL: `{ name, row, column, colSpan?, rowSpan? }`.
+  // Published beside `fieldNames` for the same reason those names are: a build unit is handed one page and cannot
+  // see the plan document, so a placement stated only in `plan.md` reaches nobody. `[]` when the page's fields
+  // carry no computed cell (nothing to place by, and nothing to check).
+  return { fields: n("fields"), fieldNames: [...(f?.names || [])], fieldLayout: [...(f?.layout || [])],
+    tabs: n("tabs"), details: n("details"), images: n("image"),
     rules: n("rule"), ruleNames: [...(r?.names || [])] };
 }
 // ONE page entry. `expectedTemplate` is the SCHEMA NAME (via CHILD_TEMPLATE_SCHEMA at fold time), taken from the
@@ -2693,6 +2957,36 @@ export function matchResolution(index, { id, kind, item }) {
   if (!blankStr(hit.date)) out.date = hit.date.trim();
   return out;
 }
+// ⚠ RUN-SCOPED ANSWERS (ENG-96204). `resolutions.json` was built for ONE question class — a ⚠ Confirm item, which
+// belongs to a page and is keyed by `kind`+`item` off that page's row. The operator now has answers that belong to
+// the RUN and to no page at all: which control mode this invocation runs in, and whether the next round is
+// authorised. Those travel through THIS SAME FILE rather than a second state file, because a second answer channel
+// is exactly what the ticket forbids — an operator who writes into the wrong one gets silence, and silence here
+// reads as "not answered yet" on both sides.
+//
+// The reserved `kind` is `run`; the `item` names WHICH run-level question (`control-mode`, `round-2`, …). Nothing
+// about the index or the matcher had to change to carry them: `buildResolutionIndex` already keys on an arbitrary
+// `kind`+`item` pair. What DID have to change is the unmatched report — a run-scoped entry answers no ⚠ Confirm
+// question by construction, so the report would have called every one of them an answer nobody asked for, which is
+// the one thing that report exists to mean.
+export const RUN_SCOPE_KIND = "run";
+const isRunScoped = (v) => hasPairKey(v) && v.kind.trim().toLowerCase() === RUN_SCOPE_KIND;
+// The run-level answers this file carries, published at the ROOT of `--units` (never onto a page slice: a build
+// agent owns one page and has no business acting on the run's mode). `item` is lower-cased on the way out for the
+// same reason the pair index trims: an operator types these by hand, and `Control-Mode` is the same answer as
+// `control-mode`. The answer TEXT is copied verbatim — the consumer validates it, this only carries it.
+export function runResolutionsOf(index) {
+  if (!index) return [];
+  const out = [];
+  for (const v of index.byKindItem.values()) {
+    if (!isRunScoped(v)) continue;
+    const entry = { item: v.item.trim().toLowerCase(), answer: v.answer };
+    if (!blankStr(v.decidedBy)) entry.decidedBy = v.decidedBy.trim();
+    if (!blankStr(v.date)) entry.date = v.date.trim();
+    out.push(entry);
+  }
+  return out.sort((a, b) => a.item.localeCompare(b.item));
+}
 // Every key the published questions consumed, under both key forms.
 function askedKeys(published) {
   const seen = new Set();
@@ -2705,14 +2999,19 @@ function askedKeys(published) {
 // Answers matching no published question — REPORT them, never drop them: the operator believes they are answered.
 // KEEP THE TWO GUARDS SYMMETRIC. One entry may carry both key forms and match through either, so each loop must ask
 // whether the OTHER form matched before calling it a miss — otherwise an applied answer is reported as a miss.
+// ENG-96204 — a RUN-SCOPED entry is never unmatched. It answers a run-level question (the control mode, a round
+// authorisation) that no page publishes as a ⚠ Confirm item, so judging it against `preflight[]` would report every
+// correctly-recorded mode choice as "an answer nobody asked for" — the exact opposite of what this report means,
+// and on the one entry the run is about to act on. Excluded on BOTH key forms, since an entry carrying an `id`
+// alongside its `run` pair is indexed under both.
 function unmatchedResolutions(index, published) {
   if (!index) return [];
   const seen = askedKeys(published);
   const pairMatched = (v) => hasPairKey(v) && seen.has(resolutionKey(v.kind.trim(), v.item.trim()));
   const idMatched = (v) => !blankStr(v.id) && seen.has(v.id.trim());
   const out = [];
-  for (const [k, v] of index.byKindItem) if (!seen.has(k) && !idMatched(v)) out.push({ kind: v.kind, item: v.item, answer: v.answer });
-  for (const [k, v] of index.byId) if (!seen.has(k) && !pairMatched(v)) out.push({ id: k, answer: v.answer });
+  for (const [k, v] of index.byKindItem) if (!seen.has(k) && !idMatched(v) && !isRunScoped(v)) out.push({ kind: v.kind, item: v.item, answer: v.answer });
+  for (const [k, v] of index.byId) if (!seen.has(k) && !pairMatched(v) && !isRunScoped(v)) out.push({ id: k, answer: v.answer });
   return out;
 }
 // TWO DIFFERENT ENTRIES answering ONE published question through the two different key forms. `indexResolution`
@@ -2783,6 +3082,13 @@ export function pageUnits(result, opts = {}) {
     // `pages-only-no-menu` (nothing is registered). Published so the unit that does the registration reads the
     // approved app instead of resolving one off the stand.
     applicationCode: opts.applicationCode || null,
+    // ENG-96457 (item 3) — the two facts that make the code above CHECKABLE. `schemaNamePrefix` is what the stand
+    // prepends to any code `create-app` is given; `applicationPackage` is the package this plan's code will
+    // therefore produce. Published because the unit that mints the app is the one that would otherwise re-derive
+    // both off the stand — and re-deriving is how a code that already carried the prefix got prefixed twice.
+    // Both `null` when no app is minted (`existing-app` / `pages-only-no-menu`) or the prefix was never read.
+    schemaNamePrefix: opts.appCode?.prefix ?? null,
+    applicationPackage: opts.appCode?.pkg ?? null,
     pages,
     // The template names this plan asserts, for the pre-build stand check (ENG-95468). Root-level and deduped, like
     // the executor's `componentTypes` union: one lookup per distinct name, before the first write.
@@ -2810,6 +3116,13 @@ export function pageUnits(result, opts = {}) {
     // Pinning it explicitly means a future answer shape that is falsy-but-present cannot silently undercount
     // the one diagnostic whose whole job is to be believed.
     resolutionsMatched: preflight.filter((p) => p.resolution != null).length,
+    // ENG-96204 — the RUN-LEVEL answers in the same file: `[{ item, answer, decidedBy?, date? }]`, `[]` when the
+    // operator recorded none. Published at the ROOT because they belong to the invocation and not to a page, and
+    // published at all because the workflow core has no filesystem: `--units` is the only route from
+    // `resolutions.json` into the run's own decisions (which control mode this is, and whether round N+1 is
+    // authorised). The engine does NOT validate the answer text — the consumer that acts on it owns that, and an
+    // engine that rejected an unknown mode would be a second place the mode vocabulary lives.
+    runResolutions: runResolutionsOf(resIndex),
     // ENG-95859 — dedupe by id: `qualityGateRows` now publishes TWO rows (`part: "filed"` / `"judged"`) sharing
     // ONE evidence id, so a naive `.map` here would publish that id twice. The build-agent filing contract
     // (`references/01-evidence-records.md` in freedom-build-executor) names ONE id per page — keep that true.
@@ -2865,6 +3178,8 @@ export function pageUnitsSlice(units, pageKey) {
     sectionSchema: units.sectionSchema ?? null,
     sectionHost: units.sectionHost ?? null,
     applicationCode: units.applicationCode ?? null,
+    schemaNamePrefix: units.schemaNamePrefix ?? null,
+    applicationPackage: units.applicationPackage ?? null,
     page,
     ...(units.parents && Object.hasOwn(units.parents, pageKey) ? { parent: units.parents[pageKey] } : {}),
     reachability: (units.reachability || []).filter((r) => (r.pages || []).includes(pageKey)),
@@ -3022,13 +3337,75 @@ function resolveStructuralVk(vk, ctx) {
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
 // `name` is the uncheckable case.
+// ENG-96457 (item 1) — THE PLACEMENT LEG of the fields row. Every expected field being present by name is not the
+// same fact as the page matching the plan: on the ENG-96445 page all four header fields were built and the pairing
+// was still wrong, because the plan's Layout table had published them in declaration order. The plan now publishes
+// each field's cell (`expect.fieldLayout`), so a built page can be checked against it.
+//
+// THREE OUTCOMES, and the third is why this cannot simply be a hard check:
+//   · every matched field sits at its published cell            ⇒ the name-identity verdict stands (✅)
+//   · a matched field sits at a DIFFERENT cell                  ⇒ ❌: the page is not the one the plan approved.
+//     A deviation someone approved is reported the same way ON PURPOSE — the answer lives in `resolutions.json`,
+//     which `--verify` does not read, so the gate reports what it measured and the deviation is recorded, not
+//     silently absorbed. The message names both cells so the reader can tell the two apart at a glance.
+//   · the built payload carries NO `layoutConfig` at all        ⇒ placement NOT checked, and the verdict says so
+//     rather than passing it off as checked. This is also every payload produced before this field existed, so an
+//     older `--built` file keeps its previous verdict instead of failing on evidence it could not have carried.
+//
+// ⚠ ONE UNVERIFIED ASSUMPTION, stated because it decides what this leg is ALLOWED to report: that clio `get-page`'s
+// merged `bundle.viewConfig` returns each component's `layoutConfig.row`/`.column` in the SAME 1-based integer space
+// the engine emits. The engine emits per TARGET GRID, and one page can use two of them (a wide Header keeps the
+// classic 24-column grid → columns 1/13; a tab is 2-column → columns 1/2), so a platform that normalised the
+// coordinates, or that returned a template-merged field's own cell instead of the built one, would report a
+// deviation on a correctly built page. This needs ONE on-stand run to confirm (build a 2-column header page, read it
+// back, compare).
+//
+// SO THE WHOLE LEG IS ADVISORY UNTIL THAT READ-BACK LANDS (PR #156 review, finding 1). A cell deviation reports
+// `⚠ verify` / `unverified`, NOT `❌ MISSING` / `missing`: `missing` states "this deliverable is not on the built
+// page", which is a claim about the BUILD, and the only evidence for it here rests on an assumption nothing has
+// checked. `unverified` states what is actually known — "the cells did not line up and the comparison itself is not
+// yet trustworthy, look at the page". When the read-back confirms the space (normalise HERE if it differs), flip
+// the deviation arm back to `❌ MISSING` and delete this paragraph — the check is not being weakened, its verdict is
+// being matched to its evidence.
+function resolveFieldCells(vk, ops, okText) {
+  const want = (vk.layout || []).filter((e) => e && typeof e.name === "string" && Number.isInteger(e.row) && Number.isInteger(e.column));
+  if (!want.length) return ["✅ Done", okText, "ok"];
+  const byName = new Map(ops.filter((o) => o.name).map((o) => [o.name, o]));
+  const checkable = want.filter((e) => byName.get(e.name)?.layoutConfig && typeof byName.get(e.name).layoutConfig === "object");
+  // NO layoutConfig AT ALL keeps its `ok` — and only this shape does. This is the payload EVERY build produced
+  // before the field existed, so failing it would fail a build on evidence it could not have carried, and the
+  // status text names the gap ("PLACEMENT not checked") rather than claiming a check that did not happen.
+  // The SUBSET shape below is the opposite case and does NOT get this treatment (PR #156 review): there the text
+  // used to read "each at its planned cell" while some cells were never compared, so a re-paired field that
+  // happened to publish no `layoutConfig` was never in `off` and the exact ENG-96445 escape this leg exists to
+  // catch passed as a hard green.
+  if (!checkable.length)
+    return ["✅ Done", `${okText} — PLACEMENT not checked: no built component carries a \`layoutConfig\`, so the ${want.length} published cell(s) could not be compared (re-run get-page and pass \`bundle.viewConfig\` VERBATIM to check the grid too)`, "ok"];
+  const off = [];
+  for (const e of checkable) {
+    const got = byName.get(e.name).layoutConfig;
+    if (got.row !== e.row || got.column !== e.column)
+      off.push(`\`${esc(e.name)}\` planned r${e.row}·c${e.column}, built r${got.row ?? "?"}·c${got.column ?? "?"}`);
+  }
+  const partial = checkable.length < want.length
+    ? ` — but only ${checkable.length} of ${want.length} published cell(s) could be compared: the rest carry no \`layoutConfig\`, so their placement is UNKNOWN (re-run get-page and pass \`bundle.viewConfig\` VERBATIM)`
+    : "";
+  if (!off.length) {
+    if (partial) return ["⚠ verify", `${okText}, each COMPARED field at its planned cell${partial}`, "unverified"];
+    return ["✅ Done", `${okText}, each at its planned cell (${checkable.length} of ${want.length} placement(s) checked)`, "ok"];
+  }
+  const overflow = off.length > 6 ? ` …and ${off.length - 6} more` : "";
+  // ADVISORY until the one on-stand read-back lands — see the coordinate-space paragraph above for why this is
+  // `unverified` and not `missing`.
+  return ["⚠ verify", `every expected field is present BY NAME but ${off.length} sit(s) at a DIFFERENT cell than the plan published, so the built page may not carry the plan's layout: ${off.slice(0, 6).join("; ")}${overflow}. Look at the page: re-place them, or — if the deviation was approved — record it and re-run. NOT read as proof of a wrong build: the coordinate space \`get-page\` reports in is not yet confirmed against the one the plan publishes${partial}`, "unverified"];
+}
 function resolveFieldsByIdentity(vk, names, ops) {
   const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
   if (ops.length && !builtNames.size) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
   const missing = names.filter((n) => !builtNames.has(n));
   const b = names.length - missing.length;
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
+  if (b >= vk.n) return resolveFieldCells(vk, ops, `${b} of ${vk.n} expected fields matched BY NAME on the built page`);
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
@@ -3354,9 +3731,16 @@ function resolveEvidenceCombinedVk(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page: re-file the record with what is actually there, or confirm the deliverable really is absent.`;
     }
+    // PR review — NO owner tag here, unlike the `judged === false` site below. The two share a return shape but not
+    // a meaning: a judge ruled on a filed RECORD, and only the verifier can re-file it, so that one is verifier-owned
+    // by contract. `rec === false` is the verifier asserting something else entirely — as the comment above says, that
+    // the deliverable is GENUINELY ABSENT from the page. Tagging it `"verifier"` moved it off `builderOpen`, which
+    // flipped the scoped in-context gate from exit 2 to exit 0: a build agent whose page really is missing a
+    // deliverable self-certified, no repair round was dispatched, and the run could not converge — the verifier cannot
+    // honestly file `true` for something that does not exist, and the builder was never sent to build it.
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent${contradiction}`, "missing"];
   }
-  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing"];
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${ctx.root.judge[vk.id].why ? " — " + esc(String(ctx.root.judge[vk.id].why)) : ""}`, "missing", "verifier"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff) && judged === true) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\` and judged convincing`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under \`${esc(vk.id)}\` but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
@@ -3367,6 +3751,8 @@ function resolveEvidenceCombinedVk(vk, ctx) {
 function resolveEvidenceFiledPart(vk, ctx) {
   const rec = ctx.root?.evidence?.[vk.id];
   const need = `\`${esc(vk.id)}\` (needs ${(vk.requires || EVIDENCE_REQUIRES).join(" + ")}${vk.allowNoDiff ? " (or components: [] + noChangesReason)" : ""})`;
+  // PR review — untagged, for the reason spelled out at `resolveEvidenceCombinedVk`: a record filed `false` says the
+  // deliverable is absent from the page, which is the BUILDER's row, not a re-filing job.
   if (rec === false) return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` by the verifier — reported genuinely absent`, "missing"];
   if (evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["✅ Done", `evidence filed under \`${esc(vk.id)}\``, "ok"];
   return ["⚠ verify", `no complete evidence record under ${need}`, "unverified", "verifier"];
@@ -3386,9 +3772,10 @@ function resolveEvidenceJudgedPart(vk, ctx) {
       const whyText = why ? ` ("${esc(String(why)).slice(0, 240)}")` : "";
       contradiction = ` — NOTE: the judge reviewed it and DISAGREES${whyText}. One of the two is wrong about the built page.`;
     }
+    // PR review — untagged, same reason as the other two `rec === false` sites.
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
   }
-  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing", "verifier"];
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
   if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
@@ -3479,6 +3866,44 @@ const VK_PLACEMENT = new Set(["placement"]);
 const VK_ENTITY = new Set(["entity"]);
 const VK_CHILDPAGE = new Set(["childpage"]);
 const VK_EVIDENCE = new Set(["evidence"]);
+// ⚠ ROW SEVERITY (ENG-96204) — the axis an OPEN row lacked, on the SAME two tokens `eff.warnings` already uses
+// (`SEVERITY`, imported from `engine.mjs`: one vocabulary, not two that agree until someone edits one). It exists so
+// the checkpoint stop can RANK what is open instead of listing it in table order, and the sentence that decides each
+// value is written here so a new `vk` type cannot be added without answering it:
+//   "correctness" — the deliverable itself is absent or wrong: a field, a component, a rule, a related list, the
+//                   object the page sits on, the package it went into, the wiring that makes it reachable. The
+//                   customer's page does not do what the plan says it does, and the remedy is to BUILD something.
+//   "fidelity"    — the deliverable is there and the shortfall is about how well it PRESENTS: the mandatory design
+//                   pass over a page that already carries its content. Worth fixing, never worth fixing FIRST — an
+//                   operator who spends the round on a layout polish while `Amount` is missing spent it wrongly.
+// A type NOT NAMED HERE is `correctness`, deliberately and for the same reason `migrate.mjs`'s `isCorrectnessWarning`
+// defaults that way: a producer that forgot to declare a severity must fail loud (ranked FIRST, in the operator's
+// face) rather than quietly sink to the bottom of the list. So this map names only the fidelity side.
+// KEYED ON THE `vk`, never on the group TITLE: titles are `esc`d and carry a page-key prefix for a sub-page
+// (`child:Education · Form — Logic`), so matching on them would classify `main`'s rows one way and a child's the
+// other. Layout rows carry NO `vk` at all — they resolve `skip` and never reach an open row — so there is nothing
+// for this to say about them; the fidelity side is reachable only through the quality-gate rows today.
+const QUALITY_GATE_SUFFIX = "#quality-gates";
+export function rowSeverity(vk) {
+  // The mandatory `creatio-ui-guidelines` design pass — the one open row that is about presentation rather than
+  // about a missing deliverable. Discriminated by the evidence ID and not by `vk.type`: a `#confirm:` / `#childpage`
+  // / `#listpage:` record proves something was BUILT, and those stay correctness.
+  if (vk?.type === "evidence" && String(vk.id ?? "").endsWith(QUALITY_GATE_SUFFIX)) return SEVERITY.FIDELITY;
+  return SEVERITY.CORRECTNESS;
+}
+// EVERY correctness item before ANY fidelity one, and the engine's own row order kept INSIDE each band — a stable
+// sort, so two rows of one severity stay in table order and the ranked list is still readable as the table.
+// Pure and exported for DOWNSTREAM consumers of this engine — anything that renders the design-spec's own open
+// rows, including whoever reads `verify.json` / the digest, where every open row carries its `rowSeverity` stamp.
+// THIS IS NOW THE ONLY COPY OF THE INVARIANT (ENG-96204 rework). The executor's round-boundary stop used to hold a
+// second one (`rankOpenItems`, over its own in-memory item shape); it does not any more, because the open ROWS do
+// not cross the Reconcile -> workflow boundary at all — ENG-95930 made that central verify counts-only, so the
+// stop reports COUNTS plus a pointer at these artifacts and the ranking is read here, where the severity is
+// stamped. This function's own tests live in `engine-tests/classic-to-freedom/run-mapper.mjs`.
+export function rankOpenRows(rows) {
+  const band = (r) => (r?.severity === SEVERITY.FIDELITY ? 1 : 0);
+  return (rows || []).map((r, i) => ({ r, i })).sort((a, b) => band(a.r) - band(b.r) || a.i - b.i).map((x) => x.r);
+}
 const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 // A row that is deliberately NOT a deliverable (ENG-95861: an approved cross-section boundary). Resolved BEFORE any
 // `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
@@ -3518,7 +3943,12 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
+  // `layoutConfig` (ENG-96457, item 1) rides along with the name and the type. It is the ONLY evidence of where a
+  // field actually landed, and the flattening used to drop it — so a page with every expected field present but
+  // re-paired into the wrong columns read exactly like the page the plan asked for. Read under both shapes: a
+  // rendered node carries it directly, a diff op under `values`.
+  if (node.name != null || node.type != null)
+    out.push({ name: node.name, type: node.type, layoutConfig: node.layoutConfig ?? node.values?.layoutConfig ?? null });
   return walkViewConfig(node.items, out);
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
@@ -3642,15 +4072,45 @@ function verifyCtxFactory(root) {
 // on their own. `complete` is kept exactly as before (missing||unverified) for the post-hoc `--verify` CLI verdict
 // (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
 //
+// ENG-95901 (reopened 2026-09-03) — the SAME conflation survived one level up, in the run-level counters. A row the
+// JUDGE rejected resolves `❌ MISSING` and used to carry no owner at all, so it landed on the BUILDER's side of the
+// axis: the 2026-09-02 paired run closed `⛔ INCOMPLETE, missing: 3` with all three rows being evidence rejections
+// and not one deliverable short. The `judged === false` return sites now name `"verifier"` (they are the read-only
+// verifier's / judge's rows by contract — a builder may not re-file them), and the tally keeps FOUR cells, not
+// three: {builder, verifier} × {missing, unverified}.
+//
+// PR review — a record the verifier filed as `false` is deliberately NOT tagged, even though it is also written by
+// the verifier: that record asserts the deliverable is genuinely ABSENT from the page, so it is builder-owned work.
+// Tagging it moved it off `builderOpen` and flipped the scoped gate from exit 2 to exit 0 on a page that really was
+// short. The tag follows who can REMEDY the row, not who wrote it.
+//
+// The counters are ADDITIVE, deliberately: `missing` and `unverified` keep their exact former meaning (every ❌ row,
+// every ⚠ row), because they are what the human-facing `--verify` verdict and the CLI exit code read, and AC7/AC8 of
+// the first round pinned that behaviour. The split rides alongside, mirroring the `complete` → `buildComplete`
+// precedent this same ticket set:
+//   · `buildMissing` — ❌ rows the BUILDER owns; this is "my build is short", the counter a park/close report wants;
+//   · `rejected`     — ❌ rows the verifier/judge owns (evidence rejected, or filed `false`); NOT a build shortfall;
+//   · `unfiled`      — ⚠ rows the verifier owns (nobody has filed the record yet).
+// Invariants, pinned by golden: `missing === buildMissing + rejected`, `builderOpen === buildMissing + builder-owned
+// unverified`, and therefore per page `rejected = missing - buildMissing` and `unfiled = unverified - (builderOpen -
+// buildMissing)`. That derivability is why the per-page entry gains exactly ONE integer (`buildMissing`) and not
+// three: every page entry of `--verify-summary` is transcribed into the Reconcile agent's answer against a
+// 16000-byte wire ceiling (ENG-95930), so a per-page field costs bytes on every page of the plan while the totals
+// cost them once.
+//
+// NOT named `evidenceRejected`: that name is already taken in the same run, as the reconcile answer's ARRAY OF IDS
+// (`state.evidenceRejected`, read by `earnedFrom`). One word in two shapes is what an LLM agent transcribing both
+// into one answer gets wrong, so the counter is `rejected` and the id list keeps its name.
+//
 // PR review: the axis is keyed on the row's OWNER, not on its `missing`/`unverified` label. Keying it on the label
 // was wrong in the dangerous direction — `resolveFieldsByIdentity` returns `unverified` for ANY field count below
 // expected including `0/N`, `resolveCountVk` returns it for any partial component count, and "no `--built.pages`
 // entry" / "re-run get-page and pass viewConfig VERBATIM" are `unverified` too. All of those are the builder's own,
 // named, actionable work, and a page with none of its expected fields reported `buildComplete: true`.
 function verifyTally() {
-  const t = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, pages: {} };
+  const t = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, buildMissing: 0, rejected: 0, unfiled: 0, pages: {} };
   t.add = (pageKey, outcome, row, owner) => {
-    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, complete: true, buildComplete: true, openRows: [], pendingRows: [] });
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, buildMissing: 0, openCorrectness: 0, openFidelity: 0, complete: true, buildComplete: true, openRows: [], pendingRows: [] });
     // ENG-96458 D3 — an ACCEPTED row is counted so the close report can say how many deviations the verdict rests
     // on, and is otherwise inert: it leaves `missing`, does not open a row, and does not hold `complete`.
     if (outcome === "accepted") { t.accepted++; p.accepted++; return; }
@@ -3663,10 +4123,21 @@ function verifyTally() {
     if (outcome === "pending") { t.pending++; p.pending++; p.pendingRows.push({ n: row.n, deliverable: row.deliverable, rowKey: row.rowKey }); return; }
     if (outcome !== "missing" && outcome !== "unverified") return;
     t[outcome]++; p[outcome]++; p.complete = false;
+    // ENG-96204 (AC 2) — the SAME severity stamp the row carries, COUNTED per page. `openCorrectness + openFidelity`
+    // is `missing + unverified` by construction: every open row is stamped exactly one band by `rowSeverity`, and
+    // this reads the stamp off the row rather than re-deriving it, so the two integers cannot disagree with the rows
+    // they summarise. They exist so the counts-only `verifySummary` can carry the severity axis across the capped
+    // Reconcile boundary as two integers — the executor's round-boundary stop tallies on them, where it used to
+    // count every page row as `unstamped` because the summary published no band at all.
+    if (row?.severity === SEVERITY.FIDELITY) p.openFidelity++; else p.openCorrectness++;
     // `builderOpen` is the count that matches the axis — how many open rows this builder can actually act on. The
     // scoped exit-2 diagnostic reports THIS, not `missing`: a `0/N expected fields` page has `missing: 0` and would
     // otherwise announce "0 MISSING deliverable(s)" while exiting 2, which reads as a broken gate.
-    if (owner !== "verifier") { p.buildComplete = false; p.builderOpen++; t.builderOpen++; }
+    if (owner !== "verifier") {
+      p.buildComplete = false; p.builderOpen++; t.builderOpen++;
+      if (outcome === "missing") { p.buildMissing++; t.buildMissing++; }
+    } else if (outcome === "missing") t.rejected++;
+    else t.unfiled++;
     p.openRows.push(row);
   };
   return t;
@@ -3709,8 +4180,29 @@ export function planGaps(result, opts = {}) {
   }
   return g;
 }
-function verifyVerdict(missing, unverified, pending = 0) {
-  if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+// ENG-95901 (reopened) — this sentence is the one the 2026-09-03 comment quotes: it said "3 machine-checked
+// deliverable(s) MISSING from YOUR BUILD" on a run whose build was whole and whose three ❌ rows were records the
+// judge rejected. It is also the sentence the close report presents verbatim (`verify.md`), so a wrong attribution
+// here is what an operator reads. The SEVERITY is unchanged — a rejected record is still ⛔, still a reason not to
+// call the run done — only the CLAIM about whose work is short is split onto the axis that now exists.
+//
+// PR review — the "YOUR BUILD is NOT short" claim is guarded on `builderOpen`, not on `buildMissing`. The four
+// counters this function used to receive cannot tell "no builder-owned rows at all" from "no builder-owned ❌ rows":
+// a partially built page resolves `unverified`, so `buildMissing === 0` while fields are genuinely absent, and the
+// `rejected > 0` branch returned before the `unverified > 0` branch below could mention them — the header then
+// contradicted the very table under it (`1/3 expected fields present — missing: Amount, Owner`). `builderOpen ===
+// buildMissing + builder-owned unverified`, so it is the one counter that answers the question the sentence asks.
+// `missing` is gone from the signature: it was no longer read in the body, surviving only as `buildMissing`'s
+// default, and neither default could fire — the single call site passes every argument. Had one ever fired it would
+// have silently reconstructed the pre-fix sentence.
+// ENG-96458 D4 — `pending` joins the signature as a trailing, defaulted argument, and it ranks AFTER every ⛔ branch
+// and after the ⚠ unconfirmed branch below: a page that is genuinely short is described as short, and only a page
+// whose machine rows are all green reports the human hold.
+function verifyVerdict(unverified, buildMissing, rejected, builderOpen, pending = 0) {
+  if (buildMissing > 0 && rejected > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD, and ${rejected} evidence row(s) REJECTED by the judge** (build the first set; the rejected records are re-FILED by the read-only verifier/judge, not built)`;
+  if (buildMissing > 0) return `⛔ **INCOMPLETE — ${buildMissing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
+  if (rejected > 0 && builderOpen > 0) return `⛔ **INCOMPLETE — ${rejected} evidence row(s) REJECTED by the judge, and ${builderOpen} open row(s) YOUR BUILD owns** (re-FILE the rejected records — that half is the read-only verifier's/judge's; the build rows are named in the table above)`;
+  if (rejected > 0) return `⛔ **NOT DONE — ${rejected} evidence row(s) REJECTED by the judge; YOUR BUILD is NOT short** (re-FILE the record with what is actually on the page — nothing here is built)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   // ENG-96458 D4 — the ☐ rows are now part of the verdict instead of a footnote after a ✅. The machine half IS
   // green and says so; what remains is named, counted, and holds the run short of complete until a human answers
@@ -3793,13 +4285,16 @@ export function renderVerify(result, opts = {}, built = {}) {
       const rowNo = ++n;
       // `owner` rides along on the open row too: a caller repairing from the JSON needs to know which rows are
       // its own without re-deriving the classification the engine already made.
+      // `severity` (ENG-96204) rides along for the same reason and answers a DIFFERENT question: `owner` says WHO
+      // closes the row, `severity` says whether it is worth closing FIRST. A checkpoint stop ranks on it, so it is
+      // published as data here rather than re-derived by whoever renders the status.
       tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, rowKey,
-        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
+        owner: owner === "verifier" ? "verifier" : "builder", severity: rowSeverity(r.vk), ...(r.id ? { id: r.id } : {}) }, owner);
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }
-  const { missing, unverified, pending, accepted: acceptedCount, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified, pending);
+  const { missing, unverified, pending, accepted: acceptedCount, builderOpen, buildMissing, rejected, unfiled, pages } = tally;
+  const verdict = verifyVerdict(unverified, buildMissing, rejected, builderOpen, pending);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
@@ -3809,7 +4304,7 @@ export function renderVerify(result, opts = {}, built = {}) {
   // `pendingRows` worklist — and the hold "not complete while a confirmation is open" is applied by the RUN's
   // close, where the ticket puts it: a build that is finished is still finished, and it is the run that may not
   // call itself done while five rows are waiting on a human.
-  return { markdown: md, missing, unverified, pending, accepted: acceptedCount, builderOpen,
+  return { markdown: md, missing, unverified, pending, accepted: acceptedCount, builderOpen, buildMissing, rejected, unfiled,
     complete: missing === 0 && unverified === 0, pages };
 }
 
@@ -3852,10 +4347,10 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
     // (`error`, `complete: false`, `buildComplete: false`) instead so the caller / CLI fails distinctly rather than
     // reading a false green.
     const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
-    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
-    return { pageKey, complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    return { pageKey, complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
   }
-  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
+  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
 }
 
 // The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
@@ -3869,6 +4364,9 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
 export function verifyReport(result, v) {
   return {
     complete: v.complete, missing: v.missing, unverified: v.unverified,
+    // The owner split (ENG-95901 reopened). `missing` stays every ❌ row; `buildMissing` is the builder-owned half —
+    // the one a caller scheduling repair rounds must read, since `rejected` rows are not its work to redo.
+    buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled,
     // ENG-96458 — the two axes that are NOT build state: ☐ rows waiting on a human, and rows an operator accepted
     // by decision. A caller scheduling on `complete` alone would still see a finished build; these tell it whether
     // the RUN may call itself done, and how many deviations the green verdict rests on.
@@ -3896,10 +4394,10 @@ export function verifyDigest(result, v) {
     // operator worklist on precisely the runs that need it. They are three short fields per row and only Layout /
     // confirm rows produce them, so this does not reopen the size problem the compaction was written for.
     pages[k] = p?.complete === true
-      ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, unverified: p.unverified, builderOpen: p.builderOpen, pending: p.pending || 0, accepted: p.accepted || 0, pendingRows: p.pendingRows || [] }
+      ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, pending: p.pending || 0, accepted: p.accepted || 0, pendingRows: p.pendingRows || [] }
       : p;
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
 }
 
 // THE COUNTS-ONLY SUMMARY (`--verify-summary <file>`). SAME SHAPE as `verifyDigest` for the totals and the per-page
@@ -3917,6 +4415,13 @@ export function verifyDigest(result, v) {
 // approach the answer's 16000-byte wire ceiling on counts alone. Pages are NOT dropped to fit (an absent entry
 // reads as "nobody looked" downstream and would re-open settled units); instead the `--verify-summary` writer warns
 // loudly as the ceiling nears, and the true close at scale is the answer-slimming follow-up, not a silent cut here.
+// ENG-96204 (AC 2) — TWO MORE INTEGERS PER PAGE, `openCorrectness` / `openFidelity`: the page's open rows split by
+// the severity band `rowSeverity` stamps on each of them (see `verifyTally`). Still counts-only, still fixed-shape,
+// still invariant in the row count — a page costs ~40 more wire bytes and the summary stays bounded by the page
+// count alone. This is what lets the executor's stop report a REAL severity tally for pages instead of `unstamped`:
+// the band is stamped once, in the engine, and published here as two numbers rather than re-derived downstream.
+// Absent (undefined, so dropped by JSON) only on a verdict that predates the field, which the executor keeps reading
+// as `unstamped`.
 // How many ☐ rows one page contributes to the counts-only summary before the rest are counted instead of named.
 // Five is the measured size of a real page's Layout worklist, so a normal run loses nothing to the cap.
 const PENDING_ROW_CAP = 5;
@@ -3936,12 +4441,13 @@ export function verifySummary(result, v) {
     // default `verifyTally` starts every page from.
     const all = p?.pendingRows || [];
     const pendingRows = all.slice(0, PENDING_ROW_CAP).map((r) => ({ n: r.n, deliverable: String(r.deliverable).slice(0, 100), rowKey: r.rowKey }));
-    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, unverified: p?.unverified, builderOpen: p?.builderOpen,
+    pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen,
+      openCorrectness: p?.openCorrectness, openFidelity: p?.openFidelity,
       ...(p?.pending ? { pending: p.pending, pendingRows } : {}),
       ...(all.length > pendingRows.length ? { pendingMore: all.length - pendingRows.length } : {}),
       ...(p?.accepted ? { accepted: p.accepted } : {}) };
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
 }
 
 // THE WIRE'S OWN BYTES — the size the summary costs once the Reconcile agent's answer is ASCII-encoded for

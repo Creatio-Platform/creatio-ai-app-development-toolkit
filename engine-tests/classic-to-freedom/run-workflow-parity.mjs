@@ -23,6 +23,28 @@
 // the working tree, because a baseline refreshed from the thing under test proves nothing. When a behaviour change
 // is intended, the diff is reviewed and the baseline is replaced deliberately, in its own commit.
 //
+// WHAT THE `freedom-build-executor` BASELINE IS, as of ENG-96204: the PREVIOUSLY SHIPPED script, frozen. It began
+// life as the hand-written original the generator replaced, and it was replaced when the control-mode work (a
+// deliberate change to the return shape and to the Reconcile prompt) made every prompt and return diverge on
+// purpose — replaced a SECOND time, in the same ticket, when the round-boundary stop was reworked onto
+// ENG-95930's counts-plus-pointer pattern and `openRanked` left the return shape (DR-4 in the executor's decision
+// records) — and a THIRD time, still in ENG-96204, when the engine began publishing per-page severity counts the
+// stop tallies (AC 2), spent round answers became a queue-file record the gate refuses by (`consumedRoundAnswers`,
+// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. It therefore says nothing
+// about the change that replaced it — that change's own coverage is the executed suites in `run-infra.mjs` and
+// `run-workflow-core.mjs` — and everything about the NEXT one: the whole prompt text and return shape of the
+// current behaviour is now pinned byte for byte. The value of this file is always forward-looking, which is why
+// replacing it is a reviewed act and not a build step.
+//
+// WHAT THE `freedom-build-executor` SCENARIOS NOW COVER (ENG-96204, folding in ENG-96475): besides the `auto`-mode
+// runs the suite always had, `buildScenarios()` drives every control-mode outcome a caller can observe — a `round1`
+// run to `paused-at-round`; a `layout-first` LAYOUT pass to its stop, and the RESUMED logic pass (marker and count
+// on file, a valid `round-N` answer) to the next; the two refusals to start (`mode-not-chosen`, `mode-invalid`);
+// `awaiting-round-decision` on a folder one round deep with no answer; and the by-record refusal of a spent answer
+// against a walked-back count. Every one is a scripted host with fixed answers, so both sides see identical
+// inputs and the comparison is deterministic. What is NOT here: the two bundle-size checks (`run-infra.mjs`) and
+// any scenario that depends on a real filesystem — the host has none, and neither do these.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -121,6 +143,22 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       baseline: "Write these cards to `<outDir>/customizations-shared-core.md`",
       shipped: "Write these cards to `out/customizations-shared-core.md`",
       why: "a literal `<outDir>` placeholder in a prompt is unexpandable; the run's actual migration folder is interpolated instead",
+    },
+  ],
+  "freedom-build-executor": [
+    {
+      // ROUND 21 REVIEW, FINDING 2 — the row's IDENTITY joins its round-trip contract. `discrepancies` is re-seeded
+      // on a resume from what the RECONCILE AGENT transcribes, and `schemas.mjs` states the rule: an agent
+      // reproduces the fields it is told about and drops the rest. Round 21 keyed the refuted-answer dedup on
+      // `(unit, id)` while this line still enumerated the row as `{ unit, claim, found, round }` — so the growth it
+      // bounded was bounded for ONE PROCESS, and the resume axis (the unbounded one: in-session repeats stop at
+      // `DEFAULT_MAX_ROUNDS`, operator-driven resumes do not) was left exactly as it was. The baseline predates the
+      // answers channel entirely and cannot carry an identity it has no rows for, so this is a one-way, intended
+      // divergence rather than baseline drift. Both halves are pinned per-substring: the enumeration is the whole
+      // change, and the prose after it rides on the same line.
+      baseline: "`discrepancies` as `{ unit, claim, found, round }`",
+      shipped: "`discrepancies` as `{ unit, id, kind, claim, found, round }`",
+      why: "the refuted-answer dedup keys on `(unit, id)`, so `id`/`kind` must be named in the read step or the identity does not survive an agent transcription and every resume re-files the row",
     },
   ],
 }
@@ -222,16 +260,25 @@ function behaviourScenarios() {
 // park, and the two mid-run failures (verifier / reconcile).
 // ---------------------------------------------------------------------------
 function buildScenarios() {
+  // ENG-96204 — `mode: "auto"` IS NOW PART OF THESE ARGS, and it is stated rather than omitted. It used to be
+  // omittable and default to `auto`; the run now refuses to start until a mode is resolved (AC 1). Both sides of
+  // this comparison behave identically under an EXPLICIT `auto` — the baseline never read the field it did not
+  // have — so declaring it here keeps every scenario below exercising the behaviour it was written for instead of
+  // collapsing all of them onto the one new refusal. The refusal has its own coverage: executed end to end in
+  // `run-workflow-core.mjs` and through the real prologue in `run-infra.mjs`.
   const ARGS = {
     manifest: "/mig/manifest.json", environment: "dev", outDir: "/mig", planFile: "/mig/plan.md",
     engine: "/plug/skills/classic-to-freedom-migration/engine/migrate.mjs", sectionSchema: "DealSection",
+    mode: "auto",
   };
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
   // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
   // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
   // and a realistic fixture should look like the real answer, not because the checker demands it.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });
+  // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
+  // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -245,16 +292,20 @@ function buildScenarios() {
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
     reachabilityState: { sectionRegistered: "unset" },
     preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
+    // ENG-96204 — the two RUN-level lists a real Reconcile answer always carries (both REQUIRED by the schema):
+    // the operator's run-scoped answers, and the round answers the queue file already records as spent. Empty
+    // here, the normal first run; the control-mode scenarios below override them.
+    runResolutions: [], consumedRoundAnswers: [],
     schemaNamePrefixEmpty: false,
     evidenceIds: ["main#quality-gates"], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
     parkedUnits: [], proposals: [], blocked: [], discrepancies: [],
     staleQueueKeys: [], newKeys: [],
-    verify: verify({ "child:Documents": { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true }, main: { complete: false, buildComplete: false, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
+    verify: verify({ "child:Documents": { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Amount")] }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: false, buildComplete: false, buildMissing: 1, missing: 1, unverified: 0, openRows: [openRow("Field Stage")] } }),
     exitCode: 2, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, pending: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true }, list: { complete: true, buildComplete: true }, main: { complete: true, buildComplete: true } } },
+    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pending: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({
@@ -561,6 +612,59 @@ function buildScenarios() {
         ], unresolved: [] },
         judge: { verdicts: [{ id: "#confirm:dcm:Deal", convincing: true, why: "queried" }], evidenceWritten: ["#confirm:dcm:Deal"], notes: "" },
       }),
+    },
+    // ENG-96204 (ENG-96475) — THE CONTROL-MODE STOPS, driven end to end. Each of these is a return shape and a
+    // prompt set the earlier scenarios (all `auto`) never reached, so a change to any of them was invisible here.
+    // `ONE_ROUND_SPENT` is what the queue file holds after one full round: every unit charged once, the folder's
+    // own count at 1. `ROUND_2_GO` is the operator's authorisation for the next round, as `--units` republishes it.
+    {
+      // Mode A: one round, a shortfall left open ⇒ `paused-at-round`, asking for `round-2`.
+      name: "`round1` — one round, still open, stops `paused-at-round`",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE(), RECONCILE({ roundOf: { "child:Documents": 1, list: 1, main: 1 }, roundsSpent: 1 })] }),
+    },
+    {
+      // Mode C, first invocation: the LAYOUT pass — page builders scoped to layout, no repair round charged, the
+      // marker recorded, the logic rows reported as scheduled rather than short.
+      name: "`layout-first` — the layout pass stops `paused-at-round` with the marker recorded",
+      args: { ...ARGS, mode: "layout-first" },
+      answer: host({ reconciles: [RECONCILE(), RECONCILE({ roundsSpent: 1, layoutPassDone: true })] }),
+    },
+    {
+      // Mode C, second invocation: the marker and the count are on file and the operator has authorised round 2 ⇒
+      // the LOGIC pass builds (step 6, no layout rebuild), spends a repair round, and stops asking for `round-3`.
+      name: "`layout-first` — the resumed LOGIC pass, authorised by `round-2`",
+      args: { ...ARGS, mode: "layout-first" },
+      answer: host({ reconciles: [
+        RECONCILE({ layoutPassDone: true, roundsSpent: 1, roundOf: {}, runResolutions: [{ item: "round-2", answer: "go" }] }),
+        RECONCILE({ layoutPassDone: true, roundsSpent: 2, roundOf: { "child:Documents": 1, list: 1, main: 1 }, runResolutions: [{ item: "round-2", answer: "go" }], consumedRoundAnswers: ["round-2"] }),
+      ] }),
+    },
+    {
+      // AC 1: no mode from any of the three sources ⇒ the run refuses to start, after the baseline Reconcile and
+      // before any stand write.
+      name: "no mode resolved — `mode-not-chosen`",
+      args: { ...ARGS, mode: undefined },
+      answer: host({ reconciles: [RECONCILE()] }),
+    },
+    {
+      // DR-2: a mistyped RECORDED mode is a structured stop, not an exception.
+      name: "a mistyped recorded control-mode answer — `mode-invalid`",
+      args: { ...ARGS, mode: undefined },
+      answer: host({ reconciles: [RECONCILE({ runResolutions: [{ item: "control-mode", answer: "round-1" }] })] }),
+    },
+    {
+      // AC 4: a folder one round deep, re-run with no authorisation on file ⇒ nothing is built.
+      name: "a re-run with no round answer on file — `awaiting-round-decision`",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE({ roundOf: { "child:Documents": 1, list: 1, main: 1 }, roundsSpent: 1 })] }),
+    },
+    {
+      // DR-5: the answer is on file AND already recorded as spent, while the count has been walked back to where
+      // it would be asked for again ⇒ refused by record, nothing built.
+      name: "a spent `round-2` answer against a walked-back count — refused by record",
+      args: { ...ARGS, mode: "round1" },
+      answer: host({ reconciles: [RECONCILE({ roundOf: {}, roundsSpent: 1, runResolutions: [{ item: "round-2", answer: "go" }], consumedRoundAnswers: ["round-2"] })] }),
     },
   ];
 }

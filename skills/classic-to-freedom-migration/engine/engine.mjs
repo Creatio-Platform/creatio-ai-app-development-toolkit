@@ -1491,7 +1491,11 @@ function makeItem(op, seed, pkg) {
 // `migrate.mjs` blocks on `correctness` only, and quotes each warning's OWN hint rather than pasting one summary
 // sentence ("op hit a missing item / skeletal seed") onto every producer — that string sent a 12-hour investigation
 // to the wrong file.
-const SEVERITY = { CORRECTNESS: "correctness", FIDELITY: "fidelity" };
+// EXPORTED (ENG-96204) so the OTHER axis that needs it — the open verify rows in `designspec.mjs` — ranks on the
+// SAME two tokens instead of minting a second vocabulary that agrees only until someone edits one of them. The two
+// deciding sentences above are the contract for both surfaces; `rowSeverity` in `designspec.mjs` states how a
+// CHECKLIST ROW answers them, which is a different question from how a merge-replay warning does.
+export const SEVERITY = { CORRECTNESS: "correctness", FIDELITY: "fidelity" };
 
 // diff replay — one op against the accumulated item map. `warnings` collects the non-fatal diagnostics.
 // ALIASES. `saveAlias` (core `json-applier.js` L554-566) keys the table by the ALIAS's declared name and stores the

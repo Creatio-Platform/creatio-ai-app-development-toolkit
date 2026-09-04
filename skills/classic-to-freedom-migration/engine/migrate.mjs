@@ -79,7 +79,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild } from "./designspec.mjs";
+  boundaryChild, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -161,7 +161,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, inheritedResolutions: ctx.resolutions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -727,7 +727,17 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // `present` = this entity HAS an active rule marked use-on-save; `serviceConfigured` = the target stand can
 // actually run the Freedom flow. Both are needed because they fail differently: no rule means nothing to lose,
 // while a rule + no service means the check silently stops at migration (measured — see mapDedupOnSave).
-const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
+// `schemaNamePrefix` (ENG-96457, item 3) joins them because it is the same KIND of fact — a value that lives on the
+// stand, is invisible in every schema body, and silently corrupts the plan when guessed. The stand applies
+// `SchemaNamePrefix` to every code `create-app` / `create-page` is given, so a plan that names the app code
+// `UsrBusinessRuleFreedom` on a `Usr`-prefixed stand asks for the package `UsrUsrBusinessRuleFreedom`. That is
+// exactly what happened in ENG-96445: the ENG-95468 identifiers gate caught it on the BUILD and cost a whole run
+// plus a re-approval. Read it at plan time instead — `query-sys-settings` code `SchemaNamePrefix`, or clio
+// `odata-read SysSettings` — and record the value:
+//   "schemaNamePrefix": { "resolved": true, "value": "Usr" }
+// An EMPTY string is a valid answer (a stand that prefixes nothing); "never read" is not, which is why this is a
+// gate key and not an optional hint. The build-time gate stays as the safety net it was.
+const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication", "schemaNamePrefix"];
 // Is signal `k` still UNRESOLVED? The generic rule is "absent, not an object, or resolved !== true". `deduplication`
 // adds ONE field-aware clause, because the key carries two facts and the gate must not pass on half of them: a rule
 // IS present but `serviceConfigured` was never recorded is precisely the likely real-world half-answer (an operator
@@ -741,7 +751,57 @@ function signalUnresolved(k, signals) {
   // service requirement into the mapper's "serviceConfigured unrecorded" branch — that is the same half-answered
   // plan this clause exists to block. The mapper reads `present` the same way.
   if (k === "deduplication" && s.present && typeof s.serviceConfigured !== "boolean") return true;
+  // `schemaNamePrefix` carries a VALUE, not a present/absent flag, so `resolved:true` alone is not an answer: the
+  // whole point is the string the stand prefixes. A non-string (or an omitted `value`) is the half-answer here —
+  // `{ resolved: true }` with nothing read would derive an app code against `undefined`. `""` is a real answer.
+  if (k === "schemaNamePrefix" && typeof s.value !== "string") return true;
   return false;
+}
+// ENG-96457 (item 3) — THE APP CODE, DERIVED FROM THE STAND INSTEAD OF TYPED BY HAND, for the ONE case that mints
+// an app (`placement.sectionHost.mode = new-app`). `create-app` takes a code and
+// the stand prepends `SchemaNamePrefix` to it, so the package that appears is `prefix + code` — never the code
+// itself. The plan therefore cannot state an app code without stating the prefix it will be read under, and the
+// only code that yields the plan's own target package is `targetPackage` MINUS that prefix. Returns:
+//   { code }        the code to hand `create-app` (prefix stripped, so `prefix + code === targetPackage`)
+//   { prefix }      the stand's value, or `null` while the signal is unresolved
+//   { pkg }         the package that code will actually produce (`prefix + code`)
+//   { supplied }    what the manifest recorded, kept so a correction is visible rather than silent
+//   { corrected }   the manifest's code would have produced a DIFFERENT package than this one
+//   { mismatch }    `prefix + code` cannot equal `targetPackage` at all — the target package name does not start
+//                   with the stand's prefix, so no `create-app` code can produce it (a decision, not a derivation)
+// The code stem `create-app` must be given so the package comes out as `target`: the target package minus the
+// stand's prefix. Own function, not a ternary chain: three cases, and the empty-prefix one is easy to misread.
+// With prefix `""` every string "starts with" it and `slice(0)` is a no-op — the correct behaviour anyway, since a
+// stand that prefixes nothing leaves the code as the package. No target recorded ⇒ nothing to derive FROM, so the
+// supplied code stands and the caller reports the package it makes.
+function appCodeStem(target, prefix, supplied) {
+  if (!target) return supplied || "";
+  if (prefix && target.startsWith(prefix)) return target.slice(prefix.length);
+  return target;
+}
+// The one host mode that MINTS an app, named so the two comparisons below cannot drift apart.
+const HOST_NEW_APP = "new-app";
+export function deriveApplicationCode(manifest, signals = {}) {
+  const sig = signals.schemaNamePrefix;
+  const mode = manifest?.placement?.sectionHost?.mode ?? null;
+  const supplied = typeof manifest?.placement?.application?.code === "string" ? manifest.placement.application.code.trim() || null : null;
+  const target = typeof manifest?.targetPackage === "string" ? manifest.targetPackage.trim() : "";
+  const prefix = (sig && typeof sig === "object" && sig.resolved === true && typeof sig.value === "string") ? sig.value : null;
+  const base = { code: supplied, prefix, pkg: null, supplied, corrected: false, mismatch: false, mints: mode === HOST_NEW_APP };
+  // ONLY `new-app` derives. Under `existing-app` the code is a FACT read off the stand — the app already exists,
+  // nothing prepends anything to its code, and rewriting it from the target package would point the section at an
+  // app that does not exist. Under `pages-only-no-menu` (and with no placement recorded) no app is named at all.
+  // The prefix question is exactly "what will `create-app` create", so it applies to the minting case and no other.
+  if (mode !== HOST_NEW_APP || prefix == null) return base;
+  // No target package recorded → nothing to derive FROM; keep the supplied code and report the package it makes.
+  // `startsWith` on a non-empty prefix only: with prefix `""` every string "starts with" it and slice(0) is a no-op,
+  // which is the correct behaviour anyway (a stand that prefixes nothing leaves the code as the package).
+  const code = appCodeStem(target, prefix, supplied) || null;
+  const pkg = code == null ? null : prefix + code;
+  return { code, prefix, pkg, supplied, mints: true,
+    corrected: !!(code && supplied && supplied !== code),
+    // a target package that does not carry the prefix is unreachable through `create-app` on this stand
+    mismatch: !!(target && pkg && pkg !== target) };
 }
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
 // built five pages, and only then discovered that `create-app-section` cannot run at all: the owning app was an
@@ -763,7 +823,7 @@ const PLACEMENT_KEYS = ["targetPackageEditable", "application", "primaryPackage"
 // vendor/install wrapper). `pages-only-no-menu` — pages ship, the section is deliberately NOT registered; a
 // legitimate outcome, but an APPROVED one, never a silent fallback: the whole point of this gate is that the
 // missing menu entry is a plan decision, not a surprise found two hours into a build.
-const SECTION_HOST_MODES = ["existing-app", "new-app", "pages-only-no-menu"];
+const SECTION_HOST_MODES = ["existing-app", HOST_NEW_APP, "pages-only-no-menu"];
 // The placement facts, checked. Pure in `manifest`; returns the human-readable blockers (empty = clear), so the
 // CLI can gate `--plan` on it exactly like planMeta/signals. Order matters: unresolved keys are reported first
 // and stop there, because a rule evaluated over a missing fact would just invent a verdict.
@@ -817,6 +877,7 @@ export function checklistOpts(manifest, opts = {}) {
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
   // key still wins. Without this every fold saw `{}` and every signal-driven row silently vanished below the root.
   const signals = { ...plainObject(opts.inheritedSignals), ...plainObject(manifest.signals) };
+  const appCode = deriveApplicationCode(manifest, signals);
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
@@ -832,7 +893,12 @@ export function checklistOpts(manifest, opts = {}) {
     // The app the section is registered INTO, published so the build side never has to guess one. In the run this
     // exists for, the agent doing the registration had no application code in front of it and invented one off the
     // stand — against an app that could not host a section at all.
-    applicationCode: manifest.placement?.application?.code ?? null,
+    // ENG-96457 (item 3) — DERIVED, not copied. The stand prefixes every code `create-app` is given, so the code
+    // that yields this plan's own target package is `targetPackage` minus `SchemaNamePrefix`. `appCode` carries the
+    // whole derivation (prefix read, package produced, whether the manifest's own code was corrected) so the plan
+    // can SAY it and `--units` can publish it; `applicationCode` stays the single code a build unit passes on.
+    appCode,
+    applicationCode: appCode.code,
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
   };
@@ -2271,11 +2337,15 @@ export function runMigration(manifest, opts = {}) {
   // derives its own from it and the renderers below reuse it verbatim. Pure in manifest + the run flags, so
   // building it early changes nothing about its value.
   const specOpts = checklistOpts(manifest, opts);
+  // ENG-96457 (item 5) — the operator's recorded ANSWERS, so `--plan` renders each answered ⚠ row as its answer
+  // instead of re-asking it. A resolution index, not a file path: the CLI reads and validates the file once.
+  // Inherited by nested folds like `signals`, because the answers are recorded once for the whole run.
+  specOpts.resolutions = opts.resolutions ?? opts.inheritedResolutions ?? null;
   // `targetPackage` rides on the fold context SEPARATELY from `checklistOpts` (D5/F3): `checklistOpts` is rebuilt
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, resolutions: specOpts.resolutions }; // shared fold context for foldSubPage (child/typed/mini)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -2559,7 +2629,9 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
-  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`";
+  " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
+  '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
+  " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
 // absent ⇒ a stderr note and `null` (the normal first run, NOT an error) · unparseable ⇒ exit 1 · unusable
 // entries ⇒ exit 1, each named. Never let either failure degrade into the absent case.
@@ -2721,6 +2793,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
+  // ENG-96204 — the SAME file also carries the RUN-LEVEL answers, under the reserved kind `run`: `{"kind":"run",
+  // "item":"control-mode","answer":"round1"}` chooses this invocation's control mode, and `item: "round-<N>"`
+  // authorises round N. They are republished verbatim at `--units.runResolutions` and are deliberately NOT judged
+  // here — the executor owns the mode vocabulary, and an engine that rejected an unknown mode would be a second
+  // place that vocabulary lives. They are excluded from the unmatched report: they answer no ⚠ Confirm question by
+  // construction, so reporting them would call a correctly-recorded mode choice an answer nobody asked for.
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
@@ -2729,8 +2807,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `missing`. Without this the acceptance mechanism was reachable from the API and NOT from the command line,
   // which is the only way anyone actually runs the gate — caught by running the CLI, not by the unit tests.
   // Every other kind stays what it was: an INPUT to the build that closes no verify row.
-  if (resolutionsFile && !unitsMode && !verifyMode)
-    fail("`--resolutions <file>` applies to `--units` (it attaches the operator's answers to that run's ⚠ Confirm queue items) and to `--verify` (it applies `kind: \"accepted\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
+  // ENG-96457 (item 5) — `--plan` accepts it too. It used to be `--units`-only, which is precisely how the approved
+  // `plan.md` and the payload the builder acted on came to disagree: every ⚠ question was answered, and the document
+  // a human had signed off still showed the unanswered worklist and the 1-column fallback table.
+  if (resolutionsFile && !(unitsMode || planMode || verifyMode))
+    fail("`--resolutions <file>` applies to `--units`, `--plan` (it attaches the operator's answers to that run's ⚠ Confirm items) and to `--verify` (it applies `kind: \"accepted\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -2769,8 +2850,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.schemas) || manifest.schemas.length === 0) {
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
+  // ENG-96457 (item 5) — read ONCE, before the run: `--plan` renders the answers and `--units` attaches them, so
+  // both modes must see the same validated index (and the same exit-1 on a malformed file).
+  const resolutionIndex = resolutionsFile ? readResolutions(resolutionsFile, fail) : null;
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), resolutions: resolutionIndex }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
   // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
@@ -2782,7 +2866,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null;
-  if (planMode) output = result.plan + "\n";
+  if (planMode) {
+    output = result.plan + "\n";
+    // ENG-96457 review — the two discarded-answer reports run under `--plan` as well, not only `--units`.
+    // They are computed inside `pageUnits`, which `--plan` never called, so a typo'd or stale key was
+    // dropped with NO diagnostic on the one mode whose whole point is that the approved document and the
+    // payload the builder acts on say the same thing. Gated on an answers file actually being passed, so a
+    // plain `--plan` run pays nothing for it.
+    if (resolutionIndex) {
+      const planUnits = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
+      if (planUnits.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(planUnits.resolutionsUnmatched));
+      if (planUnits.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(planUnits.resolutionsConflicts));
+    }
+  }
   else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
   else if (checklistMode) output = pageArg
     // Re-rendered rather than cut out of `result.checklist`: that string is already assembled, and slicing a
@@ -2829,7 +2925,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // publishes no machine set at all (its ⛔ banners are rendered directly by `renderPlan`, and its own exit-2
     // gate is the `planMode`-only `planIncomplete` below). A shared constant implied a pairing the code does not
     // have — unlike `--resolved-gates`, whose guard genuinely reads both modes.
-    const units = pageUnits(result, { ...checklistOpts(manifest), planCompleteness: true, resolutions: readResolutions(resolutionsFile, fail) });
+    const units = pageUnits(result, { ...checklistOpts(manifest), planCompleteness: true, resolutions: resolutionIndex });
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;
@@ -2965,6 +3061,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // — MY BUILD is short — and it IS repairable on-stand. Until now `--verify` exited 2 with no stderr line at all,
   // so the two were indistinguishable.
   if (verifyIncomplete) {
+    // Per page, the same distinction as the headline: `missing` folds the judge-rejected rows in, so a page whose
+    // build is whole but whose evidence was rejected read "3 missing" and sent a reader hunting for absent fields.
+    const pageShortfall = (p) => {
+      // PR review — `?? p.missing` and not `?? 0`, matching `shortfallOf` (`helpers.mjs`), whose comment states the
+      // rule this copy has to follow too: an absent `buildMissing` OVER-reports the build axis, never a false zero.
+      // With `?? 0` a page entry that predates the field read `rejected = missing`, i.e. "0 missing" on a page whose
+      // build really is short. Unreachable today (the object is the in-process tally), but this is the copy a future
+      // reader imitates.
+      const buildMissing = p.buildMissing ?? p.missing ?? 0;
+      const rejected = (p.missing ?? 0) - buildMissing;
+      return rejected > 0 ? `${buildMissing} missing + ${rejected} judge-rejected` : `${p.missing ?? 0} missing`;
+    };
     // ENG-95901 — the SCOPED (`--page`) in-context gate exits 2 on `buildComplete: false` alone (at least one open
     // row the BUILDER owns), never on unfiled evidence, so this WHOLE diagnostic — headline counts, per-page
     // breakdown, and the repair advice — must talk about the builder's own rows for that caller. Surfacing the
@@ -2977,7 +3085,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // narrows.
     const pageGaps = pageArg
       ? Object.entries(verifyRes.pages).filter(([, p]) => p.buildComplete !== true).map(([k, p]) => `${k}: ${p.builderOpen} open`)
-      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${p.missing} missing / ${p.unverified} unconfirmed`);
+      : Object.entries(verifyRes.pages).filter(([, p]) => !p.complete).map(([k, p]) => `${k}: ${pageShortfall(p)} / ${p.unverified} unconfirmed`);
     // The six-page truncation is a READABILITY limit on this human line only. The full, uncapped per-page verdict
     // — every open page, with its open rows — is what `--verify-json` writes; nothing machine-readable is capped.
     let overflow = "";
@@ -2985,14 +3093,42 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const where = verifyJsonFile ? `all of them in ${verifyJsonFile}` : "re-run with `--verify-json <file>` for the full, uncapped per-page verdict";
       overflow = ` | …and ${pageGaps.length - 6} more (${where})`;
     }
-    const repairAdvice = pageArg ? "build / complete the pieces named in the rows, then re-verify" : "build the missing pieces / file the on-stand evidence, then re-verify";
+    // ENG-95901 (reopened) — the UNSCOPED headline said "YOUR BUILD is incomplete: N MISSING" while every one of
+    // those N was an evidence row the judge rejected, i.e. a record filed unconvincingly by a SEPARATE read-only
+    // agent and not one deliverable short on the page. The exit code and the gating predicate are untouched (AC7/AC8
+    // — for a human, a rejected record is still a reason not to call it done); what changes is that the line names
+    // WHICH of the two it hit, so the close report and a reader stop calling a re-filing job a build gap.
+    const rejectedNote = verifyRes.rejected > 0
+      ? ` + ${verifyRes.rejected} evidence row(s) REJECTED by the judge (re-FILE the record — not a build gap)`
+      : "";
+    // The BANNER and the advice follow the same number. Leaving them fixed would have the line say "YOUR BUILD is
+    // incomplete … build the missing pieces" on a run whose build is whole and whose only ❌ rows are records the
+    // judge rejected — the very sentence the reopened ticket quotes as what sent a reader hunting for absent fields.
+    // PR review — the claim keys on `builderOpen`, NOT on `buildMissing`. `buildMissing` is `missing` narrowed by
+    // owner, so it inherits `missing`'s blind spot: a partially built page resolves `unverified`
+    // (`resolveFieldsByIdentity` returns it for ANY field count below expected, including `0/N`; `resolveCountVk` for
+    // any partial component count; "no `--built.pages` entry" too), which leaves `buildMissing === 0` on the most
+    // common intermediate state of a run — and the line then read "YOUR BUILD is not short … nothing here is built"
+    // while fields were genuinely absent, routing a repair round away from real build work. `builderOpen ===
+    // buildMissing + builder-owned unverified` covers BOTH halves of the builder's own work, so the pure-rejection
+    // case this ticket targets still yields `builderOpen === 0` and keeps its new banner.
+    const buildIsShort = pageArg || (verifyRes.builderOpen ?? 0) > 0;
+    const banner = buildIsShort ? "YOUR BUILD is incomplete" : "the RUN is not done — but YOUR BUILD is not short";
+    let repairAdvice = "build the missing pieces / file the on-stand evidence, then re-verify";
+    if (pageArg) repairAdvice = "build / complete the pieces named in the rows, then re-verify";
+    else if (!buildIsShort) repairAdvice = "the open rows are the read-only verifier's / judge's to file or re-file — re-run the evidence pass, then re-verify; nothing here is built";
     const headline = pageArg
       ? `${verifyRes.builderOpen} open deliverable(s) YOU OWN across ${pageGaps.length} page(s)`
-      : `${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
-    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
+      : `${verifyRes.buildMissing} MISSING from the build${rejectedNote} + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s)`;
+    process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — ${banner}: ${headline}. ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: ${repairAdvice}.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
+  // ENG-96457 (item 6) — the authoring rule reaches the AGENT here, on stderr, instead of being the last line of
+  // `plan.md`. It is generator guidance, not plan content: a delivered plan must not end by telling its reader to
+  // fill `manifest.planMeta`. Printed on every `--plan` run (complete or not) because the "do not hand-edit the
+  // generated tables" half applies to a COMPLETE plan too — that is the rule agents break.
+  if (planMode) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
