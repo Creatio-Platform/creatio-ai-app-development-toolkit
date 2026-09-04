@@ -4796,6 +4796,21 @@ check("ENG-96204: a TYPO'd `defaultMode` THROWS at launch, before the first agen
     [LAYOUT_DONE({ roundsSpent: 1, runResolutions: [{ item: "round-2", answer: "go" }] }),
       LAYOUT_DONE({ roundsSpent: 2, roundOf: { main: 1 }, runResolutions: [{ item: "round-2", answer: "go" }] })]);
   const logicBuild = buildCalls(logicPass.calls)[0]?.prompt || "";
+  /* THE COUNT THE CARRY INSTRUCTS, not the count a fixture happens to answer (Fable review, Blocker).
+     `logicPass`/`authorisedLayoutResume` above script their SECOND Reconcile with `roundsSpent: 2`, i.e. the
+     state the folder should be in after the logic pass. Nothing asserted that the run ever ASKS for that number,
+     and it did not: `roundsBefore` was seeded from the per-unit repair counters only, which a layout pass never
+     charges, so on the logic pass it fell back to 0 and the carry instructed `roundsSpent` = 0 + 1 = 1 over a
+     file that already said 1. The count never advanced, the stop re-asked for the `round-2` the operator had
+     just spent, and the NEXT invocation's gate refused it as consumed — a deadlock, while telling the operator
+     they had lowered the number by hand. The fixtures were green over it because they answered 2 regardless.
+     Both checks below read what the run itself emits, so neither can pass on a fixture's say-so. */
+  check("Fable review (Blocker): the LOGIC pass instructs the queue writer to advance `roundsSpent` to 2 — the carry's number must be the folder's real count, not the per-unit repair counters, which a layout pass never charges",
+    /set the ROOT key `roundsSpent` to `2`/.test(persistPrompt(logicPass.calls)),
+    () => (/ROUNDS SPENT[^\n]*/.exec(persistPrompt(logicPass.calls)) || ["(no ROUNDS SPENT instruction in the persist prompt)"])[0]);
+  check("Fable review (Blocker): and the LOGIC pass stop asks for `round-3`, NOT the `round-2` it just consumed — a stop that re-asks a spent item deadlocks the mode on the next invocation, because the gate refuses it by record",
+    /round-3/.test(logicPass.res.next || "") && !/`round-2`/.test(logicPass.res.next || ""),
+    () => ({ asks: (/round-(\d+)/.exec(logicPass.res.next || "") || [])[0], consumed: logicPass.res.consumedRoundAnswers }));
   check("PR review F2 (R9 x R7): WITH the round-2 answer on file the same resumed run builds exactly ONE round — so the gate that now refuses is opened by the operator's word and by nothing else",
     !logicPass.res.threw && buildCalls(logicPass.calls).length === 1,
     () => (logicPass.res.threw ? `threw: ${logicPass.res.threw}` : `builds=${buildCalls(logicPass.calls).length}`));

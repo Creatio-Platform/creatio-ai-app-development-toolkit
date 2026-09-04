@@ -720,10 +720,16 @@ export function roundsSpentOnFile(state) {
 // so it is defended the way `roundsSpentOnFile` defends its integer. A union and never a replacement — an entry is
 // never un-spent, whichever of the file and the process learned of it first.
 export function mergeConsumed(current, incoming) {
+  // SHAPE-CONSTRAINED, not merely non-blank (Fable review, Minor). The only items this list ever holds are the
+  // round-authorisation keys `roundDecisionItem` mints, so anything else arriving from the queue file is either a
+  // hand edit or a transcription slip — and an unconstrained string rides raw into the persist prompt's carry
+  // block and into `run-status.md`'s "spent" line. Dropping it is safe in the direction that matters: an item the
+  // gate would never look for cannot authorise anything, so discarding it can only ever REFUSE a round, never
+  // grant one.
   const out = []
   for (const x of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
     const s = typeof x === 'string' ? x.trim().toLowerCase() : ''
-    if (s && !out.includes(s)) out.push(s)
+    if (/^round-\d+$/.test(s) && !out.includes(s)) out.push(s)
   }
   return out
 }

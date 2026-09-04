@@ -56,7 +56,7 @@ import {
   // ENG-96204 — the control-mode names, imported for the same MODULE-path reason stated above: the inlined Claude
   // artifact shares one scope and would not notice a missing name, the Codex/CLI path resolves them through here.
   isLayoutPassMode, openCountsOf, passScopeText, resolveControlMode, roundDecisionItem,
-  roundsOnFile, runResolutionAnswer, runStatusDoc, stopsAtRoundBoundary,
+  runResolutionAnswer, runStatusDoc, stopsAtRoundBoundary,
   roundAnswerVocabulary, roundAuthorised, roundsSpentOnFile,
   mergeConsumed,
 } from './helpers.mjs'
@@ -1306,7 +1306,16 @@ for (const k of state.resolutionsPending || []) resolutionsPending.add(idKey(k))
   // instead of running a second layout pass. `=== true` and not truthiness: an absent field on a folder written
   // before this marker existed must read as "no layout pass on record", which is the correct answer for it.
   layoutPassDone = state.layoutPassDone === true
-  roundsBefore = roundsOnFile(state.roundOf)
+  // THE FOLDER'S OWN COUNT, and it must be the SAME number `roundsSpentNow()` computes — `roundsSpentOnFile`, not
+  // `roundsOnFile`. Seeding this from the per-unit repair counters alone dropped the root `roundsSpent` key, which
+  // is the very record added to stop a `layout-first` folder reading as fresh: the layout pass charges no per-unit
+  // counter, so on the logic pass `roundsBefore` fell back to 0, the carry instructed `roundsSpent` = 0 + 1 = 1
+  // over a file that already said 1, and the count never advanced. The stop then re-asked for the `round-N` the
+  // operator had just spent, the gate refused it as consumed, and the run deadlocked while accusing them of having
+  // lowered the number by hand. `layoutPassDone` is folded in for the same reason it is an input to
+  // `roundsSpentNow`: a layout pass IS a round whichever record survived. With this seed
+  // `roundsBefore + round === roundsSpentNow()` by construction, which is what the F4 comment below claims.
+  roundsBefore = Math.max(roundsSpentOnFile(state), layoutPassDone ? 1 : 0)
   consumedRoundAnswers = mergeConsumed([], state.consumedRoundAnswers)
   if (isLayoutPassMode(mode)) {
     log(layoutPassDone
@@ -3475,7 +3484,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const { affirmative, negative } = roundAnswerVocabulary()
     const authorise = `record \`{"kind":"run","item":"${roundDecisionItem(nextRound)}","answer":"go"}\` in \`${RESOLUTIONS_FILE}\` and re-run this workflow with the SAME args — that entry is what authorises round ${nextRound}, and without it the re-run stops again rather than building. The answer is CHECKED, not merely read: \`${affirmative.join('\` / \`')}\` authorise the round, \`${negative.join('\` / \`')}\` decline it and stop, and ANYTHING ELSE (including a typo or "maybe later") is read as NOT authorised — this run refuses rather than guesses, because the round it would guess its way into writes to a live stand`
     const layoutNote = layoutPass
-      ? ' Round 1 built LAYOUT ONLY: the business-rules and handler rows below are SCHEDULED for the logic pass, not a shortfall of this round — do not repair them by hand. The next round ports them.'
+      ? ' Round 1 built LAYOUT ONLY: the business-rules and handler rows counted above are SCHEDULED for the logic pass, not a shortfall of this round — do not repair them by hand, and do not read them as work this round failed to do. The next round ports them. The rows themselves are in the verify table, not in this message.'
       : ''
     return `read \`${RUN_STATUS_FILE}\` — it holds what was built, the open COUNTS per unit, the parked units with their reasons, and this step; the open ROWS themselves are in \`${VERIFY_TABLE}\` (the table) and \`${VERIFY_JSON}\` (the same rows machine-readable, each stamped \`rowSeverity\`: \`correctness\` / \`fidelity\`), so read those before repairing anything.${layoutNote} Check the pages that were built on \`${input.environment}\`. If one is wrong, add \`findings: [{ unit: "<key>", problem: "<what is wrong>" }]\` to the re-run: that re-opens the unit even when the gate calls it complete, which is the only way a defect in a ported handler gets fixed (those rows carry no verification key). Then ${authorise}.`
   }
