@@ -708,7 +708,7 @@ Details of the record shapes, the ids and the judge tri-state:
   alone, so only an interrupted run carried across the upgrade starts over.
   **The deliberate no-override** — why this terminal stop offers no flag, answer, or run-scoped acknowledgement to
   proceed on a catalog answer, and the alternatives that were rejected — is recorded in
-  `./references/05-decision-records.md` (DR-1).
+  `./references/05-decision-records.md` (DR-8).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.
