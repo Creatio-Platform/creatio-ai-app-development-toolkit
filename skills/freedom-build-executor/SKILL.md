@@ -685,6 +685,57 @@ Details of the record shapes, the ids and the judge tri-state:
   a code that yields the planned package — the prompt hands it the exact `code` (`SchemaNamePrefix` + code =
   `targetPackage`, so the code is arithmetic). "Choose the code so the package comes out right" is the instruction a
   real run followed to a package the plan did not name; the read-back equality on `packageName` stays the backstop.
+- A plan that was **never validated against the stand at all** — a different stop from the one above, and it comes
+  FIRST on the same stop point. `get-component-info` does not fail when it cannot probe the environment: it answers
+  from its BUNDLED `latest` catalog and still reports `resolved: true`, recording the substitution only in free text.
+  A round that read those answers checked nothing about the stand, so each entry of Reconcile's sweep now carries
+  `resolvedFrom` — `'stand'` (this environment answered) or `'catalog'` (it did not) — and only `'stand'` is a
+  confirmation. Any catalog-sourced answer **stops the run** (`stopped: 'plan-unvalidated-against-stand'`,
+  `standUnconfirmedComponents` on every return) before the first build unit, and again at every in-run Reconcile for
+  a stand that goes away mid-run. This is **not** a re-plan: nothing about a catalog answer implicates the plan —
+  a catalog `resolved: false` is no more evidence about this stand than a catalog `resolved: true` — so the `next`
+  points at the environment (registration, DNS, credentials, `clio ping`) and asks for a re-run. There is no
+  override: a stand whose version cannot be probed while it is otherwise up produces the same catalog answer, and
+  reading that as a confirmation is the defect. `resolvedFrom` is REQUIRED on every entry, enforced by the
+  response-shape check rather than the byte-capped output schema, so it cannot be dropped to switch the gate off
+  (ENG-95468).
+  Details a reader will otherwise get wrong (all from the PR #159 review):
+  the value is matched **case-insensitively**, so a capitalisation variant cannot hard-stop a healthy round, and a
+  word that names **neither** literal is a **shape fault** — refused and retried, not read as "did not reach the
+  stand" — so a model synonym (`on-stand`, `environment`) cannot drive the terminal environment-remedy stop on a
+  healthy round either; the fail-closed arithmetic remains only as defence in depth, over a value that already
+  survived the fault;
+  a **blank** `resolvedFrom`, and a sweep that resolves **none** of the plan's published types, are both **shape
+  faults** rather than verdicts — the answer is refused and the informed retry names the field, so a transport
+  artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated round
+  (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). The absence door
+  that pairs with it — dropping **both** `componentTypes` and `componentResolution` at once, which would leave the
+  sweep nothing to gate against — is closed at the host: `componentTypes` is now in `RECONCILE_SCHEMA.required` (room
+  made by trimming a superfluous per-string cap on `sectionRouteByRun`), so an answer omitting the key is refused
+  before the model runs. `[]` stays the honest value for a plan with no gated types, so a correct run pays nothing;
+  a **`stand` claim** whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) is a
+  shape fault — a mis-classified catalog answer is caught while those tokens survive into the note. This is a
+  **best-effort** cross-check over free text clio owns, **not** a machine-verified guarantee (the earlier docs
+  overstated it): a `stand` claim with **no note at all** is NOT cross-checked and is not faulted — a healthy
+  `resolved: true` stand answer legitimately carries no note, so faulting the empty case would tax every healthy round
+  to close a bypass whose durable fix is a structured provenance field from clio (DR-8). That residual is declared,
+  not hidden: the coupling to clio's note wording is written down in `AGENTS.md` and guarded by a token-drift test, so
+  a clio rewording fails a named test instead of switching the cross-check off unseen. (`resolvedFrom` is the
+  toolkit's own two-word field, distinct from clio's like-named `resolvedFrom`.)
+  Every stop on this point **carries the other three axes** — an unresolved component type the stand DID answer, an
+  unresolvable template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
+  precondition stop does, and the mid-run package-precondition stop now carries them too, so a mixed round yields
+  every fix in one pass. The component axis is scoped to stand-answered entries there, which is what keeps a catalog
+  `resolved: false` out of a re-plan instruction.
+  **Resume across this change:** because `resolvedFrom` is now required, a run **journal** recorded before the field
+  existed replays `componentResolution` entries that lack it, so a mid-flight **resume** across the upgrade re-faults
+  the replayed answer and stops with `run journal drifted … Start a fresh run` — cross-version journal replay is not
+  supported (the driver's drift check already declares it). This is a fast stop, not a re-execution: nothing is
+  re-spent, and a **fresh** run off the same folder is unaffected — the arithmetic leaves a provenance-less entry
+  alone, so only an interrupted run carried across the upgrade starts over.
+  **The deliberate no-override** — why this terminal stop offers no flag, answer, or run-scoped acknowledgement to
+  proceed on a catalog answer, and the alternatives that were rejected — is recorded in
+  `./references/05-decision-records.md` (DR-8).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.
@@ -700,6 +751,7 @@ Read the file that matches what you are doing. Do not read them all up front.
 | deciding whether to repair, park, or stop | `./references/03-failure-and-park-policy.md` |
 | building one page | `./references/04-per-page-build-recipe.md` |
 | why this workflow's agent-facing contract changed, and what a caller must do about it | `./references/05-decision-records.md` |
+| understanding a deliberate refusal (why a stop offers no override) | `./references/05-decision-records.md` |
 | mapping a Classic construct to a Freedom one | `../classic-to-freedom-migration/references/classic-to-freedom-mapping.md` |
 
 ## How to run it — the three routes, in preference order

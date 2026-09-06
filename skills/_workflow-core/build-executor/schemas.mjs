@@ -55,8 +55,10 @@ export const CARRY_TEXT_CAP = 400
 // `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
-// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 4085 —
-// it is the run's first agent, so its refusal costs the whole run.
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` at 4061 bytes —
+// it is the run's first agent, so its refusal costs the whole run. ENG-95468 (PR #159, RC-4) added `componentTypes`
+// to `required` and made room for it by dropping `sectionRouteByRun`'s superfluous per-string `maxLength` (the
+// answer's total size is bounded by `reconcileShapeErrors`, and that object's four short fields are shape-checked).
 //
 // Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
 // list stay: the core computes on all of them. What the schema does not describe, `reconcileShapeErrors` checks
@@ -115,6 +117,16 @@ export const RECONCILE_SCHEMA = {
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
     // CLI-enforced), never an empty prefix quietly decoding as unreadable and switching the identity gate off.
     'schemaNamePrefixEmpty',
+    // ENG-95468 (PR #159 review, RC-4) — `componentTypes` is REQUIRED so it can never be dropped. It is what the
+    // component gate reads to know what the plan published, and `componentResolution` is the sweep against it; an
+    // answer that omitted BOTH switched the whole gate off by absence (FAULT 2 could not fire — it had nothing to
+    // count against), which is the ST_2 failure one field along. `[]` is the honest answer for a plan with no gated
+    // types (the prompt says so), so requiring the KEY costs a correct run nothing while closing the omit-both door
+    // at the host, before the model runs. Host-enforced, so it does not need — and could not have — a
+    // `componentSweepFaults` arrival fault, which would refuse the legitimate no-gated-types state. Room for it was
+    // made by dropping `sectionRouteByRun`'s superfluous per-string `maxLength` (its four short identifier fields are
+    // shape-checked by `RECONCILE_SHAPE` and bounded by the answer's total-size check) — see its property below.
+    'componentTypes',
     'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
@@ -167,7 +179,12 @@ export const RECONCILE_SCHEMA = {
     // schema was shrunk under the host's 4096-byte refusal: no property is dropped, only its nested SHAPE
     // description, which `reconcileShapeErrors` then checks on arrival. Spelling the four keys out here cost
     // ~150 bytes on the run's FIRST agent's schema, whose refusal costs the whole run.
-    sectionRouteByRun: { type: ['object', 'null'], additionalProperties: { maxLength: RECONCILE_TEXT_CAP } },
+    // NO per-string `maxLength` here (PR #159 review, RC-4): its four fields are short identifiers
+    // (`route` / `schemaName` / `sectionHost` / `planVersion`), `RECONCILE_SHAPE.sectionRouteByRun` already requires
+    // and types them, and the answer's TOTAL size is bounded by `reconcileShapeErrors` (the real cap, per the header
+    // above). Dropping the ~41-byte cap that added nothing those two layers do not is what made room for
+    // `componentTypes` in `required` above, keeping this schema under the host's 4096-byte cap.
+    sectionRouteByRun: { type: ['object', 'null'] },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -184,21 +201,45 @@ export const RECONCILE_SCHEMA = {
     applicationCode: { type: ['string', 'null'] },
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
+    // REQUIRED (PR #159 review, RC-4 — see the `required` list above): it and `componentResolution` are the two
+    // plan-derived halves of the component gate, and an answer omitting BOTH switched the gate off by absence. `[]`
+    // is the honest value for a plan with no gated types; the host refuses an answer that omits the key entirely.
     componentTypes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
-    // resolved against the TARGET stand: `{ type, resolved, note }`. This is what the pre-build component gate
+    // resolved against the TARGET stand: `{ type, resolved, resolvedFrom, note }`. This is what the pre-build component gate
     // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
-    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL:
-    // an agent/plan that does not report it produces no component gate (absence is never read as a failure), so a
-    // run that predates this field behaves exactly as it did before.
+    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL TO
+    // THE ARITHMETIC: a type with no entry produces no component gate on it — a partial or absent sweep is left
+    // alone (absence is not evidence), so `standUnconfirmedComponents` / `componentTypeMismatches` behave over a
+    // provenance-less or partial sweep exactly as they did before this field. The ONE carve-out is a shape check,
+    // not the arithmetic (PR #159 review, Minor): a plan that PUBLISHED component types and swept NONE of them is
+    // refused by `componentSweepFaults` (FAULT 2) and retried, because a wholly-absent sweep would otherwise clear
+    // the gate by absence — the door the residual scope exists to close. A PARTIAL sweep stays un-faulted.
     // ENG-95683 DELIVERED the by-kind branch this comment used to defer: a `resolved: false` type carrying a
     // well-formed gated composite (`kind: 'composite'` + an `id` of gate-name shape) makes the stop say 'install
     // `id` (+enable `feature`) and re-run the BUILD' instead of the generic re-plan text. What is STILL open is
     // narrower: nothing here confirms the `id` is the RIGHT package for the type — that needs the engine's
     // `gateForComponentType` table, unreachable from a module inlined into the workflow script (see `helpers.mjs`
     // `gatedComposite`). Absent or malformed ⇒ the generic clause stands, so an older plan behaves as it did.
-    // One `{ type, resolved, note }` per entry, `type`/`resolved` required, plus ENG-95683's OPTIONAL typed gate on a
+    // One `{ type, resolved, resolvedFrom, note }` per entry, `type`/`resolved`/`resolvedFrom` required, plus ENG-95683's OPTIONAL typed gate on a
     // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
+    // ENG-95468 (residual) — `resolvedFrom` says WHERE the answer came from: `'stand'` (this environment answered)
+    // or `'catalog'` (it did not — `get-component-info` could not probe the environment and answered from its
+    // bundled `latest` catalog instead). Only `'stand'` is a confirmation; a catalog answer STOPS the round
+    // (`plan-unvalidated-against-stand`) rather than passing the gate on a round where nothing about the stand was
+    // checked. VOCABULARY (PR #159 review, Major 7): this toolkit-side field REUSES clio's field name `resolvedFrom`
+    // with a DIFFERENT two-word vocabulary — clio's own `resolvedFrom` is `latest-fallback` (etc.), which the agent
+    // reads out of the `get-component-info` note and CLASSIFIES into `stand`/`catalog` here. Because the gate rests on
+    // that classification, `componentSweepFaults` FAULT 3 cross-checks it against clio's machine tokens in the same
+    // entry's `note` (`probe-error` / `latest-fallback`): a `stand` claim over such a note is refused as a bundled-
+    // catalog answer, so the model cannot re-open the tool-side false positive this axis closed.
+    // REQUIRED — enforced in `RECONCILE_SHAPE`, which is not byte-capped, so the field cannot be dropped. NOTE on
+    // RESUME (PR #159 review, Major 4): requiring it means a run JOURNAL recorded before this field existed carries
+    // `componentResolution` entries without `resolvedFrom`, so a resume that REPLAYS such an answer re-validates it,
+    // faults, and the driver stops with `run journal drifted … Start a fresh run` — cross-version journal replay is
+    // not supported (it never was; the driver's drift check already declares it). The ARITHMETIC half is unaffected —
+    // `standUnconfirmedComponents`/`componentTypeMismatches` leave a provenance-less entry alone — so a fresh run off
+    // the same folder behaves exactly as before; it is only mid-flight RESUME across the upgrade that starts over.
     // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
     // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
     // the model ever ran. `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` carries them — a string cap does not constrain
@@ -408,8 +449,19 @@ export const RECONCILE_SHAPE = {
   // ENG-95683 — `kind`/`id`/`feature` are the OPTIONAL typed gate on a `resolved: false` composite; the by-kind
   // stop (`helpers.mjs` `GATE_COMPOSITE`) reads them. Declared here rather than in `RECONCILE_SCHEMA` for the mode-A
   // reason given above; absent/malformed still falls back to the generic re-plan clause.
-  componentResolution: { kind: 'array', required: ['type', 'resolved'],
-    types: { type: 'string', resolved: 'boolean', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
+  // ENG-95468 (residual) — `resolvedFrom` is REQUIRED, and THIS table is where that requirement costs nothing:
+  // `RECONCILE_SCHEMA` is bounded by the host's 4096-byte classifier cap and this checker is not, so the one field
+  // that must never be silently droppable rides here rather than there. An answer missing it spends an attempt and
+  // the informed retry names it (`reconcileAttempt`) — the same fail-closed treatment `schemaNamePrefixEmpty` earns
+  // for the same reason: a provenance field an agent may quietly omit is a gate that is switched off on exactly the
+  // round that needs it, and the round it was needed on cost five agents and 18 minutes for zero stand writes.
+  componentResolution: { kind: 'array', required: ['type', 'resolved', 'resolvedFrom'],
+    types: { type: 'string', resolved: 'boolean', resolvedFrom: 'string', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
+  // NO provenance field here, deliberately. The template sweep reads schemas (`get-schema` / `get-page` /
+  // `list-pages`), and those have no bundled-catalog substitute to fall back TO: a failed read is a failed read, and
+  // the prompt already orders it OMITTED rather than reported as `false`. The component axis needs a value because
+  // its tool answers from a catalog when the stand cannot be probed — that is a false POSITIVE, which omission
+  // cannot express (see `helpers.mjs` `standUnconfirmedComponents`).
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
   // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key

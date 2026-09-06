@@ -308,7 +308,7 @@ function buildScenarios() {
     buildOrder: ["child:Documents", "list", "main"],
     targetPackage: "DealPkg", packageState: "exists", mainEntity: "Deal",
     sectionHost: "existing-app", applicationCode: "DealApp",
-    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolved: true, note: "" }],
+    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "" }],
     pageSchemas: { "child:Documents": "DocsFormPage", list: "DealListPage", main: "DealFormPage" },
     parents: { "child:Documents": "main", list: "main" },
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
@@ -371,9 +371,43 @@ function buildScenarios() {
     // stand one. Both sides share the fixture, so parity passed either way — the bug was invisible here by design.
     { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["coverage INCOMPLETE (4 unaccounted member(s))"] })] }) },
     { name: "package state unknown — hard stop 3", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "unknown" })] }) },
-    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
-    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
-    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolved: true }] })] }) },
+    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "install CrtCustomer360App" }] })] }) },
+    // ENG-95468 (residual) — the PROVENANCE branch, driven through BOTH scripts for the reason the note below gives
+    // about the gated-composite branch: two copies of a decision that no scenario exercises can differ for a whole
+    // review round with every parity check green. A catalog-sourced answer must stop as `plan-unvalidated-against-
+    // stand` on both sides, and the un-swept scenario below is its negative twin (absence still logs, never stops).
+    { name: "a catalog-sourced component answer stops as unvalidated, not as a plan defect", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true }] })] }) },
+    // PR #159 review (Major 5) — the single-type catalog scenario above drives the provenance stop, but NOT the two
+    // branches the frozen mirror hand-writes into it: the `...alsoAxesClauses(...)` carry (only reached when a
+    // stand-answered defect rides beside the catalog answer) and the `falseFromCatalog` "do NOT re-plan on it" clause
+    // (only reached when the catalog answer is itself `resolved: false`). Deleting either from the mirror alone left
+    // parity green, the exact divergence class recorded on this PR. These two differential scenarios drive both.
+    { name: "PR #159 (Major 5): a MIXED round — a catalog answer beside a stand-confirmed defect — stops as unvalidated AND carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog answer that is ALSO resolved:false drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Blocker, RC-12) — the whole `reconcileShapeErrors` ARRIVAL check (and with it
+    // `componentSweepFaults`) was dropped from the frozen mirror while the shipped script kept it: a malformed
+    // Reconcile answer was refused-and-retried there and silently accepted here, and no scenario submitted one, so
+    // parity stayed green with the two copies divergent. These three drive each of `componentSweepFaults`' three
+    // faults through BOTH scripts — a well-formed answer never reaches them, so only the fault path is exercised.
+    // Each malformed answer is re-asked on all three attempts (the mock clamps to the last `reconciles` entry) and
+    // then stops `reconcile-failed`; deleting the sweep faults (or the whole check) from the mirror alone lets the
+    // baseline ACCEPT on the first attempt, so its dispatch diverges and parity fails — the drift is now mechanical.
+    { name: "PR #159 (RC-12): a BLANK resolvedFrom is REFUSED and retried on both copies (componentSweepFaults FAULT 1)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "", resolved: true, note: "" }] })] }) },
+    { name: "PR #159 (RC-12): an EMPTY sweep against published types is REFUSED and retried on both copies (componentSweepFaults FAULT 2)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [] })] }) },
+    { name: "PR #159 (RC-12): a stand claim its own note contradicts is REFUSED and retried on both copies (componentSweepFaults FAULT 3)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "probe-error" }] })] }) },
+    // PR #159 review round 2 — FAULT 4: a `resolvedFrom` naming NEITHER literal is a shape fault, not a terminal
+    // stop. Before it, `statedNotStand` read `environment` as "not a confirmation" and drove the override-less
+    // `plan-unvalidated-against-stand` stop on a healthy round; now it is refused and retried on both copies. Drive
+    // it through BOTH scripts for the RC-12 reason: two copies of a fault no scenario exercises can diverge unseen.
+    { name: "PR #159 (round 2): an unrecognised `resolvedFrom` word is REFUSED and retried on both copies (componentSweepFaults FAULT 4)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "environment", resolved: true, note: "resolved on env" }] })] }) },
+    // PR #159 review (Major, kamil) — the MID-RUN package-precondition stop must carry the SAME three axes the
+    // baseline package stop and the plan-invalid stop carry. This drives a mid-run round with an unknown package AND
+    // a stand-confirmed component defect: the package stop fires (checked first) and must still return the component
+    // mismatch. The mirror hand-writes this return, so deleting the axis carry from the mirror alone leaves the
+    // shipped return carrying the mismatch and the mirror at the `runReturn` default `[]` — a NAMED parity failure.
+    { name: "PR #159 (Major, kamil): the mid-run package stop carries the component/template/identity axes on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ packageState: "unknown", componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "ok" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the
@@ -382,9 +416,9 @@ function buildScenarios() {
     // Each one MUST override `componentTypes` as well: `RECONCILE` defaults it to `["crt.ComboBox"]`, and
     // `componentTypeMismatches` drops any resolution the plan did not publish — so a scenario that overrides only
     // `componentResolution` never reaches the gate branch at all and passes vacuously against either predicate.
-    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
-    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
-    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolved: false, note: "fabricated" }] })] }) },
+    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
+    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
+    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "fabricated" }] })] }) },
     { name: "a checkpoint key that names no unit — hard stop 4", args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["nope"] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "a finding that names no unit — refused", args: { ...ARGS, findings: [{ unit: "ghost", problem: "wrong" }] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "nothing published — no-units-published", args: ARGS, answer: host({ reconciles: [RECONCILE({ unitKeys: [], buildOrder: [], reachability: [] })] }) },
@@ -406,6 +440,17 @@ function buildScenarios() {
     { name: "the app unit builds the package the plan targets", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), GREEN], build: (unit) => (unit === "app" ? { unit: "app", packageName: "DealPkg", appName: "Deals", starterFormPage: "DealFormPage", starterListPage: "DealListPage", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "the app unit produces a DIFFERENT package — it stays open", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), RECONCILE({ packageState: "absent" })], build: (unit) => (unit === "app" ? { unit: "app", packageName: "OtherPkg", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["gate BLOCKED (1 correctness signal(s))"] })] }) },
+    // PR #159 review (Major 4) — THE MID-RUN half of the provenance stop, driven in BOTH copies. The single-Reconcile
+    // scenario above it reaches only the baseline call site, and `run-infra.mjs` executes the generated artifact and
+    // never this file's frozen mirror — so before this scenario existed, deleting the whole mid-run provenance block
+    // from the mirror alone left parity 407/0 and infra 856/0 green with the two copies behaviourally divergent.
+    // That is the failure class the gated-composite note above records, measured again.
+    { name: "a stand that goes away MID-RUN stops before the next unit", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Major 5) — the MID-RUN twins of the two differential scenarios above. The mirror hand-writes the
+    // provenance stop's construction at BOTH sites, so a deletion from the mid-run copy's `alsoAxesClauses` carry or
+    // `falseFromCatalog` clause is caught only by a scenario that reaches the SECOND Reconcile.
+    { name: "PR #159 (Major 5): a MIXED round MID-RUN carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog resolved:false MID-RUN drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },
