@@ -349,6 +349,7 @@ const RECONCILE_SCHEMA = {
     'roundState',
     'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
     'schemaNamePrefixEmpty',
+    'componentTypes',
     'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     approval: { type: 'object' },
@@ -359,7 +360,7 @@ const RECONCILE_SCHEMA = {
     packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
     packageCreatedByRun: { type: ['object', 'null'] },
     orphanedPagesOnFile: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    sectionRouteByRun: { type: ['object', 'null'], additionalProperties: { maxLength: RECONCILE_TEXT_CAP } },
+    sectionRouteByRun: { type: ['object', 'null'] },
     mainEntity: { type: ['string', 'null'] },
     sectionHost: { type: ['string', 'null'], enum: ['existing-app', 'new-app', 'pages-only-no-menu', null] },
     applicationCode: { type: ['string', 'null'] },

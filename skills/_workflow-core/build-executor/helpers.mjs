@@ -2067,16 +2067,13 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // healthy `resolved: true` stand answer legitimately carries no note, so requiring one would tax every healthy round
 // to partially close a bypass whose durable fix is a structured provenance field from clio (DR-8). The residual is
 // DECLARED, not silently closed — SKILL.md and DR-8 state that the cross-check is best-effort, not a guarantee.
-// NOT CLOSED HERE — omitting BOTH `componentTypes` AND `componentResolution` (PR #159 review round 2, RC-4). FAULT 2
-// reads what the plan published from `componentTypes`, which is itself droppable, so an answer that drops both slips
-// the gate by absence. The clean closure is making `componentTypes` REQUIRED — but not here: an arrival fault on an
-// absent key is indistinguishable from the many legitimate states that carry neither (a plan with no gated types; the
-// deliberate `published`-empty → gate-ALL path that a state predating the field relies on; every single-field
-// `reconcileShapeErrors` unit fixture), so it would fault correct answers. The host-level fix — `componentTypes` in
-// `RECONCILE_SCHEMA.required` — is the right one, and it does not fit: that schema is at 4085 B and the field pushes it
-// to 4102 B, over the host's hard 4096-byte classifier cap. So RC-4 is a DECLARED residual: the door is narrow (an
-// agent must drop two plan-derived fields at once, for a plan that has gated types), and the durable fix is trimming
-// the capped schema to make room for the required key. See the PR #159 validation report and DR-8's follow-up note.
+// The omit-BOTH-fields door (PR #159 review round 2, RC-4) is CLOSED at the host, not here. FAULT 2 reads what the
+// plan published from `componentTypes`, which used to be droppable — so an answer dropping both `componentTypes` and
+// `componentResolution` slipped the gate by absence. `componentTypes` is now in `RECONCILE_SCHEMA.required` (room made
+// by trimming `sectionRouteByRun`'s superfluous `maxLength`), so the host refuses an answer that omits the key before
+// the model runs. It is deliberately NOT an arrival fault here: an absent-key fault is indistinguishable from the
+// legitimate states that carry neither field (a plan with no gated types; the `published`-empty → gate-ALL path a
+// state predating the field relies on), so it would refuse correct answers. `[]` stays the honest no-gated-types value.
 function componentSweepFaults(state, out) {
   const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
   // PR #159 review (Major 2): name the offending row by INDEX, never by echoing the agent-supplied `type`. This

@@ -1601,10 +1601,15 @@ check("ENG-95468 (residual): `resolvedFrom` costs the byte-capped schema NOTHING
 // `reconcileShapeErrors` (which runs `componentSweepFaults`). FAULT 4 was added in this review round; its coverage is
 // here rather than only in the parity mirror because parity proves the two COPIES agree, not that the fault fires at
 // all — a fault deleted from BOTH copies would pass parity and fail here.
-// (RC-4 — the omit-BOTH-fields door — is a DECLARED residual, NOT closed by an arrival fault: an absent-key fault is
-// indistinguishable from the deliberate `published`-empty → gate-all state and from every single-field fixture here,
-// and the host-level fix, `componentTypes` in RECONCILE_SCHEMA.required, overflows the 4096-byte cap. See the sweep's
-// header comment in helpers.mjs and the PR #159 validation report.)
+// (RC-4 — the omit-BOTH-fields door — is closed at the HOST, not by an arrival fault here: an absent-key fault is
+// indistinguishable from the deliberate `published`-empty → gate-all state and from every single-field fixture here.
+// The fix is `componentTypes` in `RECONCILE_SCHEMA.required`, asserted just below; room for it was made by trimming
+// `sectionRouteByRun`'s superfluous per-string cap, and the schema-size cap loop later in this file re-measures it.)
+check("ENG-95468 (PR #159, RC-4): `componentTypes` is in RECONCILE_SCHEMA.required — so an answer omitting BOTH it and `componentResolution` cannot switch the component gate off by absence; the host refuses the key's omission before the model runs. `[]` stays legal for a plan with no gated types (RECONCILE_SHAPE does not require entries).",
+  () => (wf.RECONCILE_SCHEMA?.required || []).includes("componentTypes")
+    && JSON.stringify(wf.RECONCILE_SCHEMA).length <= 4096
+    && !("maxLength" in (wf.RECONCILE_SCHEMA?.properties?.sectionRouteByRun?.additionalProperties || {})),
+  () => ({ hasReq: (wf.RECONCILE_SCHEMA?.required || []).includes("componentTypes"), bytes: JSON.stringify(wf.RECONCILE_SCHEMA).length }));
 const sweepFaults = (over) => wf.reconcileShapeErrors({ componentTypes: ["crt.X"], componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note: "n" }], ...over });
 check("ENG-95468 (PR #159, RC-2): FAULT 4 — a `resolvedFrom` naming NEITHER `stand` NOR `catalog` is refused at arrival (so a synonym cannot drive the terminal stop), while a clean `catalog`/`stand` is not faulted",
   () => sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "environment", note: "n" }] }).some((f) => /neither .stand. nor .catalog./.test(f))
@@ -2363,9 +2368,10 @@ check(`ENG-96455: RECONCILE_SCHEMA serializes to ${reconcileSchemaBytes} bytes a
 // omitted key seeds `[]` and the next close persists that `[]` over the stored rows), `preflightItems` is what makes
 // `routed` the full persisted answer set the per-unit wipe in `reportResolutionAccounting` depends on, and the two
 // `resolutions*` keys are the reopen bookkeeping that must survive a resume.
-check("ENG-95930: the loosened Reconcile schema still declares all 48 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions` and `roundState`) and its 20-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on. 48 and not 50 because ENG-96455 folded three root keys into `roundState` under the host's cap; no property was dropped, only its nested shape description (DR-7)",
-  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 48 && (wf.RECONCILE_SCHEMA?.required || []).length === 20
-    && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty"),
+check("ENG-95930: the loosened Reconcile schema still declares all 48 properties (42 + the answers channel's three round-trip keys + ENG-96147 `sectionRouteByRun` + ENG-96204's `runResolutions` and `roundState`) and its 21-entry `required` list — `schemaNamePrefixEmpty` is required so a dropped flag is a refused answer, `componentTypes` is required (PR #159 RC-4) so the component gate cannot be switched off by dropping both it and `componentResolution`, and the byte reduction came from dropping nested SHAPE descriptions, never a property the core computes on. 48 and not 50 because ENG-96455 folded three root keys into `roundState` under the host's cap; no property was dropped, only its nested shape description (DR-7)",
+  Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length === 48 && (wf.RECONCILE_SCHEMA?.required || []).length === 21
+    && (wf.RECONCILE_SCHEMA?.required || []).includes("schemaNamePrefixEmpty")
+    && (wf.RECONCILE_SCHEMA?.required || []).includes("componentTypes"),
   () => ({ properties: Object.keys(wf.RECONCILE_SCHEMA?.properties || {}).length,
     required: (wf.RECONCILE_SCHEMA?.required || []).length }));
 check(`PR #128 review (round 20): each of the answers channel's four required Reconcile keys is asserted BY NAME (${RECONCILE_REQUIRED_ANSWER_KEYS.join(", ")}) — a rename or typo in any one keeps the required list 18 long, so the count check above cannot see it, and an unrequired key is a silently droppable one: that is how an unconsumed answer went missing across a resume in the first place`,

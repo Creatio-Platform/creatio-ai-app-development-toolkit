@@ -55,8 +55,10 @@ export const CARRY_TEXT_CAP = 400
 // `RECONCILE_SHAPE` now carries.
 //
 // THE HOST'S RULE: an agent whose serialized output schema exceeds 4096 bytes is refused before the model runs, in
-// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` under 4085 —
-// it is the run's first agent, so its refusal costs the whole run.
+// `auto`-permission sessions. Every schema in this file stays under that, and `RECONCILE_SCHEMA` at 4061 bytes —
+// it is the run's first agent, so its refusal costs the whole run. ENG-95468 (PR #159, RC-4) added `componentTypes`
+// to `required` and made room for it by dropping `sectionRouteByRun`'s superfluous per-string `maxLength` (the
+// answer's total size is bounded by `reconcileShapeErrors`, and that object's four short fields are shape-checked).
 //
 // Nested objects are therefore declared as a bare `object` / `array of object`. Every property and the `required`
 // list stay: the core computes on all of them. What the schema does not describe, `reconcileShapeErrors` checks
@@ -115,6 +117,16 @@ export const RECONCILE_SCHEMA = {
     // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
     // CLI-enforced), never an empty prefix quietly decoding as unreadable and switching the identity gate off.
     'schemaNamePrefixEmpty',
+    // ENG-95468 (PR #159 review, RC-4) — `componentTypes` is REQUIRED so it can never be dropped. It is what the
+    // component gate reads to know what the plan published, and `componentResolution` is the sweep against it; an
+    // answer that omitted BOTH switched the whole gate off by absence (FAULT 2 could not fire — it had nothing to
+    // count against), which is the ST_2 failure one field along. `[]` is the honest answer for a plan with no gated
+    // types (the prompt says so), so requiring the KEY costs a correct run nothing while closing the omit-both door
+    // at the host, before the model runs. Host-enforced, so it does not need — and could not have — a
+    // `componentSweepFaults` arrival fault, which would refuse the legitimate no-gated-types state. Room for it was
+    // made by dropping `sectionRouteByRun`'s superfluous per-string `maxLength` (its four short identifier fields are
+    // shape-checked by `RECONCILE_SHAPE` and bounded by the answer's total-size check) — see its property below.
+    'componentTypes',
     'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
   properties: {
     // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
@@ -167,7 +179,12 @@ export const RECONCILE_SCHEMA = {
     // schema was shrunk under the host's 4096-byte refusal: no property is dropped, only its nested SHAPE
     // description, which `reconcileShapeErrors` then checks on arrival. Spelling the four keys out here cost
     // ~150 bytes on the run's FIRST agent's schema, whose refusal costs the whole run.
-    sectionRouteByRun: { type: ['object', 'null'], additionalProperties: { maxLength: RECONCILE_TEXT_CAP } },
+    // NO per-string `maxLength` here (PR #159 review, RC-4): its four fields are short identifiers
+    // (`route` / `schemaName` / `sectionHost` / `planVersion`), `RECONCILE_SHAPE.sectionRouteByRun` already requires
+    // and types them, and the answer's TOTAL size is bounded by `reconcileShapeErrors` (the real cap, per the header
+    // above). Dropping the ~41-byte cap that added nothing those two layers do not is what made room for
+    // `componentTypes` in `required` above, keeping this schema under the host's 4096-byte cap.
+    sectionRouteByRun: { type: ['object', 'null'] },
     // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
     // section it creates to THIS, and the gate compares every built page against the same string.
     mainEntity: { type: ['string', 'null'] },
@@ -184,6 +201,9 @@ export const RECONCILE_SCHEMA = {
     applicationCode: { type: ['string', 'null'] },
     // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
     // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
+    // REQUIRED (PR #159 review, RC-4 — see the `required` list above): it and `componentResolution` are the two
+    // plan-derived halves of the component gate, and an answer omitting BOTH switched the gate off by absence. `[]`
+    // is the honest value for a plan with no gated types; the host refuses an answer that omits the key entirely.
     componentTypes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
     // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
     // resolved against the TARGET stand: `{ type, resolved, resolvedFrom, note }`. This is what the pre-build component gate

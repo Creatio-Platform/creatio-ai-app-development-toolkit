@@ -694,12 +694,11 @@ Details of the record shapes, the ids and the judge tri-state:
   a **blank** `resolvedFrom`, and a sweep that resolves **none** of the plan's published types, are both **shape
   faults** rather than verdicts — the answer is refused and the informed retry names the field, so a transport
   artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated round
-  (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). One absence door
-  is **not** closed and is declared as such: dropping **both** `componentTypes` and `componentResolution` at once (for
-  a plan that has gated types) still slips the sweep. The clean fix is making `componentTypes` required in the output
-  schema, which does not fit the host's 4096-byte cap; a `componentSweepFaults` fault on the absent key was rejected
-  because it is indistinguishable from the legitimate no-gated-types state. The door is narrow (two plan-derived
-  fields dropped together) and its durable fix — trimming the capped schema to make room — is a named follow-up;
+  (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). The absence door
+  that pairs with it — dropping **both** `componentTypes` and `componentResolution` at once, which would leave the
+  sweep nothing to gate against — is closed at the host: `componentTypes` is now in `RECONCILE_SCHEMA.required` (room
+  made by trimming a superfluous per-string cap on `sectionRouteByRun`), so an answer omitting the key is refused
+  before the model runs. `[]` stays the honest value for a plan with no gated types, so a correct run pays nothing;
   a **`stand` claim** whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) is a
   shape fault — a mis-classified catalog answer is caught while those tokens survive into the note. This is a
   **best-effort** cross-check over free text clio owns, **not** a machine-verified guarantee (the earlier docs
