@@ -1597,6 +1597,35 @@ check("RECONCILE_SCHEMA: `componentResolution` items mark `type`, `resolved` AND
 check("ENG-95468 (residual): `resolvedFrom` costs the byte-capped schema NOTHING — it is required in RECONCILE_SHAPE (uncapped, checked on arrival) and NOT re-declared as a `properties` entry, so the run's first agent cannot be refused for carrying it",
   /required: \['type', 'resolved', 'resolvedFrom'\]/.test(wfSrc) && !/resolvedFrom: \{ type: /.test(wfSrc),
   () => `shape-required=${/required: \['type', 'resolved', 'resolvedFrom'\]/.test(wfSrc)} schema-property=${/resolvedFrom: \{ type: /.test(wfSrc)}`);
+// ENG-95468 (PR #159 review round 2) — THE COMPONENT SWEEP'S ARRIVAL FAULTS, exercised through the SHIPPED
+// `reconcileShapeErrors` (which runs `componentSweepFaults`). FAULT 4 was added in this review round; its coverage is
+// here rather than only in the parity mirror because parity proves the two COPIES agree, not that the fault fires at
+// all — a fault deleted from BOTH copies would pass parity and fail here.
+// (RC-4 — the omit-BOTH-fields door — is a DECLARED residual, NOT closed by an arrival fault: an absent-key fault is
+// indistinguishable from the deliberate `published`-empty → gate-all state and from every single-field fixture here,
+// and the host-level fix, `componentTypes` in RECONCILE_SCHEMA.required, overflows the 4096-byte cap. See the sweep's
+// header comment in helpers.mjs and the PR #159 validation report.)
+const sweepFaults = (over) => wf.reconcileShapeErrors({ componentTypes: ["crt.X"], componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note: "n" }], ...over });
+check("ENG-95468 (PR #159, RC-2): FAULT 4 — a `resolvedFrom` naming NEITHER `stand` NOR `catalog` is refused at arrival (so a synonym cannot drive the terminal stop), while a clean `catalog`/`stand` is not faulted",
+  () => sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "environment", note: "n" }] }).some((f) => /neither .stand. nor .catalog./.test(f))
+    && sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "catalog", note: "n" }] }).length === 0
+    && sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "STAND", note: "n" }] }).length === 0,
+  () => JSON.stringify(sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "environment", note: "n" }] })));
+// ENG-95468 (PR #159, RC-3) — THE DECLARED clio COUPLING, given a drift signal. FAULT 3 cross-checks a `stand`
+// claim against clio's own catalog-fallback tokens in the free-text `note` — prose clio OWNS and nothing pins. If
+// clio rewords that note the fault silently becomes a no-op and the gate degrades to a bare model attestation. These
+// two checks are that signal: the FIRST fires the fault through the shipped code on each token (case-insensitively)
+// and confirms a clean note does NOT; the SECOND pins the exact token literal, so a clio rewording (or an edit here)
+// fails a NAMED test. The coupling itself is declared in `AGENTS.md` and DR-8. The not-yet-closed piece — a fixture
+// captured from a real `get-component-info` probe-failure response — is named there as the follow-up.
+check("ENG-95468 (PR #159, RC-3): FAULT 3 fires on clio's catalog-fallback tokens in a `stand` claim's note (case-insensitive), and a clean note does not — the behavioural half of the clio-coupling drift signal",
+  () => { const hit = (note) => sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note }] }).some((f) => /catalog-fallback token/.test(f));
+    return hit("resolvedFromReason=probe-error") && hit("used the LATEST-FALLBACK catalog") && !hit("resolved on this environment"); },
+  () => JSON.stringify(sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note: "probe-error" }] })));
+check("ENG-95468 (PR #159, RC-3): the clio-note coupling is PINNED — CATALOG_NOTE_TOKENS is exactly `probe-error`/`latest-fallback`, declared in AGENTS.md, so a clio rewording fails THIS test instead of switching FAULT 3 off unseen",
+  /const CATALOG_NOTE_TOKENS = \/probe-error\|latest-fallback\/i/.test(coreSrc)
+    && /Declared coupling: freedom-build-executor reads clio's `get-component-info` note/.test(readFileSync(fileURLToPath(new URL("../../AGENTS.md", import.meta.url)), "utf8")),
+  () => `token-pin=${/const CATALOG_NOTE_TOKENS = \/probe-error\|latest-fallback\/i/.test(coreSrc)}`);
 // The Applicant replay (ENG-95468 done-criterion): the two round-1 blockers are BOTH reproducible through the
 // pre-build checks — the fabricated component type via componentTypeMismatches, and new-app-over-existing via
 // packagePreconditionStop — so a re-plan sees both instead of paying repair rounds to rediscover them.

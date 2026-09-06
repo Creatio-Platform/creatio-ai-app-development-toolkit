@@ -1231,6 +1231,10 @@ export const RESOLVED_FROM_CATALOG = 'catalog'
 // exists to close, and unrecoverable, because the stop deliberately offers no override. Folding case costs nothing
 // (both literals are lower-case) and leaves the fail-closed rule below untouched for a genuinely unknown word.
 const isStandProvenance = (v) => typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_STAND
+// The catalog literal, folded the same way (PR #159 review round 2). Used only by `componentSweepFaults` to tell a
+// LEGAL non-stand answer (`catalog`) apart from a word that names NEITHER literal — the latter is refused at arrival
+// as a shape fault and retried, rather than driving the terminal environment-remedy stop on a healthy round.
+const isCatalogProvenance = (v) => typeof v === 'string' && v.trim().toLowerCase() === RESOLVED_FROM_CATALOG
 // A STATED provenance that is not this stand. `undefined` is NOT one — absence is handled where it belongs, by the
 // shape check (`componentSweepFaults`), not by inventing a verdict here.
 const statedNotStand = (c) => typeof c?.resolvedFrom === 'string' && !isStandProvenance(c.resolvedFrom)
@@ -2033,11 +2037,14 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // written before the field, `sectionHost` on a plan written before placement was gated). A property that IS present
 // is checked in full. `limit` keeps the message readable: a wholesale-wrong answer names its first few faults
 // instead of every index of a 200-row array.
-// THE COMPONENT SWEEP'S OWN THREE FAULTS (ENG-95468 residual; PR #159 review, Majors 1, 3 and 7). All live HERE and
-// not in `RECONCILE_SCHEMA` for the reason the whole provenance field does: this checker is not bounded by the
-// host's 4096-byte classifier cap, so a fault costs zero schema bytes, and a faulted answer spends ONE attempt and
-// comes back with the informed retry naming the exact field — which is the cheap outcome. None is expressible as
-// a per-field table row: two are value contradictions, the other is about the set as a whole.
+// THE COMPONENT SWEEP'S OWN ARRIVAL FAULTS (ENG-95468 residual; PR #159 review, Majors 1, 3, 7 and round 2). All live
+// HERE and not in `RECONCILE_SCHEMA` for the reason the whole provenance field does: this checker is not bounded by
+// the host's 4096-byte classifier cap, so a fault costs zero schema bytes, and a faulted answer spends ONE attempt
+// and comes back with the informed retry naming the exact field — which is the cheap outcome. None is expressible as
+// a per-field table row: they are value contradictions or facts about the set as a whole. Together they are the ONLY
+// machine-side defence the gate has, because it otherwise rests entirely on an agent-supplied classification — so
+// every way the answer can switch the gate off by absence or slip a mis-classification past it is closed here, and
+// only a well-formed provenance value reaches the fail-closed arithmetic in `standUnconfirmedComponents`.
 // FAULT 1 — a BLANK `resolvedFrom`. `shapeRequiredErrors` rejects only `undefined` and the typed check only a
 // non-string, so `''` used to pass arrival and then gate, hard-stopping a healthy run with a DNS remedy. A bare
 // `""` is the token this repo has already MEASURED being dropped in transit from this very answer (the reason
@@ -2049,6 +2056,27 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // itself an invitation to that door, so the answer is faulted here and `reconcileAttempt` sends the sweep's own
 // rule back instead. Scoped to a COMPLETELY blank sweep on purpose: a PARTIAL sweep stays non-gating and un-faulted
 // exactly as documented (`absence is not evidence`), so one flaky `get-component-info` call cannot cost the round.
+// FAULT 3 — a `resolvedFrom: 'stand'` CLAIM the entry's own `note` contradicts (catalog-fallback token in the note).
+// FAULT 4 — a stated `resolvedFrom` that names NEITHER literal (PR #159 review round 2). `statedNotStand` would read
+// such a word as "not a confirmation" and drive the TERMINAL, override-less `plan-unvalidated-against-stand` stop
+// whose remedy is "fix DNS" — a false positive strictly worse than the defect the axis closes, unrecoverable, and
+// (because model wording is systematic) likely to repeat rather than self-heal. A synonym like `on-stand` /
+// `environment` is a transport/agent artefact exactly like a blank, so it is refused and the retry names the two
+// legal values, and the terminal environment-remedy stop stays reserved for a stated `catalog`.
+// FAULT 3's own residual — a `resolvedFrom: 'stand'` claim with NO `note` at all — is NOT faulted here on purpose: a
+// healthy `resolved: true` stand answer legitimately carries no note, so requiring one would tax every healthy round
+// to partially close a bypass whose durable fix is a structured provenance field from clio (DR-8). The residual is
+// DECLARED, not silently closed — SKILL.md and DR-8 state that the cross-check is best-effort, not a guarantee.
+// NOT CLOSED HERE — omitting BOTH `componentTypes` AND `componentResolution` (PR #159 review round 2, RC-4). FAULT 2
+// reads what the plan published from `componentTypes`, which is itself droppable, so an answer that drops both slips
+// the gate by absence. The clean closure is making `componentTypes` REQUIRED — but not here: an arrival fault on an
+// absent key is indistinguishable from the many legitimate states that carry neither (a plan with no gated types; the
+// deliberate `published`-empty → gate-ALL path that a state predating the field relies on; every single-field
+// `reconcileShapeErrors` unit fixture), so it would fault correct answers. The host-level fix — `componentTypes` in
+// `RECONCILE_SCHEMA.required` — is the right one, and it does not fit: that schema is at 4085 B and the field pushes it
+// to 4102 B, over the host's hard 4096-byte classifier cap. So RC-4 is a DECLARED residual: the door is narrow (an
+// agent must drop two plan-derived fields at once, for a plan that has gated types), and the durable fix is trimming
+// the capped schema to make room for the required key. See the PR #159 validation report and DR-8's follow-up note.
 function componentSweepFaults(state, out) {
   const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
   // PR #159 review (Major 2): name the offending row by INDEX, never by echoing the agent-supplied `type`. This
@@ -2078,6 +2106,16 @@ function componentSweepFaults(state, out) {
   if (contradictory.length) {
     const which = contradictory.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (contradictory.length > 3 ? ', …' : '')
     out.push(contradictory.length + ' component resolution entr' + (contradictory.length === 1 ? 'y claims' : 'ies claim') + ' `resolvedFrom: stand` but the entry\'s own `note` carries clio\'s catalog-fallback token (`probe-error` / `latest-fallback`) (' + which + '). That is a bundled-catalog answer, not a stand answer: report `catalog` when the note says the environment could not be probed, so the round is not read as validated against a stand it never reached')
+  }
+  // FAULT 4 — a stated `resolvedFrom` naming NEITHER `stand` NOR `catalog` (PR #159 review round 2). Runs BEFORE the
+  // published-types early return: an invented word is a shape fault regardless of what the plan published. A blank is
+  // FAULT 1's domain and excluded here so an empty value is not double-faulted. Named by INDEX, never echoing the
+  // agent value — `resolvedFrom` is as unbounded on this path as `type`, so relaying it could forge a fault line.
+  const unrecognised = []
+  rows.forEach((c, i) => { if (c && typeof c.resolvedFrom === 'string' && c.resolvedFrom.trim() !== '' && !isStandProvenance(c.resolvedFrom) && !isCatalogProvenance(c.resolvedFrom)) unrecognised.push(i) })
+  if (unrecognised.length) {
+    const which = unrecognised.slice(0, 3).map((i) => 'componentResolution[' + i + ']').join(', ') + (unrecognised.length > 3 ? ', …' : '')
+    out.push(unrecognised.length + ' component resolution entr' + (unrecognised.length === 1 ? 'y has' : 'ies have') + ' a `resolvedFrom` that is neither `stand` nor `catalog` (' + which + '). Those are the ONLY two legal values (matched case-insensitively): report `stand` when THIS environment answered or `catalog` when it did not. A third word is refused rather than read as "did not reach the stand", so a synonym cannot hard-stop a healthy round with a DNS remedy')
   }
   const published = (Array.isArray(state.componentTypes) ? state.componentTypes : []).filter((t) => typeof t === 'string')
   if (!published.length) return

@@ -375,6 +375,17 @@ function buildScenarios() {
     { name: "PR #159 (RC-12): a BLANK resolvedFrom is REFUSED and retried on both copies (componentSweepFaults FAULT 1)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "", resolved: true, note: "" }] })] }) },
     { name: "PR #159 (RC-12): an EMPTY sweep against published types is REFUSED and retried on both copies (componentSweepFaults FAULT 2)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [] })] }) },
     { name: "PR #159 (RC-12): a stand claim its own note contradicts is REFUSED and retried on both copies (componentSweepFaults FAULT 3)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "probe-error" }] })] }) },
+    // PR #159 review round 2 — FAULT 4: a `resolvedFrom` naming NEITHER literal is a shape fault, not a terminal
+    // stop. Before it, `statedNotStand` read `environment` as "not a confirmation" and drove the override-less
+    // `plan-unvalidated-against-stand` stop on a healthy round; now it is refused and retried on both copies. Drive
+    // it through BOTH scripts for the RC-12 reason: two copies of a fault no scenario exercises can diverge unseen.
+    { name: "PR #159 (round 2): an unrecognised `resolvedFrom` word is REFUSED and retried on both copies (componentSweepFaults FAULT 4)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "environment", resolved: true, note: "resolved on env" }] })] }) },
+    // PR #159 review (Major, kamil) — the MID-RUN package-precondition stop must carry the SAME three axes the
+    // baseline package stop and the plan-invalid stop carry. This drives a mid-run round with an unknown package AND
+    // a stand-confirmed component defect: the package stop fires (checked first) and must still return the component
+    // mismatch. The mirror hand-writes this return, so deleting the axis carry from the mirror alone leaves the
+    // shipped return carrying the mismatch and the mirror at the `runReturn` default `[]` — a NAMED parity failure.
+    { name: "PR #159 (Major, kamil): the mid-run package stop carries the component/template/identity axes on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ packageState: "unknown", componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "ok" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the

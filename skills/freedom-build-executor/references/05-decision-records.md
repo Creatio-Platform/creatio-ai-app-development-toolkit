@@ -439,12 +439,34 @@ prevent. The remedy is the same — make the stand answerable and re-run — and
 **Trust boundary (related).** The gate keys on the agent's `resolvedFrom` *classification* of
 clio's free-text note, not on a machine field carried across the MCP contract. Rather than trust
 that classification blindly, `componentSweepFaults` FAULT 3 refuses a `resolvedFrom: 'stand'` claim
-whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) — so a
-catalog answer cannot be mis-classified into a stand confirmation at the model layer either
-(PR #159 review, Major 7). Transcribing clio's own `resolvedFromReason` verbatim across the
-contract would be stronger still and remains a possible future change (it would also let the script,
-not the model, own the stand/catalog mapping); the contradiction fault was chosen for this round as
-the self-contained way to close the one-directional hole.
+whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`)
+(PR #159 review, Major 7). This is a **best-effort** cross-check, **not** a guarantee — and the
+earlier wording here ("cannot be mis-classified into a stand confirmation at the model layer
+either") overstated it and has been corrected. FAULT 3 fires only while clio's own tokens survive
+into the `note`; a `stand` claim that carries **no `note` at all** is not cross-checked. Faulting the
+empty-note case was considered and rejected for this round (PR #159 review, round 2): a healthy
+`resolved: true` stand answer legitimately carries no note, so requiring one would tax every healthy
+round — a permanent cost — to close a bypass whose durable fix is clio-side anyway (below). A green
+round is therefore **model-attested and best-effort cross-checked**, not machine-verified, and the
+residual empty-note bypass is stated plainly rather than papered over.
+
+*Undeclared-coupling risk, now declared.* FAULT 3's token match is a coupling to free-text prose
+that **clio owns and nothing pins**: `AGENTS.md` says the CAADT↔clio contract is the MCP tool
+contract resolved at runtime, not an independent contract defined in repo docs. If clio rewords the
+`get-component-info` probe-failure note, FAULT 3 silently becomes a no-op (every in-repo test still
+passes, because those tests feed author-written strings that contain the tokens by construction) and
+the gate degrades to a bare model attestation with no signal. The coupling is therefore declared in
+`AGENTS.md` (CAADT↔clio section) and guarded by a **token-drift test** in the engine suite, so a
+wording change fails a named test instead of switching the cross-check off unseen. The residual gap
+that this does not close — a real `get-component-info` probe-failure response captured as a fixture
+with the clio version recorded beside it — is named as the follow-up.
+
+**The durable fix.** Transcribing clio's own `resolvedFromReason` verbatim across the contract — or,
+better, clio emitting a structured `resolvedFrom` response field — would remove the guesswork
+entirely (it would let the script, not the model, own the stand/catalog mapping). The contradiction
+and missing-note faults were chosen for this round as the self-contained way to narrow the
+one-directional hole; the structured-field change is the design that closes it and belongs in this
+record when it lands.
 
 **When to revisit.** This decision changes only if the underlying tool behaviour changes — for
 example, if `get-component-info` gains a way to *fail* (rather than silently substitute the catalog)

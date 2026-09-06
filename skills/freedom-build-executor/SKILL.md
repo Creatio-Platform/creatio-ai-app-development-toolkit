@@ -685,21 +685,35 @@ Details of the record shapes, the ids and the judge tri-state:
   reading that as a confirmation is the defect. `resolvedFrom` is REQUIRED on every entry, enforced by the
   response-shape check rather than the byte-capped output schema, so it cannot be dropped to switch the gate off
   (ENG-95468).
-  Four details a reader will otherwise get wrong (all from the PR #159 review):
-  the value is matched **case-insensitively**, so a capitalisation variant cannot hard-stop a healthy round, while a
-  word neither literal names still gates (fail-closed);
+  Details a reader will otherwise get wrong (all from the PR #159 review):
+  the value is matched **case-insensitively**, so a capitalisation variant cannot hard-stop a healthy round, and a
+  word that names **neither** literal is a **shape fault** — refused and retried, not read as "did not reach the
+  stand" — so a model synonym (`on-stand`, `environment`) cannot drive the terminal environment-remedy stop on a
+  healthy round either; the fail-closed arithmetic remains only as defence in depth, over a value that already
+  survived the fault;
   a **blank** `resolvedFrom`, and a sweep that resolves **none** of the plan's published types, are both **shape
   faults** rather than verdicts — the answer is refused and the informed retry names the field, so a transport
-  artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated
-  round (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round);
-  a **`stand` claim the entry's own `note` contradicts** — a note carrying clio's catalog-fallback tokens
-  (`probe-error` / `latest-fallback`) — is a shape fault too, so the model cannot re-open the tool-side false
-  positive by mis-classifying a catalog answer as a stand one (`resolvedFrom` is the toolkit's own two-word field,
-  distinct from clio's like-named `resolvedFrom`; the note is the machine signal it is cross-checked against);
-  and the stop **carries the other three axes** — an unresolved component type the stand DID answer, an unresolvable
-  template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
-  precondition stop does, so a mixed round yields every fix in one pass. The component axis is scoped to
-  stand-answered entries there, which is what keeps a catalog `resolved: false` out of a re-plan instruction.
+  artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated round
+  (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). One absence door
+  is **not** closed and is declared as such: dropping **both** `componentTypes` and `componentResolution` at once (for
+  a plan that has gated types) still slips the sweep. The clean fix is making `componentTypes` required in the output
+  schema, which does not fit the host's 4096-byte cap; a `componentSweepFaults` fault on the absent key was rejected
+  because it is indistinguishable from the legitimate no-gated-types state. The door is narrow (two plan-derived
+  fields dropped together) and its durable fix — trimming the capped schema to make room — is a named follow-up;
+  a **`stand` claim** whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) is a
+  shape fault — a mis-classified catalog answer is caught while those tokens survive into the note. This is a
+  **best-effort** cross-check over free text clio owns, **not** a machine-verified guarantee (the earlier docs
+  overstated it): a `stand` claim with **no note at all** is NOT cross-checked and is not faulted — a healthy
+  `resolved: true` stand answer legitimately carries no note, so faulting the empty case would tax every healthy round
+  to close a bypass whose durable fix is a structured provenance field from clio (DR-8). That residual is declared,
+  not hidden: the coupling to clio's note wording is written down in `AGENTS.md` and guarded by a token-drift test, so
+  a clio rewording fails a named test instead of switching the cross-check off unseen. (`resolvedFrom` is the
+  toolkit's own two-word field, distinct from clio's like-named `resolvedFrom`.)
+  Every stop on this point **carries the other three axes** — an unresolved component type the stand DID answer, an
+  unresolvable template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
+  precondition stop does, and the mid-run package-precondition stop now carries them too, so a mixed round yields
+  every fix in one pass. The component axis is scoped to stand-answered entries there, which is what keeps a catalog
+  `resolved: false` out of a re-plan instruction.
   **Resume across this change:** because `resolvedFrom` is now required, a run **journal** recorded before the field
   existed replays `componentResolution` entries that lack it, so a mid-flight **resume** across the upgrade re-faults
   the replayed answer and stops with `run journal drifted … Start a fresh run` — cross-version journal replay is not
