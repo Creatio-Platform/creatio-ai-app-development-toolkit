@@ -161,7 +161,7 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
-    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
+    const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, resolutions: ctx.resolutions, ...extra });
     if (!res.treeCyclic) ctx.memo.set(memoKey, res); // cache only context-independent (acyclic) subtrees
     return { status: "ok", res };
   } catch (e) { return { status: "error", error: e.message }; }
@@ -843,6 +843,11 @@ export function checklistOpts(manifest, opts = {}) {
     applicationCode: manifest.placement?.application?.code ?? null,
     isMiniPage: !!opts.isMiniPage,
     isChildPage: !!opts.isChildPage,
+    // ENG-96327: the operator's `--resolutions` answers (a built index or null), so the HUMAN plan render can drop
+    // ⚠ Confirm items already settled. Threaded through here — like every other run flag — so renderPlan sees it via
+    // specOpts; null in the many `checklistOpts(manifest)` call sites that pass no opts (the `--units`/`--verify`
+    // paths, which read resolutions on their own separate channel).
+    resolutions: opts.resolutions ?? null,
   };
 }
 // A SUB-page's checklist opts. Deliberately NOT the parent's threaded through: with the parent's planMeta the
@@ -2296,7 +2301,7 @@ export function runMigration(manifest, opts = {}) {
   // from THIS run's manifest, and a nested run's manifest is the child bundle — which carries no `targetPackage`.
   // Taking the run-level value from `opts.runTargetPackage` first makes the package gate exist at every depth.
   const runTargetPackage = opts.runTargetPackage != null ? opts.runTargetPackage : manifest.targetPackage;
-  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals }; // shared fold context for foldSubPage (child/typed/mini)
+  const foldCtx = { visited: new Set([...visited, ...selfKeys]), memo, memoStats, baseDir, behaviourIndexInput, checklistOpts: specOpts, targetPackage: runTargetPackage, signals: runSignals, resolutions: opts.resolutions ?? null }; // shared fold context for foldSubPage (child/typed/mini); resolutions ride along like inheritedSignals (one per run) so folded per-type specs suppress already-answered ⚠ Confirm items too (ENG-96327)
   foldChildPages(childPages, manifest.childPageSchemas || {}, foldCtx);
   // TYPED-PAGE RECURSION — fold each per-type edit page (bundle in manifest.typedPageSchemas); `bindOnly:true` is
   // the only non-fold escape. An unresolved typed page (no bundle, not bindOnly) is a STRUCTURE issue below.
@@ -2702,8 +2707,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
-  if (resolutionsFile && !unitsMode)
-    fail("`--resolutions <file>` only applies to `--units` — it attaches the operator's answers to that run's ⚠ Confirm queue items. Add `--units`, or drop `--resolutions`.");
+  if (resolutionsFile && !unitsMode && !planMode)
+    fail("`--resolutions <file>` applies to `--units` (attach the operator's answers to that run's ⚠ Confirm queue items) and `--plan` (hide the ⚠ Confirm items — and the Header template recommendation — the operator has already answered from the human plan). Add one of them, or drop `--resolutions`.");
+  // Read the answers ONCE here: `--plan` feeds them to runMigration (so the human plan suppresses settled items),
+  // `--units` reuses this same index below. `null` when no file was passed.
+  const resolutionsIndex = readResolutions(resolutionsFile, fail);
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -2743,7 +2751,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), resolutions: resolutionsIndex }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
   // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
@@ -2793,7 +2801,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // therefore deliberately absent from the positional-argument exclusion above: adding it there would make
   // `--units <manifest>` lose its manifest and die with a misleading JSON error.
   else if (unitsMode) {
-    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: readResolutions(resolutionsFile, fail) });
+    const units = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionsIndex });
     // The requested slice is resolved FIRST: `--page` on an unknown key must exit 1 with nothing written, not
     // leave a directory of files and a success note behind a failure line.
     const requested = pageArg ? pageUnitsSliceOrFail(units, pageArg, fail) : units;

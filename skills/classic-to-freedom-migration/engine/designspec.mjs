@@ -576,7 +576,7 @@ function renderListPageBlock(result, section, opts = {}) {
   const lcs = result.listChangeSet;
   // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
   // is an open question with an owner, not a note in prose.
-  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
+  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs, opts));
   L.push("");
   return L;
 }
@@ -678,6 +678,10 @@ function childFormRecommendation(cs, fields, opts) {
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // ENG-96327: the operator already chose the form template for this page's Header (a `layout-type:Header`
+  // answer in `--resolutions`) — do NOT re-print the engine's (possibly overridden) recommendation in the plan
+  // they approve. Fires only when the render carries resolutions (a `--plan --resolutions` run); see isDecisionResolved.
+  if (isDecisionResolved("layout-type", "Header", opts)) return [];
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
@@ -738,14 +742,27 @@ const HUMAN_CONFIRM_KINDS = new Set([
   "unmapped-component", "component", "list-filter-attributes", "dedup-on-save",
   "feature-toggle", "layout-type", "container", "detail-placement",
 ]);
-// The "⚠ Confirm before I build" worklist — ONLY the HUMAN_CONFIRM_KINDS decisions (above). Returns the lines.
-function renderConfirmWorklist(cs) {
+// ENG-96327 — a ⚠ Confirm decision the operator has ALREADY answered (recorded in `--resolutions`) is not re-asked
+// in the human plan: the answer flows to the build via `--units.preflight[].resolution`, so re-listing it in the
+// document the operator APPROVES is a duplicate of a settled question. Gated on `opts.resolutions` being PRESENT —
+// which happens only for a `--plan --resolutions` run (the human plan, AND the per-type form specs it folds in, whose
+// sub-runs inherit the answers) and a `--units --resolutions` run (whose designSpec nobody outputs). A plain `--spec`
+// CANNOT carry `--resolutions` (the CLI forbids it), so the build agent's standalone design spec is never touched.
+// Matched with the SAME matcher `--units` uses (kind+item) — so the plan hides EXACTLY what the build treats as
+// answered, no more.
+function isDecisionResolved(kind, item, opts = {}) {
+  if (!opts.resolutions) return false;
+  return !!matchResolution(asResolutionIndex(opts.resolutions), { kind, item });
+}
+// The "⚠ Confirm before I build" worklist — ONLY the HUMAN_CONFIRM_KINDS decisions (above), minus any already
+// answered in `--resolutions` (see isDecisionResolved). Returns the lines.
+function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
   // `<`/`>`/backtick/`](` live; `esc` neutralizes those. Whole-string `esc` is omission-proof and the
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
-  const nd = (cs.needsDecision || []).filter((n) => HUMAN_CONFIRM_KINDS.has(n.kind));
+  const nd = (cs.needsDecision || []).filter((n) => HUMAN_CONFIRM_KINDS.has(n.kind) && !isDecisionResolved(n.kind, n.item, opts));
   const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   if (!confirm.length) return [];
@@ -867,7 +884,7 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs, opts),
     // ENG-96327: the Member ledger is dense per-kind coverage accounting (mapped/decision/resolved/context/decoration/
     // unaccounted) a non-technical approver cannot act on. Keep it on the standalone `--spec` surface (QA / the build
     // agent) but OUT of the human approval plan (`embedded`). The coverage GATE is unaffected (computed in migrate.mjs),

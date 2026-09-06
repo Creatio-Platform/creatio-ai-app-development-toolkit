@@ -6471,6 +6471,39 @@ const notChild = renderDesignSpec({ entity: "Rec", changeSet: { viewConfigDiff: 
 check("#7 the TOP-LEVEL record page (not a child) never gets the small-form recommendation",
   !/Recommendation — small child form/.test(notChild));
 
+// ENG-96327 — a plan render drops ⚠ Confirm items (and the Header template recommendation) the operator has ALREADY
+// answered in `--resolutions`. Gated on the render CARRYING resolutions — true for a `--plan --resolutions` run (the
+// human plan + the per-type specs it folds), never for a plain `--spec` (the CLI forbids `--resolutions` there), so
+// the build agent's standalone spec is untouched. A wide-Header changeSet carries BOTH a layout-type:Header ⚠ Confirm
+// row and the top-area Template recommendation, so one fixture exercises both.
+const resHdrCs = { headerLayout: "wide", viewConfigDiff: [
+  { name: "A", parentName: "Header", values: { control: "$A", type: "crt.Input" } }],
+  needsDecision: [{ kind: "layout-type", item: "Header", reason: "classic Header is a WIDE 2-column block" }] };
+const resHdrIndex = buildResolutionIndex({ resolutions: [
+  { id: "main#confirm:layout-type:Header", kind: "layout-type", item: "Header", answer: "PageWithTabsFreedomTemplate — no top-area.", decidedBy: "Katya" }] });
+// NO resolutions (the plain --spec / un-answered plan) → both the ⚠ Confirm row and the recommendation are shown
+const hdrUnres = renderDesignSpec({ entity: "H", changeSet: resHdrCs }, { embedded: true });
+check("ENG-96327: render WITHOUT resolutions → ⚠ Confirm row + Template recommendation both shown",
+  /\[layout-type\]/.test(hdrUnres) && /Template recommendation — header elements present/.test(hdrUnres));
+// with resolutions → both suppressed (просто прибирай — no residual "decided" line)
+const hdrRes = renderDesignSpec({ entity: "H", changeSet: resHdrCs }, { embedded: true, resolutions: resHdrIndex });
+check("ENG-96327: header decision RESOLVED in --resolutions → ⚠ Confirm row AND Template recommendation both removed",
+  !/\[layout-type\]/.test(hdrRes) && !/Template recommendation — header elements present/.test(hdrRes) && !/#### ⚠ Confirm before I build/.test(hdrRes));
+// suppression fires for the folded per-type spec too (rendered standalone, embedded:false) — the gate is resolutions-present, not embedded
+const hdrFolded = renderDesignSpec({ entity: "H", changeSet: resHdrCs }, { resolutions: resHdrIndex });
+check("ENG-96327: a folded per-type spec (embedded:false) with resolutions ALSO drops the resolved ⚠ Confirm row + recommendation",
+  !/\[layout-type\]/.test(hdrFolded) && !/Template recommendation — header elements present/.test(hdrFolded));
+// the guarantee for the build agent's channel: NO resolutions ⇒ nothing suppressed (a plain --spec never carries them)
+const hdrSpecPlain = renderDesignSpec({ entity: "H", changeSet: resHdrCs }, {});
+check("ENG-96327: a render without resolutions (the plain --spec case) keeps the full worklist + recommendation — build/QA channel unchanged",
+  /\[layout-type\]/.test(hdrSpecPlain) && /Template recommendation — header elements present/.test(hdrSpecPlain));
+// a DIFFERENT resolved answer must not suppress THIS header (matcher is kind+item, not blanket)
+const otherIndex = buildResolutionIndex({ resolutions: [
+  { kind: "detail-placement", item: "SomethingElse", answer: "put it on tab X.", decidedBy: "Katya" }] });
+const hdrOther = renderDesignSpec({ entity: "H", changeSet: resHdrCs }, { embedded: true, resolutions: otherIndex });
+check("ENG-96327: an answer to a DIFFERENT question does not suppress the header ⚠ Confirm/recommendation",
+  /\[layout-type\]/.test(hdrOther) && /Template recommendation — header elements present/.test(hdrOther));
+
 // #8 — Print/Run-process card actions render CONCRETELY when the on-stand signals are resolved (present → wire
 // these; none → NOT migrated), and the full 'go check on-stand' how-to is kept ONLY for the unresolved fallback.
 const paResolved = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] },
@@ -7401,9 +7434,15 @@ try {
         broken: { st: broken.status, err: (broken.stderr || "").slice(0, 160) },
         noAnswer: { st: noAnswer.status, err: (noAnswer.stderr || "").slice(0, 160) } }));
     const wrongMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--checklist", RES_FLAG, resPath], { encoding: "utf8" });
-    check("ENG-95503: `--resolutions` outside `--units` is refused rather than ignored — in any other mode there is no queue item to attach an answer to, and silently accepting it would leave a caller believing answers had been applied",
-      wrongMode.status === 1 && /only applies to `--units`/.test(wrongMode.stderr || ""),
+    check("ENG-95503/ENG-96327: `--resolutions` in a mode with no channel for it (`--checklist`) is refused rather than ignored — silently accepting it would leave a caller believing answers had been applied",
+      wrongMode.status === 1 && /applies to `--units`/.test(wrongMode.stderr || "") && /and `--plan`/.test(wrongMode.stderr || ""),
       () => ({ status: wrongMode.status, err: (wrongMode.stderr || "").slice(0, 200) }));
+    // ENG-96327: `--plan --resolutions` is now ACCEPTED (it hides already-answered ⚠ Confirm items from the human
+    // plan). It must NOT hit the wrong-mode refusal; the run may still exit on its own plan gates, but never on this.
+    const planAccept = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--plan", RES_FLAG, resPath], { encoding: "utf8" });
+    check("ENG-96327: `--plan --resolutions` is accepted (not refused) — the human plan drops the ⚠ Confirm items the operator already answered",
+      !/applies to `--units`/.test(planAccept.stderr || ""),
+      () => ({ status: planAccept.status, err: (planAccept.stderr || "").slice(0, 200) }));
   } finally {
     fs.rmSync(resPath, { force: true });
   }
