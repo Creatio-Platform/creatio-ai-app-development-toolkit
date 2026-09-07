@@ -58,6 +58,10 @@ ALLOWLISTS = {
     "KN_REL_API": _SAFE_URL,
     "KN_BRANCH": r"[A-Za-z0-9][A-Za-z0-9._/-]*",
     "CONFIG": _SAFE_TOKEN,
+    # A ';'-separated list of real-looking TFMs (net10.0 or net10.0;net8.0). Each segment must be
+    # letters, then a digit, then digits/letters/./- (net8.0, net472, netstandard2.0, net8.0-windows) --
+    # so arbitrary words like `a;calc` never validate.
+    "TFM": r"[A-Za-z]+[0-9][0-9A-Za-z.-]*(?:;[A-Za-z]+[0-9][0-9A-Za-z.-]*)*",
     "MARKETPLACE_NAME": _SAFE_TOKEN,
 }
 PICK_INDEX_RE = r"[1-9]\d*"
@@ -122,7 +126,7 @@ def resolve_config(cfg):
     out = dict(cfg)
     for key, default in DEFAULTS.items():
         out[key] = setting(cfg, key, default)
-    for key in ("CLIO_SRC", "KN_MODE", "KN_BRANCH", "CLIO_HOME"):
+    for key in ("CLIO_SRC", "KN_MODE", "KN_BRANCH", "CLIO_HOME", "TFM"):
         val = setting(cfg, key)
         if val:
             out[key] = val
@@ -393,23 +397,45 @@ def _resolve_version(clio_src):
     return FALLBACK_VERSION
 
 
-def _build_and_pack(clio_src, config, version):
-    print(f"\n=== [3/7] Building + packing clio global tool ({config}) ===")
+def _build_and_pack(clio_src, config, version, tfm=None):
+    frameworks = f", frameworks: {tfm}" if tfm else ""
+    print(f"\n=== [3/7] Building + packing clio global tool ({config}{frameworks}) ===")
     csproj = clio_src / "clio" / "clio.csproj"
     pack_out = clio_src / "artifacts" / "local-tool"
     if pack_out.exists():
         shutil.rmtree(pack_out, ignore_errors=True)
     shutil.rmtree(clio_src / "clio" / "bin" / config, ignore_errors=True)
     shutil.rmtree(clio_src / "clio" / "obj" / config, ignore_errors=True)
+    # An explicit TFM (config/env) overrides the csproj's SDK-conditional <TargetFrameworks> list; a
+    # command-line -p: global property wins over any project value. Passed to build AND pack so the
+    # --no-build pack packs exactly what was built.
+    tfm_props = [f"-p:TargetFrameworks={tfm}"] if tfm else []
+    # Restore runs explicitly, in two passes, and the build/pack then go --no-restore.
+    # Reason: `TargetFrameworks` is an MSBuild GLOBAL property, so it leaks down every ProjectReference --
+    # including single-target ones. clio references Creatio.ConflictResolver, which is netstandard2.0: an
+    # implicit restore carrying the override writes a net10.0-only assets file for it, while its build
+    # still runs as netstandard2.0, and the build dies with
+    #   NETSDK1005: Assets file '.../Creatio.ConflictResolver/obj/project.assets.json' doesn't have a
+    #   target for 'netstandard2.0'.
+    # Pass 1 restores the whole graph WITHOUT the override, so every project gets the TFMs its own csproj
+    # declares. Pass 2 re-restores clio ALONE (--no-dependencies) WITH the override, which keeps the
+    # dropped TFMs out of clio's own assets -- otherwise pack emits a dependency group with no matching
+    # lib folder (NU5128). Skipped when no override is set (pass 1 already did it).
+    if run(["dotnet", "restore", str(csproj)], cwd=clio_src).returncode:
+        fail("RESTORE FAILED.")
+    if tfm_props and run(["dotnet", "restore", str(csproj), "--no-dependencies"] + tfm_props,
+                         cwd=clio_src).returncode:
+        fail("RESTORE FAILED (target-framework override pass).")
     # build first, then pack --no-build (this multi-target PackAsTool project fails MSB3030 under a bare
     # pack). cwd=clio_src reproduces the .bat's `pushd` so `dotnet` resolves global.json/SDK from the clio
     # tree (walking up from the CWD, not the project path).
-    if run(["dotnet", "build", str(csproj), "-c", config,
-            f"-p:Version={version}", f"-p:AssemblyVersion={version}", f"-p:FileVersion={version}"],
-           cwd=clio_src).returncode:
+    if run(["dotnet", "build", str(csproj), "-c", config, "--no-restore",
+            f"-p:Version={version}", f"-p:AssemblyVersion={version}", f"-p:FileVersion={version}"]
+           + tfm_props, cwd=clio_src).returncode:
         fail("BUILD FAILED.")
-    if run(["dotnet", "pack", str(csproj), "-c", config, "--no-build", "-o", str(pack_out),
-            f"-p:Version={version}", f"-p:PackageVersion={version}"], cwd=clio_src).returncode:
+    if run(["dotnet", "pack", str(csproj), "-c", config, "--no-build", "--no-restore", "-o", str(pack_out),
+            f"-p:Version={version}", f"-p:PackageVersion={version}"] + tfm_props,
+           cwd=clio_src).returncode:
         fail("PACK FAILED.")
     nupkg = pack_out / f"clio.{version}.nupkg"
     if not nupkg.exists():
@@ -448,7 +474,7 @@ def stage_a_build(cfg, run_tmp):
     config = cfg["CONFIG"]
     _stop_clio_processes()
     version = _resolve_version(clio_src)
-    pack_out = _build_and_pack(clio_src, config, version)
+    pack_out = _build_and_pack(clio_src, config, version, cfg.get("TFM"))
     _reinstall_global_tool(pack_out, version, run_tmp)
     autoupdate_off = _disable_autoupdate()
     return version, autoupdate_off
@@ -728,6 +754,8 @@ def main(argv=None):
     for name in ("KN_URL", "KN_REL_OWNER", "KN_REL_REPO", "KN_REL_ASSET", "KN_REL_API", "CONFIG",
                  "MARKETPLACE_NAME"):
         require_token(name, cfg[name])
+    if cfg.get("TFM"):
+        require_token("TFM", cfg["TFM"])
 
     plugin_name = resolve_plugin_name()
     home = clio_home(cfg.get("CLIO_HOME"))
