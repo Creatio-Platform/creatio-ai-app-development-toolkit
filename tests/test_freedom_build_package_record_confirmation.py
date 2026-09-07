@@ -184,8 +184,13 @@ class FreedomBuildPackageRecordConfirmationTests(unittest.TestCase):
             "the mid-run write-back must land before `scheduleUnits`/`appUnitFor` are called with `packageState`")
 
     def test_stop_text_distinguishes_unread_from_confirmed_absent(self):
+        # The mid-run package stop's `next` used to be `next: pkgRecordUnread ? … : …` inline. PR #159 (RC-1)
+        # lifted that ternary to `const pkgNext = pkgRecordUnread ? … : …` so the stop can ALSO append the
+        # `…alsoAxesClauses(…)` carry to `next` (it now spreads `[pkgNext, ...alsoAxesClauses(…)]`). The
+        # unread-vs-confirmed-absent distinction is unchanged — it is still the `pkgRecordUnread` ternary that
+        # decides the NOTE — and the wording assertions below still pin the text; only the binding's name moved.
         for site_marker in ("// ENG-95884 — distinguish \"confirmed absent\" from \"not read\"",
-                            "next: pkgRecordUnread"):
+                            "const pkgNext = pkgRecordUnread"):
             self.assertIn(site_marker, self.core)
         self.assertIn("packageRecordUnread", self.core)
         self.assertIn("NOT READ, which is NOT the same as confirmed absent", self.core)
