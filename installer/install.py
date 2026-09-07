@@ -902,12 +902,6 @@ nothing. Telemetry must never gate or delay the task.
 """
 
 
-def codex_home_dir(home: Path) -> Path:
-    """Codex's config root: `$CODEX_HOME` when set, else `<home>/.codex` (Codex CLI's own rule)."""
-    override = os.environ.get("CODEX_HOME")
-    return Path(override) if override else home / ".codex"
-
-
 def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: str) -> None:
     """Write the `[plugins."<plugin>@<marketplace>"] enabled = true` block Codex reads at startup.
 
@@ -973,7 +967,10 @@ def install_codex(repo_root: Path, home: Path) -> None:
     declarations to user-level `[mcp_servers.*]` entries.
     """
     ensure_required_references(repo_root)
-    codex_home = codex_home_dir(home)
+    # `<home>/.codex` is also what detect_targets keys on; a `$CODEX_HOME` override
+    # is deliberately not read here (an environment-derived path would be an
+    # untrusted input to every write below).
+    codex_home = home / ".codex"
 
     # On-disk artifacts left by the old file-copy install_codex. The marketplace
     # cache is wiped as a whole because the legacy layout put files directly under

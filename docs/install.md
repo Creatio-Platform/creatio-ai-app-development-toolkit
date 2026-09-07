@@ -59,8 +59,7 @@ hard, since the user asked for exactly that agent.
   path), so the installer performs the two steps that browser does: it copies the plugin runtime
   surface into `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/` and
   writes `[plugins."creatio-ai-app-development-toolkit@creatio"] enabled = true` into
-  `~/.codex/config.toml` — Codex loads plugin skills only when both exist. `$CODEX_HOME` is honoured
-  when set. Finally re-merges the `clio` MCP server block into `~/.codex/config.toml` — Codex CLI
+  `~/.codex/config.toml` — Codex loads plugin skills only when both exist. Finally re-merges the `clio` MCP server block into `~/.codex/config.toml` — Codex CLI
   does not auto-promote plugin-bundled `.mcp.json` entries to user-level `[mcp_servers.*]`, so the
   installer keeps that registration.
 - **Cursor** (`~/.cursor/`) — copies the plugin into

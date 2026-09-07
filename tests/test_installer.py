@@ -1151,29 +1151,6 @@ class InstallCodexTests(unittest.TestCase):
             self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
             self.assertEqual(config_body.count("[mcp_servers.clio]"), 1)
 
-    def test_respects_codex_home_environment_variable(self):
-        installer = load_installer()
-        with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
-            repo_root.mkdir()
-            write_minimal_plugin_checkout(repo_root)
-            write_required_references(installer, repo_root)
-            write_release_manifest(repo_root)
-            home = Path(temp) / "home"
-            (home / ".codex").mkdir(parents=True)
-            alt_codex_home = Path(temp) / "alt-codex-home"
-
-            with patch.dict(installer.os.environ, {"CODEX_HOME": str(alt_codex_home)}), patch.object(
-                installer.agent_cli, "preflight_codex", return_value="codex"
-            ), patch.object(installer, "run_checked"), patch("builtins.print"):
-                installer.install_codex(repo_root, home)
-
-            self.assertTrue(
-                (alt_codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0").is_dir()
-            )
-            self.assertIn("[plugins.", (alt_codex_home / "config.toml").read_text(encoding="utf-8"))
-            self.assertFalse((home / ".codex" / "plugins").exists())
-            self.assertFalse((home / ".codex" / "config.toml").exists())
 
     def test_tolerates_marketplace_remove_not_found(self):
         installer = load_installer()
