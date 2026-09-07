@@ -3803,7 +3803,7 @@ check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` 
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
   /#### Business rules/.test(guidCs.designSpec)
-  && /\| when Stage \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  && /\| when Stage = a specific value \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
@@ -11569,8 +11569,8 @@ const a3Gap = (r) => r.changeSet.needsDecision.filter((n) => n.kind === "rule-co
 
 // (i) READABLE condition → the cell names the attribute the rule watches. No gap, no worklist row.
 const a3Ok = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]`);
-check("ENG-96571 A3: a rule with a READABLE condition renders `when <attr>` and raises no condition gap",
-  a3Cell(a3Ok) === "when Stage"
+check("ENG-96571/ENG-96327 A3: a rule with a READABLE condition renders the WHOLE condition (`when <attr> = <value>`) and raises no condition gap",
+  a3Cell(a3Ok) === "when Stage = New"
   && !a3Ruleset(a3Ok).conditionsIncomplete && a3Gap(a3Ok).length === 0,
   () => ({ row: a3Row(a3Ok), rule: a3Ruleset(a3Ok) }));
 
@@ -12022,8 +12022,8 @@ check("ENG-96571 (review 1, G): a column-to-column comparison is NOT a condition
   && !(r1gAttr.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
   () => JSON.stringify((r1gAttr.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition")));
 const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
-check("ENG-96571 (review 1, G) ANTI-VACUITY: a comparison against a CONSTANT keeps the existing bare `when Stage` phrasing — this cell has never printed the constant, and nothing about that case changed",
-  /when Stage \|/.test(r1gRow(r1gConst)) && !/when Stage =/.test(r1gRow(r1gConst)),
+check("ENG-96327 (was ENG-96571 G ANTI-VACUITY): a comparison against a CONSTANT states the whole condition too — `when Stage = New`, the value the cell now prints (a readable constant is shown; a lookup GUID would read `a specific value`)",
+  /when Stage = New/.test(r1gRow(r1gConst)),
   () => r1gRow(r1gConst));
 const r1gNothing = r1gRun('{ "type": 0 }');
 check("ENG-96571 (review 1, G): a right side with NEITHER a value NOR an attribute is DEGENERATE — it names nothing to compare against, so the rule is a parse gap rather than rendering as a readable condition",

@@ -409,19 +409,33 @@ function ruleTriggerCell(r, attrs) {
 }
 
 // ENG-96571 (review 1, G) — ONE condition, as the Trigger cell names it. A column-to-column comparison
-// (Classic's `rightExpression: { type: 1, attribute: "OtherStage" }`) rendered as bare `when Stage`, which reads
-// as "Stage is set" and lost the comparison entirely; the right attribute is now named. A comparison against a
-// CONSTANT keeps the existing bare `when <left>` phrasing — the constant is already carried in the emitted rule
-// and this cell has never printed it, so nothing about that case changes.
-const condLeftName = (c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.attribute || null;
+// (Classic's `rightExpression: { type: 1, attribute: "OtherStage" }`) is rendered as `Stage = OtherStage`, not the
+// bare `when Stage` that reads as "Stage is set".
+// ENG-96327 — the Trigger states the WHOLE condition, not just the attribute: a presence check reads "<attr> is
+// filled"/"<attr> is empty"; a comparison against a constant reads "<attr> <op> <value>" (the operators the platform
+// uses). A lookup value is a raw record GUID (unreadable — the reason the removed [lookup-value] prompt existed), so
+// it renders as "a specific value" and the agent resolves the real name on-stand. An unknown comparison or a missing
+// value falls back to the attribute alone. Robust to BOTH the sanitized shape (`comparison`/`left`/`right.value`)
+// and a raw condition (`comparisonType`/`leftExpression`/`rightExpression.value`).
+const COMPARISON_OP = { 3: "=", 4: "≠", 5: "<", 6: "≤", 7: ">", 8: "≥" };
+const condLeftName = (c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.leftExpression?.attributePath || c?.attribute || null;
 const condRightAttr = (c) => c?.right?.attribute || c?.right?.attributePath || null;
 // RAW, not escaped: `ruleTriggerCell` runs `esc` over each phrase it prints, so escaping here too would
 // double-escape a stand-derived attribute name.
 const condPhrase = (c) => {
   const left = condLeftName(c);
   if (!left) return null;
+  const cmp = typeof c?.comparison === "number" ? c.comparison : c?.comparisonType;
+  if (cmp === 12) return `${left} is filled`;   // IS_NOT_NULL
+  if (cmp === 11) return `${left} is empty`;     // IS_NULL
   const right = condRightAttr(c);
-  return right ? `${left} = ${right}` : left;
+  if (right) return `${left} = ${right}`;        // column-to-column comparison
+  const op = COMPARISON_OP[cmp], v = c?.right?.value ?? c?.rightExpression?.value;
+  if (op && v !== null && v !== undefined) {
+    const shown = typeof v === "string" && TYPED_GUID.test(v) ? "a specific value" : String(v);
+    return `${left} ${op} ${shown}`;
+  }
+  return left;
 };
 
 // Declarative page business rules → Logic rows [behaviour, trigger, effect, target]. Extracted for Sonar CC 15.
