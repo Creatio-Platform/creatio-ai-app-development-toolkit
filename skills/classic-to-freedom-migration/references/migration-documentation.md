@@ -59,7 +59,8 @@ migrations/<app-or-section-slug>/
 the repo/workspace" above is the rule, and it was already written here and in `SKILL.md` when a run put its whole
 doc set in a folder that was not a git repository at all — no commit, no diff, no way to see afterwards what the
 run had touched. Prose nobody verifies is how that happens, so `migrate.mjs` checks: before its first write it
-resolves the folder each output flag points into and, when neither that folder nor any parent holds a `.git`
+resolves the folder each output flag points into — `--slices <dir>` at its PARENT, the migration folder, since it
+names a directory the run writes into rather than a file — and, when neither that folder nor any parent holds a `.git`
 entry, writes one `⚠ NOT UNDER VERSION CONTROL` line to stderr naming the folder. A folder that IS inside a
 working tree produces no extra output, so a correct run reads exactly as it did before.
 

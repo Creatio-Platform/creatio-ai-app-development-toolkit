@@ -8310,7 +8310,11 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
     // whatever this fixture's plan gates produce, and the property under test is that the warning does not change
     // it. Same status, byte-identical artifact, one extra stderr line.
     check("ENG-96011 (T1): a `--plan --out` run into an un-versioned folder writes exactly ONE warning line naming that folder ABSOLUTELY — and still writes the artifact, byte-identical, with the same exit code as the identical run in a versioned folder",
-      vcLines(rBare).length === 1
+      // A THUNK, not an eager expression: the second `readFileSync` reads the VERSIONED run's artifact, which
+      // nothing above guards. Evaluated eagerly, a regression in that write path throws ENOENT while this
+      // argument is being built and aborts the whole runner (~1000 later checks) instead of failing this one
+      // check; `check` treats a throw from a function condition as a named failure (see its definition above).
+      () => vcLines(rBare).length === 1
         && vcLines(rBare)[0].includes(path.resolve(bare))
         && existsSync(path.join(bare, "plan.md"))
         && rBare.status === rGitDir.status
@@ -8362,6 +8366,37 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
     check("ENG-96011 (T4): and the line SAYS the run continues — the operator has to be able to tell an advisory notice from a stop without knowing which phrases the executor happens to classify on",
       /\bcontinues\b/i.test(multiLine),
       () => ({ line: multiLine }));
+
+    // T5 (R4, the `--verify-*` half) — R4's second acceptance criterion is "a run whose only output flag is a
+    // `--verify-*` file still gets the check", and until this golden nothing exercised any of the three. T4 above
+    // covers `--out` / `--slices` / `--resolved-gates`; the three `--verify-*` paths reach the warner only through
+    // the array literal at its single call site, so they were the three entries a future edit of that array could
+    // drop silently.
+    //
+    // It has to be a REAL `--verify` run. The cheap form — appending `--verify-json` to the `--units` invocation
+    // above — CANNOT work and must not be re-proposed: the CLI fails such a run at exit 1 ("`--verify-json <file>`
+    // only applies to `--verify`"), and that guard is ordered BEFORE the preflight, so the run would die before the
+    // check ever executed. `--verify-summary` and `--verify-digest` are guarded the same way. Hence `--verify
+    // --built <file>`, with the built payload keyed by page exactly as the `--verify` goldens in `run-mapper.mjs`
+    // shape it. The empty `main` page is short, so this run also exits 2 on the done-gate — irrelevant here and
+    // deliberately not asserted: the property under test is that the advisory line appears and the file is written.
+    const bareVerify = path.join(vcRoot, "bare-verify");
+    mkdirSync(bareVerify, { recursive: true });
+    // The built payload is a FIXTURE we author, so it lives OUTSIDE `bareVerify` — `bareVerify` must contain only
+    // what the run itself writes, or "the verdict file was written" would be asserting our own write.
+    const vcBuiltFile = path.join(vcRoot, "built.json");
+    writeFileSync(vcBuiltFile, JSON.stringify({ pages: { main: {
+      viewConfig: { items: [] }, parentSchemaName: "ApplicantPage",
+      schemaUId: "11111111-1111-4111-8111-111111111111" } } }));
+    const rVerify = spawnSync(process.execPath, [ENGINE_MJS, "-", "--verify", "--built", vcBuiltFile,
+      "--verify-json", path.join(bareVerify, "verify.json")], { input: vcManifest, encoding: "utf8" });
+    check("ENG-96011 (T5): a run whose ONLY output flag is `--verify-json` still gets the check — exactly ONE warning line naming that folder absolutely, and the verdict file is still written (R4's `--verify-*` criterion, which needs a real `--verify --built` run: the CLI rejects `--units --verify-json` before the preflight)",
+      () => vcLines(rVerify).length === 1
+        && vcLines(rVerify)[0].includes(path.resolve(bareVerify))
+        && existsSync(path.join(bareVerify, "verify.json")),
+      () => ({ lines: vcLines(rVerify), expectedFolder: path.resolve(bareVerify),
+        wroteVerdict: existsSync(path.join(bareVerify, "verify.json")), status: rVerify.status,
+        stderrHead: (rVerify.stderr || "").slice(0, 240) }));
 
     // THE DETECTOR ITSELF, called directly — the legs no CLI golden can reach. `mg.versionedRootFor` is exported for
     // exactly this.

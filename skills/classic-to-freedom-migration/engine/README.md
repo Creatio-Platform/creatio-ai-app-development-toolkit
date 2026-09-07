@@ -258,7 +258,11 @@ of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planM
 **Version-control preflight (ENG-96011).** Before the run's first write, the CLI checks the folder every output
 flag points into — `--out`, `--slices`, `--verify-json`, `--verify-summary`, `--verify-digest`,
 `--resolved-gates` — and writes ONE `⚠ NOT UNDER VERSION CONTROL` line to **stderr** per folder where neither
-the folder nor any parent holds a `.git` entry, naming that folder absolutely. The migration folder is expected to
+the folder nor any parent holds a `.git` entry, naming that folder absolutely. One exception to "the folder the flag
+points into": `--slices <dir>` names a directory the run writes *into*, and it is deliberately reduced to its PARENT —
+the migration folder — so a slices-only run is checked, and named, one level up. The verdict is unaffected (the walk-up
+answers the same for a folder and its parent), and it is what makes `--out <d>/plan.md` and `--slices <d>/slices` one
+line instead of two. The migration folder is expected to
 be a git working tree (the doc set is the versioned OUTPUT — see `../references/migration-documentation.md`), and a
 run whose output can never be diffed or reverted should say so rather than be discovered afterwards. A folder that
 IS inside a working tree adds **no output at all**, and several flags pointing into one folder produce one line.
