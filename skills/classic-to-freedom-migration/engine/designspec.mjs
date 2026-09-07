@@ -916,6 +916,18 @@ function answeredText(r) {
   const attribution = who ? ` _(${who})_` : "";
   return `**✅ answered:** ${esc(r.answer)}${attribution}`;
 }
+// ENG-96327 — WHO the ⚠ Confirm block is for. It is read by the HUMAN approver, but the build is done by an AGENT
+// that holds the classic body, the live stand and the contracts. A caption/label/hint to fetch on-stand, a control
+// type to look up, a field's density/truncation, an image's placement — those are pure AGENT work: the agent
+// resolves them on-stand and nothing about the answer is the approver's call. They still ride the MACHINE channel
+// (`confirmWorklistRows` → `--units.preflight`), so nothing is lost; they are just kept OUT of the human list, which
+// is left to the decisions that genuinely need a person (map-or-drop, layout shape, a Classic side effect, an add
+// mechanism, a lookup value to resolve, …). This is a DENYLIST, not an allowlist: a new decision kind stays VISIBLE
+// by default (the safe direction) and is hidden only when it is added here as demonstrably cosmetic.
+const COSMETIC_CONFIRM_KINDS = new Set([
+  "element-caption", "group-caption", "detail-caption", "field-labels", "field-hint", "field-control",
+  "layout-density", "layout-truncated", "image-column", "image-placement",
+]);
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -940,7 +952,10 @@ function renderConfirmWorklist(cs, opts = {}) {
   // simply drops out — the question is gone, the plan is shorter, and nothing points back at it.
   const res = opts.resolutions ? asResolutionIndex(opts.resolutions) : null;
   const isAnswered = (n) => !!(res && matchResolution(res, { kind: n.kind, item: n.item }));
-  const confirm = open.filter((d) => !isAnswered(d)).map((d) =>
+  // ENG-96327 — the RENDERED open list is the HUMAN shrink: cosmetic/agent-only kinds (see COSMETIC_CONFIRM_KINDS)
+  // are dropped from the plan (they still ride the machine channel). The disposition machinery above
+  // (closed / invalid / notApplicable) is left on the broader set — a disposition the operator wrote is still reported.
+  const confirm = open.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !isAnswered(d)).map((d) =>
     `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is

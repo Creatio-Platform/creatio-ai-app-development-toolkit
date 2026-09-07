@@ -6010,6 +6010,18 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   check("⚠ Other declared logic table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
+  // ENG-96327 (shrink, F-intent): a COSMETIC/agent-only decision (a caption/label/hint to fetch on-stand) is dropped
+  // from the human ⚠ Confirm, while a GENUINE decision (map-or-drop a component) stays. The cosmetic kind still rides
+  // the machine channel, so a build agent's --units preflight is unaffected; only the human plan is shorter.
+  {
+    const shrinkCs = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+      { kind: "component", item: "FancyWidget", reason: "no clean Freedom mapping — confirm the substitute" },
+      { kind: "field-labels", item: "SomeField", reason: "fetch the caption on-stand" },
+    ] } }, { embedded: true });
+    check("ENG-96327 (F-intent): a genuine ⚠ Confirm decision (component) is shown; a cosmetic one (field-labels) is dropped to the machine channel",
+      /\*\*\[component\]\*\* FancyWidget/.test(shrinkCs) && !/\[field-labels\]/.test(shrinkCs),
+      () => shrinkCs.split("\n").filter((l) => /\[component\]|\[field-labels\]|Confirm before/.test(l)));
+  }
   // Section ORDER including the new worklist. The order is documented as prose in SKILL.md, AGENTS.md and three
   // reference templates; without this, moving ⚠ Other declared logic below ⚠ Confirm would contradict every one of
   // them and no assertion would notice — the older order check (above) predates the section and omits it.
@@ -6020,8 +6032,11 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
-        "#### ⚠ Confirm before I build"].map((n) => page.indexOf(n));
+      // ⚠ Confirm is only present when a HUMAN-facing decision remains after the ENG-96327 shrink (this fixture's
+      // decisions are all cosmetic/agent-only, so it has none) — include it in the order check only when it renders.
+      const base = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic"];
+      const seq = page.includes("#### ⚠ Confirm before I build") ? [...base, "#### ⚠ Confirm before I build"] : base;
+      const order = seq.map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos)
         && !page.includes("#### Member ledger");   // ENG-96327: suppressed in the human (embedded) plan
     },
@@ -12373,9 +12388,9 @@ check("ENG-96327 (item 5): `--plan --resolutions` REMOVES each answered ⚠ Conf
       const r = br1(["--plan", "--resolutions", f]);
       const out = r.stdout || "";
       return r.status === 0
-        // the two answered items are gone from the LIST worklist (3 → 1 open) and the one from the FORM worklist (3 → 2)
-        && /⚠ Confirm before I build \(1\)/.test(out)
-        && /⚠ Confirm before I build \(2\)/.test(out)
+        // the answered items are gone from the worklists — both pages shrink to a single open row (the header shows
+        // only the OPEN count; cosmetic/agent-only kinds are not in the human list either, per the ENG-96327 shrink)
+        && (out.match(/⚠ Confirm before I build \(1\)/g) || []).length === 2
         // no header carries an "answered" count any more, and no ⚠ row is echoed back as its answer
         && !/⚠ Confirm before I build \([^)]*answered/.test(out)
         && !/\*\*\[list-add-routing\]\*\*[^\n]*✅ answered/.test(out)
