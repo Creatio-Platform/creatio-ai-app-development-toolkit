@@ -19,14 +19,14 @@ HTML or a rendered artifact.
 - **One `Layout` table = structure + contents.** The `Region` column is the page structure (side-profile
   islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
   related list, native component and card action is ONE row — nothing is listed twice.
-- **`Logic` is where the business rules live** — the declarative page rules (required / read-only /
+- **`Business rules` is where they live** — the declarative page rules (required / read-only /
   visible-when, each with its condition) render here, together with entity/lookup filters and
   process launch. The Layout `Rule` column carries only intrinsic field state
   (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.
-- **Custom METHODS are not in `Logic`** — each is a row in `⚠ Custom methods`, with its trigger traced
-  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Logic` = what the
+- **Custom METHODS are not in `Business rules`** — each is a row in `⚠ Custom methods`, with its trigger traced
+  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Business rules` = what the
   engine MAPPED; `⚠ Custom methods` = the methods it could not, each carrying a ported/dropped/blocked
-  obligation. `Logic` closes with a pointer line naming how many methods the page has.
+  obligation. `Business rules` closes with a pointer line naming how many methods the page has.
 - **`⚠ Other declared logic`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
   `module-dep`, `referenced-module`) — declared on this page, defined elsewhere. Same contract as
   `⚠ Custom methods`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
@@ -187,12 +187,12 @@ top-area columns · profile island). Three states, and the third is the point: m
 context, measured-and-does-not is an explicit build step **with its own expected count**, and never-measured is
 `⚠ confirm on-stand` — never an assertion in either direction.
 
-#### Logic
-| Behaviour | Trigger | Effect | Freedom target |
+#### Business rules
+| Trigger | Behaviour | Effect | Freedom target |
 | --- | --- | --- | --- |
-| <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
-| Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
-| Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
+| when <attr> | <field> | required (else optional) / visible (else hidden) / read-only | page business rule |
+| <attr> lookup | Filter · <attr> | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
+| Run process action | Run process | launch <process> | ⚠ which process — resolve via connected processes on-stand |
 
 > <N> custom method(s) — see **⚠ Custom methods** below.
 
@@ -213,7 +213,7 @@ context, measured-and-does-not is an explicit build step **with its own expected
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm), then each child page under **Child page mappings**.
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm), then each child page under **Child page mappings**.
 
 ## Worked example (single-section, abbreviated)
 
@@ -262,13 +262,13 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Tab · Approvals | — | Visas | Approvals | native — confirm component on-stand | — | — |
 | Card actions | — | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
-#### Logic
-| Behaviour | Trigger | Effect | Freedom target |
+#### Business rules
+| Trigger | Behaviour | Effect | Freedom target |
 | --- | --- | --- | --- |
-| Specialist expertise level | when Stage | required (else optional) | page business rule |
-| Request | when Stage | required (else optional) | page business rule |
-| Reject reason | when Stage | required (else optional) | page business rule |
-| Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
+| when Stage | Specialist expertise level | required (else optional) | page business rule |
+| when Stage | Request | required (else optional) | page business rule |
+| when Stage | Reject reason | required (else optional) | page business rule |
+| Request lookup | Filter · Request | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 
 > 2 custom method(s) — see **⚠ Custom methods** below.
 

@@ -1050,21 +1050,21 @@ check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layou
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
   && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
 // A method belongs to the ⚠ Custom methods worklist ONLY — never repeated as a Logic row.
-const dsLogicBlock = (spec.split("#### Logic")[1] || "").split("####")[0];
+const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
 check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Custom methods only)",
-  /#### Logic/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
+  /#### Business rules/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the Logic section points at the worklist carrying the methods",
   /1 custom method\(s\) — see \*\*⚠ Custom methods\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the handler is still accounted for — it carries its own ⚠ Custom methods row",
   /#### ⚠ Custom methods/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
-// (`split("#### Logic")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
+// (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
 // worklist being moved back below the confirm list.
 const specAt = (needle) => spec.indexOf(needle);
 check("design-spec: sections run Layout → Logic → ⚠ Custom methods → ⚠ Confirm → Member ledger",
-  specAt("#### Layout") < specAt("#### Logic") && specAt("#### Logic") < specAt("#### ⚠ Custom methods")
+  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Custom methods")
   && specAt("#### ⚠ Custom methods") < specAt("### ⚠ Confirm"),
-  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Logic"),
+  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Business rules"),
     imperative: specAt("#### ⚠ Custom methods"), confirm: specAt("### ⚠ Confirm") }));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
@@ -3802,8 +3802,8 @@ check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` 
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
-  /#### Logic/.test(guidCs.designSpec)
-  && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  /#### Business rules/.test(guidCs.designSpec)
+  && /\| when Stage \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
@@ -3815,9 +3815,9 @@ check("RV10: result.payload exposes the emitted (payload-filtered) counts",
 // documented Known Trap (a companion field loaded by such a helper gets dropped, leaving a lone-field island).
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-const foldLogicTable = (foldCs.designSpec.split("#### Logic")[1] || "").split("####")[0];
+const foldLogicTable = (foldCs.designSpec.split("#### Business rules")[1] || "").split("####")[0];
 check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Custom methods worklist's alone",
-  /#### Logic/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
+  /#### Business rules/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
@@ -3828,7 +3828,7 @@ check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
-  /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
+  /Filter · Req[^\n]*2 filters/.test(dupFilt.designSpec));
 // #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
@@ -4951,8 +4951,8 @@ check("Major(imperative-sink): a piped handler/helper name is escaped in the wor
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
 check("Major(imperative-sink): the Logic table renders no method name to escape in the first place",
-  /#### Logic/.test(logicSpec) && !(logicSpec.split("#### Logic")[1] || "").split("####")[0].includes("Fo"),
-  () => (logicSpec.split("#### Logic")[1] || "").split("####")[0]);
+  /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
+  () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
 // The CALL names in `Body does` are a second sink for the same hostile input — a call path comes from an untrusted
 // body, and the cell prints it verbatim so the reader can grep for it. Fed straight to the renderer, bypassing the
@@ -5992,7 +5992,7 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Logic", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
+      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
         "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
@@ -6609,11 +6609,11 @@ const ck = ckRun.checklist || "";
 // pinned on a fixture carrying only one of them, so nothing asserted the whole section — including that the method
 // count line CLOSES it, after the rules and before the next heading.
 {
-  const logicBlock = (ckRun.plan.split("#### Logic")[1] || "").split(/\n#### /)[0];
+  const logicBlock = (ckRun.plan.split("#### Business rules")[1] || "").split(/\n#### /)[0];
   const lines = logicBlock.split("\n").filter((l) => l.trim());
   check("Logic (canonical): the rules table comes first and the method-count line closes the section",
-    /#### Logic/.test(ckRun.plan)
-    && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
+    /#### Business rules/.test(ckRun.plan)
+    && /^\| Trigger \| Behaviour \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
     && /^> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\.$/.test(lines[lines.length - 1] || "")
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
@@ -11533,8 +11533,8 @@ const A3_RULE = (conds) => `{ "Job": { "JobRequired": {
 const a3Run = (conds) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "A3Page", body: A3_PAGE(A3_RULE(conds)) }] });
 // The LOGIC row (`| <element> | <trigger> | <effect> | page business rule |`), not the Layout row that also
 // carries the field name — the Trigger cell under test lives only in the Logic table.
-const a3Row = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
-const a3Cell = (r) => (a3Row(r).split("|")[2] || "").trim();
+const a3Row = (r) => (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const a3Cell = (r) => (a3Row(r).split("|")[1] || "").trim();
 const a3Ruleset = (r) => r.changeSet.pageBusinessRules[0];
 const a3Gap = (r) => r.changeSet.needsDecision.filter((n) => n.kind === "rule-condition");
 
@@ -11980,7 +11980,7 @@ const R1_G_RULE = (right) => `define("R1GPage", ["BusinessRuleModule"], function
 }; });`;
 const r1gRun = (right) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1GPage", body: R1_G_RULE(right) }] });
 const r1gRule = (r) => (r.changeSet.pageBusinessRules || []).find((x) => x.element === "Job");
-const r1gRow = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const r1gRow = (r) => (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
 const r1gAttr = r1gRun('{ "type": 1, "attribute": "OtherStage" }');
 check("ENG-96571 (review 1, G): an ATTRIBUTE on the right side of a condition SURVIVES sanitizeConditions — it used to collapse to `{value:null, dataValueType:null}` and the comparison was gone from the ChangeSet entirely",
   r1gRule(r1gAttr)?.conditions?.[0]?.right?.attribute === "OtherStage",
