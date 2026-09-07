@@ -548,12 +548,11 @@ const INDEX_ENTRY = {
     ac: { type: 'array', items: { type: 'string' } },
     bodyCard: { type: 'string' },
     bodyAc: { type: 'array', items: { type: 'string' } },
-    trigger: { type: 'string', enum: REPORTED_TRIGGERS },
+    trigger: { type: 'string' },
     from: { type: 'string' },
     note: { type: 'string' },
     behaviourEstablished: { type: 'boolean' },
   },
-  dependentRequired: { trigger: ['from'], from: ['trigger'] },
 }
 
 const DESCRIBE_SCHEMA = {
