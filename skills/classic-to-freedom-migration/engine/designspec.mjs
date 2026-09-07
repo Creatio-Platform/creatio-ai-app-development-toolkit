@@ -769,6 +769,11 @@ function childFormRecommendation(cs, fields, opts) {
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
 function headerTemplateRecommendation(cs, opts) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // ENG-96327 (product decision) — the operator already chose this page's Header template (a `layout-type:Header`
+  // answer in `resolutions.json`), so the engine's recommendation (and its capability caveat) is a settled question:
+  // drop it from the plan rather than re-argue a decision the operator made. Fires only when the render carries
+  // resolutions (a `--plan --resolutions` run); a plain `--spec` never carries them, so it is unaffected.
+  if (opts.resolutions && matchResolution(asResolutionIndex(opts.resolutions), { kind: "layout-type", item: "Header" })) return [];
   const L = [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`];
   // ENG-96457 (item 2) — the recommendation is made on ONE fact ("the Header is populated") and used to be stated
   // with no reference to what the recommended template can actually hold. Check it against the MEASURED top-area
@@ -886,17 +891,10 @@ function notApplicableLines(notApplicable) {
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
-// ENG-96457 (item 5) — THE ANSWER, IN THE DOCUMENT. `resolutions.json` used to reach only `--units`, so after all
-// four ⚠ questions were answered `plan.md` still showed the unanswered worklist (and the 1-column fallback table):
-// the artifact a human had approved and the payload the builder acted on said different things. With
-// `--plan --resolutions <file>` each answered row is rendered as its answer, with the question kept beneath it —
-// an answer with its question is auditable; an answer that replaces its question is not. Unanswered rows are
-// unchanged, so a partially answered plan still reads as partially answered.
-function resolutionSuffix(resolutions, kind, item) {
-  const r = matchResolution(resolutions, { kind, item });
-  if (!r) return "";
-  return ` · ${answeredText(r)}`;
-}
+// ENG-96327 (product decision) — `resolutions.json` answers do NOT appear in the human plan: an answered ⚠ Confirm
+// row is REMOVED from the worklist (see renderConfirmWorklist). The answer reaches the build through
+// `--units.preflight[].resolution` and is kept in `resolutions.json`; the plan the operator approves just gets
+// shorter as questions are settled, rather than echoing each answer back.
 // `**✅ answered:** <answer> _(who, when)_` — ONE renderer, so the ⚠ rows and the list-column line cannot drift into
 // two spellings of the same fact (they did: `✅ **answered:**` vs `**✅ answered:**`, and a test had to pick one).
 function answeredText(r) {
@@ -920,17 +918,17 @@ function renderConfirmWorklist(cs, opts = {}) {
   const open = nd.filter((n) => !n.closed);
   const closedRows = nd.filter((n) => n.closed);
   const invalid = nd.filter((n) => n.dispositionInvalid);
-  // ENG-96457 (item 5) — the operator's recorded answer, rendered after the question it answers. Orthogonal to the
-  // CLOSED split above: a `resolutions` answer annotates a row that is still OPEN, a disposition removes it from the
-  // open list. Both channels therefore run, and only the OPEN rows can carry an answer suffix.
-  const res = opts.resolutions || null;
-  let answered = 0;
-  const confirm = open.map((d) => {
-    const suffix = resolutionSuffix(res, d.kind, d.item);
-    if (suffix) answered++;
-    return `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-      (d.describedIn ? ` · **described in** ${describedInText(d)}` : "") + suffix;
-  });
+  // ENG-96327 (product decision) — a ⚠ Confirm row the operator ANSWERED in `resolutions.json` is REMOVED from the
+  // human plan entirely, NOT rendered as its answer. The answer lives in `resolutions.json` (a separate file) and
+  // travels to the build via `--units.preflight[].resolution`; re-printing it in the document the operator approves
+  // is a duplicate of a settled question. This is a DIFFERENT channel from `confirmDispositions` above: a disposition
+  // still prints an `ℹ` CLOSED line (a manifest-level acceptance the reader may want to see), whereas an answered ⚠
+  // simply drops out — the question is gone, the plan is shorter, and nothing points back at it.
+  const res = opts.resolutions ? asResolutionIndex(opts.resolutions) : null;
+  const isAnswered = (n) => !!(res && matchResolution(res, { kind: n.kind, item: n.item }));
+  const confirm = open.filter((d) => !isAnswered(d)).map((d) =>
+    `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
   // now raised by `mapRules` as a `lookup-value` `needsDecision` entry (ENG-95503) and arrives through `nd` above
   // like every other kind, so it has an evidence id, a `--units.preflight` row, and a key an answer can bind to.
@@ -941,13 +939,10 @@ function renderConfirmWorklist(cs, opts = {}) {
   // (ENG-96457: it also means every kind that reaches this worklist can carry an answer — including this one.)
   const notApplicable = cs.confirmNotApplicable || [];
   if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length) return [];
-  // The header counts EVERY half, and says which is which: "(3)" on a run where two of the three were answered
-  // reads as three open questions. Each qualifier is only mentioned when there IS one, so an unanswered run's
-  // header is unchanged, and the answered-only wording stays the ENG-96457 one.
+  // The header counts the OPEN work left. A `confirmDispositions` CLOSE is named alongside (it still prints below);
+  // an answered ⚠ is gone entirely (removed above), so it is not counted here — the shorter list IS the signal.
   let head = `#### ⚠ Confirm before I build (${confirm.length})`;
-  if (closedRows.length && answered) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed, ${answered} answered)`;
-  else if (closedRows.length) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed)`;
-  else if (answered) head = `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`;
+  if (closedRows.length) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed)`;
   const L = [head, ...confirm];
   if (closedRows.length) {
     const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${noteSuffix(d.note)}`).join(" · ");

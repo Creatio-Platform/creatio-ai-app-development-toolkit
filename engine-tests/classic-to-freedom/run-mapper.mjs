@@ -12496,8 +12496,12 @@ check("ENG-96457 (item 4): the routing question is SECTION-scoped — a page wit
     .map((pf) => ({ pageKey: pf.pageKey, item: pf.item })),
     pages: (br1Units.pages || []).map((pg) => pg.key) }));
 
-// ---- item 5: plan.md is regenerated with the answers ----------------------------------------------------------
-check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row AS its answer and says how many are answered — every question could be answered and `plan.md` still showed the unanswered worklist, so the approved document and the payload the builder acted on said different things",
+// ---- item 5: plan.md drops the ⚠ Confirm rows the operator answered (ENG-96327 product decision) ---------------
+// POC's ENG-96457 rendered each answered ⚠ row AS its answer. The migration-plan branch's decision is the opposite:
+// an answered ⚠ Confirm row is REMOVED from the human plan entirely — the answer lives in `resolutions.json` (a
+// separate file) and reaches the build via `--units.preflight[].resolution`. So the worklist just gets shorter, the
+// header stops carrying an "answered" count, and a settled header decision drops its Template recommendation too.
+check("ENG-96327 (item 5): `--plan --resolutions` REMOVES each answered ⚠ Confirm row from the human plan (kept only in resolutions.json), rather than echoing the answer — the worklist shrinks and the header shows only the OPEN count",
   () => { const f = path.join(os.tmpdir(), `c2f_br1_res_${process.pid}.json`);
     try {
       fs.writeFileSync(f, JSON.stringify({ resolutions: [
@@ -12508,11 +12512,15 @@ check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row 
       const r = br1(["--plan", "--resolutions", f]);
       const out = r.stdout || "";
       return r.status === 0
-        && /⚠ Confirm before I build \(3, 2 answered\)/.test(out)          // the list page's two
-        && /⚠ Confirm before I build \(3, 1 answered\)/.test(out)          // the form page's one
-        && /\*\*\[list-add-routing\]\*\*.*\*\*✅ answered:\*\* Accepted — switch-over/.test(out)
-        // …and the unresolved COLUMN LINE is superseded by the answer rather than still reading as a fallback
-        && /\*\*List columns:\*\* \*\*✅ answered:\*\* Name, City1, Country1 _\(Alex, 2026-09-03\)_/.test(out);
+        // the two answered items are gone from the LIST worklist (3 → 1 open) and the one from the FORM worklist (3 → 2)
+        && /⚠ Confirm before I build \(1\)/.test(out)
+        && /⚠ Confirm before I build \(2\)/.test(out)
+        // no header carries an "answered" count any more, and no ⚠ row is echoed back as its answer
+        && !/⚠ Confirm before I build \([^)]*answered/.test(out)
+        && !/\*\*\[list-add-routing\]\*\*[^\n]*✅ answered/.test(out)
+        // the answered Header layout-type is gone AND its Template recommendation is suppressed (settled, not re-argued)
+        && !/\*\*\[layout-type\]\*\*/.test(out)
+        && !/Template recommendation — header/.test(out);
     } finally { fs.rmSync(f, { force: true }); }
   },
   () => "see --plan --resolutions on the fixture");
