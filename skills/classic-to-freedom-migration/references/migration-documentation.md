@@ -55,6 +55,19 @@ migrations/<app-or-section-slug>/
   worklog.md           # session log and runtime read-back evidence (append-only)
 ```
 
+**"Versioned" is a requirement, and the engine now SAYS when it is not met (ENG-96011).** "Keep it versioned in
+the repo/workspace" above is the rule, and it was already written here and in `SKILL.md` when a run put its whole
+doc set in a folder that was not a git repository at all — no commit, no diff, no way to see afterwards what the
+run had touched. Prose nobody verifies is how that happens, so `migrate.mjs` checks: before its first write it
+resolves the folder each output flag points into and, when neither that folder nor any parent holds a `.git`
+entry, writes one `⚠ NOT UNDER VERSION CONTROL` line to stderr naming the folder. A folder that IS inside a
+working tree produces no extra output, so a correct run reads exactly as it did before.
+
+The check is deliberately **advisory only** — it never refuses to run, never initialises a repository and never
+asks for a commit, because migrating against a scratch stand is legitimate. It makes the situation visible; what
+to do about it stays the operator's call. Note the check covers what the ENGINE writes; a document you create by
+hand before the first engine call precedes it, which is why `SKILL.md` step 6 runs `--plan --out` first.
+
 **An answered ⚠ Confirm item goes in `resolutions.json`, not only in `decisions.md` prose.** `decisions.md`
 remains the human decision log and the home of the plan approval; the build reads it for the approval entry
 alone. An answer a build agent must ACT on needs a machine home, keyed to the question the engine published:

@@ -3169,6 +3169,87 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
   return written;
 }
 
+// IS THIS FOLDER INSIDE A GIT WORKING TREE? (ENG-96011) — the walk-up that answers it, and the only version-control
+// knowledge anywhere in this engine.
+//
+// BY FILESYSTEM, NOT BY `git`. No module under engine/ spawns a child process, and this warning is not worth being
+// the first that does: `spawnSync("git", ["rev-parse", …])` would put a `git`-on-PATH dependency into a pure engine,
+// and a process per run onto Windows CI, to answer a question the filesystem already answers for every layout the
+// skill's folders actually take.
+//
+// A `.git` ENTRY — existence, deliberately NOT `statSync(...).isDirectory()`. An ordinary clone has a `.git`
+// DIRECTORY, but a linked worktree and a submodule both have a `.git` FILE holding a `gitdir:` pointer, so a
+// directory test reads a perfectly tracked worktree as untracked and warns at an operator who did nothing wrong.
+// `fs.existsSync` is also the only fs call here that cannot throw — it answers false for a path it may not stat —
+// which is exactly the "unknown" behaviour the caller needs (see warnUnversionedWriteTargets).
+//
+// THE ACCEPTED GAP: a `GIT_DIR`-only setup, where the environment names a repository that has no `.git` on disk,
+// goes undetected and stays silent. That is the deliberate price of staying subprocess-free; the ticket asks only to
+// surface the "no repository at all" case that was actually observed. The mirror-image gap — a migration folder
+// nested inside an UNRELATED repository reads as versioned — is accepted for the same reason: it is the same answer
+// `git status` gives from that folder.
+//
+// Returns the working-tree ROOT (so a caller can name it) or null for "nothing found, up to the filesystem root".
+// A path this cannot even resolve is null too: UNKNOWN, never a throw.
+export function versionedRootFor(dir) {
+  try {
+    let cur = path.resolve(dir);
+    // TERMINATES BY FIXPOINT — `path.dirname` shortens the path until it stops changing, which is the only root test
+    // that reads the same on both legs of the goldens matrix: POSIX stops at "/", Windows at "C:\" and at a UNC
+    // share root, and each is its own dirname. Comparing against a literal "/" would loop forever on windows-latest.
+    let prev = null;
+    while (cur !== prev) {
+      if (fs.existsSync(path.join(cur, ".git"))) return cur;
+      prev = cur;
+      cur = path.dirname(cur);
+    }
+    return null;
+  } catch { return null; } // a non-path argument — an answer, never an exception into a run that was about to write
+}
+
+// THE WARNING (ENG-96011): one stderr line per un-versioned directory this run is about to write into.
+//
+// WHY THE ENGINE AND NOT THE SKILL. "Keep the migration folder under version control" was already prose in three
+// documents when a run produced a folder that was not a repository at all; a fourth restatement would repeat the
+// failure. The engine is the only component that performs the writes, so it is the only one that can say so before
+// the first one happens.
+//
+// ONCE, UP FRONT, DEDUPED BY RESOLVED DIRECTORY. A guard at each of the six write sites would repeat the same line
+// up to six times for one folder and would still be ordered AFTER the first write for some flags. `--out plan.md`
+// and `--slices slices/` normally point into the same migration folder, and the operator needs telling about that
+// folder once.
+//
+// STDERR, NEVER STDOUT. Without `--out`, stdout IS the artifact the agent presents verbatim, so a notice there would
+// be pasted into the plan. stderr already carries this engine's other advisory lines (the retention sweep, the
+// summary-size warning), which is where an operator already looks for them.
+//
+// THE TEXT IS CONSTRAINED, not merely styled. `_workflow-core/build-executor/helpers.mjs` classifies a plan-level
+// gap by CONTAINMENT and case-INSENSITIVELY over exactly `gate BLOCKED` / `structure INCOMPLETE` /
+// `coverage INCOMPLETE` / `plan INCOMPLETE`, because such an entry is sometimes a pasted engine stderr line. An
+// advisory line that happened to carry one of those phrases would be read as a blocking plan gap and would stop a
+// build. So none of them appear here, the ⛔ marker stays reserved for the gates that really do block, and the line
+// says in its own words that the run continues. `run-infra.mjs` pins all three properties.
+//
+// NON-BLOCKING, UNCONDITIONALLY. Nothing in here throws, and it changes no exit code, no artifact and no byte of
+// stdout. The worst this may ever do is stay quiet.
+export function warnUnversionedWriteTargets(paths) {
+  const seen = new Set();
+  for (const p of paths) {
+    if (!p) continue; // an output flag this run did not pass
+    let dir;
+    // THE DIRECTORY, NOT THE FILE — and `--slices <dir>` reduces to its PARENT on purpose, rather than being special
+    // -cased. Walk-up detection returns the same verdict for a folder and its parent (a `.git` inside `slices/`
+    // itself is not a thing), the parent is the migration folder an operator recognises, and it is already what
+    // `sweepAnswerCaptures` treats as the run's folder. It also makes `--out <d>/plan.md` and `--slices <d>/slices`
+    // dedupe to the single line they ought to be.
+    try { dir = path.dirname(path.resolve(p)); } catch { continue; }
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    if (versionedRootFor(dir)) continue; // inside a working tree — a correct run gains NO output at all
+    process.stderr.write(`migrate.mjs: ⚠ NOT UNDER VERSION CONTROL — this run writes into ${dir}, where neither the folder nor any parent holds a \`.git\` entry, so nothing it writes will have history to diff or revert. The migration folder is expected to be a git working tree. This is ADVISORY: the run continues and writes exactly what it would otherwise write. Put the folder under git, or move the migration inside a working tree, if this run's output is meant to be kept.\n`);
+  }
+}
+
 // RETENTION FOR THE RECONCILE ANSWER CAPTURES (`reconcile-answer-*.json` beside the queue file). The submission
 // protocol writes the agent's full answer to disk — the evidence a rejected submission needs — and instructs the
 // agent to delete an ACCEPTED attempt's copies; an instruction to an agent is probabilistic, and a REJECTED
@@ -3307,6 +3388,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), resolutions: resolutionIndex }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
+  // THE VERSION-CONTROL PREFLIGHT (ENG-96011) — the LAST thing before the run's earliest write, and the only place
+  // it is called from. `--resolved-gates` below is that earliest write; everything else this CLI writes (`--slices`,
+  // the three `--verify-*` files, `--out`) happens further down, so one call here is "before it writes anything" for
+  // every mode. Deliberately AFTER the manifest has parsed and `runMigration` has returned: a run that dies on a bad
+  // manifest writes nothing at all, and telling that operator about git would be noise about a run that never
+  // touched the folder. All six output paths go in together and the callee dedupes them by resolved directory, so
+  // the six flags of a full `--units` run produce one line for the one folder they share.
+  warnUnversionedWriteTargets([outFile, slicesDir, verifyJsonFile, verifySummaryFile, verifyDigestFile, resolvedGatesFile]);
   // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
   // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
   // `[]` included, so a reader can tell "no gated types" from "the flag was never passed".
