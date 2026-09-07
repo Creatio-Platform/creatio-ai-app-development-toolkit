@@ -387,6 +387,32 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
         self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
 
+    def test_install_plugin_false_skips_the_install_step_on_both_paths(self):
+        # ENG-96710: Codex CLI has no `plugin add`/`plugin install`; install_codex
+        # registers the marketplace only and materializes the plugin itself.
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("Error: marketplace 'creatio' not found")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(
+                ["codex"], marketplace_remove_flags=[], pre_remove_marketplace=True, install_plugin=False
+            )
+            installer.register_remote_marketplace_and_install_plugin(["codex"], install_plugin=False)
+
+        self.assertEqual(
+            commands,
+            [
+                ["codex", "plugin", "marketplace", "remove", "creatio"],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+            ],
+        )
+
     def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
         # Regression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
         # the "no such marketplace" condition as
@@ -1051,9 +1077,15 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 
 
 class InstallCodexTests(unittest.TestCase):
-    """ENG-90514: Codex installs via the remote marketplace, parity with Claude."""
+    """ENG-90514: Codex registers the remote marketplace via its CLI.
 
-    def test_shells_out_via_codex_cli_in_remove_add_install_order(self):
+    ENG-96710: Codex CLI has no non-interactive plugin-install subcommand, so the
+    installer performs the two steps the interactive `/plugins` browser does —
+    copy the plugin into `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`
+    and enable it in config.toml. Skills load only when both exist.
+    """
+
+    def test_registers_marketplace_without_plugin_add_and_materializes_cache(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -1074,15 +1106,74 @@ class InstallCodexTests(unittest.TestCase):
             ), patch.object(installer, "copy_plugin_runtime_surface") as copy_runtime:
                 installer.install_codex(repo_root, home)
 
+            # No `codex plugin add`: the subcommand does not exist in Codex CLI.
             self.assertEqual(
                 commands,
                 [
                     ["codex", "plugin", "marketplace", "remove", "creatio"],
                     ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
-                    ["codex", "plugin", "add", installer.PLUGIN_SOURCE],
                 ],
             )
-            copy_runtime.assert_not_called()
+            copy_runtime.assert_called_once_with(
+                repo_root,
+                home / ".codex" / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0",
+            )
+            config_body = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+
+    def test_materializes_plugin_cache_and_enables_plugin_idempotently(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            # A stale version left by an earlier install must not survive.
+            stale = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            stale.mkdir(parents=True)
+            (stale / "marker").write_text("old\n", encoding="utf-8")
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), patch("builtins.print"):
+                installer.install_codex(repo_root, home)
+                installer.install_codex(repo_root, home)  # re-run: idempotent
+
+            version_dir = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0"
+            self.assertTrue((version_dir / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+            self.assertTrue((version_dir / ".github" / "plugin" / "plugin.json").exists())
+            self.assertFalse(stale.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
+            self.assertEqual(config_body.count("[mcp_servers.clio]"), 1)
+
+    def test_respects_codex_home_environment_variable(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            (home / ".codex").mkdir(parents=True)
+            alt_codex_home = Path(temp) / "alt-codex-home"
+
+            with patch.dict(installer.os.environ, {"CODEX_HOME": str(alt_codex_home)}), patch.object(
+                installer.agent_cli, "preflight_codex", return_value="codex"
+            ), patch.object(installer, "run_checked"), patch("builtins.print"):
+                installer.install_codex(repo_root, home)
+
+            self.assertTrue(
+                (alt_codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0").is_dir()
+            )
+            self.assertIn("[plugins.", (alt_codex_home / "config.toml").read_text(encoding="utf-8"))
+            self.assertFalse((home / ".codex" / "plugins").exists())
+            self.assertFalse((home / ".codex" / "config.toml").exists())
 
     def test_tolerates_marketplace_remove_not_found(self):
         installer = load_installer()
@@ -1110,7 +1201,6 @@ class InstallCodexTests(unittest.TestCase):
             self.assertEqual([cmd[1:4] for cmd in commands], [
                 ["plugin", "marketplace", "remove"],
                 ["plugin", "marketplace", "add"],
-                ["plugin", "add", installer.PLUGIN_SOURCE],
             ])
 
     def test_cleans_up_legacy_file_copy_artifacts(self):
@@ -1142,7 +1232,12 @@ class InstallCodexTests(unittest.TestCase):
                 installer.install_codex(repo_root, home)
 
             self.assertFalse(legacy_marketplace_dir.exists())
-            self.assertFalse(legacy_cache_dir.exists())
+            # The marketplace cache is rebuilt, not just deleted: the legacy marker
+            # is gone and the current version directory is in place.
+            self.assertFalse((legacy_cache_dir / "marker").exists())
+            self.assertTrue(
+                (legacy_cache_dir / installer.PLUGIN_NAME / "0.1.0" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+            )
             self.assertFalse(legacy_personal_plugin_dir.exists())
             self.assertFalse(legacy_skill_dir.exists())
 
@@ -1187,7 +1282,9 @@ class InstallCodexTests(unittest.TestCase):
             self.assertIn('model = "gpt-5.4"', config_body)
             self.assertNotIn("[marketplaces.creatio]", config_body)
             self.assertIn("[marketplaces.other]", config_body)
-            self.assertNotIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            # The legacy plugin block is replaced by exactly one installer-owned block.
+            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
             self.assertIn('[plugins."other@other"]', config_body)
             self.assertNotIn("[[skills.config]]", config_body)
             self.assertIn("[mcp_servers.clio]", config_body)
