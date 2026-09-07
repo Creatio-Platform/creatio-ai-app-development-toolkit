@@ -705,9 +705,12 @@ Details of the record shapes, the ids and the judge tri-state:
   overstated it): a `stand` claim with **no note at all** is NOT cross-checked and is not faulted — a healthy
   `resolved: true` stand answer legitimately carries no note, so faulting the empty case would tax every healthy round
   to close a bypass whose durable fix is a structured provenance field from clio (DR-8). That residual is declared,
-  not hidden: the coupling to clio's note wording is written down in `AGENTS.md` and guarded by a token-drift test, so
-  a clio rewording fails a named test instead of switching the cross-check off unseen. (`resolvedFrom` is the
-  toolkit's own two-word field, distinct from clio's like-named `resolvedFrom`.)
+  not hidden: the coupling to clio's note wording is written down in `AGENTS.md`, and an in-repo token-pin test guards
+  it against a silent **in-repo** edit that loosens or drops the token list. What that pin does NOT do is detect a
+  **clio-side** rewording — no in-repo signal can, since every in-repo test feeds the tokens by construction — so a
+  clio rewording would turn the cross-check into a no-op unseen; the fixture named in DR-8 (a captured real
+  probe-failure response) is what would close that, and it is not yet in place. (`resolvedFrom` is the toolkit's own
+  two-word field, distinct from clio's like-named `resolvedFrom`.)
   Every stop on this point **carries the other three axes** — an unresolved component type the stand DID answer, an
   unresolvable template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
   precondition stop does, and the mid-run package-precondition stop now carries them too, so a mixed round yields

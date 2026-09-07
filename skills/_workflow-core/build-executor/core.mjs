@@ -29,9 +29,9 @@
 import { step, ACCESS } from '../work-item.mjs'
 import { makeContext, makePaths, normalizeInput, assertContextInput, resolveEngineCli, q } from './context.mjs'
 import {
-  absorbPreflight, answeredNoteFor, appCodeInstruction, appIdentityClause, appIdentityMismatch, appUnitFor, approvalStop,
+  absorbPreflight, answeredNoteFor, appCodeInstruction, appIdentityMismatch, appUnitFor, approvalStop,
   batchPreflight, blockedByParked,
-  buildModeMenu, buildModes, buildSchemaKind, claimsBlock, componentReplanClause, componentTypeList,
+  buildModeMenu, buildModes, buildSchemaKind, claimsBlock, componentTypeList,
   offeredModes,
   componentTypeMismatches, composeBuildPrompt, continuationAllowed, continuationBudgetBlock,
   CONTROL_MODE_ITEM, earnedFrom, findingsFor,
@@ -41,7 +41,7 @@ import {
   preflightToRun, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, reopenKeySet, repairBlock, requeueDecisions,
   RESOLUTION_NOT_APPLIED, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
-  shouldPauseAfter, templateMismatches, templateNameList, templateReplanClause, unknownCheckpointKeys, verifyFetchPlan,
+  shouldPauseAfter, templateMismatches, templateNameList, unknownCheckpointKeys, verifyFetchPlan,
   // ENG-95468 (residual) — the provenance axis of the component sweep: the two values an answer can come from,
   // the entries that did NOT come from this stand, and the operator's next move on them (which is NOT a re-plan).
   RESOLVED_FROM_CATALOG, RESOLVED_FROM_STAND, standAnsweredResolutions, standUnconfirmedComponents,

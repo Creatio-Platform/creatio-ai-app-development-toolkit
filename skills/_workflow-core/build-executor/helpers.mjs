@@ -1309,9 +1309,23 @@ export function standUnconfirmedComponents(componentResolution, publishedTypes) 
 // it did. On a healthy round every entry is stand-sourced and this is the identity function.
 export const standAnsweredResolutions = (componentResolution) =>
   (componentResolution || []).filter((c) => !statedNotStand(c))
-export const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
-const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+// The agent-supplied `type` routed through `componentTypeToken` HERE TOO (PR #159 review round 3, Alexandr): this
+// list renders straight into the STOP `log(...)` line at both call sites, which is FREE TEXT, not JSON — so the "it
+// is JSON and cannot escape" reasoning that lets `standUnconfirmedComponents` keep the raw `type` on its structured
+// entry does not cover this path. Same anti-forgery treatment its sibling `standUnconfirmedDetail` already applies to
+// the `next` text, so a `type` carrying a backtick or newline cannot forge instruction-shaped prose into the log.
+export const standUnconfirmedList = (entries) => (entries || []).map((c) => componentTypeToken(c.type)).join(', ')
+// CAPPED at the module's `UNIT_CAP` (24) with a `+N more` tail (PR #159 review round 3, Alexandr), matching the
+// operator-facing list convention above (`cappedList`): a normal sweep shows every entry and only a pathological one
+// is trimmed, and a silent truncation cannot read as a shorter list. Each note/provenance is already bounded by
+// `capNote` on the structured entry, so this is a readability cap over the already-byte-bounded answer, not a size guard.
+const STAND_UNCONFIRMED_RENDER_CAP = 24
+const standUnconfirmedDetail = (entries) => {
+  const list = entries || []
+  const shown = list.slice(0, STAND_UNCONFIRMED_RENDER_CAP)
+    .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+  return list.length > STAND_UNCONFIRMED_RENDER_CAP ? shown + '; +' + (list.length - STAND_UNCONFIRMED_RENDER_CAP) + ' more' : shown
+}
 // The operator's next move, and it is NOT a re-plan: the plan is not implicated by an answer nobody got from the
 // stand. ONE home for the wording, like `componentReplanClause`, so the pre-build and mid-run stops cannot drift.
 export const standUnvalidatedNext = (entries, tail) => {

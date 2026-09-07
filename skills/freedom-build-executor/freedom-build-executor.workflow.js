@@ -1256,9 +1256,14 @@ function standUnconfirmedComponents(componentResolution, publishedTypes) {
 }
 const standAnsweredResolutions = (componentResolution) =>
   (componentResolution || []).filter((c) => !statedNotStand(c))
-const standUnconfirmedList = (entries) => (entries || []).map((c) => c.type).join(', ')
-const standUnconfirmedDetail = (entries) => (entries || [])
-  .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+const standUnconfirmedList = (entries) => (entries || []).map((c) => componentTypeToken(c.type)).join(', ')
+const STAND_UNCONFIRMED_RENDER_CAP = 24
+const standUnconfirmedDetail = (entries) => {
+  const list = entries || []
+  const shown = list.slice(0, STAND_UNCONFIRMED_RENDER_CAP)
+    .map((c) => '`' + componentTypeToken(c.type) + '` (from `' + provenanceToken(c.resolvedFrom) + '`: ' + c.note + ')').join('; ')
+  return list.length > STAND_UNCONFIRMED_RENDER_CAP ? shown + '; +' + (list.length - STAND_UNCONFIRMED_RENDER_CAP) + ' more' : shown
+}
 const standUnvalidatedNext = (entries, tail) => {
   const list = entries || []
   const falseFromCatalog = list.filter((c) => !c.resolved).length

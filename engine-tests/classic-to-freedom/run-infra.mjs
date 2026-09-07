@@ -1616,18 +1616,21 @@ check("ENG-95468 (PR #159, RC-2): FAULT 4 — a `resolvedFrom` naming NEITHER `s
     && sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "catalog", note: "n" }] }).length === 0
     && sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "STAND", note: "n" }] }).length === 0,
   () => JSON.stringify(sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "environment", note: "n" }] })));
-// ENG-95468 (PR #159, RC-3) — THE DECLARED clio COUPLING, given a drift signal. FAULT 3 cross-checks a `stand`
-// claim against clio's own catalog-fallback tokens in the free-text `note` — prose clio OWNS and nothing pins. If
-// clio rewords that note the fault silently becomes a no-op and the gate degrades to a bare model attestation. These
-// two checks are that signal: the FIRST fires the fault through the shipped code on each token (case-insensitively)
-// and confirms a clean note does NOT; the SECOND pins the exact token literal, so a clio rewording (or an edit here)
-// fails a NAMED test. The coupling itself is declared in `AGENTS.md` and DR-8. The not-yet-closed piece — a fixture
-// captured from a real `get-component-info` probe-failure response — is named there as the follow-up.
-check("ENG-95468 (PR #159, RC-3): FAULT 3 fires on clio's catalog-fallback tokens in a `stand` claim's note (case-insensitive), and a clean note does not — the behavioural half of the clio-coupling drift signal",
+// ENG-95468 (PR #159, RC-3) — THE DECLARED clio COUPLING. FAULT 3 cross-checks a `stand` claim against clio's own
+// catalog-fallback tokens in the free-text `note` — prose clio OWNS and nothing pins. If clio rewords that note the
+// fault silently becomes a no-op and the gate degrades to a bare model attestation, and NO in-repo signal sees it:
+// every in-repo test feeds the tokens by construction, so a clio-side wording change cannot be caught here (the
+// captured-probe-failure fixture named in DR-8 and AGENTS.md is what would close that, and is not yet in place —
+// PR #159 review round 3, kamil). What these two checks DO guard is a different failure: the FIRST fires the fault
+// through the shipped code on each token (case-insensitively) and confirms a clean note does NOT — coverage that the
+// fault fires at all; the SECOND pins the token literal and its AGENTS.md declaration against a silent IN-REPO edit
+// that loosens or drops either, so the in-repo half of the guard cannot vanish unnoticed. Neither claims to detect a
+// clio-side rewording, and the header above no longer says they do.
+check("ENG-95468 (PR #159, RC-3): FAULT 3 fires on clio's catalog-fallback tokens in a `stand` claim's note (case-insensitive), and a clean note does not — coverage that the fault actually fires (NOT a clio-side drift signal)",
   () => { const hit = (note) => sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note }] }).some((f) => /catalog-fallback token/.test(f));
     return hit("resolvedFromReason=probe-error") && hit("used the LATEST-FALLBACK catalog") && !hit("resolved on this environment"); },
   () => JSON.stringify(sweepFaults({ componentResolution: [{ type: "crt.X", resolved: true, resolvedFrom: "stand", note: "probe-error" }] })));
-check("ENG-95468 (PR #159, RC-3): the clio-note coupling is PINNED — CATALOG_NOTE_TOKENS is exactly `probe-error`/`latest-fallback`, declared in AGENTS.md, so a clio rewording fails THIS test instead of switching FAULT 3 off unseen",
+check("ENG-95468 (PR #159, RC-3): the token list and its AGENTS.md declaration are pinned against a silent IN-REPO edit — CATALOG_NOTE_TOKENS stays exactly `probe-error`/`latest-fallback` and the coupling stays declared. This does NOT detect a clio-side rewording (no in-repo test can); the captured-probe fixture named in DR-8 is the residual that would.",
   /const CATALOG_NOTE_TOKENS = \/probe-error\|latest-fallback\/i/.test(coreSrc)
     && /Declared coupling: freedom-build-executor reads clio's `get-component-info` note/.test(readFileSync(fileURLToPath(new URL("../../AGENTS.md", import.meta.url)), "utf8")),
   () => `token-pin=${/const CATALOG_NOTE_TOKENS = \/probe-error\|latest-fallback\/i/.test(coreSrc)}`);
