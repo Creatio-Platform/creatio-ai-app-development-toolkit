@@ -1,74 +1,99 @@
 # Product Telemetry Contract
 
-When the `send-telemetry` clio MCP tool is available, emit product telemetry for CAADT workflow milestones. Telemetry is diagnostic product metadata only. Use only the fields listed in the Telemetry payload section. Telemetry must never include sensitive data: no full prompts, passwords, tokens, customer names, raw usernames, full generated app content, or full MCP request/response payloads.
+This file owns ONE thing: **where each CAADT flow's telemetry stages land** — which gate of which
+workflow emits which stage.
 
-clio's `get-tool-contract` for `send-telemetry` is the authoritative schema for the allowed event names and payload fields. The lists in this file are a convenience mirror kept in sync with that contract; if they ever disagree, the clio contract wins.
+Everything else about telemetry is owned by clio and MUST be read from there, not restated here:
 
-## Consent
+- **`get-guidance name=product-telemetry`** — the stage vocabulary, the `workflow` and `variant`
+  fields, the consent flow and withdrawal, the payload rules, and the non-blocking rule.
+- **`get-tool-contract`** for `send-telemetry` — the authoritative executable schema.
 
-At CAADT workflow start, call clio MCP `get-telemetry-consent` before sending any product telemetry event. This is the read-only consent check; it never writes. Ask the developer for permission to collect diagnostic product telemetry only when it returns `telemetry_consent=unknown`. The consent prompt must be a single-purpose interaction before requirements gathering, Business Plan discovery, or implementation planning. Do not combine the consent question with discovery questions.
+Read the guidance article before your first emission of a run. Do not infer the vocabulary from this
+file; a stage name spelled from memory is rejected by clio's allow-list.
 
-Because enabling telemetry uploads these events to Creatio servers (not only local storage) and retains them for up to one year, the consent prompt must disclose this remote upload and the one-year retention so the decision is informed; it must also state that the data is diagnostic product metadata only — it includes a random, pseudonymous installation identifier (used only to group an installation's events for adoption analysis) but never prompts, generated content, credentials, or directly identifying personal data such as names, emails, or raw usernames — and that declining keeps telemetry off — nothing is collected or sent — and that consent can be withdrawn at any time (as easily as it was granted). Declining or later withdrawing never blocks the workflow.
+The one field this repository supplies: use the static Analytics Context from the installed skill or
+rule for `coding_agent` and `plugin_version`.
 
-### Consent state → what to do
+## When the connected clio does not accept the vocabulary
 
-`get-telemetry-consent` returns one of three states. **Persisting the decision** (a `send-telemetry` call that carries `telemetry_consent`) is a different action from **emitting the `session_started` event** (a product event clio stores and counts). On a first-run grant they happen to be the same call; on a first-run denial that same call persists the decision but stores no event. Persisting the first-run decision is required either way — skipping it leaves consent `unknown` and re-prompts the developer on every future run.
+Nothing here probes clio's version before emitting; the pairing is made compatible by release order
+(clio ships the vocabulary first, then the guidance, then this toolkit), and a mismatch is made
+visible rather than guessed around.
 
-| Consent state at workflow start | Ask the developer? | Persist the decision | `session_started` event |
-| --- | --- | --- | --- |
-| `unknown`, developer **grants** | Yes — single-purpose prompt | Call `send-telemetry` once with `event_name=session_started` **and** `telemetry_consent=granted` | This same call **is** the `session_started` emission — do not send a second `session_started` for the "first user input" mapping |
-| `unknown`, developer **denies** | Yes — single-purpose prompt | Call `send-telemetry` once with `event_name=session_started` **and** `telemetry_consent=denied`; clio records the decision only and stores **no** event (status `consent-denied`) | None — no `session_started` event is stored, now or later in this run |
-| `granted` (from a prior run) | No | Nothing to persist (already stored) | Emit `session_started` once at workflow start, **without** `telemetry_consent` |
-| `denied` (denied earlier or withdrawn) | No | Nothing to persist (already stored) | None — do not emit any telemetry this run |
+- **Agent side.** A `send-telemetry` rejected with `unknown-event-name` means the installed clio
+  predates the flow-agnostic vocabulary. Stop emitting for the rest of the run and carry on with the
+  task; do not fall back to the deprecated app-creation names, and do not report it as a task failure.
+  The guidance article owns this rule, this is only where it lands for CAADT flows.
+- **Hook side.** The session-start floor is attempted at most `FLOOR_ATTEMPT_LIMIT` times per session.
+  When every attempt is refused, the hook writes one stderr line per session carrying clio's own
+  rejection code from the last answer, and `unknown-event-name` gets a second line naming the cause
+  and the fix (upgrade clio). That line is the difference between a deploy that shipped ahead of the
+  clio it needs and a transient refusal for a bad field, which need opposite responses. See
+  `docs/telemetry-transport-decision.md`, "The floor's exactly-once contract".
 
-Emit `session_started` exactly once per workflow. Treat telemetry as recorded only when the MCP result reports success; if the host displays an invocation exception, do not claim telemetry was recorded. If telemetry is denied or unavailable, continue the CAADT workflow without blocking the user.
+## Which `workflow` value a CAADT flow reports
 
-## Consent withdrawal
+`workflow` identifies the flow; the stage names are shared. Pick the value for the flow you are
+actually running.
 
-The developer can withdraw telemetry consent at any time. When the developer asks to stop, turn off, opt out of, or withdraw telemetry (in any phrasing), call clio MCP `withdraw-telemetry-consent`. It sets the stored decision to `denied`, stops further collection and any new uploads, and deletes any not-yet-uploaded local events (clio reports how many were purged); an upload already in progress at the moment of withdrawal may still finish. Treat the withdrawal as effective only when the MCP result reports success; then confirm to the developer that telemetry is off and stop sending events for the rest of the workflow. A withdrawn decision reads back as `telemetry_consent=denied`, so consent is not requested again. Withdrawal is forward-looking: it does not delete events already uploaded to Creatio, which expire on the one-year retention timer. If `withdraw-telemetry-consent` is unavailable or reports failure, tell the developer telemetry could not be turned off, do not claim it was, and never block the workflow.
+| You are running | `workflow` | Gate P / Gate R applies |
+| --- | --- | --- |
+| App creation or business-shaped feature work | `app-creation` | Yes |
+| Classic→Freedom UI migration | `classic-to-freedom-migration` | No — that skill has its own plan and approval |
+| Freedom UI web→mobile page conversion | `mobile-page-conversion` | No — Gate M / Gate S instead |
+| Branding / theming | `branding` | No — single final confirmation instead |
+| A targeted, implementation-ready edit to an existing app | `app-maintenance` | No |
 
-## Session identifier
+**Being exempt from Gate P/R is not being exempt from telemetry.** That exemption is exactly why those
+flows used to report nothing: the old event names hung off the app-creation gates, so a flow that
+skipped those gates emitted nothing at all, no matter how the instructions were worded. Their
+emission points are their own gates instead, listed below.
 
-Create one `session_id` for the CAADT workflow as a freshly generated random GUID and reuse it for every telemetry event in that conversation. Never derive `session_id` from user, account, file-path, host, or email data; it must be an opaque random identifier. Use the static Analytics Context from the installed skill or rule for `coding_agent` and `plugin_version`.
+## Where each flow's stages land
 
-## Telemetry payload
+The stages are generic; the *points* are each flow's own gates.
 
-Like every parameterized clio MCP tool, `send-telemetry` takes a single top-level `args` object — put all fields **inside** `args`, never at the top level (a flat, top-level payload is rejected with a missing-`args` error). The live `send-telemetry` tool schema is the source of truth for the exact shape; build the call from it rather than inferring a flat payload from the field list below.
+**This table is the condensed, cross-flow summary — it is not the only place this mapping lives, and
+that is deliberate rather than the drift risk it can look like.** Each flow's own `SKILL.md` (and,
+for the app-creation/app-maintenance pair, `rules/creatio-app-orchestrator.mdc`) carries the SAME
+mapping again, expanded to that flow's full stage list — this table only has room for four columns,
+so a flow's own file is what actually tells an agent running that flow every stage it must emit, not
+just the four picked out for side-by-side comparison here. What this delegation removed was the
+STAGE VOCABULARY itself — the closed list of valid names and what each one generically means, owned
+by `get-guidance name=product-telemetry` and restated nowhere in this repo — not each flow's own
+emission-point guidance, which cannot be centralized without losing the per-flow granularity an agent
+running that flow actually needs at the point of emission. `tests/test_product_telemetry_contract.py` is what keeps the two from silently drifting apart: one
+test requires every stage to appear in at least one flow's own file, and another fails the build the
+day any surface — this file, a `SKILL.md`, the Cursor rule, the installer — names something clio's
+allow-list does not recognise.
 
-Fields to send (inside `args`):
+| Flow | `plan_presented` | `plan_approved` | `work_item_completed` | Notes |
+| --- | --- | --- | --- | --- |
+| `app-creation` | the BA-style Business Plan is shown in full | Gate R confirmation | per created section/page | `build_started` after Gate R, once runtime context is available |
+| `classic-to-freedom-migration` | the engine-written `plan.md`, presented verbatim | explicit approval, before the first Freedom artifact | per migrated page (`variant=page`) | `plan_blocked` with `variant=engine-gate` on each `⛔` run |
+| `mobile-page-conversion` | the plain-language conversion plan | **Gate M** | per built mobile page; also on **Gate S** registration (`variant=section`) | `plan_blocked` with `variant=feature-disabled` when the `mobile-page-converter` flag is off |
+| `branding` | the single final summary | confirmation of that summary | per applied asset (`variant=theme` / `logo`) | palette confirmation is a `user_input_received` |
+| `app-maintenance` | — (skips planning) | — | per applied change | `plan_skipped` at the start makes the skip explicit |
 
-- `session_id`
-- `event_name`
-- `coding_agent`
-- `plugin_version`
-- `telemetry_consent` — only when persisting the first-run consent decision (see the consent table above)
-- `duration_ms` — optional; clio infers each step's duration from local session timing, so send it only when you have a more accurate measurement for the step; omit it otherwise
+Two rules that decide *when*, and that this table depends on:
 
-Example (first-run grant):
+- **Emit at the point named, not batched at the end.** A stage recorded after the fact cannot show
+  where a run stopped, which is the whole point of a funnel.
+- **What counts as a `work_item_completed` unit in each flow.** That it is one event per unit and never
+  zero is owned by the guidance article — read it there. What belongs here is the flow's own definition
+  of a unit: an entity schema, a column, a lookup, a page, a section, a mobile page, a navigation
+  registration, or an applied branding asset. One event each, at the moment that unit is verified, with
+  its own `variant`. A run that touched three of these reports three.
+- **`workflow_started` goes at the first user input of the flow**, and it is also the call that
+  persists a first-run consent decision — see the guidance article for that interaction.
 
-```json
-{ "args": { "session_id": "a7f3b2e1-9c4d-4e8a-b5f6-2d1c3e7a9b0f", "event_name": "session_started", "coding_agent": "Claude Code", "plugin_version": "1.1.0", "telemetry_consent": "granted" } }
-```
+## Overlay skills have no workflow of their own
 
-clio also records an anonymized installation identifier and other diagnostic fields it derives locally, so the agent does not send them; the full set of locally derived, stored, and uploaded attributes is owned and documented by clio (see the clio telemetry ADR), not enumerated by this contract.
+`creatio-schema-naming` and `creatio-ui-guidelines` supply rules to whichever flow is running. They
+MUST NOT open a telemetry session of their own — the enclosing flow already reports its stages, and a
+second session double-counts the same run.
 
-## Events — when to emit
-
-Emit each event at the point described, reusing the same `session_id`. Events fire as the workflow reaches them; not every workflow reaches every event. `session_started` follows the consent table above.
-
-| Event | When to emit |
-| --- | --- |
-| `session_started` | First user input in the CAADT workflow. Emitted once per workflow — see the consent table (on a first-run grant the consent-persisting send is this emission). |
-| `pre_plan_clarification_requested` | The agent asks extra questions before Business Plan generation. |
-| `pre_plan_user_input_received` | Each user input before Business Plan generation. |
-| `business_plan_generated` | The full Business Plan has been generated and shown in the visible conversation body. Emit immediately after presenting the complete Business Plan, never before or during drafting. |
-| `business_plan_generation_skipped` | Business Plan generation is intentionally skipped. |
-| `business_plan_feedback_received` | Each user input or requested change before Business Plan approval. |
-| `business_plan_regenerated` | An updated Business Plan has been regenerated and shown in the visible conversation body. Emit immediately after presenting the complete updated plan. |
-| `business_plan_approved` | The developer approves the Business Plan. Emit after explicit plan approval, before runtime setup or implementation prep. |
-| `implementation_started` | Implementation begins after Gate R approval and the required runtime context is available. Emit before the first implementation action. |
-| `implementation_user_input_received` | Each user input after `implementation_started` and before a terminal `implementation_completed` or `implementation_failed` event. |
-| `implementation_completed` | Implementation succeeds. |
-| `implementation_changes_requested` | The developer requests extra changes after `implementation_completed`. Emit before starting the follow-up change work. |
-| `implementation_changes_applied` | Requested post-completion changes are applied and verified. Emit after the follow-up change is complete. |
-| `implementation_failed` | Implementation fails, is blocked, or cannot continue. |
+The single exception is a standalone invocation: the developer called the overlay directly, no other
+CAADT flow is active, and the run still changes the environment. That is a targeted edit — report it
+as `app-maintenance` so the change is not invisible.

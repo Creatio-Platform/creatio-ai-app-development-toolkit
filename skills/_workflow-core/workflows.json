@@ -1,0 +1,16 @@
+{
+  "generatedBy": "scripts/build-workflows.mjs",
+  "note": "GENERATED — do not edit. The identity of each shipped workflow script, for consumers that must not parse the generated JavaScript. Run `node scripts/build-workflows.mjs` to regenerate; `--check` fails CI when it drifts.",
+  "workflows": [
+    {
+      "name": "creatio-classic-behaviour-analysis",
+      "script": "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js",
+      "phases": [
+        "Context",
+        "Describe",
+        "Critique",
+        "Merge"
+      ]
+    }
+  ]
+}

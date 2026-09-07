@@ -31,6 +31,31 @@ Evidence to collect:
 - existing replacing schemas or Freedom pages for the same entity
 - explicit user package strategy, if provided
 
+## Section Host Mapping
+
+A writable package answers *where pages go*. It does not answer *whether the section can be
+registered in the menu* — those are two different questions, and conflating them is how a run builds
+every page and only then finds that `create-app-section` cannot run.
+
+**`create-app-section` takes no package parameter.** It writes to the application's **primary**
+package. Everything below follows from that one fact.
+
+| Application situation | Section host | Notes |
+| --- | --- | --- |
+| App's primary package IS the target package, and it is editable | `existing-app` | The only situation where the section lands where the plan says it will. |
+| App has a primary package, but it is NOT the target package | `new-app`, or fix composition on-stand first | Registering anyway writes the section into a package the migration does not own. |
+| App's primary package is locked (vendor/installed) | `new-app` | Design-time writes into it are refused; unlocking a vendor package is not a migration decision. |
+| App has **no** primary package at all | `new-app` | Typical of an app created by *installing* a package: the wrapper carries a primary package only when the package shipped an app descriptor. `get-app-info` fails with *"Primary package not found in response."* — that error IS the evidence, not a tool defect. |
+| No app owns the entity's package | `new-app` | `create-app` gives the new app its own editable primary package. |
+| User accepts URL/page-binding reachability only | `pages-only-no-menu` | Legitimate, but it must be an approved decision recorded in `decisions.md` — never a silent fallback after a failed registration. |
+
+Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
+present a plan until they are resolved.
+
+**Never repair an app's package composition unasked.** Linking a package to an application or
+flipping its primary flag changes which package owns the app's identity and where the Section Wizard
+writes every future schema. Surface it as a decision; the user picks the host mode.
+
 ## Layout Mapping
 
 Start with the page template, then map child controls. Do not choose a Freedom form template only from the entity name or section caption.
@@ -76,20 +101,27 @@ The single source of truth for the components agents most often mis-map. When yo
 `cardActions` / `needsDecision` (`process-launch`) — the generated design spec already renders each in the
 right shape. Honor that shape; do not invent a generic Expanded-list.
 
-> **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as
-> `../engine/mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`, `WIDGET_BY_CONTAINER`, `PROFILE_CARD_BY_ENTITY`) — the engine is what
-> actually emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable
-> guidance and the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a
-> feature/widget, change **both in the same commit** — they must not drift.
+> **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as the
+> shared mapping table `../engine/mapping-table.mjs` (the FEATURE, WIDGET, PROFILE_CARD and CARD_ACTION rows —
+> the four hand catalogs that used to live in `mapper.mjs` were absorbed into it). The engine is what actually
+> emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable guidance and
+> the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a feature/widget,
+> change **both in the same commit** — they must not drift.
+>
+> Two halves of that rule are now CHECKED rather than trusted (`engine-tests/classic-to-freedom/run-infra.mjs`):
+> every `crt.*` type named anywhere in this file must exist in the vendored component registry index, and every
+> feature/widget the table carries must be named in this section. What stays hand-curated is everything a
+> registry cannot answer: the build recipes, the on-stand checks, and the **Do NOT** column.
 
 | Classic thing | Engine signal | Freedom target | Do NOT |
 | --- | --- | --- | --- |
-| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components (both from `get-component-info`) — add BOTH:** the approval **module/widget** as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). See the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
+| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components — add BOTH, and `--verify` now gates BOTH (ENG-95859):** the approval **module/widget** (`crt.Approval`) as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). Before ENG-95859 only `crt.ApprovalList` was machine-checked, so a build that added just the list read the same as one that added both — see the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing — this now reads ❌ MISSING under `--verify`, not a proposal to raise). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
 | Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments / Feed component | rebuild as a generic list. |
 | Activities / Emails | `standardFeatures` `uiShape: "list"` | a **filtered related list** — a DataGrid of the child records (Activity/Task, Email) filtered to the master. This IS their native form, not a downgrade. | turn them into a `crt.Timeline` or an email-client component. |
-| Means of communication (`ContactCommunication` — "Средства связи контакта") | `standardFeatures` `uiShape: "component"` (inferred by the `ContactCommunication` entity) | the native **Communication-options component** (`crt.ContactCommunication`; `get-component-info` for its contract — it may require the `CrtCustomer360App` package). | rebuild it as a plain Expanded-list / DataGrid over `ContactCommunication` (loses the typed add-communication UI, type icons). If the component/package is unavailable on the stand, RAISE it as a decision (add the dependency / confirm) — do NOT silently fall back to a grid. |
+| Means of communication (`ContactCommunication` — "Средства связи контакта") | `standardFeatures` `uiShape: "component"` (inferred by the `ContactCommunication` entity) | the native **Communication-options component** (`crt.CommunicationOptions`, the compositeOnly component the "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY name; `get-component-info` for its contract — it requires the `CrtCustomer360App` package AND the `CommonCommunicationsBehavior` feature). | rebuild it as a plain Expanded-list / DataGrid over `ContactCommunication` (loses the typed add-communication UI, type icons). If the component/package is unavailable on the stand, RAISE it as a decision (add the dependency / confirm) — do NOT silently fall back to a grid. |
 | Timeline | `widgets` (only when the classic page has an actual Timeline) | `crt.Timeline` | invent a Timeline for Activities/Emails — those are lists (row above). |
 | Action Dashboard = **Case progress bar** + **Next steps** (two components) | `widgets` (`Case progress bar` / `Next steps`) | **The default Freedom form template ships NEITHER — you must ADD them** when the object has a configured DCM case: the **progress bar** on the page top, and **Next steps** as a **NEW tab in the tab container, next to the Feed tab**. Both **auto-populate from the object's case** — do not hand-author stages/steps. **Check on-stand whether the object has a DCM case:** DCM cases are `SysSchema` records with **`ManagerName = 'DcmSchemaManager'`** (the case-schema manager) — query `SysSchema` filtered by `ManagerName eq 'DcmSchemaManager'` and find the case for your entity (match via the case caption/metadata and the object's own `Stage`/case-stage column; a DCM-driven object carries one). Some cases have an active + previous version sharing one caption (e.g. `Recruiting_v11` active, `Recruiting_v1` previous) — take the active one. **A hit ⇒ add both components; no hit ⇒ nothing to add.** ⚠ Do NOT filter by `ManagerName = 'CaseSchemaManager'` — that name is wrong, returns 0 rows, and reads as a false "no case". | treat them as template-provided / "nothing to migrate", or hand-author stage/step lists per page. Conclude "no case" from a query that returned 0 without confirming the filter used `DcmSchemaManager` (not `CaseSchemaManager`). |
+| Duplicates (side widget) | `widgets` (`Duplicates`) | the Freedom duplicates widget — surface it only when the classic page actually carried the `DuplicatesWidgetContainer` **with** its own layer evidence (an inherited-but-empty base container is chrome). No registry component is published under a duplicates name, so resolve the exact target on-stand (`get-component-info`, search "duplicate") before building. | assume the target is NOT `crt.Duplicates` — nothing in the component registry is named that; and do not migrate the widget from an inherited base container with no evidence the classic page used it. |
 | Recommendations (side widget) | `chromeWidgets` (hidden by default) | inherited base-template container (`BasePageV2`), **empty by default**, filled at runtime by `RecommendationModuleUtilities` (the **Next-Best-Offer / product recommendations**, `RecommendedProduct`). The engine classifies it as base **chrome and HIDES it from the plan** (kept in `chromeWidgets`). Surface it manually ONLY if the live page actually renders recommendations (NBO rules configured for the entity) → then wire the Freedom product-selection / recommendations component. | treat it as page content just because it is in the schema — it's always present but usually empty. |
 | **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
@@ -102,6 +134,26 @@ Keep an engine-matched standard feature AS its shape unless you confirm on-stand
 that feature's infrastructure. Build the native component up front — never build a generic list first and
 "switch" it later.
 
+### Verify-side role/analog acceptance (the interim hand table)
+
+A migration builds the **native Freedom component**, not a literal of the Classic name — so when a plan row
+expects a Classic-derived component type, `--verify` (`migrate.mjs`, `resolveComponentVk`) must accept the
+Freedom **analog** that a correct build actually produces, or a built page reads ❌ MISSING against its own
+plan. The accepted pairs are a small **curated hand table** (`COMPONENT_ANALOGS` in
+`../engine/designspec.mjs`), sourced from the rows above; fetch the analog's documentation
+(`get-component-info`) before building, and `--verify` matches either one.
+
+| Planned (Classic-derived) type | Accepted Freedom analog | Source row |
+| --- | --- | --- |
+| `crt.ContactCommunication` (the `ContactCommunication` entity name with a `crt.` prefix — never a real component) | `crt.CommunicationOptions` (the native Communication-options component) | *Means of communication*, above |
+
+> **Interim, and deliberately so.** This table is the **hand-maintained** role/analog source until the
+> ENG-95543 component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
+> registry (same expected set, one call site) and this table is retired. Until then, keep it in sync with the
+> rows above **in the same commit** — the engine constant and this table must not drift. Match STRICTLY against
+> a curated pair; a Freedom analog is never inferred from a name family, so a wrong component cannot falsely
+> satisfy a planned row.
+
 ### Build recipes for the components agents get wrong (verified on-stand)
 
 **Approvals = TWO components, not one.** `get-component-info` for the approval feature returns **two** parts and
@@ -111,10 +163,55 @@ own approve/reject actions). Agents typically add only the list — that is inco
 is what shows the current approval state/actions. Read `get-component-info` for the exact component types + their
 required config before building, and add both.
 
-**Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes, and
-printables are marked "⚠ ADD only if present" precisely because the schema alone doesn't say. Run each query
-at plan time and act on the result; never build "faithful to the classic body" while a `⚠` on-stand check is
-still pending — the classic body having no dashboard/button does NOT mean the section has no case/process.
+**Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes,
+printables, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
+alone doesn't say. Run each query at plan time and act on the result; never build "faithful to the classic
+body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
+the section has no case/process.
+
+**On-save duplicate check → does this entity have one, and will it survive?** (ENG-94274) Two separate facts,
+because they fail differently.
+
+1. **Is there a rule?** `odata-read DuplicatesRule` (a `BaseLookup` in `CrtDeduplication`); select
+   `Name`, `IsActive`, `UseAtSave`, `ProcedureName`. The rows that matter are the ones whose `Object` is your
+   entity with **`IsActive` AND `UseAtSave` both true** — `UseAtSave` is the "Use this rule on save" checkbox.
+   None ⇒ nothing to lose, record `present: false` and move on. List the matching rule names under **`names`**
+   — the CANONICAL key for this signal, and an **array** even for a single rule (`"names": ["Contact
+   duplicates. Contact name"]`; a bare string is tolerated but lists nothing). `items` is accepted only because
+   the sibling signals use it; no other alias is read.
+2. **Can the Freedom flow run on the target stand?** `get-sys-setting DeduplicationWebApiUrl` must be
+   non-empty AND the features `ESDeduplication` + `BulkESDeduplication` must be enabled (read
+   `AdminUnitFeatureState` via `execute-esq`, columns `Feature.Code` / `FeatureState` — **no state row means
+   OFF**). Record the answer as `signals.deduplication.serviceConfigured` (a **boolean**). This one is
+   **required whenever `present: true`** — the `--plan` gate treats a rule with no recorded service answer as
+   unresolved and exits non-zero, because that is the half-answer that would otherwise ship an approvable plan
+   whose own text says the key question is unanswered. With `present: false` it is not needed.
+
+Why both: **Classic has two paths, Freedom has one.** The Classic hook is an `asyncValidate` override in
+`CrtDeduplication.BaseEntityPage` that branches on
+`if (this.getIsFeatureEnabled("ESDeduplication") && !this.isNewMode())`; with that feature off it falls back to
+the rule's own SQL procedure (e.g. `tsp_FindContactDuplicateByName`), so Classic keeps working with no service
+at all. The Freedom side is the platform's `crt.ValidateDuplicatesOnSaveHandler` (registered on
+`crt.SaveDataRequest`, scoped to `BasePageTemplate` / `BaseMiniPageTemplate`, so entity-generic) plus the
+`DuplicateNotificationPage` dialog — and it goes through the deduplication service. Measured 2026-08-21 on a
+stand newer than 8.3.4: Classic posted `DeduplicationService/FindDuplicatesOnSave` and showed its duplicates
+screen, while the Freedom form page issued only `InsertQuery` and saved the duplicate silently, with
+`DeduplicationWebApiUrl` empty and the ES features off.
+
+So a rule **with** the service configured ⇒ verify the dialog on the built page. A rule **without** it ⇒ the
+check stops at migration, silently; that is a decision for the operator (configure the service, keep the
+Classic page for this entity, install the `Deduplication Freedom UI enhancements` marketplace app, or accept
+the loss). Never write this up as "Freedom cannot check duplicates" — it can, and the wording must stay true
+the day the service is turned on. Note the rules themselves live on the ENTITY, not the page, so they survive
+the page migration untouched — only the check is at risk.
+
+**Scope of the answer: one entity.** The recorded answer describes the entity of the page it was resolved for,
+so the engine carries it to every fold of the SAME entity — each per-type form of a typed entity and the
+add-record mini page each get their own row. A **child edit page** is a different entity: it gets a
+child-scoped row telling you to run step 1 for THAT entity, never the parent's verdict (the same convention as
+the section-level Print / Run-process notes). Record the child's own answer as `signals.deduplication` **on that
+child's bundle** and the instruction is replaced by the real verdict for its entity — an operator who runs the
+query must have a way to close the row, and `present: false` there closes it with no row at all.
 
 **DCM case → does the object have one?** `SysSchema` WHERE `ManagerName = 'DcmSchemaManager'` (the case-schema
 manager). Match the case to the entity by its caption + the object's own stage column (`Stage`); active +
@@ -393,6 +490,26 @@ Freedom target differs:
   `methods` (ESQ queries, `on*Changed`, `onEntityInitialized`, save overrides) → migrate as
   Freedom handlers (`crt.HandlerChainService`), converters, or virtual attributes, NOT as
   business rules.
+  - `lookupListConfig.filters` is the IMPERATIVE twin of a FILTRATION rule: the same
+    user-visible behaviour ("this lookup is filtered"), but it needs a filter handler, not
+    `create-entity-business-rules`. Reporting the page as "no lookup filters" because the
+    `businessRules` block has none is the error this distinction exists to prevent.
+  - `dependencies: [{ columns, methodName }]` names the TRIGGER of a method directly — use it
+    instead of reading intent out of the method's name.
+  - An attribute with NO entity column behind it is page UI state (an editability/mode flag, a
+    collection backing a menu). No field insert carries it, so it must be created as a Freedom
+    view-model attribute with its default, and whatever read it re-wired.
+- `messages` (the sandbox contract, with `mode`/`direction`) and `mixins` are members too:
+  a message's counterpart lives in ANOTHER schema, and a mixin's members are defined outside the
+  page body entirely. Neither is visible in the page's own `diff`/`methods`, and neither may be
+  reported as absent — resolve the counterpart, then choose the Freedom shape (handler-mediated
+  request / shared service / ported behaviour).
+- A method written as `name: SomeModule.Method` has no body in this schema at all. The behaviour
+  to port lives in that `define()` dependency; read it there.
+
+The engine enforces all of the above through its `coverage` gate (the member ledger): every
+`diff` op, method, attribute, message, mixin, `define()` dependency and details entry is either
+mapped, on a `⚠` worklist, recorded as base-template context, or the plan is blocked.
 
 Report the two categories separately in the Business Logic Analysis section so declarative
 rules are not silently converted into custom handlers (or vice versa).

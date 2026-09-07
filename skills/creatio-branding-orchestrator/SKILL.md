@@ -48,14 +48,38 @@ theme name:
 - Everything else still holds: the single final summary and confirmation before applying, and
   the environment-wide visibility warning in Build and apply.
 
+## Product telemetry — emit the shared stages with `workflow: "branding"`
+
+Read `get-guidance name=product-telemetry` for the stage vocabulary and the consent flow, and
+`../../context/product-telemetry.md` for this flow's emission points. Emit with clio MCP `send-telemetry`. Event names are **flow-agnostic stages**; this flow is
+identified by the `workflow` field, so do not invent `branding_*` event names — clio rejects them.
+
+| Send | With | At the point where you |
+| --- | --- | --- |
+| `workflow_started` | — | take the first branding request |
+| `clarification_requested` / `user_input_received` | — | ask for brand inputs / receive them, including the palette confirmation |
+| `plan_presented` | — | present the single final summary, before applying anything |
+| `plan_changes_requested` | — | receive a change request before applying |
+| `plan_approved` | — | get confirmation of that summary — before anything is applied environment-wide |
+| `build_started` | — | begin applying |
+| `work_item_completed` | `variant` = `theme` / `logo` / `background` | finish applying each asset |
+| `workflow_completed` / `workflow_failed` | — | reach the end of the run |
+| `changes_requested` | — | the developer asks for further branding changes AFTER it was applied. Emit before starting that follow-up work |
+| `changes_applied` | — | the follow-up changes are applied and verified |
+
+On an asset-only request, emit only the stages that request actually reaches. Keep the consent question
+separate from the brand intake questions. Telemetry is non-blocking: never let it gate or delay the flow,
+and if clio rejects an event name (older clio), stop emitting for the rest of the run and carry on.
+
 ## Resolve the target environment first
 
 Before collecting brand inputs, make sure there is a Creatio environment to apply the branding
 to, and that it can accept the change. Resolve the environment the same way the app workflow
 does — follow `../../runbooks/01-environment-setup.md` (the DataForge availability check there
 is not needed for branding) — then confirm branding is available on it with clio's access check,
-as described in the relevant guidance (`get-guidance name="theming"` for the theme,
-`get-guidance name="branding"` for logos and the background). Doing this first avoids running
+as described in the relevant guidance (the `theming` guidance for the theme, the
+`branding` guidance for logos and the background — both fetched with `get-guidance`; resolve its
+argument shape via `get-tool-contract` rather than assuming one). Doing this first avoids running
 the whole brand conversation against an environment that cannot apply it.
 
 ## Brand intake — after the environment — turning a source into inputs
@@ -90,7 +114,7 @@ observations.
 
 ## The palette conversation — after brand intake — follow clio's theming guidance
 
-For the color part of the flow, decide nothing by eye. Fetch `get-guidance name="theming"` from
+For the color part of the flow, decide nothing by eye. Fetch the `theming` guidance with `get-guidance` from
 clio MCP and follow it: it walks you through choosing the primary, offering a more readable
 variant when needed, generating the secondary, picking an accent, and previewing the palette —
 and for every color decision it has you call clio's color tool and read its verdict (readable
@@ -107,7 +131,7 @@ the hex.
 ## Logos and favicon — after the palette conversation — follow clio's branding guidance
 
 Logos are optional but always offered, right after the palette is settled. Fetch
-`get-guidance name="branding"` from clio MCP and follow it — it owns the logo slots and where
+the `branding` guidance with `get-guidance` from clio MCP and follow it — it owns the logo slots and where
 each one shows, the variant routing, the splash-screen handling, and the apply mechanics. Your
 job is the conversation: tell the user briefly that the product shows a logo in three places on
 a white background and one place on a dark top panel, so the ideal input is a main logo plus a
@@ -175,7 +199,7 @@ background will be generated or not.
   SVG must not be the only control against SVG/XML injection from scraped input.
 - Sanitize the recolored SVG the same as a logo — the sanitize rule and its strip list live in
   the Logos step — then save it to a temporary file. It is applied during Build and apply following
-  clio's branding guidance (`get-guidance name="branding"`), which sets the file as the shell
+  clio's `branding` guidance (via `get-guidance`), which sets the file as the shell
   background.
 
 ## Fonts — after the background
@@ -237,7 +261,7 @@ logos with their favicon, the favicon on its own, and/or the background — and 
 explicit yes. This gate is per apply,
 not the in-flow "include logos/background?" choice collected earlier. If the user declines here, leave
 the assets unchanged and say so. The concrete tool mechanics live in clio's branding guidance
-(`get-guidance name="branding"`) — follow it to write the logos and favicon and to set the recolored
+(the `branding` guidance, via `get-guidance`) — follow it to write the logos and favicon and to set the recolored
 SVG as the shell background. Skipped logos or a declined background mean the corresponding apply
 simply does not happen.
 

@@ -11,6 +11,7 @@
     ".cursor-plugin",
     ".github/plugin",
     "context",
+    "hooks",
     "rules",
     "runbooks",
     "runtime",

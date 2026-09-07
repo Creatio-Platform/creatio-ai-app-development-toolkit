@@ -1,5 +1,7 @@
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from runtime.scripts import mcp_client
 from runtime.scripts.mcp_client import (
+    TOOL_TREE_ROOT,
+    PathOutsideStore,
+    PathStore,
     PersistentMcpClient,
     USAGE,
     _HelpRequested,
@@ -141,6 +147,78 @@ class McpClientTests(unittest.TestCase):
         self.addCleanup(cache_patcher.stop)
         cache_patcher.start()
 
+    def test_resolve_clio_cmd_keeps_a_path_with_spaces_whole(self):
+        # Windows' default install location contains a space, and CLIO_CMD is commonly a bare path.
+        # Splitting the value first turned `C:\Program Files\...\clio.exe` into `C:\Program` plus a
+        # stray argument, and clio was then reported as not installed on a machine where it was.
+        #
+        # The path is BUILT with a space rather than borrowed from `sys.executable`: on the Linux and
+        # macOS runners that name has no space (`/usr/bin/python3`), so the assertion held whether or
+        # not the fix worked — the test passed everywhere it mattered least.
+        with tempfile.TemporaryDirectory() as tmp:
+            spaced = Path(tmp) / "Program Files" / "clio.exe"
+            spaced.parent.mkdir(parents=True)
+            spaced.write_text("", encoding="utf-8")
+            self.assertIn(" ", str(spaced))
+            with patch.dict(os.environ, {"CLIO_CMD": str(spaced)}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+            with patch.dict(os.environ, {"CLIO_CMD": f'"{spaced}"'}):
+                self.assertEqual(mcp_client._resolve_clio_cmd(), [str(spaced)])
+
+    def test_resolve_clio_cmd_keeps_windows_quoting_when_the_path_is_absent(self):
+        # The win32-only `posix=False` branch: on a POSIX runner the platform check skipped it, so
+        # nothing exercised the quote handling that branch exists for. A path that does not exist
+        # falls through to the split, which is where the two spellings have to agree.
+        with patch.object(mcp_client.sys, "platform", "win32"):
+            with patch.dict(os.environ, {"CLIO_CMD": r'"C:\Program Files\clio\clio.exe"'}):
+                self.assertEqual(
+                    mcp_client._resolve_clio_cmd(), [r"C:\Program Files\clio\clio.exe"]
+                )
+
+    def test_resolve_clio_cmd_keeps_a_single_path_whole_even_when_it_does_not_exist(self):
+        # A spaced path that resolves to nothing — a stale config after a reinstall, a typo, an
+        # install still in progress — must still be reported WHOLE. Splitting it reproduces the
+        # original bug for exactly that case: the caller then names `C:\Program` in its "not found"
+        # message, a path the developer never configured, which is the least helpful moment to lose
+        # the real one. The discriminator is whether the FIRST token is itself runnable.
+        with tempfile.TemporaryDirectory() as tmp:
+            for missing in (Path(tmp) / "Program Files" / "clio.exe",
+                            Path(tmp) / "Program Files" / "clio"):
+                with self.subTest(path=missing.name):
+                    with patch.dict(os.environ, {"CLIO_CMD": str(missing)}):
+                        self.assertEqual(mcp_client._resolve_clio_cmd(), [str(missing)])
+
+    def test_resolve_clio_cmd_still_splits_a_runnable_first_token(self):
+        # The counter-case that keeps the rule above honest: `dotnet` resolves on PATH, so this is a
+        # command plus an argument and must stay two tokens even though the whole value has a space.
+        if shutil.which("dotnet") is None:
+            self.skipTest("needs dotnet on PATH to distinguish a command from a path")
+        # The argument is quoted, which is how a spaced argument has to be written for any splitter:
+        # unquoted, `dotnet C:/no where/clio.dll` is three tokens by every shell's rules too.
+        with patch.dict(os.environ, {"CLIO_CMD": 'dotnet "C:/no where/clio.dll"'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/no where/clio.dll"])
+
+    def test_resolve_clio_cmd_still_splits_the_documented_two_token_form(self):
+        # `dotnet /path/to/clio.dll` must keep splitting: that string is not itself a file, so the
+        # whole-path shortcut above must not swallow it.
+        with patch.dict(os.environ, {"CLIO_CMD": "dotnet C:/nowhere/clio.dll"}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ["dotnet", "C:/nowhere/clio.dll"])
+
+    def test_resolve_clio_cmd_survives_unbalanced_quotes(self):
+        # `shlex.split()` raises ValueError ("No closing quotation") on a stray unmatched quote -- a
+        # plausible typo in a manually edited env var. This used to abort MCP client startup with an
+        # unhandled exception instead of the normal "clio not found" diagnostic.
+        with patch.dict(os.environ, {"CLIO_CMD": '"clio'}):
+            self.assertEqual(mcp_client._resolve_clio_cmd(), ['"clio'])
+
+    def test_resolve_clio_cmd_reports_the_failing_token_for_a_malformed_multi_word_value(self):
+        # A genuinely malformed value (a typo, a stale two-word leftover) is not a spaced path in
+        # disguise: it has no separator and no executable extension, so the whole-value fallback must
+        # not swallow it. The caller's "not found" diagnostic should name the actual failing token
+        # (`clioo`) rather than the confusing whole string.
+        with patch.dict(os.environ, {"CLIO_CMD": "clioo something"}):
+            self.assertEqual(mcp_client._parse_clio_cmd("clioo something"), ["clioo", "something"])
+
     def test_persistent_client_list_tools_uses_mcp_tools_list_method(self):
         client = PersistentMcpClient()
         expected = {"success": True, "data": {"tools": [{"name": "sync-schemas"}]}, "raw": "{}"}
@@ -177,13 +255,14 @@ class McpClientTests(unittest.TestCase):
         self.assertEqual(parsed["timeout"], 30)
 
     def test_parse_cli_request_accepts_args_file_mode(self):
-        temp_path = ROOT / ".tmp-tests" / "mcp-client-args.json"
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
-        try:
+        # The fixture goes under TOOL_TREE_ROOT, one of the two bases load_cli_arguments accepts.
+        # The repository root itself is not a base: on a Windows CI runner the checkout sits on
+        # `D:\a\...` while the profile is on `C:`, so a fixture at the repo root is under neither
+        # the home store nor the tool tree and the resolution is refused.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
+            temp_path = Path(temp) / "mcp-client-args.json"
+            temp_path.write_text('{"environment-name":"local"}', encoding="utf-8")
             parsed = parse_cli_request(["list-apps", "--args-file", str(temp_path), "--timeout", "45"])
-        finally:
-            temp_path.unlink(missing_ok=True)
         self.assertEqual(parsed["tool_name"], "list-apps")
         self.assertEqual(parsed["arguments"], {"environment-name": "local"})
         self.assertEqual(parsed["timeout"], 45)
@@ -191,6 +270,71 @@ class McpClientTests(unittest.TestCase):
     def test_load_cli_arguments_accepts_stdin_mode(self):
         arguments = load_cli_arguments(args_stdin=True, stdin_text='{"environment-name":"local"}')
         self.assertEqual(arguments, {"environment-name": "local"})
+
+    def test_load_cli_arguments_reads_a_file_through_the_path_store(self):
+        # The taint class path_store.py exists to close: the value must not reach `open()` as the
+        # caller's own string. Resolution is by listing, so a real file under the home store works.
+        with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            self.assertEqual(
+                load_cli_arguments(args_file=args_file),
+                {"environment-name": "local"},
+            )
+
+    def test_load_cli_arguments_reads_a_file_under_the_tool_tree(self):
+        # The SECOND base, and the home store is patched to somewhere unrelated so this test can
+        # only pass if the TOOL-TREE store is the one that resolved. Previously the fixture went
+        # under os.getcwd(), which on a Linux CI runner is itself inside $HOME — so the home store
+        # served it on the first iteration and the second base was never exercised at all.
+        with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:
+            args_file = os.path.join(temp, "args.json")
+            with open(args_file, "w", encoding="utf-8") as handle:
+                handle.write('{"environment-name":"local"}')
+
+            with tempfile.TemporaryDirectory() as unrelated_home:
+                with patch("runtime.scripts.mcp_client.home_store",
+                           return_value=PathStore(unrelated_home)):
+                    self.assertEqual(
+                        load_cli_arguments(args_file=args_file),
+                        {"environment-name": "local"},
+                    )
+
+    def test_load_cli_arguments_refuses_a_file_under_neither_base(self):
+        # PathOutsideStore specifically, not the base ValueError: PathOutsideStore subclasses it,
+        # but so does json.JSONDecodeError, so `assertRaises(ValueError)` stayed green with the
+        # whole containment loop deleted — /etc/hosts reads fine and simply fails to parse.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        traversal = os.path.join(os.path.expanduser("~"), "..", "..", "etc", "hosts")
+        for requested in (outside, traversal):
+            with self.subTest(requested=requested):
+                with self.assertRaisesRegex(
+                    PathOutsideStore, "under neither your home directory nor the tool tree"
+                ):
+                    load_cli_arguments(args_file=requested)
+
+    def test_load_cli_arguments_refuses_before_reading_the_file(self):
+        # "Refused BEFORE any read" was a comment, not an assertion. Now it is one.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        with patch.object(Path, "read_text") as read_text:
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        read_text.assert_not_called()
+
+    def test_load_cli_arguments_is_not_widened_by_the_working_directory(self):
+        # The base must be a program constant. When it was derived from os.getcwd(), running from
+        # the filesystem root rooted the second store there and resolved every file on the volume,
+        # including other accounts' profiles.
+        outside = os.path.join(os.path.abspath(os.sep), "etc", "hosts")
+        previous = os.getcwd()
+        try:
+            os.chdir(os.path.abspath(os.sep))
+            with self.assertRaises(PathOutsideStore):
+                load_cli_arguments(args_file=outside)
+        finally:
+            os.chdir(previous)
 
     def test_load_cli_arguments_rejects_multiple_sources(self):
         with self.assertRaisesRegex(ValueError, "exactly one argument source"):

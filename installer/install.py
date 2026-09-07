@@ -32,6 +32,17 @@ from agent_cli import (  # noqa: E402
 
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
+NAMED_WORKFLOW_DIR_NAME = "workflows"
+WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
+WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+# A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
+# than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
+# the base and an absolute value discards the base entirely, which would turn the installer into an
+# arbitrary-file-write primitive running with the user's privileges. The namespace prefix is part of
+# the pattern because every shipped script already carries it and it keeps the mirror out of the way
+# of unrelated user-scope workflows.
+WORKFLOW_META_NAME_ALLOWED = re.compile(r"creatio-[A-Za-z0-9._-]+")
+TELEMETRY_RULE_NAME = "creatio-telemetry"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 SETUP_WIZARD_MANIFEST_DIR = ".caadt"
@@ -377,6 +388,143 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
         )
 
 
+def workflow_manifest_names(source_root: Path) -> dict[str, str]:
+    """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
+
+    Read from the GENERATED manifest at ``skills/_workflow-core/workflows.json``, which
+    ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
+    from, under the same ``--check`` drift gate.
+
+    This used to be recovered by lexing the generated JavaScript: a hand-written JS sub-lexer in
+    Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
+    generator already held in structured form. It needed comment, string, unterminated-literal and
+    decoy-name hardening across four review rounds, and the constructs it still could not handle are
+    ordinary in generated JS - a template literal with ``${...}``, a regex literal carrying a brace
+    or a quote, the regex-versus-division ambiguity. Its failures were quiet: a wrong name written
+    to ``~/.claude/workflows/`` so ``Workflow({ name })`` resolves to nothing while the install
+    reports success, or a hard abort on a language path the generator's own goldens never exercise.
+    It is also what AGENTS.md forbids twice over - a generated artifact is a verification tool, not
+    a source to reverse-engineer a format from, and parsing text is not a substitute for a source
+    that returns the same data as fields.
+
+    Fails CLOSED: a tree with no manifest, or an unreadable one, raises rather than falling back to
+    a parser. There is deliberately no fallback - one that no test exercises would preserve exactly
+    the coupling this replaced and re-introduce the silent mis-parse.
+    """
+    manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
+            f"bundled workflow script cannot be provisioned as a named workflow: {source_root}. "
+            f"Re-run the installer from a current release, or run "
+            f"`node scripts/build-workflows.mjs` in a checkout."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} could not be read as JSON: {error}"
+        ) from error
+    entries = manifest.get("workflows")
+    if not isinstance(entries, list):
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} carries no `workflows` list, so it declares no "
+            f"workflow identities."
+        )
+    names: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Workflow manifest {manifest_path} carries a non-object entry: {entry!r}")
+        name, script = entry.get("name"), entry.get("script")
+        if not isinstance(name, str) or not isinstance(script, str) or not name or not script:
+            raise RuntimeError(
+                f"Workflow manifest {manifest_path} carries an entry without both `name` and "
+                f"`script`: {entry!r}"
+            )
+        # Validated HERE, before the value becomes a path component. The manifest arrives with the
+        # rest of the tree - from a marketplace update rather than a reviewed checkout - and
+        # `installer/update.py` re-runs this provisioner over `~/.claude/plugins/cache/`
+        # unattended, on every plugin update.
+        if not WORKFLOW_META_NAME_ALLOWED.fullmatch(name) or Path(name).name != name:
+            raise RuntimeError(
+                f"Workflow name is not usable as a filename: {name!r} in {manifest_path}. "
+                f"A provisioned name must match creatio-[A-Za-z0-9._-]+ and contain no path "
+                f"separator, because it is written to ~/.claude/workflows/<name>.js."
+            )
+        names[script] = name
+    return names
+
+
+def discover_workflow_scripts(source_root: Path) -> list[Path]:
+    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    skills_dir = source_root / "skills"
+    if not skills_dir.is_dir():
+        return []
+    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+
+
+def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
+    """Mirror bundled workflow scripts into user scope as NAMED workflows.
+
+    The marketplace ships skills, agents and MCP servers — it cannot register a
+    named workflow, so a skill can otherwise only reach its own orchestration
+    through `Workflow({ scriptPath })` with a hand-resolved absolute path into
+    the versioned plugin cache. Copying each script to
+    ``~/.claude/workflows/<meta.name>.js`` makes `Workflow({ name })` work
+    instead, which is the same convention the `creatio-development` plugin uses.
+
+    This is a MIRROR, not a second source: it is rewritten on every install and
+    on every Claude update, because the plugin itself auto-updates and a stale
+    user-scope copy would run an older `args` contract against a newer skill.
+    That is also why both skills keep `scriptPath` documented as the fallback —
+    the in-tree script is version-matched by construction, and user-scope
+    discovery only happens at session start, so a freshly provisioned workflow
+    is not resolvable by name until the next session.
+
+    Returns the provisioned workflow names. A source tree without workflow
+    scripts provisions nothing rather than failing — not every checkout or
+    release the installer runs against bundles one.
+    """
+    scripts = discover_workflow_scripts(source_root)
+    if not scripts:
+        return []
+
+    declared = workflow_manifest_names(source_root)
+    workflows_dir = claude_home / NAMED_WORKFLOW_DIR_NAME
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    provisioned: list[str] = []
+    sources: dict[str, Path] = {}
+    for script in scripts:
+        relative = script.relative_to(source_root).as_posix()
+        name = declared.get(relative)
+        if name is None:
+            raise RuntimeError(
+                f"Bundled workflow script {relative} has no entry in "
+                f"{WORKFLOW_MANIFEST_RELATIVE}, so its named identity is unknown. Run "
+                f"`node scripts/build-workflows.mjs` in a checkout, or re-run the installer from a "
+                f"current release."
+            )
+        # Two scripts claiming one name used to overwrite each other silently while BOTH were
+        # reported as provisioned, so one skill would run the other's orchestration.
+        if name in sources:
+            raise RuntimeError(
+                f"Two bundled workflow scripts declare the same `meta.name` {name!r}: "
+                f"{sources[name]} and {script}. Named workflows share one flat user-scope "
+                f"directory, so the second copy would silently replace the first."
+            )
+        sources[name] = script
+        target = workflows_dir / f"{name}.js"
+        # Containment is asserted on the resolved destination as well as on the name. The name check
+        # above is the real guard; this one holds even if it is ever loosened.
+        if target.resolve().parent != workflows_dir.resolve():
+            raise RuntimeError(
+                f"Workflow {name!r} would be written outside {workflows_dir}: {target}"
+            )
+        shutil.copyfile(script, target)
+        provisioned.append(name)
+    return provisioned
+
+
 def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
     """Copy only the files needed by installed agent plugins."""
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -707,6 +855,48 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def render_cursor_telemetry_rule(repo_root: Path) -> str:
+    """Build the always-applied Cursor rule that routes product telemetry.
+
+    Cursor does have an MCP hook, and the installer registers it — but
+    ``afterMCPExecution`` is documented as informational: it reaches neither the user
+    nor the agent, so it can record the telemetry floor and nothing else. Without an
+    always-applied rule, a Cursor session that never loads a CAADT skill would have
+    nothing but clio's server instructions telling it telemetry exists - which is the
+    original defect (an agent deprioritising a line of instruction it judges
+    unimportant). This rule stays deliberately small so it can be always-on without
+    the cost of loading the whole orchestrator rule.
+    """
+    contract = repo_file(repo_root, "context/product-telemetry.md")
+    return f"""---
+description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
+alwaysApply: true
+---
+
+# Creatio product telemetry
+
+When a Creatio workflow runs through clio MCP, emit product telemetry with `send-telemetry`.
+This applies to EVERY workflow, not just app creation.
+
+Event names are flow-agnostic stages, and WHICH flow it was goes in the `workflow` field:
+`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or
+`app-maintenance`.
+
+Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.
+Do not spell a stage from memory, and do not invent a per-flow name such as
+`migration_plan_approved`: clio validates `event_name` against a closed allow-list and rejects
+anything else.
+
+The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
+exempt them from telemetry: their emission points are their own gates instead, listed in
+`{contract}`.
+
+Check `get-telemetry-consent` first; if it reports `telemetry_consent=unknown`, ask the developer
+once as a single-purpose question, and if there is nobody to ask, leave it unknown and emit
+nothing. Telemetry must never gate or delay the task.
+"""
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
     """Install Codex via the remote marketplace (parity with install_claude).
 
@@ -770,6 +960,10 @@ def install_claude(repo_root: Path, home: Path) -> None:
         pre_remove_marketplace=True,
     )
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
+    # Named workflows are user scope, not plugin scope — the marketplace install
+    # above cannot register them, so mirror them here (see
+    # provision_named_workflows). Claude-only: no other agent reads this dir.
+    provision_named_workflows(repo_root, claude_home)
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
@@ -783,6 +977,82 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
     rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
+    # this rule is what reaches a session that never loads a CAADT skill.
+    telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
+    telemetry_rule_path.write_text(render_cursor_telemetry_rule(local_plugin_dir), encoding="utf-8")
+    merge_cursor_telemetry_hook(cursor_home, local_plugin_dir)
+
+
+def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> None:
+    """Register the telemetry floor hook in Cursor's ``hooks.json``.
+
+    Cursor's ``afterMCPExecution`` is documented as informational: it cannot reach the user
+    or the agent, so it carries no routing text. What it can still do is the part that
+    matters most — deterministically record that a session touched Creatio, which is the
+    denominator that makes the agent-reported funnel's own reliability measurable. The
+    routing itself arrives through the always-applied rule written above.
+
+    Merged rather than overwritten: a developer's other hooks must survive a reinstall.
+    """
+    hooks_path = cursor_home / "hooks.json"
+    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
+
+    config: dict = {}
+    if hooks_path.exists():
+        try:
+            config = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            # A hand-broken hooks.json is the developer's file, not ours to silently
+            # rewrite — leave it alone rather than replacing it with our single entry.
+            # Still worth a line on stderr: silently skipping the telemetry hook looks
+            # identical to it having registered, until someone notices the floor never fires.
+            print(f"Skipped Cursor telemetry hook registration — could not read {hooks_path}: "
+                  f"{error}", file=sys.stderr)
+            return
+        # Valid JSON of an unexpected SHAPE deserves the same answer. `[]`, `null` or a string all
+        # parse, and then `config.setdefault` raises AttributeError — an unhandled exception in the
+        # middle of an install that has already written two rule files, rather than the "leave it
+        # alone" this function promises.
+        if not isinstance(config, dict) or not isinstance(config.get("hooks", {}), dict):
+            print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+                  f"unexpected shape", file=sys.stderr)
+            return
+    config.setdefault("version", 1)
+    hooks = config.setdefault("hooks", {})
+    # isinstance on the container itself, not only on each entry: `afterMCPExecution` set to
+    # `null`, a number, a string, or a dict would make the comprehension below raise (or, for
+    # a string/dict, silently iterate characters/keys and replace the value with a corrupted
+    # list) — the same half-finished/corrupted install the shape check above prevents.
+    existing_hooks = hooks.get("afterMCPExecution", [])
+    if not isinstance(existing_hooks, list):
+        print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+              f"unexpected shape", file=sys.stderr)
+        return
+    # isinstance on each ENTRY, not only on the container: an array holding strings would make
+    # `item.get` raise, which is the same half-finished install the shape check above prevents.
+    # An entry this function cannot read is carried through untouched rather than dropped.
+    #
+    # Matched on the exact rendered command, not a "telemetry-routing.mjs" substring: a developer's
+    # own hook at a different path that happens to contain that filename (a wrapper, a copy kept for
+    # comparison) would otherwise be silently dropped and replaced on every reinstall — exactly the
+    # data loss the shape guard above exists to prevent.
+    existing = [
+        item
+        for item in existing_hooks
+        if not isinstance(item, dict) or item.get("command") != command
+    ]
+    hooks["afterMCPExecution"] = [*existing, entry]
+    try:
+        hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        # Read failures already return quietly; a write failure has to as well, or a read-only
+        # or locked hooks.json aborts a Cursor install that has already written two rule files.
+        # A stderr line still goes out, matching the read-failure branch above.
+        print(f"Skipped Cursor telemetry hook registration — could not write {hooks_path}: "
+              f"{error}", file=sys.stderr)
+        return
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:

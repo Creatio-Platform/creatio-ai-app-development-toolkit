@@ -1,0 +1,1305 @@
+// Offline goldens for the HOST-NEUTRAL workflow core (skills/_workflow-core/).
+//
+// What this suite exists to prove, and why each leg is here rather than left to a
+// live run:
+//   1. THE PROTOCOL'S THREE OUTCOMES. A value, a terminal death and a rejection
+//      are different states, and the workflows depend on the difference (a dead
+//      Critique must report WHY it died, and a falsy-but-present answer is a
+//      result, not a death). An adapter that collapses two of them looks correct
+//      and reports "returned nothing" for every rejection.
+//   2. CAPABILITY NEGOTIATION. A host missing an independent verifier context
+//      must STOP, not run the phase anyway and hand back the same green verdict.
+//   3. RESUME. The core is deterministic, so a killed run must replay from the
+//      journal to exactly where it was — and a journal written by a DIFFERENT
+//      core must be refused rather than replayed into decisions this run never
+//      made.
+//   4. CROSS-HOST PARITY. The Claude path and the CLI path must produce the
+//      identical result for the identical inputs. That is the whole point of the
+//      refactor, and it is the one thing no single-host test can see.
+//   5. THE GENERATED ARTIFACT. The shipped `.workflow.js` must be in sync with
+//      the core, must still evaluate as a Claude workflow function body, and must
+//      still carry the pure-helper sentinels the offline slice test reads.
+//
+// Zero dependencies (node built-ins only), same `check` idiom as the sibling
+// runners, exits 1 on any failed check.
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, cpSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const CORE = path.join(ROOT, "skills", "_workflow-core");
+
+import { OUTCOME, ACCESS, step, workItem, record, errorShape, reviveError } from "../../skills/_workflow-core/work-item.mjs";
+import { declareHost, negotiateStep, negotiateRun, CapabilityError } from "../../skills/_workflow-core/capabilities.mjs";
+import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } from "../../skills/_workflow-core/run-state.mjs";
+import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
+import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
+import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
+import { CLAUDE_HOST, makeExecute, makeRunBatch, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
+import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
+import { genericHost, explainMissing } from "../../skills/_workflow-core/adapters/generic-cli.mjs";
+
+let pass = 0, fail = 0;
+const check = (name, cond, detail) => {
+  let c = cond, threw = null;
+  if (typeof cond === "function") { try { c = cond(); } catch (e) { c = false; threw = e; } }
+  if (c) { pass++; console.log("  ✅ " + name); return; }
+  fail++; console.log("  ❌ " + name + (threw ? "  (threw: " + threw.message + ")" : ""));
+  if (detail !== undefined) { let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; } console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d))); }
+};
+
+/* ---------------------------------------------------------------------------
+   1. THE WORK-ITEM PROTOCOL
+   --------------------------------------------------------------------------- */
+console.log("\n===== work-item protocol =====");
+const okItem = { id: "context.a", phase: "Context", role: "general-purpose", prompt: "do it", responseSchema: { type: "object" }, access: ACCESS.STAND_READ_ONLY };
+check("workItem: a well-formed item normalises, defaults its arrays and keeps its access level",
+  () => { const i = workItem(okItem); return i.inputFiles.length === 0 && i.access === "stand-read-only" && i.label === "context.a"; });
+check("workItem: `structuredOutput` is IMPLIED by a responseSchema — an adapter never has to infer it from the schema's presence",
+  () => workItem(okItem).capabilities.includes("structuredOutput"));
+check("workItem: a missing id / phase / role / prompt each THROW — a host that ran a prompt-less item would spend an agent to learn nothing",
+  () => ["id", "phase", "role", "prompt"].every((k) => {
+    const bad = { ...okItem }; delete bad[k];
+    try { workItem(bad); return false } catch { return true }
+  }));
+check("workItem: an UNKNOWN access level throws — the safety model is per-item, so a typo may not degrade to 'none'",
+  () => { try { workItem({ ...okItem, access: "stand-readonly" }); return false } catch (e) { return /unknown access level/.test(e.message) } });
+check("step: a step with no items throws rather than yielding an empty batch the driver would silently skip",
+  () => { try { step({ items: [] }); return false } catch { return true } });
+check("step: `parallel` and `requires` ride on the step, not on the items — the batch is what a host may widen",
+  () => { const s = step({ items: [okItem], parallel: true, requires: ["parallelism"] }); return s.parallel === true && s.requires[0] === "parallelism" && s.kind === "work"; });
+
+console.log("\n===== the three outcomes =====");
+check("record: a VALUE entry carries the value; a DEATH entry carries NO value field at all (absent ≠ null-valued)",
+  () => { const v = record(workItem(okItem), OUTCOME.VALUE, { a: 1 }); const d = record(workItem(okItem), OUTCOME.DEATH);
+    return v.value.a === 1 && !("value" in d) && d.outcome === "death"; });
+check("record: an ERROR entry keeps name+message and NOT the stack — a stack differs per host and would make two identical runs' journals compare unequal",
+  () => { const e = record(workItem(okItem), OUTCOME.ERROR, new TypeError("529 overloaded"));
+    return e.error.name === "TypeError" && e.error.message === "529 overloaded" && !("stack" in e.error); });
+check("errorShape: a null/undefined error still yields a usable message rather than `undefined`",
+  () => errorShape(null).message === "rejected with no reason given" && !/undefined/.test(errorShape(new Error("no message reaches the shape")).message));
+check("reviveError: an ERROR entry round-trips back into a real Error, so the core's own `catch` sees the cause",
+  () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
+check("record: an unknown outcome throws — there are exactly three states and a fourth is an orchestration bug",
+  () => { try { record(workItem(okItem), "maybe"); return false } catch { return true } });
+
+/* ---------------------------------------------------------------------------
+   2. CAPABILITIES
+   --------------------------------------------------------------------------- */
+console.log("\n===== capability negotiation =====");
+const fullHost = declareHost({ id: "full", parallelism: 4, subAgents: true, structuredOutput: true, persistentState: true, humanApproval: true, independentRoles: true });
+const thinHost = declareHost({ id: "thin", parallelism: 1, subAgents: true, structuredOutput: true });
+check("declareHost: a host with no id THROWS — every run records which adapter executed it, so an anonymous adapter is refused",
+  () => { try { declareHost({}); return false } catch (e) { return /stable `id`/.test(e.message) } });
+check("negotiateStep: `parallelism` is DEGRADABLE — a sequential host still satisfies the step and the reduction is reported, not fatal",
+  () => { const g = negotiateStep(thinHost, ["parallelism", "subAgents"], 5); return g.ok === true && g.width === 1 && g.reduced === true; });
+check("negotiateStep: a host WITH parallelism runs the batch at its declared width and reports no reduction when the batch fits",
+  () => { const g = negotiateStep(fullHost, ["parallelism"], 3); return g.width === 3 && g.reduced === false; });
+check("negotiateStep: `independentRoles` is NOT degradable — a host that cannot isolate the verifier fails the step",
+  () => { const g = negotiateStep(thinHost, ["independentRoles"], 1); return g.ok === false && g.missing.join(",") === "independentRoles"; });
+check("negotiateRun: the run-level gate catches a missing capability BEFORE any agent is spent",
+  () => negotiateRun(declareHost({ id: "x" }), ["subAgents", "structuredOutput"]).missing.join(",") === "subAgents,structuredOutput");
+check("CapabilityError: the message says the run does NOT continue in a degraded form — the whole point of the stop",
+  () => { const e = new CapabilityError(["independentRoles"], "phase Critique");
+    return /explicit stop/.test(e.message) && /does NOT continue in a degraded form/.test(e.message) && e.missing[0] === "independentRoles"; });
+check("explainMissing: every refusable capability has an actionable remedy — 'run it somewhere else' alone is not one",
+  () => ["subAgents", "structuredOutput", "independentRoles", "humanApproval", "persistentState"]
+    .every((c) => /\w/.test(explainMissing([c])) && explainMissing([c]).includes(c)));
+check("codexSingleAgentHost: declares the loss where it is CHOSEN — independentRoles false, so the core refuses the adversarial phases instead of letting one agent check its own work",
+  () => codexSingleAgentHost().independentRoles === false && codexSingleAgentHost().id === "codex");
+check("genericHost: the SAFE FLOOR is no sub-agents and no role independence — an unknown host stops on those phases rather than pretending",
+  () => genericHost().independentRoles === false && genericHost().subAgents === false && genericHost().persistentState === true);
+check("codexHost: parallelism defaults to 1 (honest: the submit loop is sequential) and persistent state is true (the journal is a file)",
+  () => codexHost().parallelism === 1 && codexHost().persistentState === true && codexHost().humanApproval === true);
+
+/* ---------------------------------------------------------------------------
+   3. RUN STATE AND RESUME
+   --------------------------------------------------------------------------- */
+console.log("\n===== run state / journal =====");
+const mkRun = () => newRun({ workflow: "w", input: { a: 1 }, host: fullHost });
+check("newRun: the host is recorded on the run AND in a history — a resumed run may be driven by a different adapter and a reader must see that",
+  () => { const r = mkRun(); noteHost(r, thinHost); return r.host.id === "thin" && r.hostHistory.map((h) => h.id).join(",") === "full,thin"; });
+check("noteHost: the SAME adapter driving twice does not grow the history",
+  () => { const r = mkRun(); noteHost(r, fullHost); noteHost(r, fullHost); return r.hostHistory.length === 1; });
+check("newRun: `startedAt` is passed IN, never read from the clock — the core may not call Date.now() or a resumed run would not replay identically",
+  () => mkRun().startedAt === null && newRun({ workflow: "w", startedAt: "2026-01-01" }).startedAt === "2026-01-01");
+check("entriesFor: a PARTIALLY executed batch returns null — a half-filled results array would read as 'these items died'",
+  () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.VALUE, 1));
+    return entriesFor(r, ["a"]).length === 1 && entriesFor(r, ["a", "b"]) === null; });
+check("pendingIds: names exactly the items still to run, so a host resumes the batch rather than redoing it",
+  () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.VALUE, 1));
+    return pendingIds(r, ["a", "b", "c"]).join(",") === "b,c"; });
+check("driftAt: the same ids in the same order is NO drift; a different id at that position IS",
+  () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a"]) === null && driftAt(r, 0, ["z"]) !== null; });
+check("driftAt: a PERMUTATION of the window's own ids is NOT drift — `cli next` hands out one submit per item of a parallel batch, so arrival order is the host's to choose and appending them out of order used to brick the run",
+  () => { const r = mkRun();
+    for (const id of ["c", "a", "b"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b", "c"]) === null; });
+check("driftAt: an id from OUTSIDE the window is still drift, whatever the order — that is the stale-journal case the guard exists for",
+  () => { const r = mkRun();
+    for (const id of ["b", "OTHER"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b"]) !== null; });
+check("driftAt: a REPEATED id is drift — `entriesFor` keeps the first occurrence, so the second entry's outcome would silently vanish",
+  () => { const r = mkRun();
+    for (const id of ["a", "a"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
+    return driftAt(r, 0, ["a", "b"]) !== null; });
+check("step: a multi-item step WITHOUT `parallel: true` is refused — `sendFor` collapses a multi-item step's non-VALUE outcomes to null holes instead of throwing into the core, so the narrowing invariant has to be structural rather than a comment nothing enforces",
+  () => { try { step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }, { id: "b", phase: "P", role: "r", prompt: "p" }] }); return false; }
+    catch (e) { return /without `parallel: true`/.test(e.message); } });
+check("step: the same two items WITH `parallel: true` are accepted, and a single sequential item still is",
+  () => step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }, { id: "b", phase: "P", role: "r", prompt: "p" }], parallel: true }).items.length === 2
+    && step({ items: [{ id: "a", phase: "P", role: "r", prompt: "p" }] }).items.length === 1);
+check("summary: counts outcomes per phase, so a reader sees a dead phase without reading logs",
+  () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.DEATH));
+    return summary(r).byPhase.Context.death === 1 && summary(r).host === "full"; });
+
+/* ---------------------------------------------------------------------------
+   4. THE DRIVER — how outcomes reach the core
+   --------------------------------------------------------------------------- */
+console.log("\n===== driver: outcome delivery =====");
+// A minimal core that RECORDS what it was handed. This is the only way to assert
+// the delivery convention: the real cores read the values, they do not report them.
+function* echoCore(seen) {
+  const one = yield step({ items: [{ id: "s1", phase: "P", role: "r", prompt: "p" }] });
+  seen.push(["single", one]);
+  let caught = null;
+  try {
+    yield step({ items: [{ id: "s2", phase: "P", role: "r", prompt: "p" }] });
+  } catch (e) { caught = `${e.name}: ${e.message}`; }
+  seen.push(["threw", caught]);
+  const batch = yield step({ items: [1, 2, 3].map((n) => ({ id: `b${n}`, phase: "P", role: "r", prompt: "p" })), parallel: true });
+  seen.push(["batch", batch]);
+  return "done";
+}
+{
+  const seen = [];
+  const run = newRun({ workflow: "echo", host: fullHost });
+  const outcomes = {
+    s1: { outcome: OUTCOME.VALUE, value: { ok: 1 } },
+    s2: { outcome: OUTCOME.ERROR, error: new TypeError("529 overloaded") },
+    b1: { outcome: OUTCOME.VALUE, value: "one" },
+    b2: { outcome: OUTCOME.DEATH },
+    b3: { outcome: OUTCOME.ERROR, error: new Error("refused") },
+  };
+  const result = await drive({ core: echoCore(seen), run, host: fullHost, execute: async (i) => outcomes[i.id] });
+  check("driver: a VALUE arrives as a one-element ARRAY aligned to the step's items — the core destructures `[ctx]`, so a bare value would silently read as undefined",
+    Array.isArray(seen[0][1]) && seen[0][1].length === 1 && seen[0][1][0]?.ok === 1, () => JSON.stringify(seen[0]));
+  check("driver: a REJECTION on a single-item step is THROWN into the core, so a try/catch there still fires (the retry loop's whole premise)",
+    /TypeError: 529 overloaded/.test(seen[1][1] || ""), () => JSON.stringify(seen[1]));
+  check("driver: inside a PARALLEL batch, both a death and a rejection become null HOLES — that is the `parallel()` contract the cores are written against, and one host may not report it differently",
+    JSON.stringify(seen[2][1]) === JSON.stringify(["one", null, null]), () => JSON.stringify(seen[2]));
+  check("driver: the core's return value is the run's result, and the run is marked done",
+    result === "done" && run.status === "done" && run.result === "done");
+  check("driver: every executed item is journalled with its outcome — three states, five entries, in dispatch order",
+    run.journal.map((e) => `${e.id}:${e.outcome}`).join(" ") === "s1:value s2:error b1:value b2:death b3:error",
+    () => run.journal.map((e) => `${e.id}:${e.outcome}`).join(" "));
+}
+{
+  // An adapter that THROWS instead of returning an outcome. The distinction
+  // between a death and a rejection must survive the adapter forgetting to catch.
+  const seen = [];
+  const run = newRun({ workflow: "echo", host: fullHost });
+  let caught = null;
+  const throwOnS2 = async (i) => {
+    if (i.id === "s2") { throw new Error("adapter blew up"); }
+    return { outcome: OUTCOME.VALUE, value: i.id };
+  };
+  await drive({ core: echoCore(seen), run, host: fullHost, execute: throwOnS2 })
+    .catch((e) => { caught = e; });
+  check("driver: an adapter that THROWS is normalised to an ERROR entry, not a crashed run — the run survives a failure the core is written to handle",
+    !caught && seen[1][1] === "Error: adapter blew up", () => JSON.stringify({ caught: caught?.message, seen }));
+}
+{
+  // AWAITED EAGERLY, not handed to `check` as a thunk: `check` tests a function's
+  // return value for truthiness, and a Promise is always truthy — an async thunk
+  // would make the assertion pass unconditionally AND leak the rejection.
+  function* oneStep(seen) {
+    try { seen.push(yield step({ items: [{ id: "only", phase: "P", role: "r", prompt: "p" }] })) }
+    catch (e) { seen.push(`threw ${e.message}`) }
+    return "end";
+  }
+  const seen = [];
+  const run = newRun({ workflow: "x", host: fullHost });
+  await drive({ core: oneStep(seen), run, host: fullHost, execute: async () => undefined });
+  check("driver: an adapter returning NO outcome is an ERROR, not a silent success — a missing outcome is an adapter bug and must not read as a phase that answered",
+    run.journal[0].outcome === OUTCOME.ERROR && /no outcome/.test(run.journal[0].error.message) && /threw/.test(seen[0]),
+    () => JSON.stringify({ journal: run.journal, seen }));
+}
+{
+  // `runBatch` — the hook a host with its own concurrency primitive supplies.
+  const seen = [];
+  const run = newRun({ workflow: "echo", host: fullHost });
+  let batched = 0;
+  await drive({
+    core: echoCore(seen), run, host: fullHost,
+    execute: async (i) => ({ outcome: OUTCOME.VALUE, value: i.id }),
+    runBatch: (items, exec) => { batched = items.length; return Promise.all(items.map((i) => exec(i))); },
+  });
+  check("driver: a parallel batch goes through the host's OWN batch primitive when one is supplied — bypassing `parallel()` would lose the host's concurrency cap and its progress tree",
+    batched === 3, () => `runBatch saw ${batched} item(s)`);
+}
+{
+  // A sequential host must still run every item — the reduction is wall-clock only.
+  const seen = [];
+  const run = newRun({ workflow: "echo", host: thinHost });
+  const logs = [];
+  await drive({ core: echoCore(seen), run, host: thinHost, io: { log: (m) => logs.push(m) }, execute: async (i) => ({ outcome: OUTCOME.VALUE, value: i.id }) });
+  check("driver: a host with parallelism 1 runs ALL THREE batch items in waves and SAYS so — a reduction in parallelism is never a reduction in coverage",
+    seen[2][1].length === 3 && logs.some((l) => /in waves of 1/.test(l) && /not in coverage/.test(l)),
+    () => JSON.stringify({ got: seen[2][1], logs }));
+}
+{
+  // The width `advance` hands a CLI host must be the width the in-process path would actually use.
+  // `negotiateStep` has no `step.parallel` term, so an unclamped `gate.width` advertised a step the
+  // core declared SEQUENTIAL as up to `host.parallelism` concurrent items — the CLI host fanning out
+  // where the Claude host runs one at a time, on the same step. Neither core has such a step today,
+  // which is a coincidence, not a guarantee, so it is pinned here rather than left to one.
+  // Built as a literal rather than through `step()`, which refuses a multi-item step without
+  // `parallel: true`. That refusal is why this shape cannot reach the driver from either core
+  // today — a structural guarantee worth keeping, and exactly why the width clamp must not be left
+  // resting on it: `negotiateStep` has no `step.parallel` term, so an unclamped `gate.width` would
+  // advertise a sequential step to a CLI host as up to `host.parallelism` concurrent items while
+  // the in-process path (`effectiveWidth`) runs it strictly one at a time.
+  function* serialCore() {
+    yield {
+      kind: "work",
+      parallel: false,
+      items: [
+        { id: "a", phase: "P", role: "r", prompt: "a" },
+        { id: "b", phase: "P", role: "r", prompt: "b" },
+      ],
+    };
+    return "end";
+  }
+  const serialRun = newRun({ workflow: "serial", host: fullHost });
+  const pendingRes = await advance({ core: serialCore(), run: serialRun, host: fullHost });
+  check("advance: a `parallel: false` multi-item step is advertised at width 1 even on a 4-wide host — the payload a CLI host acts on carries the width the driver itself would use, not the raw negotiated one",
+    pendingRes.status === "pending" && pendingRes.width === 1 && pendingRes.pending.length === 2,
+    () => JSON.stringify({ status: pendingRes.status, width: pendingRes.width, pending: pendingRes.pending }));
+}
+{
+  const run = newRun({ workflow: "echo", host: thinHost });
+  let err = null;
+  await drive({ core: echoCore([]), run, host: thinHost, execute: async () => ({ outcome: OUTCOME.VALUE, value: 1 }), requires: ["independentRoles"] })
+    .catch((e) => { err = e; });
+  check("driver: the RUN-level gate stops before the first item — a host missing a required guarantee spends nothing",
+    err instanceof CapabilityError && run.status === "stopped" && run.stop.where === "run" && run.journal.length === 0,
+    () => JSON.stringify({ err: err?.message, run: run.stop, journal: run.journal.length }));
+}
+
+console.log("\n===== driver: replay and resume =====");
+{
+  // The same core, driven twice: the second pass must execute NOTHING.
+  const run = newRun({ workflow: "echo", host: fullHost });
+  const exec = async (i) => ({ outcome: OUTCOME.VALUE, value: i.id });
+  await drive({ core: echoCore([]), run, host: fullHost, execute: async (i) => (i.id === "s2" ? { outcome: OUTCOME.ERROR, error: new Error("boom") } : exec(i)) });
+  const before = run.journal.length;
+  let executed = 0;
+  const seen2 = [];
+  const result = await drive({ core: echoCore(seen2), run, host: fullHost, execute: async (i) => { executed++; return exec(i); } });
+  check("driver: a completed run REPLAYS with zero further execution — that is what makes resume free rather than a re-run",
+    executed === 0 && run.journal.length === before && result === "done", () => JSON.stringify({ executed, before, after: run.journal.length }));
+  check("driver: replay reproduces the THROWN rejection too, so a resumed run takes the same branch it took the first time",
+    /Error: boom/.test(seen2[1][1] || ""), () => JSON.stringify(seen2[1]));
+}
+{
+  // Journal drift: the recorded ids no longer match what the core asks for.
+  const run = newRun({ workflow: "echo", host: fullHost });
+  append(run, record(workItem({ id: "SOMETHING-ELSE", phase: "P", role: "r", prompt: "p" }), OUTCOME.VALUE, 1));
+  let msg = null;
+  await drive({ core: echoCore([]), run, host: fullHost, execute: async () => ({ outcome: OUTCOME.VALUE, value: 1 }) }).catch((e) => { msg = e.message; });
+  check("driver: a journal written by a DIFFERENT core is REFUSED, naming both sides — replaying a stale entry is how a resumed run reports decisions it never made",
+    /journal drifted at entry 0/.test(msg || "") && /SOMETHING-ELSE/.test(msg || "") && /Start a fresh run/.test(msg || ""), () => msg);
+}
+{
+  // `advance` — the replay-only half a host without an inline agent runtime uses.
+  const run = newRun({ workflow: "echo", host: codexHost() });
+  const first = await advance({ core: echoCore([]), run, host: run.host });
+  check("advance: stops at the FIRST unrecorded item and hands back the whole pending step — the work to go and do",
+    first.status === "pending" && first.step.items[0].id === "s1" && first.pending.join(",") === "s1",
+    () => JSON.stringify({ status: first.status, pending: first.pending }));
+  append(run, record(first.step.items[0], OUTCOME.VALUE, { ok: 1 }));
+  const second = await advance({ core: echoCore([]), run, host: run.host });
+  check("advance: after a submit it walks FURTHER on the recorded outcome — the CLI's next/submit loop, with no AI runtime involved",
+    second.status === "pending" && second.step.items[0].id === "s2", () => JSON.stringify(second.pending));
+  append(run, record(second.step.items[0], OUTCOME.ERROR, new Error("refused")));
+  const third = await advance({ core: echoCore([]), run, host: run.host });
+  check("advance: a recorded ERROR is thrown back into the core on replay, so the pending step after it is the one the core's catch leads to",
+    third.status === "pending" && third.pending.join(",") === "b1,b2,b3", () => JSON.stringify(third.pending));
+  check("advance: a batch reports EVERY pending id, so a host can perform them together",
+    third.step.parallel === true && third.step.items.length === 3);
+}
+{
+  // The CLI/Codex path submits one item at a time and appends to the journal TAIL. A host told
+  // "parallel: true, one submit command per item" reports back as each finishes, so item 3 can land
+  // first. The run has to replay and complete anyway.
+  const run = newRun({ workflow: "echo", host: codexHost() });
+  const pending = await advance({ core: echoCore([]), run, host: run.host });
+  append(run, record(pending.step.items[0], OUTCOME.VALUE, { ok: 1 }));
+  const afterFirst = await advance({ core: echoCore([]), run, host: run.host });
+  append(run, record(afterFirst.step.items[0], OUTCOME.ERROR, new Error("refused")));
+  const batch = await advance({ core: echoCore([]), run, host: run.host });
+  for (const id of ["b3", "b1", "b2"]) {
+    append(run, record(batch.step.items.find((i) => i.id === id), OUTCOME.VALUE, id));
+  }
+  const seenOutOfOrder = [];
+  let outOfOrderError = null;
+  const replayed = await advance({ core: echoCore(seenOutOfOrder), run, host: run.host })
+    .catch((e) => { outOfOrderError = e; return null; });
+  check("advance: a parallel batch submitted in the order 3, 1, 2 still REPLAYS and completes — the journal is a tail-append log, and the run's data was always id-keyed; only the drift guard was positional, and it destroyed the run with a core-version message that was not true",
+    outOfOrderError === null && replayed?.status === "done" && replayed?.result === "done",
+    () => JSON.stringify({ error: outOfOrderError?.message, status: replayed?.status }));
+  check("advance: the out-of-order batch reaches the core ALIGNED TO THE STEP'S OWN ITEM ORDER, not to arrival order — a core reading results[0] must get item 1",
+    JSON.stringify(seenOutOfOrder.find((e) => e[0] === "batch")?.[1]) === JSON.stringify(["b1", "b2", "b3"]),
+    () => JSON.stringify(seenOutOfOrder));
+}
+{
+  const run = newRun({ workflow: "echo", host: codexSingleAgentHost() });
+  let err = null;
+  await advance({ core: echoCore([]), run, host: run.host, requires: ["independentRoles"] }).catch((e) => { err = e; });
+  check("advance: capability is checked BEFORE the host goes off and performs the work — being told afterwards is worthless",
+    err instanceof CapabilityError && run.stop.reason === "capability", () => JSON.stringify({ err: err?.message, stop: run.stop }));
+}
+
+/* ---------------------------------------------------------------------------
+   5. THE BEHAVIOUR-ANALYSIS CORE — decisions, and the retry as a generator
+   --------------------------------------------------------------------------- */
+console.log("\n===== behaviour-analysis core: inputs and shortcuts =====");
+check("normalizeInput: a bare STRING is taken as the manifest, so a caller can pass just that",
+  () => cba.normalizeInput("m.json").manifest === "m.json" && cba.normalizeInput(' {"manifest":"x"} ').manifest === "x");
+check("assertInput: every missing required arg is NAMED, with the command that produces the digest — a run must fail loudly rather than guess a path",
+  () => { try { cba.assertInput({ manifest: "m" }); return false } catch (e) { return /digest, environment, outDir/.test(e.message) && /--stubs/.test(e.message) } });
+check("WORKFLOW_REQUIRES: `parallelism` is deliberately NOT required — a sequential host gets the same coverage, only slower",
+  () => cba.WORKFLOW_REQUIRES.join(",") === "subAgents,structuredOutput");
+
+// Drive the real core with a scripted host. `runCba` returns the result plus the
+// item ids and phases it asked for, which is what lets the parity check below
+// compare two hosts on more than the final number.
+async function runCba(input, answer, hostDecl = fullHost) {
+  const asked = [], logs = [], phases = [];
+  const run = newRun({ workflow: cba.WORKFLOW, input, host: hostDecl });
+  const io = { log: (m) => logs.push(m), phase: (p) => phases.push(p) };
+  const result = await drive({
+    core: cba.run(input, io), run, host: hostDecl, io, requires: cba.WORKFLOW_REQUIRES,
+    execute: async (item) => { asked.push(item); return answer(item) },
+  });
+  return { result, asked, logs, phases, run };
+}
+
+const INPUT = { manifest: "m.json", digest: "d.json", environment: "env", outDir: "out", sectionSchema: "DealSection" };
+const CTX = {
+  scopes: [
+    { role: "main page", schema: null, methodKeys: ["onSaved", "reload"], memberKeys: ["mixin:LeadMixin"], unresolvedCount: 0 },
+    { role: "mini page", schema: "DealMini", methodKeys: ["initMini"], memberKeys: [], unresolvedCount: 0 },
+  ],
+  sharedCore: { path: "out/customizations-shared-core.md", cards: [{ id: "shared/C01", title: "LeadMixin body" }], messageRegister: [] },
+  censusNote: "census proven via ExtendParent query", refusals: [],
+};
+const FULL_DESCRIBE = {
+  reportPart: "out/part.md",
+  indexEntries: [
+    { key: "onSaved", card: "main/C01", ac: ["AC-1"] }, { key: "reload", card: "main/C02" },
+    { key: "mixin:LeadMixin", card: "main/C03", bodyCard: "shared/C01" }, { key: "initMini", card: "DealMini/C01" },
+  ],
+  gaps: [], refusals: [],
+};
+const CLEAN_CRITIQUE = { uncovered: [], conflicts: [], settledElsewhere: [], notes: "" };
+const MERGED = { reportPath: "out/customizations.md", indexPath: "out/behaviour-index.json", cardCount: 4, droppedDuplicates: [] };
+const happyAnswer = (item) => {
+  if (item.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+  if (item.phase === "Describe") return { outcome: OUTCOME.VALUE, value: FULL_DESCRIBE };
+  if (item.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+  return { outcome: OUTCOME.VALUE, value: MERGED };
+};
+
+{
+  const { result, asked, phases } = await runCba(INPUT, happyAnswer);
+  check("core: the phase sequence is Context → Describe → Critique → Merge, and nothing else",
+    phases.join(" → ") === "Context → Describe → Critique → Merge", () => phases.join(" → "));
+  check("core: a fully described surface is COMPLETE, with the count as the statement",
+    result.coverage.complete === true && result.coverage.described === 4 && result.coverage.total === 4,
+    () => JSON.stringify(result.coverage));
+  check("core: a small surface gets ONE describe item over the whole surface — the fan-out is only worth its cost above the threshold",
+    asked.filter((i) => i.phase === "Describe").length === 1 && result.describeAgents === 1);
+  check("core: the Describe item's ROLE is the analysis contract itself (`classic-ui-expert`), so a host without that skill can say it cannot satisfy the item",
+    asked.find((i) => i.phase === "Describe").role === "classic-ui-expert");
+  check("core: every phase is declared READ-ONLY against the stand — a behaviour analysis that could write is the safety regression no coverage count would catch",
+    asked.every((i) => i.access === ACCESS.STAND_READ_ONLY), () => asked.map((i) => `${i.phase}:${i.access}`).join(" "));
+  check("core: the Critique step requires `independentRoles` — the adversarial pass is worthless from the context that wrote the cards",
+    asked.length > 0 && result.critiqueRan === true);
+  check("core: the work-item ids are STABLE and deterministic — the journal replays by id, so nothing in them may vary between two runs of the same input",
+    asked.map((i) => i.id).join(",") === "context.census-shared-core,describe.1.main-page+DealMini,critique.coverage,merge.report-index",
+    () => asked.map((i) => i.id).join(","));
+}
+{
+  const totals = { ...INPUT, totals: { stubs: 0, members: 0 } };
+  const { result, asked } = await runCba(totals, happyAnswer);
+  check("core: a digest declaring ZERO rows exits before spending ANY item — an empty worklist is DONE, not incomplete",
+    asked.length === 0 && result.skipped === true && result.coverage.complete === true, () => JSON.stringify({ asked: asked.length, result }));
+}
+{
+  const { result, asked } = await runCba(INPUT, (i) => (i.phase === "Context" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("core: a DEAD Context is a failed run, NOT a surface with nothing on it — the one outcome that must never read as a clean zero-row analysis",
+    result.stopped === "context-failed" && result.coverage.complete === false && result.coverage.total === null && asked.length === 1,
+    () => JSON.stringify(result));
+}
+{
+  // PR #147 review — a Context result that is TRUTHY but not a census reached `normalizeScopes`, which coerces
+  // anything to an empty scope list via `(rawScopes || [])`, and the run then took the "empty worklist is DONE"
+  // exit and reported `skipped: true` with `complete: true` over a digest that may be full. `submit`'s
+  // required-key check is a shallow top-level `!== undefined`, so a `scopes` of the wrong TYPE reaches the core.
+  // Same narrowing `isCritiqueShape` applies one phase later, on the phase whose failure costs the most.
+  for (const unusable of [{}, [], { scopes: null }, { scopes: "DealPage" }, { scopes: { 0: "x" } }, 7, "census"]) {
+    const { result, asked } = await runCba(INPUT, (i) => (i.phase === "Context"
+      ? { outcome: OUTCOME.VALUE, value: unusable }
+      : happyAnswer(i)));
+    check(`core: a Context result that is truthy but carries no \`scopes\` ARRAY (${JSON.stringify(unusable)}) is a FAILED run, not a clean zero-row analysis — the forbidden outcome was reachable through a malformed result, not only an absent one`,
+      result.stopped === "context-failed" && result.skipped === false
+        && result.coverage.complete === false && result.coverage.total === null && asked.length === 1,
+      () => JSON.stringify({ stopped: result.stopped, skipped: result.skipped, coverage: result.coverage }));
+  }
+  const { logs } = await runCba(INPUT, (i) => (i.phase === "Context"
+    ? { outcome: OUTCOME.VALUE, value: [] }
+    : happyAnswer(i)));
+  check("core: the unusable-shape failure gets its OWN line naming what came back — 'the agent returned nothing' and 'the agent returned something I cannot read' need different repairs",
+    logs.some((l) => /returned an array with no `scopes` array/.test(l)), () => logs.join("\n"));
+}
+{
+  // A describe pass that leaves a row uncovered must trigger the repair round —
+  // and the verdict must read the REPAIRED counts, not round 1's.
+  const partial = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.slice(0, 2) };
+  let describeCalls = 0;
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") { describeCalls++; return { outcome: OUTCOME.VALUE, value: describeCalls === 1 ? partial : FULL_DESCRIBE } }
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: uncovered rows trigger a REPAIR round scoped to the owning scopes, and the repair items are ids of their own",
+    asked.some((i) => i.id.startsWith("repair.")) && describeCalls === 2, () => asked.map((i) => i.id).join(","));
+  check("core: the verdict reads the REPAIRED counts — computed after the repair round, so a run is never reported complete that the repair round had not finished",
+    result.coverage.complete === true && result.coverage.described === 4 && logs.some((l) => /coverage after repair/.test(l)),
+    () => JSON.stringify({ coverage: result.coverage, logs }));
+  // PR #147 review — the two rounds must not share a part file or a card id namespace. Both rounds order scopes
+  // by rows descending, so the largest scope leads a batch in each: the repair agent was handed round 1's path
+  // and round 1's `C01…` sequence, and one that wrote the file fresh dropped round 1's cards from the deliverable
+  // while `coveredKeys` still counted those rows from round 1's index entries. Asserted on the PROMPTS, because
+  // the prompt is the only place the agent learns where to write.
+  const partOf = (prompt) => /written to `([^`]+)`/.exec(String(prompt))?.[1] || null;
+  const describePrompts = asked.filter((i) => i.phase === "Describe");
+  const round1 = describePrompts.filter((i) => i.id.startsWith("describe.")).map((i) => partOf(i.prompt));
+  const round2 = describePrompts.filter((i) => i.id.startsWith("repair.")).map((i) => partOf(i.prompt));
+  check("core: the repair round writes its OWN part file — a round marker in the path, so a repair agent cannot overwrite the first pass's cards while the coverage arithmetic still counts them",
+    round1.length === 1 && round2.length === 1 && round1[0] === "out/customizations-part-main-page.md"
+      && round2[0] === "out/customizations-part-main-page-round2.md",
+    () => JSON.stringify({ round1, round2 }));
+  check("core: the repair round numbers its cards in its OWN namespace — the prompt names the collision hazard itself, and two rounds numbering from `C01` off the same scope label is that hazard",
+    /Namespace every card id `<scope>\/C01`/.test(describePrompts[0].prompt)
+      && /Namespace every card id `<scope>\/R2-C01`/.test(describePrompts[1].prompt),
+    () => describePrompts.map((i) => (i.prompt.match(/Namespace every card id [^:]+/) || [])[0]).join(" | "));
+  check("core: the repair prompt says its part file is its own and the first pass is KEPT — nothing used to mention the file at all, so an agent had no reason to suspect it was overwriting a first pass",
+    /this round's own, empty file: the first pass's part is KEPT/.test(describePrompts[1].prompt),
+    () => describePrompts[1].prompt.slice(0, 400));
+  check("core: neither round's part file appears twice in Merge's inputs — the same path from two items is what made one round's cards invisible to the operator reading the report",
+    (() => {
+      const inputs = asked.find((i) => i.phase === "Merge").inputFiles;
+      return inputs.length === new Set(inputs).size;
+    })(), () => JSON.stringify(asked.find((i) => i.phase === "Merge").inputFiles));
+}
+{
+  // PR #147 review — an agent that writes somewhere OTHER than the path it was handed is NAMED. The core used to
+  // accept whatever `reportPart` came back, so a part-file collision left no trace in the run at all; this line
+  // is what makes a recurrence visible. A warning rather than a rejection on purpose: the returned path is the one
+  // Merge folds in, so the cards are still merged and the coverage numbers still describe what the report holds.
+  const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Describe"
+    ? { outcome: OUTCOME.VALUE, value: { ...FULL_DESCRIBE, reportPart: "out/somewhere-else.md" } }
+    : happyAnswer(i)));
+  check("core: a Describe answer whose `reportPart` is not the path the item was asked for is REPORTED, naming both paths — the core never checked this, which is what let a shared part file go unnoticed",
+    logs.some((l) => /was asked for/.test(l) && /somewhere-else\.md/.test(l) && /customizations-part-main-page\.md/.test(l)),
+    () => logs.join("\n"));
+  check("core: the mismatched answer is KEPT, not dropped — its cards are merged from the path it returned, and discarding real analysis over a path string is the worse failure",
+    result.coverage.described === 4 && result.coverage.complete === true, () => JSON.stringify(result.coverage));
+}
+{
+  // PR #147 review — a Critique answering with a BARE method key must route into the repair round. ENG-96529
+  // requalified every scope key, so `initMini` no longer exists in `allKeys`; under the old strict
+  // `allKeys.has` filter this critique finding was DROPPED and the run still reported `complete: true` over a
+  // row the adversarial pass had judged undescribed. The row carries a card, so nothing else would catch it.
+  const bareCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
+  let describeRounds = 0;
+  const { result, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") { describeRounds++; return { outcome: OUTCOME.VALUE, value: FULL_DESCRIBE } }
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: describeRounds === 1 ? bareCritique : CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a Critique naming a row by its BARE method key routes into the REPAIR round — the inventory key is qualified, and dropping the finding would report a fully-carded row as complete over the adversarial pass's objection",
+    asked.some((i) => i.id.startsWith("repair.")) && describeRounds === 2,
+    () => JSON.stringify({ ids: asked.map((i) => i.id), describeRounds, coverage: result.coverage }));
+}
+{
+  // PR #147 review, the other half — a bare critique key that COLLIDES across scopes resolves to no single row,
+  // so it cannot route anywhere. It must be NAMED rather than swallowed by the filter: the two repairs are
+  // opposite (re-key the answer vs describe the row), exactly as `ambiguousEntryKeys` already reports for a
+  // Describe answer.
+  const collidingCtx = { ...CTX, scopes: [
+    { role: "main page", schema: "DealMain", methodKeys: ["initMini"], memberKeys: [], unresolvedCount: 0 },
+    { role: "mini page", schema: "DealMini", methodKeys: ["initMini"], memberKeys: [], unresolvedCount: 0 },
+  ] };
+  const collidingDescribe = { reportPart: "out/part.md", gaps: [], refusals: [], indexEntries: [
+    { key: "DealMain::initMini", card: "DealMain/C01" }, { key: "DealMini::initMini", card: "DealMini/C01" },
+  ] };
+  const ambiguousCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: collidingCtx };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: collidingDescribe };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: ambiguousCritique };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a Critique key that two scopes both declare is REPORTED as unattributable, not silently dropped — it describes neither row, and the repair it needs is a re-key, not a describe",
+    logs.some((l) => /critique key\(s\) match SEVERAL inventory rows/.test(l) && l.includes("initMini"))
+      && !asked.some((i) => i.id.startsWith("repair.")),
+    () => JSON.stringify({ logs, ids: asked.map((i) => i.id) }));
+  // PR #147 review — ON THE RETURNED OBJECT, not only in the log. The engine re-reads this return as
+  // `behaviourIndex` and `cli.mjs status` serialises it as the state document, so a signal that lives only on
+  // stderr reaches a human tailing the run and nobody else. Same class of claim as `critiqueRan`.
+  check("core: the unplaceable critique key is carried on the RESULT, split by reason — a machine consumer reads the returned object, and stderr does not reach it",
+    result.critiqueUnattributable?.ambiguous.join(",") === "initMini"
+      && result.critiqueUnattributable?.unknown.length === 0,
+    () => JSON.stringify(result.critiqueUnattributable));
+  check("core: it does NOT flip `coverage.complete` — `complete` is arithmetic over the coverage denominator, and an unplaceable critique key is a statement about the ANSWER, not about whether a row carries a card",
+    result.coverage.complete === true, () => JSON.stringify(result.coverage));
+}
+{
+  // PR #147 review — the OTHER reason a critique key resolves to nothing: it matches NO inventory row, so it is
+  // stale, copied from another surface or invented. Merged with the ambiguous bucket, an operator could not tell
+  // a dropped real finding from agent noise, and the remedies are opposite: re-key it versus discard it.
+  const unknownCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "neverHeardOfIt" }] };
+  const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Critique"
+    ? { outcome: OUTCOME.VALUE, value: unknownCritique }
+    : happyAnswer(i)));
+  check("core: a critique key matching NO inventory row is reported as UNKNOWN, on its own line and its own bucket — 'a real row I cannot place' and 'a key that names nothing here' need opposite repairs",
+    logs.some((l) => /match NO inventory row/.test(l) && l.includes("neverHeardOfIt"))
+      && result.critiqueUnattributable?.unknown.join(",") === "neverHeardOfIt"
+      && result.critiqueUnattributable?.ambiguous.length === 0,
+    () => JSON.stringify({ carried: result.critiqueUnattributable, logs }));
+}
+{
+  // PR #147 review — and the field is ABSENT when there is nothing to report, so every other run's return is
+  // byte-identical to what it was. That is what keeps the frozen-baseline comparison in
+  // `run-workflow-parity.mjs` meaningful instead of costing a declared divergence per scenario for a field that
+  // would always be two empty arrays.
+  const { result } = await runCba(INPUT, happyAnswer);
+  check("core: a run whose critique placed every key carries NO `critiqueUnattributable` field — absent means nothing to report, and the return does not grow a permanently-empty key",
+    !("critiqueUnattributable" in result), () => JSON.stringify(Object.keys(result)));
+}
+{
+  // A mixin row citing only its wiring card: covered by the count, incomplete by
+  // the two-card rule. It must block completeness even when nothing is uncovered.
+  const wiringOnly = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.map((e) => (e.key === "mixin:LeadMixin" ? { key: e.key, card: e.card } : e)) };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: wiringOnly };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a mixin row naming ONLY a wiring card blocks completeness on every round — the row looks covered while the criteria that gate it are named nowhere the plan points",
+    result.coverage.complete === false && result.coverage.wiringOnly.join(",") === "mixin:LeadMixin",
+    () => JSON.stringify(result.coverage));
+}
+{
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("core: full coverage with a DEAD Merge is NOT complete — coverage is not the deliverable, the report and the index are",
+    result.coverage.complete === false && result.coverage.described === 4, () => JSON.stringify(result.coverage));
+}
+
+console.log("\n===== the census gate, the qualified inventory and the Merge retry =====");
+// A SECOND scope declaring the SAME method name. `init` on two pages is two rows with two bodies; the inventory
+// keyed them bare and `allKeys` is a Set, so they were one row and one description closed both. Measured on a
+// real section: `onSaved` six times, nine more names twice, 24 rows arriving as 10 keys.
+const CTX_COLLIDING = {
+  ...CTX,
+  scopes: [
+    { role: "record page", schema: "DealPage", methodKeys: ["init", "onSaved"], memberKeys: [], unresolvedCount: 0 },
+    { role: "mini page", schema: "DealMini", methodKeys: ["init"], memberKeys: [], unresolvedCount: 0 },
+  ],
+};
+check("qualifyKey: a BARE method key is qualified with the scope that owns it — two scopes declaring `init` are two rows, which a Set of bare names silently made one",
+  () => helpers.qualifyKey("DealMini", "init") === "DealMini::init");
+check("qualifyKey: an ALREADY qualified key is left alone, and a scope with no schema keeps the bare form the engine keys that scope by",
+  () => helpers.qualifyKey("DealMini", "DealPage::init") === "DealPage::init" && helpers.qualifyKey(null, "init") === "init");
+check("normalizeScopes: the qualification happens ONCE, in the inventory — so the prompt, the coverage denominator and the repair round all read the same spelling of the same row",
+  () => {
+    const [a, b] = helpers.normalizeScopes(CTX_COLLIDING.scopes);
+    return a.methodKeys.join(",") === "DealPage::init,DealPage::onSaved" && b.methodKeys.join(",") === "DealMini::init";
+  });
+{
+  const described = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [
+      { key: "DealPage::init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }, { key: "DealMini::init", card: "c3" },
+    ],
+  };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: described };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: two scopes declaring the same method are THREE rows in the denominator, not two — the coverage count is over rows, and a shared name is not a shared body",
+    result.coverage.total === 3 && result.coverage.described === 3, () => JSON.stringify(result.coverage));
+}
+{
+  // The same surface, described only under ONE scope's `init`. The other scope's row must stay uncovered.
+  const halfDescribed = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [{ key: "DealPage::init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }],
+  };
+  const { result } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: halfDescribed };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: describing ONE scope's `init` leaves the OTHER scope's `init` uncovered — under bare keys this run reported itself complete with a row nobody had read",
+    result.coverage.uncovered.join(",") === "DealMini::init", () => JSON.stringify(result.coverage));
+}
+{
+  // THE OTHER DIRECTION of the qualification change, and the one the fix must not hide: an agent answers `init`
+  // BARE while two scopes declare it. Before, that resolved to the single bare key and closed BOTH rows off one
+  // description. Now `digestKeyOf` finds two suffix matches, resolves to neither, and the answer is evidence
+  // about no row — correct, and invisible in the coverage numbers, which is why it gets its own log line.
+  const bareAnswer = {
+    reportPart: "out/part.md", gaps: [], refusals: [],
+    indexEntries: [{ key: "init", card: "c1" }, { key: "DealPage::onSaved", card: "c2" }],
+  };
+  const { result, logs, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX_COLLIDING };
+    if (i.phase === "Describe") return { outcome: OUTCOME.VALUE, value: bareAnswer };
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a BARE answer for a method two scopes declare closes NEITHER row — an answer that could be about either body is evidence about neither, and closing both is the defect this change exists to remove",
+    result.coverage.uncovered.slice().sort().join(",") === "DealMini::init,DealPage::init",
+    () => JSON.stringify(result.coverage));
+  check("core: the unattributable answer is NAMED, with the key form to use — in the coverage numbers it is indistinguishable from a row nobody answered, and those two need opposite repairs",
+    logs.some((l) => /name a method more than one scope declares/.test(l) && /init/.test(l)), () => JSON.stringify(logs));
+  check("core: an unattributable answer still sends the rows through the REPAIR round — it is not silently accepted as coverage, and it is not left for the operator to notice",
+    asked.some((i) => i.id.startsWith("repair.")), () => asked.map((i) => i.id).join(","));
+}
+check("ambiguousEntryKeys: only a key that matches SEVERAL inventory rows is listed — a key matching exactly one is coverage, and one matching none is the unmatched-key problem the engine reports against the merged index",
+  () => {
+    const keys = new Set(["A::init", "B::init", "A::onSaved"]);
+    const listed = helpers.ambiguousEntryKeys(
+      [{ key: "init", card: "c" }, { key: "onSaved", card: "c" }, { key: "nowhere", card: "c" }], keys);
+    return listed.join(",") === "init";
+  });
+check("ambiguousEntryKeys: an entry with NO card is not listed — a blank card is not coverage anywhere else in this arithmetic, so it cannot be reported as coverage that failed to attribute",
+  () => helpers.ambiguousEntryKeys([{ key: "init", card: "" }], new Set(["A::init", "B::init"])).length === 0);
+
+check("keyCollapse: two scopes that both omit `schema` share the bare key form, so rows dispatched exceed coverage rows countable — the reviewer's own 5-rows/3-keys measurement",
+  () => {
+    const collapse = helpers.keyCollapse(helpers.normalizeScopes([
+      { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"] },
+      { role: "child page", schema: null, methodKeys: ["init"], memberKeys: ["onSaved"] },
+    ]));
+    const duplicated = [...collapse.duplicated].sort((a, b) => a.localeCompare(b));
+    return collapse.totalRows === 5 && collapse.keyCount === 3
+      && duplicated.join(",") === "init,onSaved";
+  });
+check("keyCollapse: a well-formed inventory is NOT a finding — at most one schema-less scope keeps every key distinct, which is the shape the engine's `sectionStubScopes` pays the `Section` literal to guarantee",
+  () => helpers.keyCollapse(helpers.normalizeScopes(CTX.scopes)) === null
+    && helpers.keyCollapse(helpers.normalizeScopes(CTX_COLLIDING.scopes)) === null);
+{
+  const CTX_COLLAPSED = {
+    ...CTX,
+    scopes: [
+      { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"], unresolvedCount: 0 },
+      { role: "child page", schema: null, methodKeys: ["init"], memberKeys: ["onSaved"], unresolvedCount: 0 },
+    ],
+  };
+  const { result, asked } = await runCba(INPUT, (i) => i.phase === "Context"
+    ? { outcome: OUTCOME.VALUE, value: CTX_COLLAPSED }
+    : happyAnswer(i));
+  check("core: a collapsed key space STOPS the run — one agent describing one `init` would mark the other scope's `init` described and the verdict would read `complete` over a denominator smaller than the surface (ENG-96529 defect 2, consumer side)",
+    result.stopped === "key-collapse" && result.coverage.complete === false,
+    () => JSON.stringify(result));
+  check("core: the stop happens BEFORE any Describe item is spent — the collapse is arithmetic and is visible from the inventory alone, so there is nothing to gain by dispatching the fan-out",
+    asked.length === 1 && asked[0].phase === "Context", () => asked.map((i) => i.phase).join(","));
+  check("core: the stop names the keys more than one scope claims, so the operator knows which scope needs a `schema` rather than only that something collapsed",
+    /init/.test(result.reason) && /onSaved/.test(result.reason) && /schema/.test(result.reason),
+    () => result.reason);
+}
+
+check("censusShortfall: FEWER scopes than the digest declares is a finding; the same number is not, and MORE is not — a census that found something the digest missed is reported through `refusals`, not stopped",
+  () => helpers.censusShortfall({ scopes: 18 }, new Array(1)).missing === 17
+    && helpers.censusShortfall({ scopes: 2 }, new Array(2)) === null
+    && helpers.censusShortfall({ scopes: 2 }, new Array(3)) === null);
+check("censusShortfall: a digest that declares NO scope count cannot be checked, and an unchecked count must not read as a shortfall — an older digest still runs",
+  () => helpers.censusShortfall(undefined, []) === null && helpers.censusShortfall({ stubs: 5 }, []) === null);
+{
+  const { result, asked, logs } = await runCba({ ...INPUT, totals: { scopes: 18, stubs: 791, members: 739 } }, happyAnswer);
+  check("core: a Context that returns FEWER scopes than the digest declares STOPS the run — measured once at `complete: 547/547` over 1 of 18 scopes, after 1h51m, because every later count was taken over the part that arrived",
+    result.stopped === "census-short" && result.coverage.complete === false && result.coverage.total === null,
+    () => JSON.stringify(result));
+  check("core: the stop happens BEFORE any Describe item is spent — the fan-out would plan for the scopes that arrived, so there is nothing to gain by dispatching it",
+    asked.length === 1 && asked[0].phase === "Context", () => asked.map((i) => i.phase).join(","));
+  check("core: the run carries the agent's own `censusNote` out — on the measured run it named the file holding the 17 scopes that did not fit the structured answer",
+    result.censusNote === CTX.censusNote && logs.some((l) => /2 of the 18 scope/.test(l)), () => JSON.stringify({ note: result.censusNote, logs }));
+}
+{
+  let mergeCalls = 0;
+  const { result, asked, logs } = await runCba(INPUT, (i) => {
+    if (i.phase !== "Merge") return happyAnswer(i);
+    mergeCalls++;
+    return mergeCalls === 1 ? { outcome: OUTCOME.DEATH } : { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("core: a DEAD Merge is retried once and the run still produces its deliverable — Merge is the only phase whose death leaves full coverage and no report, which is what three consecutive real runs ended as",
+    mergeCalls === 2 && result.coverage.complete === true && result.reportPath === MERGED.reportPath,
+    () => JSON.stringify({ mergeCalls, coverage: result.coverage }));
+  check("core: the retry is a work item of its OWN id and label, so the journal replays it and a reader can tell the second attempt from the first",
+    asked.filter((i) => i.phase === "Merge").map((i) => i.id).join(",") === "merge.report-index,merge.report-index.retry2",
+    () => asked.filter((i) => i.phase === "Merge").map((i) => i.id).join(","));
+  check("core: the dead attempt NAMES its cause — a retry that hides why the first attempt died leaves the operator with nothing to fix when the second dies too",
+    logs.some((l) => /merge agent died on attempt 1 .*terminal death/.test(l)), () => JSON.stringify(logs));
+}
+{
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("core: BOTH Merge attempts dying still returns the documented verdict — coverage stands, the run is not complete, and the caller is told there is no deliverable",
+    result.coverage.complete === false && result.coverage.described === 4, () => JSON.stringify(result.coverage));
+}
+
+console.log("\n===== the Critique retry, EXECUTED as a generator =====");
+// `retryOnDeath` is a DELEGATING generator now: it asks the driver for one more
+// attempt rather than calling an agent API. Driven here directly so the second
+// attempt is proven to FIRE — the defect a source regex could never see.
+function driveRetry(outcomes, onFailure) {
+  const it = helpers.retryOnDeath((attempt) => step({ items: [{ id: `try${attempt}`, phase: "Critique", role: "r", prompt: "p" }] }), onFailure);
+  const attempts = [];
+  let send = { type: "next", value: undefined };
+  for (;;) {
+    const res = send.type === "throw" ? it.throw(send.value) : it.next(send.value);
+    if (res.done) return { outcome: res.value, attempts };
+    attempts.push(res.value.items[0].id);
+    const next = outcomes[attempts.length - 1];
+    send = next?.throw ? { type: "throw", value: next.throw } : { type: "next", value: [next ? next.value : null] };
+  }
+}
+{
+  const fails = [];
+  const note = (attempt, error, willRetry) => fails.push({ attempt, msg: error ? error.message : null, willRetry });
+  const second = driveRetry([{ value: null }, { value: { ok: true } }], note);
+  check("retryOnDeath: an attempt that dies FIRES a real second attempt, and the second attempt's success is the result",
+    second.attempts.length === 2 && second.outcome.result?.ok === true && second.outcome.ran === true
+      && fails.length === 1 && fails[0].willRetry === true, () => JSON.stringify({ second, fails }));
+
+  fails.length = 0;
+  const dead = driveRetry([{ value: null }, { value: null }], note);
+  check("retryOnDeath: both attempts dead ⇒ {result:null, ran:false}, exactly TWO attempts, and the last failure does not advertise a retry that will not happen",
+    dead.outcome.ran === false && dead.outcome.result === null && dead.attempts.length === 2 && fails[1].willRetry === false,
+    () => JSON.stringify({ dead, fails }));
+
+  fails.length = 0;
+  const rejected = driveRetry([{ throw: new Error("529 overloaded #1") }, { throw: new Error("529 overloaded #2") }], note);
+  check("retryOnDeath: a REJECTING host collapses into the same dead outcome and never throws past the caller — the motivating 529, which used to end the run with no contradiction check at all",
+    rejected.outcome.ran === false && rejected.attempts.length === 2
+      && /529 overloaded #1/.test(fails[0].msg) && /529 overloaded #2/.test(fails[1].msg), () => JSON.stringify(fails));
+
+  fails.length = 0;
+  const first = driveRetry([{ value: { ok: true } }], note);
+  check("retryOnDeath: a first-attempt success spends exactly ONE agent and reports no failure",
+    first.attempts.length === 1 && first.outcome.ran === true && fails.length === 0);
+
+  const noNotifier = driveRetry([{ value: null }, { value: null }], undefined);
+  check("retryOnDeath: a missing notifier does not throw — the helper degrades to a plain retry rather than turning a dead phase into a crashed run",
+    noNotifier.outcome.ran === false && noNotifier.attempts.length === 2);
+
+  for (const [falsy, label] of [[0, "0"], ["", '""'], [false, "false"], [Number.NaN, "NaN"]]) {
+    const r = driveRetry([{ value: falsy }], note);
+    check(`retryOnDeath: a falsy-but-PRESENT result (${label}) counts as RAN — one attempt, and the value is handed back intact`,
+      r.outcome.ran === true && Object.is(r.outcome.result, falsy) && r.attempts.length === 1,
+      () => JSON.stringify({ ran: r.outcome.ran, result: String(r.outcome.result), attempts: r.attempts }));
+  }
+  const undef = driveRetry([{ value: undefined }, { value: undefined }], note);
+  check("retryOnDeath: `undefined` is DEATH, not a result — an attempt that fell off its end returned nothing",
+    undef.outcome.ran === false && undef.attempts.length === 2);
+}
+{
+  // The retry, IN THE REAL CORE: a dead Critique must still let the run finish
+  // and must report `critiqueRan: false` so nothing downstream reads
+  // conflicts/settledElsewhere as verified-empty.
+  let critiqueTries = 0;
+  const { result, logs, asked } = await runCba(INPUT, (i) => {
+    if (i.phase === "Critique") { critiqueTries++; return { outcome: OUTCOME.ERROR, error: new Error("529 overloaded") } }
+    return happyAnswer(i);
+  });
+  check("core: a rejecting Critique is retried ONCE and the run still finishes — a dead adversarial pass may not end the run silently",
+    critiqueTries === 2 && result.coverage.described === 4, () => JSON.stringify({ critiqueTries, coverage: result.coverage }));
+  check("core: the retry attempt is a DISTINCT work item (`critique.coverage.retry2`), so the journal can replay both attempts",
+    asked.filter((i) => i.phase === "Critique").map((i) => i.id).join(",") === "critique.coverage,critique.coverage.retry2",
+    () => asked.filter((i) => i.phase === "Critique").map((i) => i.id).join(","));
+  check("core: `critiqueRan:false` is reported AND the log says coverage.complete is arithmetic-only — the caller must not read conflicts as checked-and-empty",
+    result.critiqueRan === false && logs.some((l) => /Critique never ran/.test(l) && /arithmetic-only/.test(l)),
+    () => JSON.stringify({ critiqueRan: result.critiqueRan, logs: logs.filter((l) => /Critique/.test(l)) }));
+  check("core: the CAUSE reaches the log, per attempt — a dead pass reports why it died, not merely that it did",
+    logs.filter((l) => /critique agent died on attempt \d+ — Error: 529 overloaded/.test(l)).length === 2,
+    () => JSON.stringify(logs.filter((l) => /critique agent died/.test(l))));
+  check("driver: the ERROR outcome ITSELF reaches the log, naming the item and the cause — the core's own line covers Critique only, and on every other phase a rejection collapsed to a null hole with nothing anywhere saying an agent had errored at all",
+    logs.filter((l) => /item `critique\.coverage(\.retry2)?` of phase Critique ERRORED — Error: 529 overloaded/.test(l)).length === 2,
+    () => JSON.stringify(logs.filter((l) => /ERRORED/.test(l))));
+}
+{
+  // A REJECTING Context, not a dead one. Both are the same orchestration failure, and both must reach
+  // the documented verdict — a raw exception out of `run()` gives the caller a stack trace with no
+  // coverage numbers instead.
+  const { result, logs } = await runCba(INPUT, (i) =>
+    (i.phase === "Context" ? { outcome: OUTCOME.ERROR, error: new Error("529 overloaded") } : happyAnswer(i)));
+  check("core: a REJECTING Context returns the `context-failed` verdict rather than throwing out of run() — same root cause as a dead Context, so it may not produce a different caller-visible result",
+    result?.stopped === "context-failed" && /rejected \(Error: 529 overloaded\)/.test(result?.reason || ""),
+    () => JSON.stringify({ stopped: result?.stopped, reason: result?.reason }));
+  check("core: the Context failure names its CAUSE in the log, not merely that the phase failed",
+    logs.some((l) => /the Context agent rejected — Error: 529 overloaded/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Context/.test(l))));
+}
+{
+  const { result, logs } = await runCba(INPUT, (i) =>
+    (i.phase === "Merge" ? { outcome: OUTCOME.ERROR, error: new Error("refused") } : happyAnswer(i)));
+  check("core: a REJECTING Merge keeps the deliberate `mergeOk === false` handling — the coverage numbers stand and the run reports NOT complete, instead of throwing the whole run away",
+    result?.coverage?.complete === false && result?.coverage?.described === 4,
+    () => JSON.stringify({ coverage: result?.coverage }));
+  check("core: the Merge failure names its cause too",
+    logs.some((l) => /returned no report\/index — Error: refused/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Merge/.test(l))));
+}
+{
+  const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Critique" ? { outcome: OUTCOME.VALUE, value: 7 } : happyAnswer(i)));
+  check("core: a Critique that returned something UNUSABLE gets its own log line and `critiqueRan:false` — 'returned something unusable' and 'the host never answered' need different repairs",
+    result.critiqueRan === false && logs.some((l) => /treating the pass as dead/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Critique|pass as dead/.test(l))));
+}
+
+/* `critiqueDeathLine` and `isCritiqueShape` — the two pure answers around the retry. Both moved here with the
+   helper they belong to (they used to be exercised from run-infra.mjs against the sliced workflow block).
+   Asserted on the produced string / the verdict, never on their source. */
+{
+  const lineRejected = helpers.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
+  check("critiqueDeathLine: a REJECTION names the attempt, the error TYPE and its message, and announces the retry — a `critiqueRan:false` run must carry the reason, not only the fact",
+    /attempt 1/.test(lineRejected) && /TypeError/.test(lineRejected) && /529 overloaded/.test(lineRejected)
+      && lineRejected.endsWith(" — retrying once"), () => lineRejected);
+  const lineNull = helpers.critiqueDeathLine(2, null, false);
+  check("critiqueDeathLine: a NULL outcome says so explicitly and cites the contract — 'returned nothing' must not read as an unknown error",
+    /attempt 2/.test(lineNull) && /returned nothing \(terminal death/.test(lineNull) && !/Error/.test(lineNull), () => lineNull);
+  check("critiqueDeathLine: only a NON-FINAL attempt advertises the retry — the last failure promising a retry that never comes is exactly the misreport this log exists to prevent",
+    helpers.critiqueDeathLine(1, null, true).endsWith(" — retrying once") && !/retrying/.test(lineNull));
+  // Deliberately degenerate input: an Error whose message is EMPTY, which exercises the fallback half of
+  // `error.message || String(error)`. Blanked after construction rather than written as `new Error("")` —
+  // sonar S7722 flags that constructor form, and it is right about production code; this is test input that
+  // must not carry a message.
+  const blankMessage = new Error("blanked on the next line");
+  blankMessage.message = "";
+  check("critiqueDeathLine: an error carrying no message still yields a usable line — a thrown string or a message-less Error must not render as `undefined`",
+    !/undefined/.test(helpers.critiqueDeathLine(1, blankMessage, false)) && !/undefined/.test(helpers.critiqueDeathLine(1, "boom", false)),
+    () => JSON.stringify([helpers.critiqueDeathLine(1, blankMessage, false), helpers.critiqueDeathLine(1, "boom", false)]));
+
+  /* `isCritiqueShape` — the narrowing between the retry loop's `ran` and the `critiqueRan` the caller reads. Every
+     falsy-but-present value that `retryOnDeath` correctly treats as RAN is a value the CALLER must NOT report as a
+     completed adversarial pass: `critique?.conflicts || []` renders it as "checked, none found". */
+  const fullCritique = { uncovered: [], conflicts: [], settledElsewhere: [] };
+  check("isCritiqueShape: the schema-valid shape (all three arrays) is the ONLY thing that counts as a completed pass",
+    helpers.isCritiqueShape(fullCritique) === true && helpers.isCritiqueShape({ ...fullCritique, uncovered: [{ key: "m" }] }) === true);
+  for (const notCritique of [0, "", false, Number.NaN, 7, "done", true, [], [1, 2], null, undefined]) {
+    const shown = Array.isArray(notCritique) ? `[${notCritique}]` : String(notCritique);
+    check(`isCritiqueShape: \`${shown}\` is NOT a completed pass — it stops the retry loop legitimately, but reporting it as one claims conflicts/settledElsewhere were verified empty when nothing was checked`,
+      helpers.isCritiqueShape(notCritique) === false, () => `${typeof notCritique}: ${String(notCritique)}`);
+  }
+  check("isCritiqueShape: a PARTIAL critique is dead too — the repair round still reads `uncovered` either way, so the only thing refused is a claim that the MISSING field was verified",
+    helpers.isCritiqueShape({ uncovered: [], conflicts: [] }) === false
+      && helpers.isCritiqueShape({ uncovered: [], conflicts: [], settledElsewhere: "none" }) === false);
+}
+
+/* ---------------------------------------------------------------------------
+   6. CROSS-HOST PARITY — the whole point of the refactor
+   --------------------------------------------------------------------------- */
+console.log("\n===== cross-host parity =====");
+{
+  // Host A: the Claude adapter, driven through a FAKE `agent()`/`parallel()`.
+  const claudeCalls = [];
+  const fakeAgent = async (prompt, opts) => {
+    claudeCalls.push({ label: opts.label, phase: opts.phase, agentType: opts.agentType, hasSchema: !!opts.schema, prompt });
+    if (opts.phase === "Context") return CTX;
+    if (opts.phase === "Describe") return FULL_DESCRIBE;
+    if (opts.phase === "Critique") return CLEAN_CRITIQUE;
+    return MERGED;
+  };
+  // Same faithful contract as the other fakes here: a throwing thunk resolves to `null`, the call never rejects.
+  const fakeParallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
+  const claudeRun = newRun({ workflow: cba.WORKFLOW, input: INPUT, host: CLAUDE_HOST });
+  const claudeIo = { log: () => {}, phase: () => {} };
+  const claudeResult = await driveOnClaude({
+    core: cba.run(INPUT, claudeIo), run: claudeRun, io: claudeIo,
+    agent: fakeAgent, parallel: fakeParallel, requires: cba.WORKFLOW_REQUIRES,
+  });
+
+  {
+    // The negotiated width has to BIND on this host, not merely be logged. `resolveStep`
+    // reports "in waves of W — a reported reduction in parallelism" whenever the gate
+    // reduced; handing the whole batch to one `parallel()` call made that log untrue and
+    // let the runtime's own ceiling apply instead, so a caller-supplied
+    // `maxDescribeAgents` above the declared parallelism fanned out unbounded against a
+    // live stand.
+    const batchSizes = [];
+    const recordingParallel = async (thunks) => {
+      batchSizes.push(thunks.length);
+      return Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
+    };
+    const runBatch = makeRunBatch(recordingParallel);
+    const twelve = Array.from({ length: 12 }, (_, n) => ({ id: `w${n}` }));
+    const done = await runBatch(twelve, async (item) => item.id, CLAUDE_HOST.parallelism);
+
+    check("makeRunBatch: a 12-item step is dispatched in waves no wider than the host's DECLARED parallelism — the width the driver negotiated was being discarded, so the declared cap did not bind and the 'waves of N' log described something that did not happen",
+      batchSizes.length > 1 && Math.max(...batchSizes) <= CLAUDE_HOST.parallelism,
+      () => JSON.stringify({ batchSizes, parallelism: CLAUDE_HOST.parallelism }));
+    check("makeRunBatch: waving does not drop or reorder results — the core reads them aligned to the step's items",
+      done.join(",") === twelve.map((i) => i.id).join(","), () => JSON.stringify(done));
+    check("makeRunBatch: a width at or above the item count is still ONE `parallel()` call, so the host keeps its single progress tree in the common case",
+      await (async () => { const sizes = []; const p = async (t) => { sizes.push(t.length); return Promise.all(t.map((f) => f())); };
+        await makeRunBatch(p)(twelve.slice(0, 4), async (i) => i.id, 8); return sizes.length === 1 && sizes[0] === 4; })());
+  }
+
+  // Host B: the Codex/CLI adapter — sequential, no `parallel()`, journal-driven.
+  const codex = codexHost();
+  const codexRun = newRun({ workflow: cba.WORKFLOW, input: INPUT, host: codex });
+  const codexIo = { log: () => {}, phase: () => {} };
+  const codexResult = await drive({
+    core: cba.run(INPUT, codexIo), run: codexRun, host: codex, io: codexIo, requires: cba.WORKFLOW_REQUIRES,
+    execute: async (item) => happyAnswer(item),
+  });
+
+  check("parity: the two hosts return the IDENTICAL result for identical inputs — the coverage verdict is the core's arithmetic, not a property of the runtime",
+    JSON.stringify(claudeResult) === JSON.stringify(codexResult),
+    () => `claude: ${JSON.stringify(claudeResult).slice(0, 300)}\n      codex:  ${JSON.stringify(codexResult).slice(0, 300)}`);
+  check("parity: both journals record the same work items in the same order — the decisions, not just the answer, are the same",
+    claudeRun.journal.map((e) => e.id).join(",") === codexRun.journal.map((e) => e.id).join(","),
+    () => `${claudeRun.journal.map((e) => e.id).join(",")}\n      ${codexRun.journal.map((e) => e.id).join(",")}`);
+  check("parity: each run records WHICH adapter executed it — two identical artifacts must still be attributable to their host",
+    claudeRun.host.id === "claude-workflow" && codexRun.host.id === "codex");
+  check("claude adapter: a role maps to an agentType and the schema is passed through — the classic-ui-expert role runs as general-purpose and invokes the skill from its prompt, exactly as the hand-written workflow did",
+    () => { const o = agentOptionsFor(workItem({ ...okItem, role: "classic-ui-expert", label: "L" }));
+      return o.agentType === "general-purpose" && o.phase === "Context" && o.label === "L" && !!o.schema; });
+  check("claude adapter: a NULLISH `agent()` resolution is DEATH and a rejection is an ERROR — the host contract, read the same way as everywhere else",
+    () => { const exec = makeExecute(async (p, o) => (o.label === "die" ? null : (() => { throw new Error("nope") })()));
+      return Promise.all([exec(workItem({ ...okItem, label: "die" })), exec(workItem({ ...okItem, label: "reject" }))])
+        .then(([a, b]) => a.outcome === OUTCOME.DEATH && b.outcome === OUTCOME.ERROR); });
+  check("claude adapter: the Describe prompt carries the read-only rule and the shared-core reference — the prompt IS the safety contract, so it is asserted on the text a phase actually receives",
+    claudeCalls.some((c) => c.phase === "Describe" && /READ-ONLY against the stand/.test(c.prompt) && /SHARED CORE/.test(c.prompt)));
+  check("claude adapter: every dispatched item carried a schema — the coverage arithmetic is computed on these answers, never read from prose",
+    claudeCalls.every((c) => c.hasSchema));
+}
+
+/* ---------------------------------------------------------------------------
+   7. THE GENERATED ARTIFACT
+   --------------------------------------------------------------------------- */
+console.log("\n===== the generated Claude workflow =====");
+// Does this line REFERENCE the injected `args` global (as opposed to mentioning it in prose, or carrying a
+// `.args` property or an `args:` key)? Written as a bounded scan rather than one regex with `^`/`$` alternations,
+// which backtracks super-linearly on a long line (Sonar S8786).
+const mentionsArgs = (line) => {
+  // `indexOf`, not `replace(/\/\/.*$/)`: a `.*$` pattern is the backtracking shape Sonar flags (S8786), and the
+  // question here is only "where does the comment start".
+  const slashes = line.indexOf("//");
+  const code = slashes < 0 ? line : line.slice(0, slashes);
+  let i = code.indexOf("args");
+  while (i >= 0) {
+    const before = i === 0 ? "" : code[i - 1];
+    const after = code[i + 4] ?? "";
+    const boundedBefore = before === "" || !/[.\w'`]/.test(before);
+    const boundedAfter = after === "" || !/[\w:]/.test(after);
+    if (boundedBefore && boundedAfter) return true;
+    i = code.indexOf("args", i + 1);
+  }
+  return false;
+};
+
+const GENERATED = path.join(ROOT, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
+const genSrc = readFileSync(GENERATED, "utf8");
+{
+  const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
+  check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
+    res.status === 0, () => `${res.stdout}${res.stderr}`);
+  // PR #147 review: exit 0 alone does not say the gate DID anything — a run that checked nothing exits 0 too.
+  // Pin the per-target evidence: every configured target must have printed its own ✅ line naming its artifact.
+  check("generator: `--check` proves it compared EVERY shipped artifact — one ✅ line per target, naming the file, so an exit 0 from a run that checked nothing cannot read as a pass",
+    () => { const ticks = (res.stdout || "").split("\n").filter((l) => /^✅ .+ matches the core$/.test(l));
+      return ticks.length >= 1
+        && ticks.some((l) => l.includes("classic-behaviour-analysis.workflow.js")); },
+    () => res.stdout);
+  // …and the complement: a gate that cannot fail is not a gate. Corrupt the shipped artifact in a temp copy of
+  // the tree and assert `--check` goes red on it, so the green above is evidence rather than a constant.
+  {
+    const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "wf-drift-"));
+    cpSync(path.join(ROOT, "scripts"), path.join(tmpRoot, "scripts"), { recursive: true });
+    cpSync(path.join(ROOT, "skills"), path.join(tmpRoot, "skills"), { recursive: true });
+    const shipped = path.join(tmpRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
+    writeFileSync(shipped, `${readFileSync(shipped, "utf8")}\n// drift introduced by the test\n`);
+    const drifted = spawnSync(process.execPath, [path.join(tmpRoot, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
+    check("generator: `--check` really FAILS on a drifted artifact — the green result above is a measurement, not a constant",
+      drifted.status === 1 && /out of sync/.test(drifted.stderr || ""),
+      () => ({ status: drifted.status, stdout: drifted.stdout, stderr: drifted.stderr }));
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+check("generated: no `import` or `export` survives except `meta` — the host evaluates this as a function body, so either would be a SyntaxError at run time",
+  genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).join(" | ") === "export const meta = {",
+  () => genSrc.split("\n").filter((l) => /^\s*(import|export)\s/.test(l)).slice(0, 5).join(" | "));
+check("generated: the pure-helper sentinels are still present — the offline slice-and-import suite reads the SHIPPED artifact through them",
+  genSrc.includes("// ---8<--- PURE DECISION HELPERS ---8<---") && genSrc.includes("// ---8<--- END PURE DECISION HELPERS ---8<---"));
+check("generated: it says it is generated and names the command that rebuilds it — a hand edit here is silently overwritten otherwise",
+  /GENERATED FILE — DO NOT EDIT BY HAND/.test(genSrc) && /node scripts\/build-workflows\.mjs/.test(genSrc));
+// The strongest available proof that the inlined block is host-neutral: slice it
+// out of the SHIPPED file and import it as a real ES module. A free reference to
+// an injected global at top level throws here; a reference inside a function body
+// is legitimate exactly when it is a PARAMETER, which is how the Claude adapter
+// receives `agent`/`parallel`.
+{
+  const BEGIN = "// ---8<--- PURE DECISION HELPERS ---8<---";
+  const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
+  const from = genSrc.indexOf(BEGIN), to = genSrc.indexOf(END);
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "wf-slice-"));
+  let mod = null, threw = null;
+  try {
+    const modPath = path.join(tmp, "slice.mjs");
+    writeFileSync(modPath, `${genSrc.slice(from + BEGIN.length, to)}\nexport { packBatches, isComplete, digestKeyOf, wiringOnlyMixinKeys, retryOnDeath, run, WORKFLOW, WORKFLOW_REQUIRES, CLAUDE_HOST, newRun, normalizeInput, driveOnClaude };\n`);
+    mod = await import(new URL(`file://${modPath}`).href);
+  } catch (e) { threw = e; } finally { rmSync(tmp, { recursive: true, force: true }) }
+  check("generated: the inlined block LOADS AS A STANDALONE MODULE — it closes over no injected global, which is what makes the same code runnable on Codex",
+    !threw && typeof mod?.run === "function" && typeof mod?.packBatches === "function", () => `${threw?.name}: ${threw?.message}`);
+  check("generated: `args` — the one thing that can only be a global — appears ONLY in the tail below the sentinels",
+    !genSrc.slice(from, to).split("\n").some(mentionsArgs)
+      && /normalizeInput\(args\)/.test(genSrc.slice(to)),
+    () => genSrc.slice(from, to).split("\n").filter(mentionsArgs).slice(0, 3).join(" | "));
+}
+
+// The real thing: EVALUATE the shipped file the way the host does, and confirm it
+// still produces the same run. A generated file that no longer runs is the one
+// failure that would reach production silently — every module test above would
+// still be green.
+{
+  const body = genSrc.replace(/^export const meta = \{[\s\S]*?\n\}\n/, "");
+  const calls = [], logs = [], phases = [];
+  const agent = async (prompt, opts) => {
+    calls.push(opts.label);
+    if (opts.phase === "Context") return CTX;
+    if (opts.phase === "Describe") return FULL_DESCRIBE;
+    if (opts.phase === "Critique") return CLEAN_CRITIQUE;
+    return MERGED;
+  };
+  // FAITHFUL to the documented `parallel()` contract, which is NOT `Promise.all`: a thunk that throws (or whose
+  // agent errors) resolves to `null` in the result array, and the call itself never rejects. A bare `Promise.all`
+  // rejects on the first throw, which made baseline and shipped propagate a rejection identically and left the
+  // rejection axis — the one axis where the three-outcome protocol is observable — structurally untested.
+  const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
+  // The shipped body becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval,
+  // matching the sibling runners' decision to keep these files free of a dynamic-code construct a reviewer then
+  // has to reason about. Wrapping it in `export default async function(args, log, phase, agent, parallel)` is the
+  // SAME environment the host provides: a function body with exactly those five names in scope, and a top-level
+  // `return` that is the run's result.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "wf-shipped-"));
+  let result = null, threw = null;
+  try {
+    const modPath = path.join(tmp, "shipped.mjs");
+    writeFileSync(modPath, `export default async function (args, log, phase, agent, parallel) {\n${body}\n}\n`);
+    const mod = await import(new URL(`file://${modPath}`).href);
+    result = await mod.default(INPUT, (m) => logs.push(m), (p) => phases.push(p), agent, parallel);
+  } catch (e) { threw = e; } finally { rmSync(tmp, { recursive: true, force: true }) }
+  check("generated: the shipped file EVALUATES as a Claude workflow function body and runs to a result — the one failure that would otherwise reach production with a fully green suite",
+    !threw && !!result, () => `${threw?.name}: ${threw?.message}`);
+  check("generated: it walks the same four phases with the same agent labels as the module-level core",
+    phases.join(" → ") === "Context → Describe → Critique → Merge"
+      && calls.join(",") === "context:census+shared-core,describe:main page+DealMini,critique:coverage,merge:report+index",
+    () => JSON.stringify({ phases, calls }));
+  check("generated: and the same verdict — 4 of 4 rows described, complete",
+    result?.coverage?.complete === true && result?.coverage?.described === 4, () => JSON.stringify(result?.coverage));
+}
+
+/* ---------------------------------------------------------------------------
+   8. THE CLI — the integration point for a host with no workflow runtime
+   --------------------------------------------------------------------------- */
+console.log("\n===== the migration-workflow CLI =====");
+{
+  const cliPath = path.join(CORE, "cli.mjs");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "wfcli-"));
+  try {
+    const runFile = path.join(tmp, "run.json");
+    const inputFile = path.join(tmp, "input.json");
+    writeFileSync(inputFile, JSON.stringify(INPUT));
+    const cli = (...argv) => spawnSync(process.execPath, [cliPath, ...argv], { encoding: "utf8" });
+
+    const started = cli("start", runFile, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex");
+    check("cli start: writes the run state and names the host that will drive it",
+      started.status === 0 && /started creatio-classic-behaviour-analysis on host `codex`/.test(started.stdout), () => started.stdout + started.stderr);
+    check("cli start: refuses to clobber an existing run — the journal IS the run, and overwriting it silently loses the work",
+      cli("start", runFile, "--workflow", "classic-behaviour-analysis", "--input", inputFile).status === 2);
+
+    const outDir = path.join(tmp, "prompts");
+    const next1 = cli("next", runFile, "--out", outDir);
+    const n1 = JSON.parse(next1.stdout);
+    check("cli next: hands back the pending item with everything needed to perform it — phase, role, access, input files, schema — and writes the prompt to a file",
+      n1.status === "pending" && n1.items[0].id === "context.census-shared-core" && n1.items[0].access === "stand-read-only"
+        && readFileSync(n1.items[0].promptFile, "utf8").includes("CONTEXT phase"),
+      () => next1.stdout.slice(0, 400));
+
+    const badResult = path.join(tmp, "bad.json");
+    writeFileSync(badResult, JSON.stringify({ scopes: [] }));
+    const bad = cli("submit", runFile, "context.census-shared-core", badResult);
+    check("cli submit: a result missing a REQUIRED schema key is refused — a shape the core will misread must not enter the journal",
+      bad.status === 2 && /missing required key\(s\): sharedCore, censusNote/.test(bad.stderr), () => bad.stderr);
+
+    const wrongId = cli("submit", runFile, "describe.1.main-page+DealMini", badResult);
+    check("cli submit: a result for an item that is NOT pending is refused, naming what is — otherwise it would sit unread and the run would ask for the same work again",
+      wrongId.status === 2 && /is not pending/.test(wrongId.stderr), () => wrongId.stderr);
+
+    const write = (name, value) => { const p = path.join(tmp, name); writeFileSync(p, JSON.stringify(value)); return p };
+    const submits = [
+      ["context.census-shared-core", write("ctx.json", CTX)],
+      ["describe.1.main-page+DealMini", write("desc.json", FULL_DESCRIBE)],
+      ["critique.coverage", write("crit.json", CLEAN_CRITIQUE)],
+      ["merge.report-index", write("merge.json", MERGED)],
+    ];
+    let allOk = true;
+    for (const [id, file] of submits) {
+      const r = cli("submit", runFile, id, file);
+      if (r.status !== 0) { allOk = false; console.log("      ↳ submit " + id + " failed: " + r.stderr) }
+    }
+    check("cli submit: every phase's result is accepted in turn — the next/submit loop is the whole Codex integration", allOk);
+
+    const done = JSON.parse(cli("next", runFile).stdout);
+    check("cli: the finished run's result is IDENTICAL to what the Claude path produced — same coverage, same paths, same verdict",
+      done.status === "done" && done.result.coverage.complete === true && done.result.coverage.described === 4
+        && done.result.indexPath === "out/behaviour-index.json",
+      () => JSON.stringify(done).slice(0, 400));
+
+    const status = JSON.parse(cli("status", runFile).stdout);
+    check("cli status: reports the host, the per-phase outcome counts and the result without re-running anything",
+      status.host === "codex" && status.executed === 4 && status.byPhase.Merge.value === 1, () => JSON.stringify(status));
+
+    // The capability stop, end to end.
+    const stopRun = path.join(tmp, "stop.json");
+    cli("start", stopRun, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex", "--no-independent-roles");
+    cli("submit", stopRun, "context.census-shared-core", write("ctx2.json", CTX));
+    cli("submit", stopRun, "describe.1.main-page+DealMini", write("desc2.json", FULL_DESCRIBE));
+    const stopped = cli("next", stopRun);
+    check("cli: a host that cannot isolate the verifier STOPS at Critique with the remedy — and exits non-zero, so a script cannot mistake it for a completed run",
+      stopped.status === 3 && /independentRoles/.test(stopped.stderr) && /mutually blind/.test(stopped.stderr) && /Nothing was executed/.test(stopped.stderr),
+      () => stopped.stderr);
+    const stopState = JSON.parse(readFileSync(stopRun, "utf8"));
+    check("cli: the stop is RECORDED on the run — `stopped` with the missing capability and the phase that needed it, so the reason survives the process",
+      stopState.status === "stopped" && stopState.stop.missing.join(",") === "independentRoles" && /Critique/.test(stopState.stop.where),
+      () => JSON.stringify(stopState.stop));
+    // PR #147 review — the OTHER half of the same stop, and the reason this block exists one assertion longer
+    // than it did: `status` is the only non-mutating command in the published `start | next | submit | status |
+    // resume` surface, and a capability stop is the single condition an operator or a JSON-parsing wrapper runs
+    // it for. Routing it through the mutating commands' `process.exit(3)` meant it printed prose to stderr,
+    // nothing to stdout, and its own catch was dead code for the only error class that path can produce.
+    const stopStatus = cli("status", stopRun);
+    let stopDoc = null;
+    try { stopDoc = JSON.parse(stopStatus.stdout) } catch { stopDoc = null }
+    check("cli status: a run stopped on a capability still emits a PARSABLE state document on stdout and exits 0 — it was asked to describe state, not to perform work, and it changed nothing",
+      stopStatus.status === 0 && stopDoc !== null, () => `exit ${stopStatus.status} · stdout ${JSON.stringify(stopStatus.stdout.slice(0, 200))}`);
+    check("cli status: the document NAMES the missing capability, the phase that needed it and the same remedy `next` prints — an orchestrating host has to read the reason, not a prose paragraph on stderr",
+      stopDoc?.pending?.missing?.join(",") === "independentRoles" && /Critique/.test(stopDoc?.pending?.where || "")
+        && /mutually blind/.test(stopDoc?.pending?.capabilityStop || ""),
+      () => JSON.stringify(stopDoc?.pending));
+    check("cli status: the work already recorded is still reported alongside the stop — the run's history is what the operator decides from, and the stop must not cost them it",
+      stopDoc?.executed === 2 && stopDoc?.host === "codex", () => JSON.stringify({ executed: stopDoc?.executed, host: stopDoc?.host }));
+    check("cli status: describing a stopped run does NOT rewrite the run file — `status` is read-only, and an inspection that mutates the journal is the one thing an operator cannot undo",
+      readFileSync(stopRun, "utf8") === JSON.stringify(stopState, null, 2) + "\n"
+        || JSON.parse(readFileSync(stopRun, "utf8")).status === stopState.status,
+      () => JSON.parse(readFileSync(stopRun, "utf8")).status);
+
+    // The RUN-level gate, on every replay path. `next` passed WORKFLOW_REQUIRES and `submit`/`status`
+    // did not, so negotiateRun ran against `requires = []` there and always answered ok: a run-level
+    // guarantee no step happens to repeat was refused on one path and silently accepted on the other
+    // two. `subAgents` is in WORKFLOW_REQUIRES and on no step's own `requires`, so it isolates the
+    // run-level gate from the step-level one.
+    const runGateRun = path.join(tmp, "run-gate.json");
+    cli("start", runGateRun, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex", "--no-sub-agents");
+    const gateNext = cli("next", runGateRun);
+    const gateSubmit = cli("submit", runGateRun, "context.census-shared-core", write("ctx-gate.json", CTX));
+    const gateStatus = cli("status", runGateRun);
+    // NOTE on what this pins and what it does not: `subAgents` is BOTH in WORKFLOW_REQUIRES and on the
+    // steps' own `requires`, so the stop it proves on `submit`/`status` is reachable through the
+    // step-level gate too. What it does pin is that all three commands MEET the gate rather than one
+    // silently accepting a host the others refuse. Isolating the run-level gate behaviourally needs a
+    // workflow whose WORKFLOW_REQUIRES names a capability no step repeats; the static assertion in
+    // run-infra.mjs guards that argument until then.
+    check("cli: the two MUTATING commands refuse a host that cannot honour the run's guarantees — exit 3 with the remedy, so a REFUSED host never looks like a broken CLI on whichever path the operator took",
+      [gateNext, gateSubmit].every((r) => r.status === 3 && /subAgents/.test(r.stderr) && /Nothing was executed/.test(r.stderr)),
+      () => [gateNext, gateSubmit].map((r) => `${r.status}:${r.stderr.slice(0, 120)}`).join(" || "));
+    // PR #147 review — and `status` meets the SAME gate without inheriting the exit policy: it reports the
+    // stop in its document. Read-only, so exit 0; a script that branches on the exit code of a query verb
+    // learns nothing about the run, and one that parses its stdout learns everything.
+    check("cli status: the read-only command reports the same stop STRUCTURALLY instead of exiting — the gate is met on every replay path, and only the two mutating paths terminate",
+      gateStatus.status === 0 && JSON.parse(gateStatus.stdout).pending?.missing?.includes("subAgents"),
+      () => `exit ${gateStatus.status} · ${gateStatus.stdout.slice(0, 200)}`);
+
+    // A TAIL-PARTIAL BATCH, one `cli submit` per item. The only shape the CLI/Codex path can produce for a
+    // multi-item batch, and the one every scenario above missed: the 2-scope INPUT yields ONE describe item, so
+    // no test ever submitted item 2 of a batch. `rowsPerAgent: 1` packs the same two scopes into two batches.
+    // Before the `driftAt` fix, `next`, `submit` and `status` all threw "run journal drifted" the moment item 1
+    // was recorded and item 2 was not — the run could be neither advanced, resumed nor inspected, and the message
+    // named a core-version mismatch that did not exist.
+    const batchRun = path.join(tmp, "batch.json");
+    const batchInput = path.join(tmp, "batch-input.json");
+    writeFileSync(batchInput, JSON.stringify({ ...INPUT, rowsPerAgent: 1 }));
+    cli("start", batchRun, "--workflow", "classic-behaviour-analysis", "--input", batchInput, "--host", "codex");
+    cli("submit", batchRun, "context.census-shared-core", write("ctx3.json", CTX));
+    const batch1 = JSON.parse(cli("next", batchRun).stdout);
+    // The host was started at the CLI default --parallelism 1, so the negotiated width is 1 and the
+    // payload advertises exactly one item with `remaining: 1` behind it. Advertising both would
+    // contradict the driver's own "waves of 1" log and hand a serial host a two-wide fan-out.
+    check("cli next: an N-item batch on a --parallelism 1 host advertises ONE item and reports the rest as remaining — the negotiated width binds on the payload, not only in the log",
+      batch1.status === "pending" && batch1.items.length === 1
+        && batch1.width === 1 && batch1.remaining === 1 && batch1.submit.length === 1,
+      () => JSON.stringify(batch1).slice(0, 300));
+    const firstId = batch1.items[0].id;
+    const afterFirst = cli("submit", batchRun, firstId, write("desc-b1.json", FULL_DESCRIBE));
+    check("cli submit: item 1 of a two-item batch is accepted — a partial batch is a normal state, not a corrupt journal",
+      afterFirst.status === 0, () => afterFirst.stderr);
+    const batch2 = cli("next", batchRun);
+    const batch2Json = JSON.parse(batch2.stdout);
+    const secondId = batch2Json.items[0]?.id;
+    check("cli next: with item 1 recorded and item 2 not, the run still ADVANCES and names exactly the remaining id — a journal that merely runs short is not drift",
+      batch2.status === 0 && batch2Json.status === "pending"
+        && batch2Json.items.length === 1 && batch2Json.remaining === 0 && secondId && secondId !== firstId,
+      () => batch2.stdout + batch2.stderr);
+    const batchStatus = cli("status", batchRun);
+    check("cli status: a run stopped mid-batch is still INSPECTABLE — the operator can see what was done before deciding what to do next",
+      batchStatus.status === 0 && JSON.parse(batchStatus.stdout).executed === 2, () => batchStatus.stdout + batchStatus.stderr);
+    const afterSecond = cli("submit", batchRun, secondId, write("desc-b2.json", FULL_DESCRIBE));
+    check("cli submit: item 2 completes the batch and the run moves on to Critique — the batch is finishable, so a multi-batch surface is analysable at all",
+      afterSecond.status === 0 && /critique/.test(JSON.parse(cli("next", batchRun).stdout).items.map((i) => i.id).join(",")),
+      () => afterSecond.stderr);
+
+    // The same batch on a host that CAN run both at once: the cap must widen, not stay at 1.
+    const wideRun = path.join(tmp, "wide-run.json");
+    cli("start", wideRun, "--workflow", "classic-behaviour-analysis", "--input", batchInput, "--host", "codex", "--parallelism", "4");
+    cli("submit", wideRun, "context.census-shared-core", write("ctx4.json", CTX));
+    const wide = JSON.parse(cli("next", wideRun).stdout);
+    check("cli next: the SAME batch on a --parallelism 4 host advertises both items — the cap is the negotiated width, not a fixed one",
+      wide.status === "pending" && wide.items.length === 2 && wide.width === 2 && wide.remaining === 0,
+      () => JSON.stringify(wide).slice(0, 300));
+
+    // Resume: a killed process comes back and re-reads the journal.
+    const resumed = JSON.parse(cli("status", runFile).stdout);
+    check("cli resume: re-reading the finished run reconstructs the same state from the journal alone — no AI runtime involved in the replay",
+      resumed.executed === 4 && resumed.status === "done", () => JSON.stringify(resumed));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+console.log(`\nWORKFLOW-CORE GOLDEN: ${pass} passed, ${fail} failed`);
+if (fail) process.exit(1);

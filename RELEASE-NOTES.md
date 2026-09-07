@@ -8,6 +8,99 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.10.0 (2026-09-04)
+
+![Classic pages read from their source, mapped, and planned into Freedom UI](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.10.0-banner.png)
+
+**Your Classic pages are now read from their real source before a migration plan is written.** A plan run can also no longer report a partial surface as complete. This release sharpens the analysis and planning side of Classic → Freedom migration: a new `classic-ui-expert` skill that describes every customization on a Classic surface with the source that proves it, a shared Freedom mapping table the whole engine agrees on, and a behaviour-analysis workflow that runs the same way on Claude and Codex. Building the Freedom pages themselves is unchanged in this release.
+
+### 🔍 Classic behaviour analysis
+
+- **A new `classic-ui-expert` skill** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). Ask what a Classic section, record page, mini page or detail actually does, and you get every customization with what it does, why it exists in business terms, and the exact source that proves it. It reads the stand only, and it declines instead of guessing when a source is unreachable.
+- **The analysis runs as a workflow, not as a single long prompt.** `classic-behaviour-analysis.workflow.js` and its host-neutral core (`skills/_workflow-core/`) split the surface into work items with their own run state, so a long analysis survives a dead call and replays identically instead of starting over. Claude and Codex adapters run the same core; a CI drift gate fails the build if the generated workflow stops matching its source.
+- **A run that can only see part of the surface stops instead of announcing full coverage** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). On a measured run the analysis returned 1 of 18 declared scopes and still logged `547/547` after 1h51m. It now stops with a named cause before spending a single description.
+- **Method names are counted per schema.** Six schemas each having an `onSaved` used to collapse into one row, so 413 rows were counted as 399 and one description closed six of them. Keys are qualified at one point, and an answer that cannot be attributed is named rather than dropped.
+- **The merge phase is retried** — it was the only phase whose death left full coverage and no deliverable — and **a page reachable from several parents is handed off once**, not two or three times.
+
+### 🗺️ Migration planning
+
+- **One mapping table for Classic → Freedom, checked against a registry** ([#147](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/147)). Element recognition, target selection and the generated component index come from the same source, so the plan and the engine can no longer disagree about what a Classic element becomes.
+- **The plan says what it could not place.** A coverage gate, imperative-logic and imperative-members worklists, section boundary resolution and a placement gate all run at plan time, so unplaceable behaviour is listed for you instead of quietly disappearing between plan and build.
+- **List pages are planned as their own change set**, and the `--stubs` handoff folds analysis results back into the plan.
+
+### 🛠️ Developer tooling
+
+- Bundled workflows are mirrored by the installer, generated output is excluded from Sonar analysis, and `.gitattributes` pins the generated files to LF so a Windows checkout runs them unchanged.
+
+---
+
+## 1.9.0 (2026-09-03)
+
+**Every toolkit workflow now reports product telemetry, not only app creation, and a host-side hook makes sure a session is counted even when the agent forgets to.** Edit, migration, mobile-conversion and branding runs were invisible to usage analytics; this release makes them countable with the same opt-in consent, the same privacy rules and no change to how you work. It requires clio **8.1.0.119** or newer (`dotnet tool update clio -g`).
+
+### 📊 Telemetry for every flow
+
+- **One stage vocabulary for all workflows** ([#96](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/96)). Agents report the same stages for every flow (`workflow_started`, `plan_approved`, `build_started`, `work_item_completed`, `workflow_completed`, ...) plus a `workflow` field naming the flow, so app maintenance, Classic to Freedom migration, mobile page conversion and branding land in the same funnel as app creation. The vocabulary is owned by clio (`get-guidance name=product-telemetry`); the toolkit only says where each flow emits and what counts as a unit of work.
+- **A guaranteed floor on Claude Code.** A small hook runs after the first clio MCP call of a session, records one session-start event and reminds the agent which session id and toolkit version to report. It is also registered for the prompt and response events, which Claude Code fires in every project; in a session that never calls clio it returns at once and writes nothing. Cursor gets the same rules through an always-applied rule the installer writes, Codex through `AGENTS.md`; Copilot CLI has the skills only.
+- **Session cost is reported from the host's own transcript**, once per response, as the real total rather than a guess made inside the run.
+- **Consent and privacy are unchanged.** Nothing is sent before you grant telemetry consent, the hook never answers that question for you, events carry no prompts, generated content or credentials, and `withdraw-telemetry-consent` turns everything off at any time.
+
+### 🛠️ Fixes
+
+- **clio installed under `C:\Program Files` is found again** ([#96](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/96)). A `CLIO_CMD` path with spaces was split at the space and clio was reported as missing on the default Windows install location.
+- **An older clio degrades quietly.** If the installed clio does not accept the new vocabulary, the toolkit reports nothing for that run and writes one diagnostic line naming the cause; upgrading clio restores reporting.
+
+---
+
+## 1.8.0 (2026-09-03)
+
+**Your Freedom UI web pages can now become mobile pages — in beta, if you opt in.** The Web → Mobile page converter is open for beta testing behind a clio feature flag that stays off until you turn it on, so nothing changes for anyone who does not ask for it. The same release lands a long reliability pass on Classic → Freedom migration: the plan is checked against the real stand before a build starts, `--verify` no longer reports success it cannot back up, and the whole workflow now runs the same way on Claude, Codex and Copilot.
+
+### 📱 Mobile page conversion — beta, opt-in
+
+- **Convert a Freedom UI web page into a Freedom UI mobile page.** The `creatio-mobile-page-conversion` skill drives a gated flow: it asks clio for a conversion guide, shows you a plain-language plan, and writes nothing until you approve it (Gate M) — and registers nothing as a mobile section until you approve that separately (Gate S).
+- **You must turn it on, and you need a recent clio.** The converter is gated behind clio's `mobile-page-converter` feature flag, which is **off by default**:
+
+  ```
+  clio experimental --name mobile-page-converter --enable
+  ```
+
+  **Requires clio 8.1.0.118 or newer** (`dotnet tool update clio -g`). On an older clio the skill stops with an enable message even after you flip the flag, because the underlying MCP tool is not there yet. The toolkit deliberately pins no clio version — the compatibility boundary is the MCP tool contract, checked at runtime.
+- **The plan tells you it is a beta.** Every conversion plan opens with a plain-text Beta notice, so the state of the feature is visible at the moment you are asked to approve a write ([#106](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/106), [#141](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/141), [#142](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/142)).
+- **What is in scope:** Freedom UI **web** form pages and list pages/sections. Classic pages must be migrated to Freedom UI web first; already-mobile pages are rejected. The converter is advisory — it returns a guide and the page body is built and validated through `create-page` / `validate-page` / `update-page`, not generated blindly.
+- **What still needs you afterwards:** mobile manifest and wizard wiring, plus anything the guide flags as `requiresManualDecision`, `droppedRequests` or `flaggedActions`. Do not enable the flag on a production environment.
+- **The engine's mechanics are documented once, in one place** ([#87](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/87)), so the skill's process description and the engine description can no longer drift apart.
+
+### 🔬 Classic → Freedom migration: fewer confident wrong answers
+
+- **A plan is validated against the real stand before the build starts** ([#102](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/102), [#133](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/133)) — including asserting the plan's identifiers against what actually exists, so a build no longer discovers halfway through that it was planned against something else.
+- **`--verify` is trustworthy** ([#109](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/109), [#124](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/124)) — business rules, component role matching and list columns are actually checked, an inconclusive live check no longer outranks the run's own record ([#123](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/123)), and a verifier reads back only the round it ran ([#134](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/134)).
+- **The gates say what they mean.** A correctness gate blocks on correctness rather than severity ([#121](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/121)); a completeness gate runs in context before a unit closes ([#111](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/111)) and no longer treats a short build as an incomplete one ([#131](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/131)); UI-guidelines evidence is recorded before a unit closes ([#108](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/108)) and a page that is already diffed-and-compliant can file it ([#122](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/122)).
+- **Your answers reach the builder.** A decision you gave on a ⚠ Confirm item is carried through to the build action, or the run says why it could not be ([#104](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/104), [#119](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/119)), and the worklist asks one question at a time instead of bundling several into one ([#97](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/97), [#98](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/98)).
+- **Recognition and mapping are registry-backed** — one shared Freedom mapping table ([#114](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/114)), component targets resolved by kind with typed `{kind, id}` identifiers ([#116](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/116), [#136](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/136)), generator-mirrored Classic element identification ([#105](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/105), [#125](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/125)), and per-output deprecation carried through the registry index ([#127](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/127)).
+- **Build execution is faster and easier to follow** — each build unit gets its own row of the queue and its own built file ([#107](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/107), [#138](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/138)), and the Freedom build executor's phases were optimized ([#112](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/112)).
+- **Reconcile respects both size caps** — the schema definition and the runtime output — and retries a bounded number of times with repeated-rejection triage ([#137](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/137), [#140](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/140)).
+- **Reading the stand survives a wedged MCP path** by falling back to the clio CLI ([#93](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/93), [#103](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/103)), list pages are emitted as a ChangeSet gated off the built page ([#100](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/100)), resolved Classic list columns are used in plans ([#91](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/91)), and the on-save duplicate check is surfaced as a fourth on-stand signal ([#113](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/113)).
+
+### 🧩 One workflow, three hosts
+
+- **The orchestration core is host-neutral** ([#115](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/115), [#139](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/139)) — Claude, Codex and Copilot run the same workflow instead of three drifting copies. Bare subagents are counted rather than passed off as a verified workflow ([#144](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/144)).
+
+### 💰 Cost reporting you can reconcile
+
+- Cache tokens are reported and cost is split by agent ([#101](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/101)), usage is de-duplicated by `message.id` rather than by JSONL record so a retried message is not billed twice ([#126](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/126)), and transcripts are classified against the run record ([#135](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/135)).
+
+### 🎨 Branding
+
+- **A favicon is applied whenever the logos are** ([#92](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/92)), so a branded app no longer keeps the stock browser-tab icon.
+
+### 🛠️ Developer tooling
+
+- A local `build-dev-toolchain` rebuild script ([#143](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/143)), now cross-platform for Windows, macOS and Linux ([#146](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/146)).
+- Workflow scripts are pinned to LF so a Windows checkout can run them ([#83](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/83)).
+
+---
+
 ## 1.7.0 (2026-08-07)
 
 **Your new app now lands where users can actually find it.** Until this release the toolkit could build a complete Creatio app that nobody but an administrator could open — `create-app` drops every new section into the `My applications` workplace, which is granted to `System administrators` only, and nothing ever asked where the app really belonged. Navigation placement is now a required discovery question, asked in the first batch alongside the business questions and carried through the plan, the runbooks and the completion criteria. The same release fixes the reason the orchestrator was often skipped entirely, and sharpens what the Classic and mobile migration skills tell you they could not convert.
