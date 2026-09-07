@@ -906,8 +906,9 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
     && helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })
        === engineValidateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" }),
     () => String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })));
-  check("ENG-96571 (review 1, F): the JSON schema states the reverse dependency too — `from` present REQUIRES `trigger`, for hosts that honour `dependentRequired`",
-    JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired) === JSON.stringify({ trigger: ["from"], from: ["trigger"] }),
+  check("ENG-96571/host-compat: the JSON schema carries NO `dependentRequired` (the Claude Code Workflow host's structured-output rejects it and DEATHs the Describe agent) — the `from`↔`trigger` co-requirement is enforced in BOTH directions by `validateReportedTrigger` instead",
+    SCHEMA_INDEX_ENTRY.dependentRequired === undefined
+    && /half an answer/.test(String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" }))),
     () => JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired));
   check("ENG-96571 A2: the measured Applicants row (`init` reporting itself as its own origin) is rejected on THAT reason, not on a generic one",
     /row itself/.test(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })),
@@ -1183,9 +1184,10 @@ const SCOPED_GOOD = SCOPED_ENTRY("attribute", "attributes.Stage.onChange");
   check("ENG-96571 A2: a VALID `{trigger:'attribute', from:'attributes.Contact.onChange'}` is ACCEPTED — nothing rejected, no repair round, the run is complete",
     result.rejectedTriggers.length === 0 && result.coverage.complete === true && !asked.some((i) => i.id.startsWith("repair.")),
     () => JSON.stringify({ rejected: result.rejectedTriggers, coverage: result.coverage }));
-  check("ENG-96571 A2: the response SCHEMA advertises the same closed vocabulary and makes `from` required beside a trigger — the host-side half of the check",
+  check("ENG-96571/host-compat: the response SCHEMA carries NO `enum` and NO `dependentRequired` (the host's structured-output rejects them and DEATHs the Describe agent) — the closed vocabulary + `from`↔`trigger` co-requirement live in validateReportedTrigger; `trigger` stays a plain string and behaviourEstablished a boolean",
     () => { const t = SCHEMA_INDEX_ENTRY.properties.trigger;
-      return t.enum.join(",") === helpers.REPORTED_TRIGGERS.join(",") && SCHEMA_INDEX_ENTRY.dependentRequired.trigger.join(",") === "from"
+      return t.enum === undefined && SCHEMA_INDEX_ENTRY.dependentRequired === undefined
+        && t.type === "string" && helpers.REPORTED_TRIGGERS.length > 0
         && SCHEMA_INDEX_ENTRY.properties.behaviourEstablished.type === "boolean"; });
 }
 
