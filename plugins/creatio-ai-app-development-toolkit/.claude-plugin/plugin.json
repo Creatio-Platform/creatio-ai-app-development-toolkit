@@ -1,0 +1,12 @@
+{
+  "name": "creatio-ai-app-development-toolkit",
+  "version": "2.0.0",
+  "description": "Creatio AI App Development Toolkit - full bundle (meta-plugin that installs every plugin of the creatio family).",
+  "author": {
+    "name": "Creatio"
+  },
+  "dependencies": [
+    "creatio-core",
+    "creatio-ui"
+  ]
+}

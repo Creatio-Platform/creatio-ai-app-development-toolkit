@@ -1,0 +1,16 @@
+{
+  "name": "creatio-ui",
+  "displayName": "creatio-ui",
+  "version": "2.0.0",
+  "description": "Creatio UI jobs: branding orchestrator (depends on creatio-core for the UI canon).",
+  "author": {
+    "name": "Creatio"
+  },
+  "repository": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit",
+  "category": "developer-tools",
+  "tags": [
+    "creatio",
+    "mcp"
+  ],
+  "skills": "./skills/"
+}

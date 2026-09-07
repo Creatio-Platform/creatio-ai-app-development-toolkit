@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <!-- Template 2: translucent orbs on a diagonal wash. Placeholder art; color slots are palette tokens. -->
+  <defs>
+    <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="{{primary-25}}"/>
+      <stop offset="1" stop-color="{{secondary-50}}"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#wash)"/>
+  <circle cx="380" cy="840" r="420" fill="{{primary-100}}" opacity="0.40"/>
+  <circle cx="1620" cy="260" r="360" fill="{{secondary-100}}" opacity="0.40"/>
+  <circle cx="1180" cy="880" r="240" fill="{{primary-200}}" opacity="0.30"/>
+  <circle cx="820" cy="180" r="180" fill="{{secondary-200}}" opacity="0.25"/>
+  <circle cx="1500" cy="700" r="90" fill="{{primary-300}}" opacity="0.25"/>
+</svg>

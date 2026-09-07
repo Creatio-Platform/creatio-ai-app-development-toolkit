@@ -1,0 +1,6 @@
+{
+  "name": "creatio-ui",
+  "version": "2.0.0",
+  "description": "Creatio UI jobs: branding orchestrator (depends on creatio-core for the UI canon).",
+  "skills": "./skills/"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "creatio-core",
+  "version": "2.0.0",
+  "description": "Creatio core knowledge: schema naming, Freedom UI guidelines, shared context, clio MCP and product telemetry hook.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

@@ -1,21 +1,24 @@
 {
   "name": "creatio",
-  "version": "1.0.0",
-  "description": "Creatio plugin marketplace.",
+  "version": "2.0.0",
+  "description": "Creatio plugin marketplace for Creatio app development (multi-plugin spike).",
   "owner": {
     "name": "Creatio"
   },
   "plugins": [
     {
-      "name": "creatio-ai-app-development-toolkit",
-      "description": "Creatio AI App Development Toolkit for business-plan driven Creatio app creation.",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
-        "ref": "release"
-      },
+      "name": "creatio-core",
+      "description": "Creatio core knowledge: schema naming, Freedom UI guidelines, shared context, clio MCP and product telemetry hook.",
+      "source": "./plugins/creatio-core",
       "category": "development",
-      "version": "1.10.0"
+      "version": "2.0.0"
+    },
+    {
+      "name": "creatio-ui",
+      "description": "Creatio UI jobs: branding orchestrator (depends on creatio-core for the UI canon).",
+      "source": "./plugins/creatio-ui",
+      "category": "development",
+      "version": "2.0.0"
     }
   ]
 }
