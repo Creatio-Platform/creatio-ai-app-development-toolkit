@@ -1933,10 +1933,23 @@ function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
 }
 // The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
 // Returns the lines. Extracted for Sonar CC 15.
+// The Type a per-type form is for, as a heading/row suffix. `list-entity-client-schemas` resolves the Type NAME
+// on-stand (ENG-96553) and the agent puts it on each `typedPages` entry as `typeName` (mapped from the tool's
+// `typeColumnDisplayValue`); `typeColumnDisplayValue` is ALSO accepted verbatim so the tool's field can pass through.
+// When only the raw `typeColumnValue` GUID is present (the tool could not resolve it), the plan shows it with a ⚠ to
+// resolve it — a bare GUID tells the approver nothing about which Type the form is for (ENG-96327). A `type` that is
+// already a readable string shows as-is.
+const TYPED_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function typedTypeSuffix(t) {
+  const label = t.typeName || t.typeColumnDisplayValue || t.type;
+  if (!label) return "";
+  const guid = !t.typeName && !t.typeColumnDisplayValue && typeof t.type === "string" && TYPED_GUID.test(t.type);
+  return ` — type "${esc(label)}"${guid ? " ⚠ resolve the type name on-stand" : ""}`;
+}
 function renderTypedPageRows(typed) {
   const P = ["### Typed page mappings", ""];
   for (const t of typed) {
-    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeNote = typedTypeSuffix(t);
     P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
     if (t.bindOnly) P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
     else if (t.cyclic) P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);

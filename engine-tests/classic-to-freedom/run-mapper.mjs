@@ -5531,6 +5531,28 @@ check("typed-page: base form spec SUPPRESSED (no general mapping) — only List 
   && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
   && !docFirstSize.includes(" fields ·"),     // …NOT the base-derived "N fields · … · 0 rules" line
   () => docFirstSize);
+// ENG-96327/ENG-96553 — the Type suffix on each `#### Typed form:` heading: a resolved `typeName` shows the NAME;
+// `typeColumnDisplayValue` (the `list-entity-client-schemas` field) is accepted verbatim too; an unresolved raw
+// Type GUID shows the GUID + a ⚠ to resolve it on-stand (a bare GUID names no Type to the approver).
+const typedTypeRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [
+    { schema: "XICPage", type: "1b2f4d6e-0000-4000-8000-000000000001", typeName: "Retirement plan" },
+    { schema: "XOCPage", type: "1b2f4d6e-0000-4000-8000-000000000002" },
+    { schema: "XDVPage", type: "1b2f4d6e-0000-4000-8000-000000000003", typeColumnDisplayValue: "Tax return" },
+  ],
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField"), XDVPage: typedBundle("XDVPage", "TaxField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("ENG-96327/ENG-96553 typed type: typeName shows the NAME; typeColumnDisplayValue (the list-entity-client-schemas field) is accepted verbatim too; an unresolved Type-GUID shows the GUID + ⚠ resolve on-stand",
+  /#### Typed form: XICPage — type "Retirement plan"/.test(typedTypeRun.plan)
+  && !/Retirement plan[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XDVPage — type "Tax return"/.test(typedTypeRun.plan)
+  && !/Tax return[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedTypeRun.plan),
+  () => typedTypeRun.plan.split("\n").filter((l) => /Typed form/.test(l)));
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
 // (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
 const docRuleRun = runMigration({
