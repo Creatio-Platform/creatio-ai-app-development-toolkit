@@ -76,6 +76,17 @@ Every install below ran in an isolated config so the machine's real plugins were
 | `codex plugin marketplace upgrade creatio` | | `Error: marketplace creatio is not configured as a Git marketplace` — expected for a local source; a URL-added marketplace is upgradable |
 | Live session | `codex exec` with `-c` overrides | **not verifiable on this machine**: the Codex refresh token is revoked (`codex login` needed). |
 
+### Install from the pushed remote branch
+
+| Host | Command | Result |
+|---|---|---|
+| Claude Code | `claude plugin marketplace add Creatio-Platform/creatio-ai-app-development-toolkit#spike/multi-plugin`, then `claude plugin install creatio-ai-app-development-toolkit@creatio` | clone + validation OK; meta-plugin installed with `+ 2 dependencies`; `known_marketplaces.json` records `{"source":"github","repo":...,"ref":"spike/multi-plugin"}` |
+| Codex CLI | `codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git --ref spike/multi-plugin` | cloned to `$CODEX_HOME/.tmp/marketplaces/creatio` with `plugins/creatio-core` present; `codex plugin marketplace upgrade creatio` works for a git marketplace |
+| Copilot CLI | `copilot plugin marketplace add <owner/repo or URL>` | **no way to pass a ref**: `owner/repo#ref` is treated as a local path, `URL#ref` is sent to GitHub verbatim and fails. Direct installs `owner/repo:plugins/creatio-core` read the default branch too (`Plugin path does not exist in repository`). Copilot always reads the catalog from the repository's default branch. |
+
+Consequence for ENG-96691: the Copilot catalog `.github/plugin/marketplace.json` on `main` must always be valid, and its
+entries should point at the released payload explicitly with `{"source": "github", "repo": "Creatio-Platform/creatio-ai-app-development-toolkit", "ref": "release", "path": "plugins/<name>"}` rather than a relative `./plugins/<name>` — exactly what the 1.10.0 catalog already does for the root plugin (`url` + `ref: release`). A relative path would install whatever is on `main` at that moment. Claude and Codex accept either form; using the same `github`/`git-subdir` + `ref: release` objects in all three catalogs keeps the payload pinned to the `release` branch on every host.
+
 ### Existing test suite on this branch
 
 `python -m pytest tests` → 636 passed, 7 skipped, **3 failed**, all three encode the single-plugin release
@@ -115,6 +126,8 @@ structure and are the input for ENG-96691:
    `[plugins."<name>@creatio"] enabled = true` sections into `config.toml` itself (the installer already
    edits that file for MCP servers) or drive the documented TUI flow. This is also a live bug for the
    current 1.10.0 installer on Codex 0.130 and deserves its own ticket.
+
+Copilot's catalog is read from the default branch only (see "Install from the pushed remote branch"), so the spike catalog could not be exercised remotely on Copilot; the local-path install covers the same code path minus the clone.
 
 Two checks could not be completed on this machine and should be repeated by someone with working
 Codex and Copilot sessions: that the skills of `creatio-core` appear in a live Codex session after enabling
