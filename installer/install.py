@@ -912,6 +912,7 @@ def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: s
     remove_codex_plugin_section(config_path, plugin_name, marketplace_name)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    needs_newline = bool(existing) and not existing.endswith("\n")
     plugin_key = f"{plugin_name}@{marketplace_name}"
     block = (
         "\n"
@@ -919,8 +920,12 @@ def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: s
         f"[plugins.{toml_quote(plugin_key)}]\n"
         "enabled = true\n"
     )
-    separator = "" if not existing or existing.endswith("\n") else "\n"
-    config_path.write_text(existing + separator + block, encoding="utf-8")
+    # Append only the installer-owned block instead of rewriting the whole file:
+    # the user's existing config never flows into the write.
+    with config_path.open("a", encoding="utf-8") as handle:
+        if needs_newline:
+            handle.write("\n")
+        handle.write(block)
 
 
 def materialize_codex_plugin(
