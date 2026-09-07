@@ -64,7 +64,7 @@ Every install below ran in an isolated config so the machine's real plugins were
 | Install | `copilot plugin install creatio-core@creatio` / `creatio-ui@creatio` | `Installed 2 skills` / `Installed 1 skill`; copied to `~/.copilot/installed-plugins/creatio/<plugin>/` (whole plugin directory, all four manifests included) |
 | Same plugin from two marketplaces | `copilot plugin install creatio-core@creatio-test` | installed alongside; `plugin list` shows three entries; both `creatio-core` skill trees present on disk |
 | Uninstall | `copilot plugin uninstall creatio-core@creatio-test` | removed cleanly, directory gone |
-| Live session | `copilot -p ... --plugin-dir ...` | **not verifiable on this machine**: the org Copilot policy denies non-interactive access (`Access denied by policy settings`). Install mechanics are proven; skill presentation inside a session is not. |
+| Live session | `copilot -p ... --plugin-dir plugins/creatio-core --plugin-dir plugins/creatio-ui` (after the org enabled Copilot CLI for the account; the first attempt failed with `Access denied by policy settings`) | `creatio-core:creatio-schema-naming`, `creatio-core:creatio-ui-guidelines`, `creatio-ui:creatio-branding-orchestrator`, plus the same three names from the installed 1.7.0 plugin as `creatio-ai-app-development-toolkit:<skill>`; `TOTAL=6`. Namespacing `<plugin>:<skill>`, duplicates coexist, same as Claude. |
 
 ### Codex CLI
 
@@ -116,7 +116,7 @@ structure and are the input for ENG-96691:
    as the repository root still has a `skills/` directory: a plugin rooted at `./` would auto-discover
    every root skill and re-create the duplication the split is meant to remove. Once ENG-96689 removes the
    root `skills/`, the meta-plugin can move back to the root manifest; until then keep it in `plugins/`.
-3. **Double installation is real on Claude and Copilot, and Claude shows both copies to the model.** The
+3. **Double installation is real on Claude and Copilot, and both show both copies to the model.** The
    same plugin from two marketplaces, or the same skill name from two plugins, coexists under separate
    namespaces and both skill bodies are loaded. This confirms the ADDK rule: **never re-export CAADT
    plugins in the ADDK catalog**, and the ADDK migration (ENG-96694) must delete its copies in the same
@@ -137,9 +137,8 @@ structure and are the input for ENG-96691:
 
 Copilot's catalog is read from the default branch only (see "Install from the pushed remote branch"), so the spike catalog could not be exercised remotely on Copilot; the local-path install covers the same code path minus the clone.
 
-One check could not be completed on this machine and should be repeated by someone whose Copilot
-policy allows sessions: how Copilot presents namespaced skills inside a session. Claude and Codex both
-present them as `<plugin>:<skill>`.
+All three hosts were exercised in a live session: each presents plugin skills as `<plugin>:<skill>`,
+and Claude and Copilot both show duplicates when the same skill name arrives from two plugins.
 
 Operational notes for the next sub-tasks:
 
