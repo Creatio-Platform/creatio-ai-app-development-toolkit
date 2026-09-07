@@ -255,6 +255,22 @@ section: `--plan --out` rewrites the file, so an appended index is lost on every
 `--out <file>` writes the `--plan`/`--spec` output to a file so the agent presents the file verbatim instead
 of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planMeta`).
 
+**Version-control preflight (ENG-96011).** Before the run's first write, the CLI checks the folder every output
+flag points into — `--out`, `--slices`, `--verify-json`, `--verify-summary`, `--verify-digest`,
+`--resolved-gates` — and writes ONE `⚠ NOT UNDER VERSION CONTROL` line to **stderr** per folder where neither
+the folder nor any parent holds a `.git` entry, naming that folder absolutely. One exception to "the folder the flag
+points into": `--slices <dir>` names a directory the run writes *into*, and it is deliberately reduced to its PARENT —
+the migration folder — so a slices-only run is checked, and named, one level up. The verdict is unaffected (the walk-up
+answers the same for a folder and its parent), and it is what makes `--out <d>/plan.md` and `--slices <d>/slices` one
+line instead of two. The migration folder is expected to
+be a git working tree (the doc set is the versioned OUTPUT — see `../references/migration-documentation.md`), and a
+run whose output can never be diffed or reverted should say so rather than be discovered afterwards. A folder that
+IS inside a working tree adds **no output at all**, and several flags pointing into one folder produce one line.
+It is **advisory**: it changes no exit code, no artifact and no byte of stdout, and it never refuses to run,
+initialises a repository, or asks for a commit. Detection is a filesystem walk-up for a `.git` entry — a directory
+*or* a file, so linked worktrees and submodules count — and never a `git` subprocess: nothing under `engine/`
+spawns a child process. The accepted gap is a `GIT_DIR`-only setup with no `.git` on disk, which stays silent.
+
 **Exit codes & gates.** Bad input (missing/invalid manifest, unreadable schema `file`) → exit **1**. Otherwise
 the run computes three gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
 skeletal seed), `structure.complete` (input completeness: unresolved detail / child-page schemas) and

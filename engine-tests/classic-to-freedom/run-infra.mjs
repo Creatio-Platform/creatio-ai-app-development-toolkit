@@ -3,7 +3,7 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync, utimesSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8795,5 +8795,186 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
   }
 }
 
+// -----------------------------------------------------------------------------------------------------------------
+// ENG-96011 — THE VERSION-CONTROL PREFLIGHT: `migrate.mjs` says so, BEFORE the run's first write, when the folder it
+// is about to write into is not a git working tree.
+//
+// "Keep the migration folder under version control" was prose in three documents when a run produced a folder that
+// was not a repository at all, so the check moved into the ENGINE — the only component that performs the writes, and
+// therefore the only one that can speak before the first one happens. These goldens pin the whole contract, because
+// almost none of it is legible from the diff: that the line appears at all and names the folder ABSOLUTELY, that a
+// versioned folder stays completely SILENT, that a `.git` FILE counts (the linked-worktree and submodule form, which
+// an `isDirectory()` test would call untracked), that ONE folder gets ONE line however many output flags point into
+// it, and that the text can never be classified as a blocking plan gap.
+//
+// Executed against the real CLI with the manifest on stdin — the same shape as the retention-sweep goldens above.
+{
+  const ENGINE_MJS = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
+    "skills/classic-to-freedom-migration/engine/migrate.mjs");
+  // The line's STABLE half — the only part a golden matches on; the rest of the sentence is operator prose and is
+  // free to be re-worded. Extracted per LINE, because "exactly one line for this folder" is half the contract.
+  const vcLines = (r) => ((r.stderr || "").match(/^.*NOT UNDER VERSION CONTROL.*$/gm) || []);
+  const vcOnStdout = (r) => /NOT UNDER VERSION CONTROL/.test(r.stdout || "");
+  // The four plan-level kinds `_workflow-core/build-executor/helpers.mjs` recognises BY CONTAINMENT and
+  // case-INSENSITIVELY (its `PLAN_GAP_KINDS`), because such an entry is sometimes a pasted engine stderr line. An
+  // advisory line containing any of them would be read as a BLOCKING plan gap and would stop a build.
+  const PLAN_GAP_PHRASES = ["gate BLOCKED", "structure INCOMPLETE", "coverage INCOMPLETE", "plan INCOMPLETE"];
+  const vcManifest = JSON.stringify({
+    entity: "Applicant",
+    schemas: [{ pkg: "HRApplicant", body: 'define("N2Vc", [], function() {\n  return {\n    entitySchemaName: "Applicant",\n    diff: /**SCHEMA_DIFF*/[]/**SCHEMA_DIFF*/\n  };\n});' }],
+  });
+  const runPlanInto = (dir) =>
+    spawnSync(process.execPath, [ENGINE_MJS, "-", "--plan", "--out", path.join(dir, "plan.md")],
+      { input: vcManifest, encoding: "utf8" });
+
+  let vcRoot;
+  try {
+    vcRoot = mkdtempSync(path.join(os.tmpdir(), "vc-preflight-"));
+    const bare = path.join(vcRoot, "bare");             // no `.git` in it or in ANY ancestor
+    const gitDir = path.join(vcRoot, "as-a-directory"); // `.git/` — an ordinary clone
+    const gitFile = path.join(vcRoot, "as-a-file");     // `.git` FILE — a linked worktree / submodule
+    const nested = path.join(gitDir, "deep", "deeper"); // versioned via an ANCESTOR, not via itself
+    for (const d of [bare, path.join(gitDir, ".git"), gitFile, nested]) mkdirSync(d, { recursive: true });
+    writeFileSync(path.join(gitFile, ".git"), "gitdir: /somewhere/.git/worktrees/wt\n");
+
+    // THE PREMISE, OBSERVED rather than assumed: the OS temp directory is outside any working tree. Every check
+    // below that expects a warning rests on it, and an environment where it does not hold (a developer whose
+    // TMPDIR sits inside a checkout) would otherwise fail the un-versioned checks with a baffling diagnostic
+    // instead of this one.
+    check("ENG-96011 (premise): the OS temp directory this suite builds its fixtures under is NOT inside a git working tree — every un-versioned expectation below depends on it",
+      mg.versionedRootFor(bare) === null,
+      () => ({ tmpdir: os.tmpdir(), bare, walkedUpTo: mg.versionedRootFor(bare) }));
+
+    const rBare = runPlanInto(bare);
+    const rGitDir = runPlanInto(gitDir);
+    const rGitFile = runPlanInto(gitFile);
+
+    // T1 (R1 + R3) — THE TICKET'S WHOLE POINT, and its non-blocking half in the same assertion. The comparison is
+    // against the VERSIONED run rather than against a hard-coded exit code: "the run's normal exit code" is
+    // whatever this fixture's plan gates produce, and the property under test is that the warning does not change
+    // it. Same status, byte-identical artifact, one extra stderr line.
+    check("ENG-96011 (T1): a `--plan --out` run into an un-versioned folder writes exactly ONE warning line naming that folder ABSOLUTELY — and still writes the artifact, byte-identical, with the same exit code as the identical run in a versioned folder",
+      // A THUNK, not an eager expression: the second `readFileSync` reads the VERSIONED run's artifact, which
+      // nothing above guards. Evaluated eagerly, a regression in that write path throws ENOENT while this
+      // argument is being built and aborts the whole runner (~1000 later checks) instead of failing this one
+      // check; `check` treats a throw from a function condition as a named failure (see its definition above).
+      () => vcLines(rBare).length === 1
+        && vcLines(rBare)[0].includes(path.resolve(bare))
+        && existsSync(path.join(bare, "plan.md"))
+        && rBare.status === rGitDir.status
+        && readFileSync(path.join(bare, "plan.md"), "utf8") === readFileSync(path.join(gitDir, "plan.md"), "utf8"),
+      () => ({ lines: vcLines(rBare), expectedFolder: path.resolve(bare),
+        wrote: existsSync(path.join(bare, "plan.md")), status: rBare.status, versionedStatus: rGitDir.status }));
+
+    // T1's other half, stated on its own because it is the constraint most easily broken by a later "make it more
+    // visible" edit: without `--out`, stdout IS the artifact the agent presents verbatim, so a notice there lands
+    // INSIDE the plan. The channel is part of the contract, not a formatting preference.
+    check("ENG-96011 (T1, channel): the warning is on STDERR and nowhere on stdout — stdout is the artifact itself when there is no `--out`, so a notice there would be pasted into the plan",
+      !vcOnStdout(rBare) && vcLines(rBare).length === 1,
+      () => ({ onStdout: vcOnStdout(rBare), stdoutHead: (rBare.stdout || "").slice(0, 120) }));
+
+    // T2 (R2) — SILENCE, the requirement that a correct run's output is untouched. Asserted over BOTH channels: a
+    // check that only counted stderr lines would pass on an implementation that announced "folder is versioned".
+    check("ENG-96011 (T2): the same run in a folder holding a `.git` DIRECTORY is completely silent about version control — on stderr and on stdout — so a correct run gains no output at all",
+      vcLines(rGitDir).length === 0 && !vcOnStdout(rGitDir),
+      () => ({ stderrLines: vcLines(rGitDir), onStdout: vcOnStdout(rGitDir), status: rGitDir.status }));
+
+    // T3 (R2) — THE ONE DETECTION SUBTLETY. A linked worktree and a submodule both carry `.git` as a FILE holding a
+    // `gitdir:` pointer, so the naive `statSync(...).isDirectory()` reads a perfectly tracked worktree as untracked
+    // and warns at an operator who did nothing wrong. Nothing else in the change set would catch that regression.
+    check("ENG-96011 (T3): a folder whose `.git` is a FILE (the linked-worktree / submodule form) is silent too — the detector tests for the ENTRY, not for a directory",
+      vcLines(rGitFile).length === 0 && !vcOnStdout(rGitFile),
+      () => ({ stderrLines: vcLines(rGitFile), onStdout: vcOnStdout(rGitFile), status: rGitFile.status }));
+
+    // T4 (R4 + R5) — the two properties a reviewer cannot see from the diff. THREE output flags, all resolving into
+    // ONE folder: a guard bolted onto each write site would print this line up to three times for one folder (and
+    // would still be ordered after the first write for some flags). `--units` is the mode that carries all of them.
+    const bareMulti = path.join(vcRoot, "bare-multi");
+    mkdirSync(bareMulti, { recursive: true });
+    const rMulti = spawnSync(process.execPath, [ENGINE_MJS, "-", "--units",
+      "--out", path.join(bareMulti, "build-queue.json"),
+      "--slices", path.join(bareMulti, "slices"),
+      "--resolved-gates", path.join(bareMulti, "resolved-gates.json")],
+      { input: vcManifest, encoding: "utf8" });
+    const multiLine = vcLines(rMulti)[0] || "";
+    check("ENG-96011 (T4): three output flags resolving into ONE un-versioned folder produce exactly ONE warning line for it — the check fires once up front, deduped by resolved directory, not once per write site",
+      vcLines(rMulti).length === 1 && multiLine.includes(path.resolve(bareMulti)),
+      () => ({ lines: vcLines(rMulti), expectedFolder: path.resolve(bareMulti), status: rMulti.status }));
+    check("ENG-96011 (T4): the warning text contains NONE of the four plan-gap phrases `_workflow-core/build-executor/helpers.mjs` classifies by case-insensitive containment, and does not use the blocking marker reserved for the gates that really do stop a build",
+      multiLine !== ""
+        && !PLAN_GAP_PHRASES.some((p) => multiLine.toLowerCase().includes(p.toLowerCase()))
+        && !multiLine.includes("⛔"),
+      () => ({ line: multiLine,
+        collides: PLAN_GAP_PHRASES.filter((p) => multiLine.toLowerCase().includes(p.toLowerCase())),
+        usesBlockingMarker: multiLine.includes("⛔") }));
+    check("ENG-96011 (T4): and the line SAYS the run continues — the operator has to be able to tell an advisory notice from a stop without knowing which phrases the executor happens to classify on",
+      /\bcontinues\b/i.test(multiLine),
+      () => ({ line: multiLine }));
+
+    // T5 (R4, the `--verify-*` half) — R4's second acceptance criterion is "a run whose only output flag is a
+    // `--verify-*` file still gets the check", and until this golden nothing exercised any of the three. T4 above
+    // covers `--out` / `--slices` / `--resolved-gates`; the three `--verify-*` paths reach the warner only through
+    // the array literal at its single call site, so they were the three entries a future edit of that array could
+    // drop silently.
+    //
+    // It has to be a REAL `--verify` run. The cheap form — appending `--verify-json` to the `--units` invocation
+    // above — CANNOT work and must not be re-proposed: the CLI fails such a run at exit 1 ("`--verify-json <file>`
+    // only applies to `--verify`"), and that guard is ordered BEFORE the preflight, so the run would die before the
+    // check ever executed. `--verify-summary` and `--verify-digest` are guarded the same way. Hence `--verify
+    // --built <file>`, with the built payload keyed by page exactly as the `--verify` goldens in `run-mapper.mjs`
+    // shape it. The empty `main` page is short, so this run also exits 2 on the done-gate — irrelevant here and
+    // deliberately not asserted: the property under test is that the advisory line appears and the file is written.
+    const bareVerify = path.join(vcRoot, "bare-verify");
+    mkdirSync(bareVerify, { recursive: true });
+    // The built payload is a FIXTURE we author, so it lives OUTSIDE `bareVerify` — `bareVerify` must contain only
+    // what the run itself writes, or "the verdict file was written" would be asserting our own write.
+    const vcBuiltFile = path.join(vcRoot, "built.json");
+    writeFileSync(vcBuiltFile, JSON.stringify({ pages: { main: {
+      viewConfig: { items: [] }, parentSchemaName: "ApplicantPage",
+      schemaUId: "11111111-1111-4111-8111-111111111111" } } }));
+    const rVerify = spawnSync(process.execPath, [ENGINE_MJS, "-", "--verify", "--built", vcBuiltFile,
+      "--verify-json", path.join(bareVerify, "verify.json")], { input: vcManifest, encoding: "utf8" });
+    check("ENG-96011 (T5): a run whose ONLY output flag is `--verify-json` still gets the check — exactly ONE warning line naming that folder absolutely, and the verdict file is still written (R4's `--verify-*` criterion, which needs a real `--verify --built` run: the CLI rejects `--units --verify-json` before the preflight)",
+      () => vcLines(rVerify).length === 1
+        && vcLines(rVerify)[0].includes(path.resolve(bareVerify))
+        && existsSync(path.join(bareVerify, "verify.json")),
+      () => ({ lines: vcLines(rVerify), expectedFolder: path.resolve(bareVerify),
+        wroteVerdict: existsSync(path.join(bareVerify, "verify.json")), status: rVerify.status,
+        stderrHead: (rVerify.stderr || "").slice(0, 240) }));
+
+    // THE DETECTOR ITSELF, called directly — the legs no CLI golden can reach. `mg.versionedRootFor` is exported for
+    // exactly this.
+    check("ENG-96011 (detector): a folder versioned only through an ANCESTOR is versioned, and the WORKING-TREE ROOT comes back rather than a bare boolean — the walk-up is what makes a nested migration folder silent",
+      mg.versionedRootFor(nested) === path.resolve(gitDir),
+      () => ({ nested, got: mg.versionedRootFor(nested), expected: path.resolve(gitDir) }));
+    check("ENG-96011 (detector): the `.git` FILE form resolves to its own folder as the root — the same entry test the T3 run exercises, asserted without a subprocess",
+      mg.versionedRootFor(gitFile) === path.resolve(gitFile),
+      () => ({ gitFile, got: mg.versionedRootFor(gitFile) }));
+    // R3's last leg: the check may NEVER be the reason a run dies. Every hostile input has to come back as an
+    // ANSWER — null for "cannot even resolve that", a root for "resolved, and it landed in a working tree" — and
+    // never as an exception into a run that was about to write a perfectly good artifact.
+    //
+    // TWO GROUPS on purpose. A non-string cannot be resolved at all, so it is null. But an EMPTY or malformed
+    // STRING is a RELATIVE path: `path.resolve` anchors it to the cwd, and if the cwd is inside a working tree
+    // (running this suite from the checkout, for one) the walk-up correctly reports that tree. Asserting null for
+    // those would be asserting a bug — so the property they carry is the one that actually matters, that the call
+    // returns rather than throws.
+    const unresolvable = [null, undefined, 42, {}, []];
+    const relativeGarbage = ["", "\0not-a-path", "   "];
+    const answered = (bad) => { try { const v = mg.versionedRootFor(bad); return v === null || typeof v === "string"; } catch { return false; } };
+    const describe = (list) => list.map((bad) => {
+      try { return JSON.stringify(bad) + " -> " + JSON.stringify(mg.versionedRootFor(bad)); }
+      catch (e) { return JSON.stringify(bad) + " -> THREW " + e.message; }
+    });
+    check("ENG-96011 (detector, R3): an input that cannot be resolved to a path at all yields `null` (unknown) instead of throwing — nothing inside this check may ever fail a run",
+      unresolvable.every((bad) => { try { return mg.versionedRootFor(bad) === null; } catch { return false; } }),
+      () => describe(unresolvable));
+    check("ENG-96011 (detector, R3): a malformed or empty path STRING also returns rather than throws — it is a relative path, so it legitimately answers for the cwd's tree, and the property that matters is that no filesystem or argument error escapes",
+      relativeGarbage.every(answered),
+      () => describe(relativeGarbage));
+  } finally {
+    if (vcRoot) rmSync(vcRoot, { recursive: true, force: true });
+  }
+}
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
