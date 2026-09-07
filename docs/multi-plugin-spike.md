@@ -74,7 +74,10 @@ Every install below ran in an isolated config so the machine's real plugins were
 | Second marketplace | `codex plugin marketplace add <creatio-test dir>` | added |
 | Install a plugin | `codex plugin add ...` / `codex plugin install ...` | **the subcommands do not exist in 0.130.0** (`codex plugin` offers only `marketplace` and `help`). Plugins are enabled through `config.toml`: `[plugins."creatio-core@creatio"] enabled = true`, which is how the machine's real config enables OpenAI's own plugins. The TUI `/plugins` flow writes the same section. |
 | `codex plugin marketplace upgrade creatio` | | `Error: marketplace creatio is not configured as a Git marketplace` — expected for a local source; a URL-added marketplace is upgradable |
-| Live session | `codex exec` with `-c` overrides | **not verifiable on this machine**: the Codex refresh token is revoked (`codex login` needed). |
+| Enabling alone is not enough | `[plugins."creatio-core@creatio"] enabled = true` in `config.toml`, marketplace registered, `codex debug prompt-input` | the plugin's skills do **not** appear in the model-visible prompt |
+| Install = cache materialization | copy `plugins/creatio-core` to `$CODEX_HOME/plugins/cache/creatio/creatio-core/2.0.0/` (same for `creatio-ui`), keep the `enabled = true` sections | `codex debug prompt-input` now lists the skills; this is the layout the TUI `/plugins` browser produces for OpenAI's own plugins (`plugins/cache/<marketplace>/<plugin>/<version>/`) |
+| Live session (v0.153.4, model `gpt-5.4-mini`) | `codex exec -s read-only` in that home, asked for the skill list | `creatio-core:creatio-schema-naming`, `creatio-core:creatio-ui-guidelines`, `creatio-ui:creatio-branding-orchestrator`, `TOTAL=3`. Skills are namespaced `<plugin>:<skill>`, like Claude. |
+| Manifest compatibility | our `.codex-plugin/plugin.json` (`name`, `version`, `description`, `skills: "./skills/"`, `mcpServers`) vs OpenAI's bundled plugins | same required shape; OpenAI adds an optional `interface` block (display name, category, icons) that the plugin browser renders. Worth adding in ENG-96691 for a clean listing. |
 
 ### Install from the pushed remote branch
 
@@ -121,17 +124,22 @@ structure and are the input for ENG-96691:
    `ai-driven-development-kit:creatio-ui-guidelines` next to `creatio-core:creatio-ui-guidelines`.
    The Installer Hub (ENG-96695) must refuse to install a plugin name that is already installed from a
    different marketplace.
-4. **Codex has no CLI install verb.** `installer/install.py::install_codex` calls
-   `codex plugin add <plugin>@<marketplace>`, which 0.130.0 rejects. ENG-96692 has to write the
-   `[plugins."<name>@creatio"] enabled = true` sections into `config.toml` itself (the installer already
-   edits that file for MCP servers) or drive the documented TUI flow. This is also a live bug for the
-   current 1.10.0 installer on Codex 0.130 and deserves its own ticket.
+4. **Codex has no CLI install verb, and enabling is not installing.** `installer/install.py::install_codex`
+   calls `codex plugin add <plugin>@<marketplace>`, which 0.130 and 0.153 reject. The only documented
+   install path is the interactive `/plugins` browser, which (a) copies the plugin directory into
+   `$CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>/` and (b) writes
+   `[plugins."<name>@<marketplace>"] enabled = true` into `config.toml`. Skills load only when both exist.
+   ENG-96692 has to replicate both steps in the installer (it already edits `config.toml` for MCP servers,
+   and the marketplace clone under `.tmp/marketplaces/<name>` provides the source to copy), or find a
+   non-interactive app-server call. This is also a live bug for the current 1.10.0 installer on current
+   Codex and deserves its own ticket: the machine's real `config.toml` has the `creatio` marketplace but
+   no `[plugins.*@creatio]` section and no cache entry, so the toolkit's skills are not loaded in Codex today.
 
 Copilot's catalog is read from the default branch only (see "Install from the pushed remote branch"), so the spike catalog could not be exercised remotely on Copilot; the local-path install covers the same code path minus the clone.
 
-Two checks could not be completed on this machine and should be repeated by someone with working
-Codex and Copilot sessions: that the skills of `creatio-core` appear in a live Codex session after enabling
-the plugin in `config.toml`, and how Copilot presents namespaced skills in a session.
+One check could not be completed on this machine and should be repeated by someone whose Copilot
+policy allows sessions: how Copilot presents namespaced skills inside a session. Claude and Codex both
+present them as `<plugin>:<skill>`.
 
 Operational notes for the next sub-tasks:
 
@@ -140,6 +148,7 @@ Operational notes for the next sub-tasks:
   being empty.
 - Copilot copies the whole plugin directory, including the other hosts' manifests. Harmless, but the
   per-plugin zip in ENG-96691 may exclude foreign manifests if size matters.
+- Codex's `codex debug prompt-input "<prompt>"` renders the model-visible prompt without a model call and is the cheapest way to check which skills a configuration loads.
 - Claude's `--plugin-dir <path>` loads an uninstalled plugin for one session and is the fastest way to test
   a plugin directory without touching any marketplace.
 
@@ -158,6 +167,9 @@ claude plugin list
 
 codex plugin marketplace add $src
 Add-Content "$env:CODEX_HOME\config.toml" "`n[plugins.""creatio-core@creatio""]`nenabled = true`n"
+# Codex loads plugin skills only from the install cache; the interactive /plugins browser creates it.
+Copy-Item "$src\plugins\creatio-core" "$env:CODEX_HOME\plugins\cache\creatio\creatio-core.0.0" -Recurse
+codex debug prompt-input "list skills" | Select-String "creatio-core:"
 
 $env:HOME = "C:\tmp\spike\copilot"; $env:USERPROFILE = $env:HOME
 copilot plugin marketplace add $src
