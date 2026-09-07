@@ -1083,7 +1083,11 @@ export function renderDesignSpec(result, opts = {}) {
     ...renderImperativeLogic(cs, result.coverage),
     ...renderImperativeMembers(cs, result.coverage),
     ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs, opts),
-    ...renderMemberLedger(result.coverage),
+    // ENG-96327: the Member ledger is dense per-kind coverage accounting (mapped/decision/resolved/context/decoration/
+    // unaccounted) a non-technical approver cannot act on. Keep it on the standalone `--spec` surface (QA / the build
+    // agent) but OUT of the human approval plan (`embedded`). The coverage GATE is unaffected (computed in migrate.mjs),
+    // and any `unaccounted` gap is still surfaced by the ⛔ COVERAGE INCOMPLETE banner renderPlan prints.
+    ...(opts.embedded ? [] : renderMemberLedger(result.coverage)),
   );
 
 
@@ -1713,6 +1717,12 @@ function renderChildMappings(childs) {
       P.push(...boundaryChildLines(c));
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
+    } else if (c.formless === "inline-grid") {
+      P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`, "");
+      P.push("", demoteHeadings(c.spec, lvl - 2)); // still show the logic (Business rules / ⚠ Custom methods / ⚠ Other declared logic)
+      for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
+    } else if (c.formless === "empty") {
+      P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");
     } else if (c.spec) {
       P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
@@ -1874,6 +1884,15 @@ function buildChildScopeRows(childs) {
       // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
       target = "↩ already mapped above (cycle) — same page, mapped higher in this plan";
       call = "Mapped above"; label = esc(c.resolvedFrom || c.editPage || c.entity);
+    } else if (c.formless === "inline-grid") {
+      // ENG-96327 — a folded child with 0 form fields is an inline-editable grid (its body is only an attribute
+      // lookup-filter + column-render methods), NOT a form page. Saying "Rebuild (child) → form page" with an empty
+      // Layout misled the reader — there is no form to build; the related list itself is the editable grid.
+      target = "inline-editable related list — NO separate form page; build it as an editable `crt.DataGrid` and port its logic (lookup filter / column config) as handlers";
+      call = "Inline grid"; label = esc(c.resolvedFrom || c.editPage || c.entity);
+    } else if (c.formless === "empty") {
+      target = "⚠ folded to 0 fields with no behaviour — verify the child bundle/seed before building";
+      call = "⚠ verify"; label = esc(c.resolvedFrom || c.editPage || c.entity);
     } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
       // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
       // recommendation banner. Unknown count (unmapped real page) → generic.
@@ -2709,8 +2728,11 @@ export function checklistGroups(result, opts = {}) {
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
   G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, opts));
-  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
-  const logicItems = [];
+  // Form — Business rules: the page's business rules folded to ONE count row (carrying a `rule` vk). Form — Custom
+  // methods: ONE row per handler (the dropped-in-prose case). Split into two groups to MIRROR the plan's two
+  // behaviour sections (`Business rules` / `⚠ Custom methods`) — same rows, same vks, two headings instead of one.
+  // Both Agent-confirmed.
+  const ruleItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
   // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--units` have the same
@@ -2723,17 +2745,19 @@ export function checklistGroups(result, opts = {}) {
     ...(cs.pageBusinessRules || []).map((r) => r.element),
     ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
   ].filter(Boolean))];
-  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  if (ruleN) ruleItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
+  const methodItems = [];
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   for (const h of cs.handlerStubs || []) {
     const parent = foldedUnder.get(h.sourceMethod);
-    logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
   }
-  G("Form — Logic", logicItems);
+  G("Form — Custom methods", methodItems);
   // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
   const acts = cs.cardActions || [];
   const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));

@@ -186,6 +186,15 @@ const ALLOWED_PROMPT_DIVERGENCES = {
   ],
   "freedom-build-executor": [
     {
+      // ENG-96327/ENG-96534: the checklist/verify control table renamed its `Form — Logic` group to
+      // `Form — Custom methods` (mirroring the plan's renamed logic worklist). The operator-findings prompt names
+      // that group when it explains why a human report is the only signal for a ported handler; the FROZEN baseline
+      // predates the rename. Display-only — same rows, same verification keys.
+      baseline: "the `Form — Logic` handler rows carry no verification key",
+      shipped: "the `Form — Custom methods` handler rows carry no verification key",
+      why: "ENG-96327/ENG-96534: the `Form — Logic` checklist group was split/renamed to `Form — Custom methods`; the operator-findings prompt names it and the frozen baseline predates the rename",
+    },
+    {
       // ROUND 21 REVIEW, FINDING 2 — the row's IDENTITY joins its round-trip contract. `discrepancies` is re-seeded
       // on a resume from what the RECONCILE AGENT transcribes, and `schemas.mjs` states the rule: an agent
       // reproduces the fields it is told about and drops the rest. Round 21 keyed the refuted-answer dedup on

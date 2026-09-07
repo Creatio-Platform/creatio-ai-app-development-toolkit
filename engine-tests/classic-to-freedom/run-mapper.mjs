@@ -3949,6 +3949,25 @@ check("#7 child recursion: mapped child's design spec is NESTED in the plan (hea
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unverified child gets an explicit verify-child-page FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: verify child page>/.test(recCs.plan));
+// ENG-96327: a child page that folds to 0 form fields is an INLINE-EDITABLE GRID (its body is only an attribute
+// lookup-filter + column-render methods), NOT a form page — the real defect was a Contract detail
+// (CorrespondenceLinkDetail → CorrespondenceLinkPage) shown as "Rebuild (child) → form page" with an empty Layout.
+// It must read "Inline grid" and say "no separate form page — build an editable crt.DataGrid", not mislead the agent.
+const inlineGridCs = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"IgDetail",entitySchemaName:"Ig",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "Ig", editPage: "IgPage" } },
+  childPageSchemas: { IgPage: { entity: "Ig",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"Ig",attributes:{Correspondence:{lookupListConfig:{filter:function(){return this.Ext;}}}},methods:{getLinkColumnConfig:function(){return this.x;}},diff:[]};});` }] } } },
+  { baseDir: FIX });
+const igChild = inlineGridCs.childPages.find((c) => c.entity === "Ig") || {};
+check("ENG-96327: a folded child with 0 form fields + behaviour is flagged formless:inline-grid (a form page needs fields)",
+  igChild.fieldCount === 0 && igChild.formless === "inline-grid");
+check("ENG-96327: an inline-grid child reads 'Inline grid' (NOT 'Rebuild (child)') and its mapping says no separate form page — build an editable crt.DataGrid",
+  /\| IgPage — opened by detail[^|]*\| inline-editable related list[^|]*\| Inline grid \|/.test(inlineGridCs.plan)
+  && !/IgPage[^\n]*Rebuild \(child\)/.test(inlineGridCs.plan)
+  && /No separate form page — inline-editable grid/.test(inlineGridCs.plan)
+  && /build the related list as an editable \*\*crt\.DataGrid\*\*/.test(inlineGridCs.plan),
+  () => inlineGridCs.plan.split("\n").filter((l) => /Ig|Inline grid|DataGrid/.test(l)).slice(0, 8));
 // #7b Main-scope hygiene: child rows get a clean target that REFLECTS the template rule (< 15 flat → Mini page;
 // else Grid page) — ChildA has 1 field → Mini page — no free-text FILL, and no misleading generic "record page".
 check("#7b Main scope: a small child (1 field) row shows the Mini page template target (not a generic 'record page')",
@@ -5966,6 +5985,15 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
   && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
 {
+  // ENG-96327 — the checklist/verify control table splits `Form — Logic` into `Form — Business rules` (the folded
+  // rule-count row, carrying the `rule` vk) + `Form — Custom methods` (one row per handler), mirroring the plan's two
+  // behaviour sections. Display-only: same rows/vks, two headings. A revert to a single `Form — Logic` group must fail.
+  const impGroupTitles = checklistGroups(impRun, {}).map((g) => g.title);
+  check("ENG-96327: the checklist splits the old Form — Logic group — methods go under Form — Custom methods, never a merged Form — Logic (mirrors the plan)",
+    !impGroupTitles.includes("Form — Logic")
+    && impGroupTitles.includes("Form — Custom methods")
+    && checklistGroups(impRun, {}).find((g) => g.title === "Form — Custom methods")?.rows.some((r) => /^Handler — /.test(r.label)),
+    () => impGroupTitles);
   const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows.map((r) => r.label) || [];
   const impPlan = renderPlan(impRun, {});
   check("⚠ Other declared logic worklist: checklist carries every member kind, including module-dep and all attribute rows",
@@ -5988,13 +6016,14 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Logic → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm (Member ledger is --spec-only, not in the human plan)",
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
       const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
-        "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
-      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
+        "#### ⚠ Confirm before I build"].map((n) => page.indexOf(n));
+      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos)
+        && !page.includes("#### Member ledger");   // ENG-96327: suppressed in the human (embedded) plan
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
   // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
