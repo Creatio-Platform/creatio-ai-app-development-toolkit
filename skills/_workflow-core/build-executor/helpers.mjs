@@ -2844,7 +2844,11 @@ export function unconsumedNextClause(entries) {
 // used to hand-spell its own copy of this sentence, which had already drifted: it dropped the remediation tail.
 // `completionLine`'s own PENDING branch composes from this, so the two cannot diverge again.
 export function pendingConfirmationLine(pendingCount) {
-  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — answer each on-stand, or record \`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }\` in resolutions.json and re-run`
+  // PR #157 review (Major) — "answer each on-stand" was the FIRST option and it closes nothing: no reader
+  // consumes an on-stand look, so the operator who followed this line re-ran forever. The look is the work;
+  // the resolutions entry is the close, and `confirmed` is the kind for a row that turned out CORRECT so a
+  // correct page is not recorded as a signed-off deviation.
+  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — open each on the stand, then record \`{ kind: "confirmed", row: "<row key>", answer, decidedBy, date }\` in resolutions.json for each row you looked at and found CORRECT, or \`kind: "accepted"\` for one that deviates and you are signing off — a resolutions entry is the ONLY thing that closes a ☐ row, and re-run`
 }
 
 // PR #157 review (Major on `helpers.mjs:2053`) — BUILD-GREEN IS THE CALLER'S DECISION, NOT A SECOND DERIVATION HERE.

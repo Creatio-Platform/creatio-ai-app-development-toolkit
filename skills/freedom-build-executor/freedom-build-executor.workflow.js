@@ -2068,7 +2068,7 @@ function unconsumedNextClause(entries) {
 }
 
 function pendingConfirmationLine(pendingCount) {
-  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — answer each on-stand, or record \`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }\` in resolutions.json and re-run`
+  return `COMPLETE PENDING ${pendingCount} CONFIRMATION(S): the build is done and every machine row is green, but ${pendingCount} ☐ row(s) can only be closed by a human — open each on the stand, then record \`{ kind: "confirmed", row: "<row key>", answer, decidedBy, date }\` in resolutions.json for each row you looked at and found CORRECT, or \`kind: "accepted"\` for one that deviates and you are signing off — a resolutions entry is the ONLY thing that closes a ☐ row, and re-run`
 }
 
 function completionLine(complete, { round, missing, buildMissing, unverified, parkedCount, unconsumedCount, pendingCount = 0, buildComplete = false } = {}) {
@@ -3373,7 +3373,7 @@ Return \`written: true\` and the park keys you wrote${status ? ', plus `statusWr
     const head = unnamed
       ? `present ${VERIFY_TABLE} verbatim, then work the ${n} ☐ confirmation(s) this run is holding on — ${named} of them are named in \`pendingConfirmations\`, and the remaining ${unnamed} are listed in ${VERIFY_TABLE}`
       : `present ${VERIFY_TABLE} verbatim, then work the ${n} ☐ row(s) listed in \`pendingConfirmations\``
-    return `${head}: open each on the stand and confirm it, or record an \`{ kind: "accepted", row, answer, decidedBy, date }\` entry in resolutions.json for the ones that are deviations by decision. Re-run to close them out.`
+    return `${head}: open each on the stand, then record its answer in resolutions.json — \`{ kind: "confirmed", row, answer, decidedBy, date }\` for a row that is CORRECT, \`{ kind: "accepted", ... }\` for one that is a deviation by decision. A resolutions entry is the only thing that closes a ☐ row; re-run to close them out.`
   }
   function zeroWorkReason() {
     const held = unconsumed.length

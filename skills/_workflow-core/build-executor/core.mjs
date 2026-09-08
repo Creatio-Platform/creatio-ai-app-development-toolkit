@@ -2065,7 +2065,10 @@ Return \`written: true\` and the park keys you wrote${status ? ', plus `statusWr
     const head = unnamed
       ? `present ${VERIFY_TABLE} verbatim, then work the ${n} ☐ confirmation(s) this run is holding on — ${named} of them are named in \`pendingConfirmations\`, and the remaining ${unnamed} are listed in ${VERIFY_TABLE}`
       : `present ${VERIFY_TABLE} verbatim, then work the ${n} ☐ row(s) listed in \`pendingConfirmations\``
-    return `${head}: open each on the stand and confirm it, or record an \`{ kind: "accepted", row, answer, decidedBy, date }\` entry in resolutions.json for the ones that are deviations by decision. Re-run to close them out.`
+    // PR #157 review (Major) — the on-stand look is the WORK, the resolutions entry is the CLOSE, and the two
+    // kinds are named apart: `confirmed` for a row that is correct, `accepted` for one that deviates and is
+    // being signed off. "Confirm it" on its own read as a closing action and was not one.
+    return `${head}: open each on the stand, then record its answer in resolutions.json — \`{ kind: "confirmed", row, answer, decidedBy, date }\` for a row that is CORRECT, \`{ kind: "accepted", ... }\` for one that is a deviation by decision. A resolutions entry is the only thing that closes a ☐ row; re-run to close them out.`
   }
   function zeroWorkReason() {
     // PR #128 review (round 17) — THE HELD ANSWER IS NAMED IN THE REASON. Without the suffix this path reported

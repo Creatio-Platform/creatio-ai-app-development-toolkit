@@ -3240,8 +3240,23 @@ const hasPairKey = (r) => !blankStr(r.kind) && !blankStr(r.item);
 // `--verify-json` publishes it, never a hand-built one. That is the same `kind`+`item` pair
 // every other resolution uses, so it is NORMALISED here rather than given a second index: one key form, one
 // matcher, one duplicate check. Written as `item` it also works — the alias is a convenience, not a dialect.
-const withRowAlias = (r) => (r?.kind === ACCEPTED_KIND && blankStr(r.item) && !blankStr(r.row) ? { ...r, item: r.row } : r);
+const withRowAlias = (r) => (ROW_KEYED_KINDS.has(r?.kind) && blankStr(r.item) && !blankStr(r.row) ? { ...r, item: r.row } : r);
 export const ACCEPTED_KIND = "accepted";
+// PR #157 review (Major, designspec.mjs:4309) — THE SECOND WAY TO CLOSE A ☐ ROW, and the one the main path was
+// missing. `buildLayoutGroupRows` marks every layout group row `human: true`, so a real page holds `pending` on
+// rows whose likeliest honest outcome is "I opened the page and the placement matches the plan". Before this kind
+// the ONLY route to green was `accepted`, which renders "ACCEPTED BY DECISION" — so the audit table recorded
+// every confirmed-CORRECT row as an accepted deviation from the plan, and the remediation strings offered
+// "answer each on-stand" as a first option that closed nothing and left the operator re-running forever.
+// SAME key form, SAME attribution rule, SAME inert-but-counted tally slot as `accepted`; what differs is the two
+// things that matter — how it RENDERS (`☑ confirmed` / "CONFIRMED ON-STAND", never "by decision") and that it
+// is counted on its OWN axis, so `accepted` keeps meaning "the build deviates from the plan and a human signed
+// it off" and a close report can still say how many deviations the verdict rests on.
+export const CONFIRMED_KIND = "confirmed";
+// The kinds addressed to a `--verify` ROW rather than to a ⚠ Confirm question, so `row` works as an alias for
+// `item` and the attribution rule applies. One set, so a third such kind cannot be added to one of the two
+// lists and forgotten in the other.
+const ROW_KEYED_KINDS = new Set([ACCEPTED_KIND, CONFIRMED_KIND]);
 // ENG-96458 D3, PR #157 review (Major) — AN ACCEPTANCE MUST NAME ITS DECIDER. Every other resolution kind is an
 // INPUT to the build; `accepted` is the one kind that OVERRIDES a completeness gate and turns a red row green, so
 // it is the one kind whose audit trail is the whole point. `decidedBy`/`date` were optional and `acceptedRow`
@@ -3250,9 +3265,15 @@ export const ACCEPTED_KIND = "accepted";
 // Enforced HERE, at the boundary that already exits 1 for a blank `answer`, and only for this kind: no other kind's
 // validation changes. The date must PARSE — a free-text "last week" is not a record.
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
-function acceptedProblem(r, at) {
-  if (blankStr(r.decidedBy)) return `${at} is \`kind: "accepted"\` and has no non-blank \`decidedBy\` — an acceptance overrides a completeness gate, so the decision must name the human who took it`;
-  if (blankStr(r.date)) return `${at} is \`kind: "accepted"\` and has no non-blank \`date\` — an acceptance must record WHEN it was taken (ISO \`YYYY-MM-DD\`)`;
+// PR #157 review — the SAME rule for `confirmed` as for `accepted`, and for the same reason: both turn a row
+// that holds the run into a row that does not, so both are records an audit has to be able to trace to a person
+// and a date. Neither is an INPUT to the build; every other kind is.
+function rowKindProblem(r, at) {
+  const overrides = r.kind === ACCEPTED_KIND
+    ? "an acceptance overrides a completeness gate"
+    : "a confirmation closes a row nothing machine-checkable can close";
+  if (blankStr(r.decidedBy)) return `${at} is \`kind: "${r.kind}"\` and has no non-blank \`decidedBy\` — ${overrides}, so the decision must name the human who took it`;
+  if (blankStr(r.date)) return `${at} is \`kind: "${r.kind}"\` and has no non-blank \`date\` — it must record WHEN it was taken (ISO \`YYYY-MM-DD\`)`;
   if (!ISO_DATE_RE.test(r.date.trim()) || Number.isNaN(Date.parse(r.date.trim()))) return `${at} has \`date: "${r.date.trim()}"\`, which is not a parseable ISO date (\`YYYY-MM-DD\`)`;
   return null;
 }
@@ -3261,7 +3282,7 @@ function resolutionProblem(r, at) {
   if (!r || typeof r !== "object") return `${at} is not an object`;
   if (blankStr(r.answer)) return `${at} has no non-blank \`answer\``;
   if (blankStr(r.id) && !hasPairKey(r)) return `${at} names neither an \`id\` nor both \`kind\` and \`item\``;
-  if (r.kind === ACCEPTED_KIND) return acceptedProblem(r, at);
+  if (ROW_KEYED_KINDS.has(r.kind)) return rowKindProblem(r, at);
   return null;
 }
 // One entry under BOTH key forms it supplies. A second answer to the same question overwrites the first — a later
@@ -4525,12 +4546,17 @@ function verifyCtxFactory(root) {
 // entry" / "re-run get-page and pass viewConfig VERBATIM" are `unverified` too. All of those are the builder's own,
 // named, actionable work, and a page with none of its expected fields reported `buildComplete: true`.
 function verifyTally() {
-  const t = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, buildMissing: 0, rejected: 0, unfiled: 0, pages: {} };
+  const t = { missing: 0, unverified: 0, pending: 0, accepted: 0, confirmed: 0, builderOpen: 0, buildMissing: 0, rejected: 0, unfiled: 0, pages: {} };
   t.add = (pageKey, outcome, row, owner) => {
-    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, pending: 0, accepted: 0, builderOpen: 0, buildMissing: 0, openCorrectness: 0, openFidelity: 0, complete: true, buildComplete: true, openRows: [], pendingRows: [] });
+    const p = t.pages[pageKey] || (t.pages[pageKey] = { missing: 0, unverified: 0, pending: 0, accepted: 0, confirmed: 0, builderOpen: 0, buildMissing: 0, openCorrectness: 0, openFidelity: 0, complete: true, buildComplete: true, openRows: [], pendingRows: [] });
     // ENG-96458 D3 — an ACCEPTED row is counted so the close report can say how many deviations the verdict rests
     // on, and is otherwise inert: it leaves `missing`, does not open a row, and does not hold `complete`.
     if (outcome === "accepted") { t.accepted++; p.accepted++; return; }
+    // PR #157 review — a CONFIRMED row is inert in exactly the same way, and counted apart. It leaves
+    // `missing`, opens no row and does not hold `complete`; the ONE thing that must not happen is its being
+    // folded into `accepted`, because "a human looked and it is correct" and "a human signed off a deviation"
+    // are the two facts a migration audit most needs to tell apart.
+    if (outcome === "confirmed") { t.confirmed++; p.confirmed++; return; }
     // ENG-96458 D4 — a PENDING (☐) row holds `complete` but is NOT builder work: `buildComplete` / `builderOpen`
     // stay untouched, so the in-context build gate is not asked to repair something only a human can answer, and
     // the rows land in their own list the close report reads as an operator worklist.
@@ -4622,9 +4648,14 @@ function verifyVerdict(unverified, buildMissing, rejected, builderOpen, pending 
   if (rejected > 0) return `⛔ **NOT DONE — ${rejected} evidence row(s) REJECTED by the judge; YOUR BUILD is NOT short** (re-FILE the record with what is actually on the page — nothing here is built)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
   // ENG-96458 D4 — the ☐ rows are now part of the verdict instead of a footnote after a ✅. The machine half IS
-  // green and says so; what remains is named, counted, and holds the run short of complete until a human answers
-  // each row (or the operator records an `accepted` resolution for it).
-  if (pending > 0) return `✅ **All machine-checkable deliverables present on the built page — COMPLETE PENDING ${pending} CONFIRMATION(S)**: ${pending} ☐ row(s) need an on-stand look and nothing machine-checkable can close them (answer each, or record \`{ kind: "accepted", row: "<row key>", answer, decidedBy, date }\` in resolutions.json)`;
+  // green and says so; what remains is named, counted, and holds the run short of complete until the operator
+  // records a resolution for each row.
+  // PR #157 review (Major) — AND THE REMEDIATION NAMES SOMETHING THAT WORKS. This used to open with "answer
+  // each", which is not a closing action: nothing reads an on-stand look, so an operator who did exactly what
+  // this line said re-ran forever. The on-stand look is still the WORK — it is what a `confirmed` entry
+  // records — but the file entry is what closes the row, and the two kinds are named apart so a correct row is
+  // not filed as an accepted deviation.
+  if (pending > 0) return `✅ **All machine-checkable deliverables present on the built page — COMPLETE PENDING ${pending} CONFIRMATION(S)**: ${pending} ☐ row(s) need an on-stand look and nothing machine-checkable can close them. Open each on the stand, then record \`{ kind: "confirmed", row: "<row key>", answer, decidedBy, date }\` in resolutions.json for each row you looked at and found CORRECT, or \`kind: "accepted"\` for one that deviates and you are signing off — a resolutions entry is the ONLY thing that closes a ☐ row.`;
   return `✅ **All machine-checkable deliverables present on the built page**`;
 }
 // The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
@@ -4711,6 +4742,10 @@ function acceptedFor(resIndex, key) {
   // public projection (`answer`/`decidedBy`/`date`), not the raw entry, so the field is not on it.
   return matchResolution(resIndex, { kind: ACCEPTED_KIND, item: key }) || null;
 }
+// A `confirmed` resolution for this row, or null. Same lookup, its own kind — see `CONFIRMED_KIND`.
+function confirmedFor(resIndex, key) {
+  return matchResolution(resIndex, { kind: CONFIRMED_KIND, item: key }) || null;
+}
 // The row as an accepted deviation: the mark says so, the evidence cell carries the operator's own words and who
 // decided, and the outcome takes the row out of every gate count. A decision the reader cannot audit is worse than
 // a red row, so `decidedBy` / `date` are printed whenever they were recorded.
@@ -4740,6 +4775,15 @@ function acceptedRow(entry, key, resolved) {
   const who = [entry.decidedBy, entry.date].map((x) => esc(String(x))).join(", ");
   return [`☑ accepted`, `ACCEPTED BY DECISION (${who}) — ${esc(String(entry.answer))} [row \`${esc(key)}\`]`, "accepted"];
 }
+// The row as CONFIRMED ON-STAND. Deliberately NOT `acceptedRow` with a swapped label: the
+// incomplete-attribution branch has to name the kind the operator actually wrote, so the two kinds share the
+// RULE (`rowKindProblem` / `acceptedGaps`) and not the rendering.
+function confirmedRow(entry, key, resolved) {
+  const gaps = acceptedGaps(entry);
+  if (gaps.length) return [resolved[0], `${resolved[1]} — ⚠ a \`confirmed\` entry for row \`${esc(key)}\` was IGNORED: no ${gaps.map((f) => "`" + f + "`").join(" / ")} on record, and a confirmation that carries no complete attribution (who looked, and when) closes no row`, resolved[2], resolved[3]];
+  const who = [entry.decidedBy, entry.date].map((x) => esc(String(x))).join(", ");
+  return [`☑ confirmed`, `CONFIRMED ON-STAND (${who}) — ${esc(String(entry.answer))} [row \`${esc(key)}\`]`, "confirmed"];
+}
 // EVERY rendered row's key, in table order, for the table `renderVerify` would render from the same inputs — the
 // full set including the rows that tally in nothing, which `openRows`/`pendingRows` do not carry. Exported because
 // injectivity of these keys is what makes an `accepted` resolution address ONE row (PR #157 review, Blocker 1), and
@@ -4757,7 +4801,13 @@ export function verifyRowKeys(result, opts = {}) {
 // never an N/A (not a deliverable), so the index is not even consulted for those two outcomes and a stale entry for
 // a row that has since gone green cannot mask a later regression on it.
 function acceptedCells(resolved, accIndex, rowKey) {
-  const accepted = resolved[2] === "ok" || resolved[2] === "skip" ? null : acceptedFor(accIndex, rowKey);
+  if (resolved[2] === "ok" || resolved[2] === "skip") return resolved;
+  // `confirmed` is consulted FIRST. A row carrying both entries is an operator who looked, found it correct,
+  // and had earlier recorded a deviation for it; the later, stronger statement is "it matches the plan", and
+  // reading it as an accepted deviation would leave the audit table claiming a deviation that was withdrawn.
+  const confirmed = confirmedFor(accIndex, rowKey);
+  if (confirmed) return confirmedRow(confirmed, rowKey, resolved);
+  const accepted = acceptedFor(accIndex, rowKey);
   return accepted ? acceptedRow(accepted, rowKey, resolved) : resolved;
 }
 
@@ -4812,7 +4862,7 @@ export function renderVerify(result, opts = {}, built = {}) {
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }
-  const { missing, unverified, pending, accepted: acceptedCount, builderOpen, buildMissing, rejected, unfiled, pages } = tally;
+  const { missing, unverified, pending, accepted: acceptedCount, confirmed: confirmedCount, builderOpen, buildMissing, rejected, unfiled, pages } = tally;
   const verdict = verifyVerdict(unverified, buildMissing, rejected, builderOpen, pending);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
@@ -4826,7 +4876,7 @@ export function renderVerify(result, opts = {}, built = {}) {
   // `rowKeyCollisions` is ADDITIVE and deliberately NOT part of `complete`: a collision does not make a build
   // short, it makes one row's ADDRESS unstable. It rides on the result so a caller (and this engine's own suite)
   // can assert the set is empty without re-deriving every key.
-  return { markdown: md, missing, unverified, pending, accepted: acceptedCount, builderOpen, buildMissing, rejected, unfiled,
+  return { markdown: md, missing, unverified, pending, accepted: acceptedCount, confirmed: confirmedCount, builderOpen, buildMissing, rejected, unfiled,
     complete: missing === 0 && unverified === 0, rowKeyCollisions, pages };
 }
 
@@ -4889,10 +4939,12 @@ export function verifyReport(result, v) {
     // The owner split (ENG-95901 reopened). `missing` stays every ❌ row; `buildMissing` is the builder-owned half —
     // the one a caller scheduling repair rounds must read, since `rejected` rows are not its work to redo.
     buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled,
-    // ENG-96458 — the two axes that are NOT build state: ☐ rows waiting on a human, and rows an operator accepted
-    // by decision. A caller scheduling on `complete` alone would still see a finished build; these tell it whether
-    // the RUN may call itself done, and how many deviations the green verdict rests on.
-    pending: v.pending || 0, accepted: v.accepted || 0,
+    // ENG-96458 — the axes that are NOT build state: ☐ rows waiting on a human, rows an operator accepted by
+    // decision, and — PR #157 review — rows a human looked at on-stand and confirmed CORRECT. A caller
+    // scheduling on `complete` alone would still see a finished build; these tell it whether the RUN may call
+    // itself done, and how many DEVIATIONS the green verdict rests on. `confirmed` is counted apart from
+    // `accepted` precisely so that second number keeps meaning deviations and nothing else.
+    pending: v.pending || 0, accepted: v.accepted || 0, confirmed: v.confirmed || 0,
     planGaps: planGaps(result),
     pages: v.pages,
   };
@@ -4908,6 +4960,27 @@ export function verifyReport(result, v) {
 // full verdict was 102 KB and its Reconcile agent spent 41 minutes, 19 of its 40 shell commands slicing that JSON,
 // and three attempts at its structured answer. The rows of pages that were already finished were most of the bulk
 // and none of the value. The FULL report stays exactly as it was, for audit and for the human table.
+// PR #157 review (Minor 1) — THE DIGEST'S WORKLIST IS CAPPED TOO. `verifyDigest` kept a COMPLETE page's
+// `pendingRows` verbatim off `verifyTally` — every row, full-length labels — which is the one `pendingRows`
+// emit in this file that passed through neither `PENDING_ROW_CAP` nor `PENDING_DELIVERABLE_CAP`, partly
+// undoing the compaction the digest exists for. Same per-page cap and same label clip as `pendingRowsFor`,
+// WITHOUT the run-level `PENDING_WIRE_BUDGET`: the digest is a local artifact and is not transcribed into a
+// Reconcile answer, so the budget that exists for that wire does not apply here — the per-page bound does.
+// `pendingMore` carries what the cap dropped, so the page's exact count is still readable off the digest.
+function pendingRowsCapped(all) {
+  return (all || []).slice(0, PENDING_ROW_CAP).map((r) => ({ n: r.n, deliverable: String(r.deliverable).slice(0, PENDING_DELIVERABLE_CAP), rowKey: r.rowKey }));
+}
+// ONE COMPLETE page's digest entry. Its own function so `pendingRowsCapped` is called once and `pendingMore`
+// is derived from the SAME array that was published — the drift `pendingMore` had at the summary boundary
+// ("COMPLETE PENDING 7" printed beside five rows) came from deriving the two independently.
+function digestCompletePage(p) {
+  const pendingRows = pendingRowsCapped(p.pendingRows);
+  const pending = p.pending || 0;
+  return { complete: true, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing,
+    unverified: p.unverified, builderOpen: p.builderOpen, pending, accepted: p.accepted || 0,
+    confirmed: p.confirmed || 0, pendingRows,
+    ...(pending > pendingRows.length ? { pendingMore: pending - pendingRows.length } : {}) };
+}
 export function verifyDigest(result, v) {
   const pages = {};
   for (const [k, p] of Object.entries(v.pages || {})) {
@@ -4916,10 +4989,10 @@ export function verifyDigest(result, v) {
     // operator worklist on precisely the runs that need it. They are three short fields per row and only Layout /
     // confirm rows produce them, so this does not reopen the size problem the compaction was written for.
     pages[k] = p?.complete === true
-      ? { complete: true, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, pending: p.pending || 0, accepted: p.accepted || 0, pendingRows: p.pendingRows || [] }
+      ? digestCompletePage(p)
       : p;
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, confirmed: v.confirmed || 0, planGaps: planGaps(result), pages };
 }
 
 // THE COUNTS-ONLY SUMMARY (`--verify-summary <file>`). SAME SHAPE as `verifyDigest` for the totals and the per-page
@@ -4952,7 +5025,7 @@ const PENDING_ROW_CAP = 5;
 // non-ASCII UTF-16 unit), so five rows on one page could cost ~3 KB against this summary's documented ~16000-byte
 // wire ceiling. Forty characters is enough to recognise a row next to its `n` and `rowKey`, both of which address
 // it exactly. (PR #157 review, Major — the worklist travelled uncapped at this boundary.)
-const PENDING_DELIVERABLE_CAP = 40;
+export const PENDING_DELIVERABLE_CAP = 40;
 // THE RUN-LEVEL BUDGET, in the summary's own wire unit. The per-page cap alone bounds nothing across a plan: 80
 // pages × 5 rows is 400 rows no matter how small each one is. So the pages are walked in order and each one's rows
 // are named only while the budget lasts; once it is spent the remaining pages name NOTHING and report their whole
@@ -4962,10 +5035,10 @@ const PENDING_DELIVERABLE_CAP = 40;
 // that floor outranked the budget: 160 pages × one row is a per-page cost again, and the summary measured 46392
 // bytes with an ASCII worklist (84274 with localized labels) against a 16100-byte counts-only baseline on the same
 // plan. So the floor is gone. What is NOT negotiable, and holds for EVERY page whether it named a row or not, is
-// the arithmetic: `pending` is the page's exact ☐ count, `pendingRows` is a convenience, and
-// `pendingMore === pending - pendingRows.length` (computed that way below, from `pending` itself), so a page that
-// named nothing reads `pending: 5, pendingRows: [], pendingMore: 5`. The count is never approximated; only the
-// naming is rationed.
+// the arithmetic: `pending` is the page's exact ☐ count, `pendingRows` is a convenience, and the number of
+// UNNAMED rows is `pending - (pendingRows?.length ?? 0)` on every shape. The count is never approximated; only
+// the naming is rationed. PR #157 review (round 2) — and the two conveniences are no longer emitted where the
+// reader can derive them: a page that named nothing reads `pending: 5` and nothing else (see `verifySummary`).
 //
 // WHY 6000. Measured on a 160-page plan (the largest size this boundary has been asked to hold). The counts-only
 // fields cost ~100 wire bytes per page when the page has nothing pending (`pending`/`pendingRows`/`pendingMore` are
@@ -4977,7 +5050,7 @@ const PENDING_DELIVERABLE_CAP = 40;
 // bytes is ~37% of the ceiling and ~60-120 named rows depending on how long the capped label and the row key are
 // (a capped row measured ~90 bytes with a 40-character ASCII label and a `main#confirm:…` key): the whole ☐
 // worklist of a ~12-page plan, and the first ~60 rows of any plan larger than that.
-const PENDING_WIRE_BUDGET = 6000;
+export const PENDING_WIRE_BUDGET = 6000;
 // One row's cost on the wire, measured with the SAME function the writer's own ceiling warning uses, so the budget
 // and the warning cannot disagree about what a row costs.
 function pendingRowBytes(r) {
@@ -4987,11 +5060,19 @@ function pendingRowBytes(r) {
 // whose first row no longer fits names NONE — the budget is the outer bound and nothing outranks it, which is the
 // whole difference from the version that always kept one row per page. Returns the named rows plus what the budget
 // consumed, so the caller stays a single loop (Sonar CC 15).
+// WHAT THE FIRST NAMED ROW OF A PAGE COSTS ON TOP OF ITSELF (PR #157 review, round 2). Naming even one row
+// brings the `"pendingRows":[]` wrapper and a `"pendingMore":N` field that a page naming NOTHING no longer
+// emits at all, so those bytes are part of the worklist's price and have to come out of the worklist's budget.
+// Measured off the literals rather than typed as a number, so it cannot drift from the field names above: an
+// 8-byte shortfall is exactly what made the budget assertion read 6008 against a 6000 bound the moment the two
+// derivable fields stopped being unconditional.
+const PENDING_PAGE_WRAPPER_BYTES = encodedAsciiBytes(',"pendingRows":[]') + encodedAsciiBytes(',"pendingMore":000');
 function pendingRowsFor(all, budget) {
   const rows = []; let spent = 0;
   for (const r of all.slice(0, PENDING_ROW_CAP)) {
     const row = { n: r.n, deliverable: String(r.deliverable).slice(0, PENDING_DELIVERABLE_CAP), rowKey: r.rowKey };
-    const cost = pendingRowBytes(row);
+    // The wrapper is charged ONCE, with the first row that fits — not per row, and not on a page that names none.
+    const cost = pendingRowBytes(row) + (rows.length ? 0 : PENDING_PAGE_WRAPPER_BYTES);
     if (spent + cost > budget) break;
     rows.push(row); spent += cost;
   }
@@ -5016,16 +5097,29 @@ export function verifySummary(result, v) {
     const all = p?.pendingRows || [];
     const { rows: pendingRows, spent } = pendingRowsFor(all, budget);
     budget -= spent;
+    const named = pendingRows.length;
     pages[k] = { complete: p?.complete, buildComplete: p?.buildComplete, missing: p?.missing, buildMissing: p?.buildMissing, unverified: p?.unverified, builderOpen: p?.builderOpen,
       openCorrectness: p?.openCorrectness, openFidelity: p?.openFidelity,
-      // `pendingMore` is subtracted from the page's own `pending` — the exact, published count — and not from
-      // the pre-cap array's length, so `pending === pendingRows.length + (pendingMore || 0)` holds by
-      // construction on every page, including a page the budget let name nothing.
-      ...(p?.pending ? { pending: p.pending, pendingRows } : {}),
-      ...(p?.pending > pendingRows.length ? { pendingMore: p.pending - pendingRows.length } : {}),
-      ...(p?.accepted ? { accepted: p.accepted } : {}) };
+      // PR #157 review (Major, round 2) — NOTHING IS SPENT ON WHAT THE READER CAN DERIVE. `pending` is the
+      // page's exact ☐ count and is the only one of these the executor reads; the other two are conveniences,
+      // and both used to be emitted on EVERY pending page. Since `buildLayoutGroupRows` marks every layout
+      // group row `human: true`, "every pending page" is very nearly every page of a real plan, so an empty
+      // `"pendingRows":[]` plus a `pendingMore` that merely restated `pending` cost ~37 wire bytes per page —
+      // ~5.9 KB on a 160-page plan, against a ~16000-byte answer ceiling this summary already approaches on
+      // the page count alone. A page the budget let name nothing now collapses to a single `pending: N`.
+      // THE DERIVATION, and it is the same one on all three shapes: UNNAMED = `pending - (pendingRows?.length
+      // ?? 0)`. That holds whether `pendingRows` was omitted (nothing named), truncated (some named) or
+      // complete (all named), so `pendingMore` is published only where it is NOT the whole of `pending` —
+      // i.e. only when some rows were actually named — and an absent field never has to be told apart from a
+      // zero. A reader doing `page.pendingRows.length` must handle the absent array; that is the one cost, and
+      // it is cheap next to a `reconcile-failed` run that builds nothing (ENG-95930).
+      ...(p?.pending ? { pending: p.pending } : {}),
+      ...(named ? { pendingRows } : {}),
+      ...(named && p.pending > named ? { pendingMore: p.pending - named } : {}),
+      ...(p?.accepted ? { accepted: p.accepted } : {}),
+      ...(p?.confirmed ? { confirmed: p.confirmed } : {}) };
   }
-  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, planGaps: planGaps(result), pages };
+  return { complete: v.complete, missing: v.missing, unverified: v.unverified, buildMissing: v.buildMissing, rejected: v.rejected, unfiled: v.unfiled, pending: v.pending || 0, accepted: v.accepted || 0, confirmed: v.confirmed || 0, planGaps: planGaps(result), pages };
 }
 
 // THE WIRE'S OWN BYTES — the size the summary costs once the Reconcile agent's answer is ASCII-encoded for

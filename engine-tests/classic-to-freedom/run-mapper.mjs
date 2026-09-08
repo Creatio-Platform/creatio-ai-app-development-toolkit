@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, deriveApplicationCode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, ONSTAND_EVIDENCE_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, verifyRowKeys, reuseChildGroups, encodedAsciiBytes, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, ONSTAND_EVIDENCE_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, verifyRowKeys, reuseChildGroups, encodedAsciiBytes, PENDING_WIRE_BUDGET, PENDING_DELIVERABLE_CAP, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 // ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
 // function the ENG-95468 identifiers gate compares it to. Two copies of "target package minus prefix" that are
@@ -12145,7 +12145,7 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("PR #157 review (Major): the `deliverable` on the wire is clipped to 40 characters — the label is recognisable next to `n` and `rowKey`, and a localized one cannot cost 600 bytes per row under `encodedAsciiBytes`",
     (() => { const long = [{ n: 1, deliverable: "Ж".repeat(300), rowKey: "main#confirm:x" }];
       const z = verifySummary({}, { pages: { main: { pending: 1, pendingRows: long } } }).pages.main;
-      return z.pendingRows[0].deliverable.length === 40 && encodedAsciiBytes(z.pendingRows[0].deliverable) === 240; })(),
+      return z.pendingRows[0].deliverable.length === PENDING_DELIVERABLE_CAP && encodedAsciiBytes(z.pendingRows[0].deliverable) === PENDING_DELIVERABLE_CAP * 6; })(),
     () => verifySummary({}, { pages: { main: { pending: 1, pendingRows: [{ n: 1, deliverable: "Ж".repeat(300), rowKey: "x" }] } } }).pages.main);
   // PR #157 review (round 2) — THE BUDGET NOW BOUNDS SOMETHING. It used to keep "at least one named row per
   // pending page", and that floor outranked the budget, so the worklist cost was per-PAGE again: measured 46392
@@ -12155,7 +12155,11 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   // `PENDING_WIRE_BUDGET` (6000). The baseline is deliberately the same plan with every `pendingRows` EMPTIED, not
   // a plan with nothing pending: `pending` and `pendingMore` are the published contract on every pending page and
   // are not the worklist's cost.
-  const WIRE_BUDGET = 6000;                     // must track `PENDING_WIRE_BUDGET` in designspec.mjs
+  // PR #157 review (Minor 3) — IMPORTED, NOT RE-TYPED. A local `const WIRE_BUDGET = 6000` (and a literal `40`
+  // for the label clip) let the assertion pass against an engine whose budget had drifted, which is the exact
+  // failure mode `run-infra.mjs` states the opposite rule for (`PENDING_CONTRADICTION_STOP_AT` is read off the
+  // shipped block for this reason). Both are now exported by designspec.mjs and read from there.
+  const WIRE_BUDGET = PENDING_WIRE_BUDGET;
   const wlRows = (label) => Array.from({ length: 5 }, (_, i) => ({ n: i + 1,
     deliverable: `${label} ${i + 1} — 3 fields · Feed (ESN)`, rowKey: `main#confirm:${label.toLowerCase()}-${i + 1}` }));
   const wlPlan = (n, rowsFor) => { const pages = {};
@@ -12172,14 +12176,31 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     () => ({ baseline: wlBase160, ascii: wlAscii160, asciiAdds: wlAscii160 - wlBase160,
       cyrillic: wlCyr160, cyrillicAdds: wlCyr160 - wlBase160, budget: WIRE_BUDGET }));
   const wl160 = verifySummary({}, wlPlan(160, () => wlRows("Region")));
-  check("PR #157 review (round 2): the budget is the OUTER bound — past it a page names NOTHING (the old per-page floor is gone), while `pending` stays exact on every page and `pending === pendingRows.length + (pendingMore || 0)` holds on all 160 of them",
-    Object.values(wl160.pages).every((p) => p.pending === 5 && p.pending === p.pendingRows.length + (p.pendingMore || 0))
-    && Object.values(wl160.pages).some((p) => p.pendingRows.length === 0)
-    && Object.values(wl160.pages).some((p) => p.pendingRows.length === 5)
+  // PR #157 review (round 2, Major on designspec.mjs:5025) — THE SHAPE CHANGED, AND THE INVARIANT IS THE SAME
+  // ONE STATED DIFFERENTLY. `pendingRows` and `pendingMore` are no longer emitted where the reader can derive
+  // them: a page the budget let name nothing carries `pending: N` and neither field. So the assertion is written
+  // on the DERIVATION that holds on all three shapes — unnamed = `pending - (pendingRows?.length ?? 0)` — rather
+  // than on two fields being present. `pendingMore`, when published, must agree with it.
+  const namedOn = (p) => p.pendingRows?.length ?? 0;
+  const unnamedOn = (p) => p.pending - namedOn(p);
+  check("PR #157 review (round 2): the budget is the OUTER bound — past it a page names NOTHING and collapses to a bare `pending: N` (no empty array, no restated `pendingMore`), while `pending` stays exact on every page and `unnamed === pending - (pendingRows?.length ?? 0)` holds on all 160 of them",
+    Object.values(wl160.pages).every((p) => p.pending === 5 && unnamedOn(p) >= 0 && (p.pendingMore === undefined || p.pendingMore === unnamedOn(p)))
+    && Object.values(wl160.pages).some((p) => p.pendingRows === undefined && p.pendingMore === undefined && p.pending === 5)
+    && Object.values(wl160.pages).some((p) => namedOn(p) === 5)
     && wl160.pending === 800,
-    () => ({ named: Object.values(wl160.pages).map((p) => p.pendingRows.length).slice(0, 20),
-      namedTotal: Object.values(wl160.pages).reduce((n, p) => n + p.pendingRows.length, 0),
-      unnamedPages: Object.values(wl160.pages).filter((p) => p.pendingRows.length === 0).length, pending: wl160.pending }));
+    () => ({ named: Object.values(wl160.pages).map(namedOn).slice(0, 20),
+      namedTotal: Object.values(wl160.pages).reduce((n, p) => n + namedOn(p), 0),
+      unnamedPages: Object.values(wl160.pages).filter((p) => namedOn(p) === 0).length, pending: wl160.pending }));
+  // The saving the shape change buys, asserted so it cannot be given back silently. The OLD shape is reconstructed
+  // here rather than remembered as a number: every all-pending page re-gains `"pendingRows":[]` and a `pendingMore`
+  // equal to its whole `pending`, which is exactly what the previous emit produced on a page that named nothing.
+  const oldShapeBytes = (summary) => encodedAsciiBytes(JSON.stringify({ ...summary,
+    pages: Object.fromEntries(Object.entries(summary.pages).map(([k, p]) => [k,
+      { ...p, pendingRows: p.pendingRows ?? [], ...(p.pending ? { pendingMore: p.pendingMore ?? p.pending } : {}) }])) }));
+  const wlBase160Old = oldShapeBytes(verifySummary({}, wlPlan(160, () => [])));
+  check("PR #157 review (round 2): omitting the two derivable fields is a REAL saving on the boundary that measures — a 160-page all-pending plan naming no rows is at least 4000 bytes smaller than the same summary carrying `pendingRows: []` and a restated `pendingMore` on every page",
+    wlBase160Old - wlBase160 >= 4000,
+    () => ({ newShape: wlBase160, oldShape: wlBase160Old, saved: wlBase160Old - wlBase160 }));
   // THE CEILING CLAUSE, asserted at the size where it is checkable — and it is checkable only below ~50 all-pending
   // pages. A page whose ☐ rows are counted costs ~200 wire bytes (the counts, plus `pending`/`pendingRows`/
   // `pendingMore`), so the COUNTS-ONLY baseline of an all-pending 80-page plan is already 16048 bytes and a

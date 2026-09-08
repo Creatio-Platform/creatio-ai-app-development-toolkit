@@ -3086,8 +3086,8 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
   " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
-  '; a `kind: "accepted"` entry (the `--verify` row override) ALSO needs a non-blank `decidedBy` and a parseable ISO `date` —' +
-  " an acceptance turns a red completeness row green, so the decision must name the human who took it and when" +
+  '; a `kind: "accepted"` or `kind: "confirmed"` entry (the two `--verify` ROW kinds, keyed by `row` as well as by `item`) ALSO needs a non-blank `decidedBy` and a parseable ISO `date` —' +
+  " both take a row out of the gate's way, so each must name the human who decided and when; `confirmed` says the row was looked at on-stand and is CORRECT, `accepted` says it deviates and the deviation is signed off" +
   '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
   " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
@@ -3341,16 +3341,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
-  // ENG-96458 D3 — `--verify` reads this file too, for `kind: "accepted"` entries only: a deviation the operator
-  // approved (`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }`) renders `☑ accepted` and leaves
-  // `missing`. Without this the acceptance mechanism was reachable from the API and NOT from the command line,
-  // which is the only way anyone actually runs the gate — caught by running the CLI, not by the unit tests.
+  // ENG-96458 D3 — `--verify` reads this file too, for the two ROW kinds only: a deviation the operator approved
+  // (`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }`) renders `☑ accepted` and leaves
+  // `missing`, and — PR #157 review — a ☐ row the operator looked at and found CORRECT
+  // (`{ kind: "confirmed", ... }`) renders `☑ confirmed` and clears the pending hold WITHOUT recording a
+  // deviation. Without this the mechanism was reachable from the API and NOT from the command line, which is
+  // the only way anyone actually runs the gate — caught by running the CLI, not by the unit tests.
   // Every other kind stays what it was: an INPUT to the build that closes no verify row.
   // ENG-96457 (item 5) — `--plan` accepts it too. It used to be `--units`-only, which is precisely how the approved
   // `plan.md` and the payload the builder acted on came to disagree: every ⚠ question was answered, and the document
   // a human had signed off still showed the unanswered worklist and the 1-column fallback table.
   if (resolutionsFile && !(unitsMode || planMode || verifyMode))
-    fail("`--resolutions <file>` applies to `--units`, `--plan` (it attaches the operator's answers to that run's ⚠ Confirm items) and to `--verify` (it applies `kind: \"accepted\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
+    fail("`--resolutions <file>` applies to `--units`, `--plan` (it attaches the operator's answers to that run's ⚠ Confirm items) and to `--verify` (it applies `kind: \"accepted\"` and `kind: \"confirmed\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
