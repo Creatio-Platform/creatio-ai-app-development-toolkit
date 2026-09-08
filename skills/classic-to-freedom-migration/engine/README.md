@@ -452,9 +452,30 @@ worklist prints — with `"<schema>::<kind>:<item>"` tried FIRST, the same prece
 `describedInForMember` use, so one answer cannot close the same question on two pages of one migration.
 `CONFIRM_DISPOSITIONS` is `accepted` / `reproduced-manually` / `n/a` / `resolved-on-stand`; a `resolved: true`
 carrying any other word does NOT close the row — it is recorded as `dispositionInvalid` and named in an advisory
-line. A closed row renders as `ℹ … CLOSED by a recorded disposition` with its note and is never dropped. The result
-`{ closed, invalid }` is published on the run as `confirmDispositions` so a caller can see what the manifest
-actually did. `decisions.md` remains the source of record; this map is only how the engine learns the decision.
+line. A closed row renders as `ℹ … CLOSED by a recorded disposition` with its note and is never dropped.
+
+**What the run publishes (ENG-96571 — the shape widened, in four places).** The pass runs over BOTH ChangeSets of a
+scope from ONE answer map: the form page's `needsDecision` and the list page's, because `renderListPage` renders its
+own `⚠ Confirm` worklist and a `list-*` answer used to close nothing while being reported in none of the arrays.
+The two results are MERGED, so a caller asking "was my key applied?" never has to know which of the two grids
+raised the row. Published as `confirmDispositions = { closed, invalid, notApplicable, unmatched }` (arrays of keys,
+built explicitly in one place — the matching accumulator the pass uses internally is deliberately NOT part of it):
+
+- `notApplicable` — a key aimed at a row whose kind that worklist does not print (every `SHOWN_ELSEWHERE` kind).
+  Also published PER PAGE on the ChangeSet (`changeSet.confirmNotApplicable` / `listChangeSet.confirmNotApplicable`),
+  because each worklist names the keys aimed at rows IT prints.
+- `unmatched` — recorded keys that matched no row ANYWHERE on the surface. Computed ONCE, AT THE ROOT, after every
+  fold, over the union of every scope's rows; also published on the form ChangeSet as `changeSet.confirmUnmatched`
+  for the ⚠ line. A nested run publishes `[]` — a fold sees one page's rows, so a sibling page's answer would read
+  as unmatched there. This is the same rule `behaviourIndex.unmatched` follows and for the same reason.
+- Every folded sub-page node carries two fields of this contract, and they ARE the contract downstream readers
+  consume: `confirmClosed` (the pairs that scope closed — `closedConfirmQuestions` in `designspec.mjs` reads
+  `nd.confirmClosed || closedOf(nd.changeSet)`) and `confirmSeenAll` (the union of key forms that subtree has rows
+  for, already unioned over its own descendants — what lets the root judge `unmatched` against the whole surface).
+  A node built BY HAND — a golden, or a direct API caller assembling nodes itself — carries neither and therefore
+  contributes nothing to either computation; that is a silent under-report, not an error.
+
+`decisions.md` remains the source of record; this map is only how the engine learns the decision.
 
 **The Approvals signal (`approvalsSignalOf` → `changeSet.featureSignals`).** A Classic page carries approvals as
 INFRASTRUCTURE, not as a control — a `RecordVisaId` attribute and/or a `*VisaDetail*` detail — and neither is a
