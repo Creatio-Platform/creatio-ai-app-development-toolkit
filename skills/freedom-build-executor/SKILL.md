@@ -186,7 +186,10 @@ Two related degradations are **recorded rather than stopped**, because the run s
 
 **`phaseOutcomes` is on every return, stop or not** — one entry per phase (`ok` · `partial` · `none` ·
 `skipped`) with the arithmetic behind it. A run can close green and still have had a phase limp; this is the
-only place that shows.
+only place that shows. A phase entered more than once in a run — `Judge` runs after Preflight AND at every
+round tail, and `Build`, `Verify` and `Reconcile` run once per round — reports its WORST entry, never its
+last, and carries `occurrences` with every entry in order and the `where`/`round` it belongs to. So a Judge
+that died after Preflight still reads `none` even when a later round's Judge answered.
 
 **Why the pause is a page and not a single row.** Imperative rows are ported INSIDE the page unit,
 so stopping mid-unit would mean telling a builder to deliver less than the plan — which rule 6

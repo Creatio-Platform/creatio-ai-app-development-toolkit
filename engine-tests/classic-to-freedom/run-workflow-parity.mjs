@@ -92,6 +92,27 @@
 // replacements recorded. What these baselines give from here on is the forward-looking half: the whole prompt text
 // and return shape of the CURRENT behaviour, pinned byte for byte, so the NEXT change cannot move them unnoticed.
 //
+// AND REPLACED A SECOND TIME WITHIN ENG-96778, by the PR review of this same change (finding F1). Recorded here
+// for the same reason as every replacement above: this is a reviewed, deliberate act, not a refresh from the tree.
+//
+// WHAT THE REVIEW FOUND. `makePhaseOutcomes` keyed its report by phase NAME and OVERWROTE, so a phase entered more
+// than once in a run reported only its LAST entry. The build core enters `Judge` from the post-preflight site and
+// again at every round tail, and `Build`, `Verify` and `Reconcile` once per round — so a dead post-preflight Judge
+// followed by a healthy round Judge reported `Judge: { state: 'ok' }`. That is precisely the degradation AC 13
+// exists to surface and that both SKILL.md files now point the operator at. The recorder is therefore DEGRADE-STICKY:
+// the headline entry is the WORST occurrence (`skipped` < `ok` < `partial` < `none`, last winning a tie so a healthy
+// multi-round run still reports its most recent round), and a phase entered more than once also carries
+// `occurrences` — every entry in order, with the `where`/`round` discriminator the caller passed.
+//
+// WHAT DIVERGED, measured against the baselines this ticket had already replaced (the parity run was 481/41):
+//   · 40 scenarios on `result.phaseOutcomes.Reconcile.occurrences` alone — Reconcile is recorded at the baseline and
+//     again at each round tail, so the new key appears on essentially every run that gets past Reconcile.
+//   · 1 scenario on `result.phaseOutcomes.Judge.why` — review finding F3: `buildRoundEndedEarly` wrote one shared
+//     reason, 'no build claim was filed this round', BEFORE branching, and on the package-mismatch path that is false
+//     (the app builder answered and a real claim was filed). Each branch now states its own true reason.
+// NOTHING ELSE MOVED: no phase sequence, no agent dispatch, no prompt byte, and no other return field. The generated
+// artifacts' whole diff for this replacement is the recorder plus those two reason strings.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";

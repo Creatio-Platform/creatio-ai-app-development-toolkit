@@ -194,9 +194,40 @@ check("outcomeState: 0 expected -> skipped · 0 returned -> none · short -> par
   check("phaseOutcomes: INSERTION order is kept — a phase re-entered on a later round must not jump to the end of the report",
     () => Object.keys(snap).join(",") === "Context,Describe,Critique,Merge", () => Object.keys(snap).join(","));
   o.record("Describe", 3, [{}, {}, {}]);
-  check("phaseOutcomes: re-recording a phase overwrites its entry IN PLACE and keeps its position",
-    () => Object.keys(o.snapshot()).join(",") === "Context,Describe,Critique,Merge" && o.snapshot().Describe.state === "ok",
-    () => JSON.stringify(o.snapshot()));
+  check("phaseOutcomes: re-recording a phase keeps its POSITION — a phase re-entered late must not jump to the end",
+    () => Object.keys(o.snapshot()).join(",") === "Context,Describe,Critique,Merge", () => Object.keys(o.snapshot()).join(","));
+  // ENG-96778 review F1 — the recorder used to OVERWRITE, so the healthy re-entry above would have erased the
+  // `partial` and reported `ok`. That is the bug that let a dead post-preflight Judge followed by a healthy round
+  // Judge report `state: "ok"` on this PR's own AC 13 golden. The headline is now the WORST occurrence.
+  check("phaseOutcomes: a healthy re-entry does NOT erase an earlier degraded one — the headline is the worst occurrence",
+    () => o.snapshot().Describe.state === "partial" && o.snapshot().Describe.agentsReturned === 2,
+    () => JSON.stringify(o.snapshot().Describe));
+  check("phaseOutcomes: and every occurrence is kept, in order, so the operator sees the sequence and not just the verdict",
+    () => { const d = o.snapshot().Describe; return Array.isArray(d.occurrences) && d.occurrences.length === 2
+      && d.occurrences[0].state === "partial" && d.occurrences[1].state === "ok"; },
+    () => JSON.stringify(o.snapshot().Describe));
+  check("phaseOutcomes: a phase entered ONCE carries no `occurrences` key — the report says nothing it has nothing to say",
+    () => !("occurrences" in o.snapshot().Context), () => JSON.stringify(o.snapshot().Context));
+  {
+    const r = makePhaseOutcomes();
+    r.record("Judge", 1, [null], { where: "preflight-evidence" });
+    r.record("Judge", 1, [{}], { round: 1 });
+    check("phaseOutcomes: the AC 13 shape itself — a dead Judge then a healthy one reports `none`, and names WHERE it died",
+      () => r.snapshot().Judge.state === "none" && r.snapshot().Judge.where === "preflight-evidence"
+        && r.snapshot().Judge.occurrences[1].state === "ok",
+      () => JSON.stringify(r.snapshot().Judge));
+  }
+  {
+    const t = makePhaseOutcomes();
+    t.record("Build", 1, [{}], { round: 1 });
+    t.record("Build", 1, [{}], { round: 2 });
+    check("phaseOutcomes: a TIE keeps the LAST occurrence as the headline — a healthy multi-round run still reports its most recent round",
+      () => t.snapshot().Build.state === "ok" && t.snapshot().Build.round === 2, () => JSON.stringify(t.snapshot().Build));
+    t.skipped("Build", "nothing left open");
+    check("phaseOutcomes: `skipped` ranks BELOW `ok` — a round that deliberately did not enter a phase is not a degradation of one that did",
+      () => t.snapshot().Build.state === "ok" && t.snapshot().Build.occurrences.length === 3,
+      () => JSON.stringify(t.snapshot().Build));
+  }
   check("phaseOutcomes: `snapshot()` is a COPY — a caller mutating the returned object cannot reach back into the run's bookkeeping",
     () => { const s = o.snapshot(); s.Context.state = "tampered"; return o.snapshot().Context.state === "ok"; });
 }

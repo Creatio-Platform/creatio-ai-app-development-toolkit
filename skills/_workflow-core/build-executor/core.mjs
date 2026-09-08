@@ -4017,8 +4017,12 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
     }
-    outcomes.skipped('Judge', 'no build claim was filed this round')
     if (appUnitIncomplete) {
+      // WHY THE REASON IS NOT SHARED with the branch below (ENG-96778 review, F3). Written once for both stops, the
+      // reason had to be 'no build claim was filed this round' — and on the package-mismatch path that is FALSE: the
+      // app builder answered, `dispatchUnit` pushed a real claim through `claimFor()`, and `builtThisRound` is not
+      // empty. Judge is skipped there because the run STOPS on the incomplete app unit, not because nothing filed.
+      outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
       outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
       yield* persistPending('stopping on an incomplete app unit')
       return runReturn({
@@ -4031,6 +4035,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         ...common, builtThisRound,
       })
     }
+    outcomes.skipped('Judge', 'the round dispatched no unit, so nothing filed a claim to rule on')
     outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
     outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
     log(`round ${round}: ${open.length} unit(s) were open and NONE was dispatched — no Verify and no Judge, because nothing wrote to the stand this round`)

@@ -185,7 +185,7 @@ check("AC 9 (control): ZERO ⚠ Confirm items produces NO stop — a phase that 
     && phasesOf(noPreflightItems).includes("Refs") && phasesOf(noPreflightItems).includes("Build"),
   () => JSON.stringify({ stopped: resultOf(noPreflightItems)?.stopped, dispatched: phasesOf(noPreflightItems) }));
 check("AC 9 (control): and Preflight is recorded as `skipped`, not as a phase that failed",
-  () => { const po = resultOf(noPreflightItems)?.phaseOutcomes || noPreflightItems.dispatched.length; return resultOf(noPreflightItems)?.phaseOutcomes?.Preflight?.state === "skipped" || !!po; },
+  () => resultOf(noPreflightItems)?.phaseOutcomes?.Preflight?.state === "skipped",
   () => JSON.stringify(resultOf(noPreflightItems)?.phaseOutcomes));
 
 /* ===========================================================================
@@ -327,9 +327,19 @@ check("AC 13: the SAME evidence id reaches a later Judge — that is what 'queue
   () => judgeItems(deadJudge).map((j) => j.id).join(", "));
 check("AC 13: NO unit is charged a repair round for a verdict that never arrived — a dead judge raises no page defect, so nothing re-opens",
   () => !/judge found a PAGE DEFECT/.test(deadJudge.log), () => deadJudge.log.split("\n").filter((l) => /PAGE DEFECT/.test(l)).join("\n"));
-check("AC 3: `phaseOutcomes` marks Judge — the run's own record that a ruling is missing, beside the phases that answered",
-  () => !!resultOf(deadJudge)?.phaseOutcomes?.Judge || judgeItems(deadJudge).length >= 2,
-  () => JSON.stringify(resultOf(deadJudge)?.phaseOutcomes));
+// ENG-96778 review F1/F2 — THE ASSERTION THAT LET THE DEFECT THROUGH, rewritten to measure the claim it makes.
+// It used to read `!!phaseOutcomes?.Judge || judgeItems.length >= 2`: the fallback was already guaranteed by the
+// check above it, and `!!Judge` is truthy for ANY state — so it passed while the run reported `Judge: ok` on a run
+// whose post-preflight Judge had died. `phaseOutcomes` is where both SKILL.md files tell the operator a limp shows,
+// so the state and the site of the death are what this has to read.
+check("AC 13: `phaseOutcomes` marks Judge `none` — a later healthy Judge does NOT erase the one that died, which is the whole point of the record",
+  () => resultOf(deadJudge)?.phaseOutcomes?.Judge?.state === "none",
+  () => JSON.stringify(resultOf(deadJudge)?.phaseOutcomes?.Judge));
+check("AC 13: and it names WHERE the ruling went missing — the post-preflight Judge — beside the round Judge that did answer",
+  () => { const j = resultOf(deadJudge)?.phaseOutcomes?.Judge;
+    return j?.where === "preflight-evidence" && Array.isArray(j.occurrences) && j.occurrences.length >= 2
+      && j.occurrences.some((o) => o.state === "ok"); },
+  () => JSON.stringify(resultOf(deadJudge)?.phaseOutcomes?.Judge));
 
 console.log(`\n=================\nSTAGE-GATES GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

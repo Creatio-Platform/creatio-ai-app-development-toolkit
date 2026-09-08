@@ -117,16 +117,53 @@ export function outcomeState(expected, returned) {
   return returned < expected ? 'partial' : 'ok'
 }
 
+// HOW BAD IS THIS STATE? Needed because a phase is recorded once per ENTRY into
+// it and several phases are entered more than once in a single run — the build
+// core records `Judge` from the post-preflight site AND from every round tail,
+// and `Build`, `Verify` and `Reconcile` once per round. The rank orders the four
+// states by how much operator attention they deserve, so the recorder can keep
+// the WORST occurrence as the phase's headline instead of the last one.
+// `skipped` sits BELOW `ok` deliberately: a phase deliberately not entered on one
+// round is not a degradation of a round where it answered.
+export const OUTCOME_RANK = { skipped: 0, ok: 1, partial: 2, none: 3 }
+
+// The worse of two occurrences, LAST winning a tie — so a healthy multi-round run
+// still reports its most recent round, exactly as it did before this became
+// degrade-sticky, while any degradation earlier in the run survives to the report.
+export function worseOutcome(a, b) {
+  if (!a) return b
+  if (!b) return a
+  return (OUTCOME_RANK[b.state] ?? 0) >= (OUTCOME_RANK[a.state] ?? 0) ? b : a
+}
+
 // A tiny ordered recorder. Insertion order is kept explicitly rather than left to
 // object key order, because a phase re-entered on a later round must not jump to
 // the end of the report — a reader compares two runs' outcomes by eye.
+//
+// DEGRADE-STICKY, and why it is not merely nicer (ENG-96778 review, F1). `set`
+// used to overwrite `byPhase[phase]`, so the LAST entry into a phase was the only
+// one the report kept. Measured on this PR's own AC 13 golden: the post-preflight
+// Judge died, round 1's Judge answered, and the run reported
+// `Judge: { state: 'ok', agentsReturned: 1 }` — the report said every Judge
+// answered, on the exact run this feature exists to make legible, and both
+// SKILL.md files tell the operator `phaseOutcomes` is where a limp shows. The same
+// erasure applied to `Build`, `Verify` and `Reconcile`: any degraded early round
+// was wiped by a later healthy one.
+//
+// So the headline entry is now the WORST occurrence, and a phase entered more than
+// once also carries `occurrences` — every entry, in order, with the discriminator
+// the caller passed (`where`, `round`). A phase entered ONCE is byte-identical to
+// what it was before: no `occurrences` key on a report that has nothing to say
+// with it.
 export function makePhaseOutcomes() {
   const byPhase = {}
+  const seen = {}
   const order = []
   const set = (phase, entry) => {
-    if (!order.includes(phase)) order.push(phase)
-    byPhase[phase] = entry
-    return entry
+    if (!order.includes(phase)) { order.push(phase); seen[phase] = [] }
+    seen[phase].push(entry)
+    byPhase[phase] = worseOutcome(byPhase[phase], entry)
+    return byPhase[phase]
   }
   return {
     // The common case: the phase dispatched `expected` agents and `results` came
@@ -143,11 +180,15 @@ export function makePhaseOutcomes() {
     skipped(phase, why = '') {
       return set(phase, why ? { state: 'skipped', why } : { state: 'skipped' })
     },
-    // A COPY, in insertion order. Returned into a result object, so a caller
-    // mutating it must not reach back into the run's own bookkeeping.
+    // A COPY, in insertion order — the occurrence list copied element by element
+    // too. Returned into a result object, so a caller mutating it must not reach
+    // back into the run's own bookkeeping.
     snapshot() {
       const out = {}
-      for (const p of order) out[p] = { ...byPhase[p] }
+      for (const p of order) {
+        out[p] = { ...byPhase[p] }
+        if (seen[p].length > 1) out[p].occurrences = seen[p].map((e) => ({ ...e }))
+      }
       return out
     },
   }
