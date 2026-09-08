@@ -128,7 +128,8 @@
       "tests/**",
       "docs/**",
       "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/**",
-      ".github/**"
+      ".github/**",
+      ".architecture/**"
     ]
   }
 }
