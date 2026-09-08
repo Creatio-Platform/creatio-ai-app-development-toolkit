@@ -827,6 +827,34 @@ check("A4: a virtual attribute declared with dataValueType: Terrasoft.DataValueT
   !!isBusy && isBusy.dataValueType === 1 && !stringAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
   () => ({ isBusy, diagnostics: stringAttrRes.astDiagnostics }));
 
+// 4b) ENG-96571 review 3 — THE TWO SIDES ARE ONE READ, ASSERTED ACROSS BOTH PATHS. The drift guard's severity and
+//     the body-side terminal read used to be two hand-written copies of the same two `Object.hasOwn` lookups (plus
+//     two independent derivations of the alias map, from `t:dvt` and from `DataValueType`), held together only by a
+//     comment claiming they mirrored each other — and they had already drifted apart once, which is why `STRING`
+//     was mis-classified. Both now call `runtimeRead` with the map from `aliasesFor`, so the checks above and the
+//     body-side ones here cannot disagree by construction. This drives BOTH paths on the SAME two spellings and
+//     asserts they agree, which is the property the old comment could only promise: an alias the body read
+//     RESOLVES must be the spelling the guard BLOCKS on, and a spelling the body read leaves UNRESOLVED must be
+//     the one the guard keeps ADVISORY.
+const a4Body = (member) => {
+  const res = parseSchema(`define("VA1b",[],function(){return{entitySchemaName:"E",diff:[],attributes:{Probe:{dataValueType:Terrasoft.DataValueType.${member},value:""}}};});`, "VA1b");
+  const probe = res.attributeDefs.find((a) => a.name === "Probe");
+  return { value: probe?.dataValueType ?? null, unknown: res.astDiagnostics.some((d) => d.kind === "unknown-enum-member") };
+};
+const a4Guard = (member, value) => enumDriftIssues({ DataValueType: { [member]: value } });
+check("A4 (review 3): the body-side read and the drift guard's severity AGREE on the exact-case alias — a body's `DataValueType.STRING` resolves to TEXT's 1, and a stand disagreeing on `STRING` BLOCKS; one `runtimeRead`, so the two cannot drift apart the way they did before",
+  (() => { const b = a4Body("STRING"); const g = a4Guard("STRING", 2);
+    return b.value === 1 && !b.unknown && g.mismatches.length === 1 && g.spellingDrift.length === 0; })(),
+  () => ({ body: a4Body("STRING"), guard: a4Guard("STRING", 2) }));
+check("A4 (review 3): …and they AGREE on the case variant too — a body's `DataValueType.String` resolves to NOTHING (advisory `unknown-enum-member`, null value), and a stand disagreeing on `String` stays ADVISORY rather than blocking",
+  (() => { const b = a4Body("String"); const g = a4Guard("String", 2);
+    return b.value === null && b.unknown && g.mismatches.length === 0 && g.spellingDrift.length === 1; })(),
+  () => ({ body: a4Body("String"), guard: a4Guard("String", 2) }));
+check("A4 (review 3) ANTI-VACUITY: the agreement is not trivial — the two spellings differ from each other on BOTH paths, so a rule that collapsed them (case-insensitive on either side) would fail one of the checks above",
+  a4Body("STRING").value !== a4Body("String").value
+  && a4Guard("STRING", 2).mismatches.length !== a4Guard("String", 2).mismatches.length,
+  () => ({ exact: a4Body("STRING"), variant: a4Body("String") }));
+
 // 5) THE CASE VARIANT IN A BODY IS NOT RESOLVED (review 1, finding B). `this.Terrasoft.DataValueType.Guid` reads
 //    `undefined` in the browser — the member is `GUID` — so the engine must NOT hand back 0. It stays an advisory
 //    `unknown-enum-member` with a null value, which is what the runtime actually does with it. Resolving it
