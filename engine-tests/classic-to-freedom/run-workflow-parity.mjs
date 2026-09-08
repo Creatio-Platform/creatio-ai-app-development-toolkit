@@ -214,6 +214,30 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "building into a substitute passes here and fails the whole tree later. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
       why: "the app unit files blockers too, and it is the one unit whose `blocked` rows name tool failures a prose classifier reads worst",
     },
+    {
+      // PR #157 REVIEW (round 2, Major on core.mjs:2584) — THE DELETE IS CORROBORATED BEFORE IT HAPPENS.
+      // `standWrites.appScaffold` decides what may be removed on a live customer stand, and every value in it was a
+      // free-form NAME asserted by the same agent, with `got === unit.package` — an equality between two strings
+      // that agent supplied — as the only guard. A page this run did not create reads exactly like its own debris
+      // from a name alone. So the step that calls `delete-app-section` now re-reads the artefact and checks BOTH its
+      // package and the UId `create-app` returned for the stub it minted, and declines rather than guessing.
+      baseline: "Say in `proposals` if the stub cannot be removed, and never leave it silently.",
+      shipped: "DELETE BY THE ID THE TOOL GAVE YOU, NOT BY THE NAME YOU REMEMBER",
+      why: "an agent-asserted name is not corroboration for a destructive call; the identity check is appended to the step that makes it, on both app arms",
+    },
+    {
+      // The record side of the same finding: the machine ids that make the check possible, and `withdraw` — the
+      // retraction channel. `null` could not be it: the prompt already assigns `null` the meaning "there is none of
+      // this", and reading that as a retraction is the inverse bug the PREVIOUS review round's defensive merge
+      // closed. Three states where there were two — a value replaces, `null`/absent leaves standing, `withdraw`
+      // clears — so a corrected report can withdraw a wrong licence without a narrower one erasing a right it.
+      // Keyed on the phrase BOTH app arms open 5b with — the no-menu arm ends "...removes what is on this list and
+      // nothing else." and the default arm "...never report a removal you did not make." — so one entry covers the
+      // pair without a substring so short it would match unrelated lines.
+      baseline: "WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not",
+      shipped: "AND RECORD THE MACHINE IDS BESIDE THE NAMES",
+      why: "`stubSectionUId`/`stubEntityUId`/`sectionSchemaUId` are the only facts here a later unit can check the stand against, and `withdraw` makes a wrong licence retractable without giving `null` a second meaning",
+    },
   ],
 }
 

@@ -209,15 +209,15 @@ const SETTLE_RECORD_RULE = ` **AN UNSETTLED READ IS NOT A \`false\` (ENG-96458 /
 
 function appSectionHostNoMenuBlock(unit) {
   return `4. **DO NOT CREATE A SECTION.** The approved plan's section host is \`pages-only-no-menu\`: it ships pages WITHOUT a menu entry, deliberately. You are creating this application only because it is the only route to the package \`${unit.package}\`. Registering a section here would build the exact deliverable the plan dropped — and the gate publishes no \`sectionRegistered\` row to catch it, because the plan says there is none. So: no \`create-app-section\`, and leave \`starterFormPage\` / \`starterListPage\` unset — \`main\` creates its own page in this package.
-5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the new app carries no orphan object of its own. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
-5b. **WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not** — \`appScaffold\` = \`{ "stubSection", "stubEntity", "starterPages": [], "details": [], "removed": [], "couldNotRemove": [{ "what", "why" }] }\`. It is the only record that tells this run's own debris from a page somebody else owns, and a later unit removes what is on this list and nothing else.
+5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the new app carries no orphan object of its own. Say in \`proposals\` if the stub cannot be removed, and never leave it silently. **DELETE BY THE ID THE TOOL GAVE YOU, NOT BY THE NAME YOU REMEMBER (PR #157 review).** Immediately before the \`delete-app-section\` call, re-read the artefact on the stand and check TWO things against \`create-app\`'s own response: it is in \`${unit.package}\`, AND its UId is the one that response returned for the stub it minted. If either check fails, or you no longer have the response's id, do NOT delete — report it in \`proposals\` naming what you found instead. A page this run did not create reads exactly like its own debris from a name alone, and a name is all the record used to carry; on a customer's stand the cost of a wrong delete is not recoverable and the cost of a skipped one is a line in a report.
+5b. **WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not** — \`appScaffold\` = \`{ "stubSection", "stubEntity", "starterPages": [], "details": [], "removed": [], "couldNotRemove": [{ "what", "why" }] }\`. It is the only record that tells this run's own debris from a page somebody else owns, and a later unit removes what is on this list and nothing else. **AND RECORD THE MACHINE IDS BESIDE THE NAMES (PR #157 review).** Add \`stubSectionUId\`, \`stubEntityUId\` and \`sectionSchemaUId\` — copied VERBATIM from the \`create-app\` / \`create-app-section\` responses, never reconstructed and never guessed. Every value in this record used to be a free-form NAME asserted by you, with no corroboration anywhere in the run, and it is the record that decides what may be deleted on a live customer stand: an id from the response that minted the artefact is the one fact here that a later unit can check the stand against. Omit an id you do not have rather than inventing one — a missing id costs a skipped removal, an invented one authorises the wrong delete. **TO WITHDRAW A VALUE AN EARLIER ROUND REPORTED WRONG, NAME ITS KEY IN \`withdraw\`** — \`"withdraw": ["stubSection"]\` clears that recorded slot. Do NOT use \`null\` for this: \`null\` means "there is none of this" and deliberately leaves an earlier value standing, because a narrower second report must not erase a licence the first one correctly recorded. Three different things, and before \`withdraw\` existed two of them were indistinguishable — so a single bad report was a permanent deletion licence on a customer's stand.
 6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, no stub section left behind, and \`appScaffold\` naming everything this call created.`
 }
 
 function appSectionHostMigrationBlock(unit) {
   return `4. **NOW THE PART THAT MAKES IT A MIGRATION.** \`create-app\` ALWAYS mints its own stub entity for the new app and binds its starter pages to THAT — never to the object being migrated. Those starter pages are therefore NOT usable as \`main\`'s deliverable. Create the real section instead: \`create-app-section\` with \`--entity-schema-name ${unit.entity || '<MISSING: `--units` published no entity for `main` — STOP and report that in `blocked`, do not pick one>'}\` — the tool validates that the object EXISTS and reuses it, which is exactly what a migration needs, because the customer's records live on it. Report the form and list pages THAT call produced in \`starterFormPage\` / \`starterListPage\`; they are what \`main\` then edits. \`starterListPage\` becomes this section's recorded NAVIGATION ROUTE (ENG-96147) — report the exact string the tool returned, never a name you reconstruct, since this script (not you) assembles the \`#Section/...\` URL from it.
-5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently.
-5b. **WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not.** Return \`appScaffold\` = \`{ "stubSection", "stubEntity", "starterPages": [], "details": [], "removed": [], "couldNotRemove": [{ "what", "why" }] }\` (schema names; \`null\` where there is none). It is the ONLY record that tells the run's own debris from a page somebody else owns, and that decides whether anything may be deleted: a later unit removes what is on this list and touches nothing that is not. Runs that skipped it shipped a stub entity, a dead \`*_FormPage\` and a look-alike section into a customer's menu, twice. Report it even when you removed everything — \`removed\` is the audit trail — and never report a removal you did not make.
+5. Then REMOVE the stub section \`create-app\` minted, with \`delete-app-section\`, so the app carries one section and no orphan object. The tool contract calls \`create-app\` → \`create-app-section\` → \`delete-app-section\` an anti-pattern — that guidance is about a NEW app that wants its own new entity, and it does not apply here: a migration must not invent an object. Say in \`proposals\` if the stub cannot be removed, and never leave it silently. **DELETE BY THE ID THE TOOL GAVE YOU, NOT BY THE NAME YOU REMEMBER (PR #157 review).** Immediately before the \`delete-app-section\` call, re-read the artefact on the stand and check TWO things against \`create-app\`'s own response: it is in \`${unit.package}\`, AND its UId is the one that response returned for the stub it minted. If either check fails, or you no longer have the response's id, do NOT delete — report it in \`proposals\` naming what you found instead. A page this run did not create reads exactly like its own debris from a name alone, and a name is all the record used to carry; on a customer's stand the cost of a wrong delete is not recoverable and the cost of a skipped one is a line in a report.
+5b. **WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not.** Return \`appScaffold\` = \`{ "stubSection", "stubEntity", "starterPages": [], "details": [], "removed": [], "couldNotRemove": [{ "what", "why" }] }\` (schema names; \`null\` where there is none). It is the ONLY record that tells the run's own debris from a page somebody else owns, and that decides whether anything may be deleted: a later unit removes what is on this list and touches nothing that is not. Runs that skipped it shipped a stub entity, a dead \`*_FormPage\` and a look-alike section into a customer's menu, twice. Report it even when you removed everything — \`removed\` is the audit trail — and never report a removal you did not make. **AND RECORD THE MACHINE IDS BESIDE THE NAMES (PR #157 review).** Add \`stubSectionUId\`, \`stubEntityUId\` and \`sectionSchemaUId\` — copied VERBATIM from the \`create-app\` / \`create-app-section\` responses, never reconstructed and never guessed. Every value in this record used to be a free-form NAME asserted by you, with no corroboration anywhere in the run, and it is the record that decides what may be deleted on a live customer stand: an id from the response that minted the artefact is the one fact here that a later unit can check the stand against. Omit an id you do not have rather than inventing one — a missing id costs a skipped removal, an invented one authorises the wrong delete. **TO WITHDRAW A VALUE AN EARLIER ROUND REPORTED WRONG, NAME ITS KEY IN \`withdraw\`** — \`"withdraw": ["stubSection"]\` clears that recorded slot. Do NOT use \`null\` for this: \`null\` means "there is none of this" and deliberately leaves an earlier value standing, because a narrower second report must not erase a licence the first one correctly recorded. Three different things, and before \`withdraw\` existed two of them were indistinguishable — so a single bad report was a permanent deletion licence on a customer's stand.
 6. Touch no page bodies and wire nothing else — the units that own that work run after you. Your deliverable is: the package exists under the planned name, one section on the EXISTING object, no stub left behind, and \`appScaffold\` naming everything this call created.`
 }
 
@@ -600,8 +600,13 @@ let resolutionCheckTally = new Map()
     // ENG-95850 (A2) — THE RUN'S OWN STAND WRITES, at the ROOT of the queue file rather than under a unit: the package
     // is not a page, and the next run's placement gate looks for it before any unit exists. Persisted from a MACHINE
     // record this script composed (a package name read back off the stand by the app unit, plus this run's own plan
-    // version), so unlike the lists above it is not stand-derived prose — but it goes into the same merge, so the
-    // instruction is the same: copy it exactly.
+    // version) — but it goes into the same merge, so the instruction is the same: copy it exactly.
+    // PR #157 review (round 2) — AND IT IS NOT ALL MACHINE-COMPOSED ANY MORE. This comment used to justify the
+    // absence of a cap with "unlike the lists above it is not stand-derived prose", and D6 made that false:
+    // `appScaffold.couldNotRemove[].what` / `.why` is free prose from the app build agent, and `stubSection` /
+    // `starterPages` / `details` are names read off the customer's stand. The bound is applied at the producer
+    // (`mergeScaffold`: whitelist, `capCarryText`, `SCAFFOLD_LIST_CAP`) rather than here, so what reaches this
+    // prompt is already capped — which is the only reason this line can still hand the value over verbatim.
     if (carry.standWrites && Object.keys(carry.standWrites).length) {
       out.push(`\nTHIS RUN'S STAND WRITES — merge under the ROOT key \`standWrites\` (create it if absent), copying the JSON EXACTLY: ${j(carry.standWrites)}\nThis is how the NEXT run — on this route or the other one — knows the target package exists because THIS migration created it, and not because somebody else owns it. Drop it and the next \`new-app\` reconcile stops the run on its own work.`)
     }
@@ -2670,15 +2675,61 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
   // ONE MERGE, TWO DESTINATIONS (PR #157 follow-up review). `field` decides which record this scaffold joins, and
   // `pkg` is stamped INTO the record: a scaffold list with no package name on it cannot be checked against the
   // plan's target by whoever reads the file next, and that check is the whole basis of the removal licence.
+  // PR #157 review (round 2, Majors on core.mjs:2582 and :2584) — THE ONE NEW AGENT PAYLOAD ON THIS PATH THAT GOT
+  // NEITHER A WHITELIST NOR A CAP, and it is the payload that licenses a DELETE on a live customer stand.
+  //
+  // The scalar loop iterated `new Set([...Object.keys(prev), ...Object.keys(sc)])` with only a four-name skip list,
+  // so both the key set and every string were fully agent-controlled, and `BUILD_SCHEMA_APP.appScaffold` is declared
+  // bare (`{ type: 'object' }`) — no `additionalProperties.maxLength`, no `maxItems` — unlike every sibling agent
+  // payload in that file. The merged record then lands in `standWrites`, which `carryBlock` serialises VERBATIM into
+  // the persist agent's prompt and into the queue file the next Reconcile transcribes under
+  // `RECONCILE_ANSWER_MAX_BYTES`. `couldNotRemove` dedupes on `what` + `why`, so a re-worded `why` appended again on
+  // every round and every resume — the same unbounded-growth class already fixed for `discrepancies`. An oversized
+  // carry pushes the answer past its ceiling, the folder faults, spends its retries and does the same on every
+  // resume (ENG-95930), which is exactly why `capJudgeText` / `capCarryText` exist.
+  //
+  // THE SIX DOCUMENTED KEYS, plus `package` — which the review's list omits because the AGENT does not send it: this
+  // script stamps it from the package name read back off the stand. Whitelisting the agent's six and then dropping
+  // our own seventh would silently unlicense every removal.
+  const SCAFFOLD_SCALAR_KEYS = ['stubSection', 'stubEntity', 'stubSectionUId', 'stubEntityUId', 'sectionSchemaUId']
+  const SCAFFOLD_LIST_KEYS = ['starterPages', 'details', 'removed']
+  // Smaller than `RECONCILE_LIST_CAP` (400) on purpose: this is a scaffold, not a page tree. A run that reports 40
+  // starter pages has not found debris, it has miscounted — and the overflow is REPORTED as a count rather than
+  // dropped silently, so a miscount is visible instead of invisible.
+  const SCAFFOLD_LIST_CAP = 40
   function mergeScaffold(field, sc, pkg) {
     if (!sc || typeof sc !== 'object') return null
     const prev = standWrites[field] || {}
-    const list = (k) => [...new Set([...(prev[k] || []), ...(Array.isArray(sc[k]) ? sc[k] : [])])]
     const nonBlank = (v) => typeof v === 'string' && v.trim() !== ''
+    // EVERY retained string goes through `capCarryText`, agent-authored or not: `stubSection` / `stubEntity` /
+    // `starterPages` / `details` are names read off the customer's stand, which is the definition of stand-derived
+    // prose the rest of this file caps.
+    const capped = (v) => (typeof v === 'string' ? capCarryText(v) : v)
+    const list = (k) => {
+      const all = [...new Set([...(prev[k] || []), ...(Array.isArray(sc[k]) ? sc[k] : [])].map(capped))]
+      return all.slice(0, SCAFFOLD_LIST_CAP)
+    }
+    const overflowOf = (k) => {
+      const n = new Set([...(prev[k] || []), ...(Array.isArray(sc[k]) ? sc[k] : [])].map(capped)).size
+      return n > SCAFFOLD_LIST_CAP ? n - SCAFFOLD_LIST_CAP : 0
+    }
+    // RETRACTABLE (Major on core.mjs:2584) — AND THE SIGNAL CANNOT BE A BARE `null`.
+    // `nonBlank(sc[k]) ? sc[k] : prev[k]` meant a once-recorded `stubSection` could only ever be REPLACED by
+    // another non-blank value, never cleared, so a single wrong report was a PERMANENT deletion licence for an
+    // artefact this run may not have created. But `null` is already SPOKEN FOR: the app prompt asks for "schema
+    // names; `null` where there is none", so an agent sending `null` is reporting THERE IS NO STUB ENTITY — a
+    // legitimate narrower report, and reading it as a retraction is precisely the inverse bug the previous review
+    // round's defensive merge closed (and which `pending-and-findings.mjs` pins).
+    // So retraction gets its OWN channel: `withdraw: ["stubSection", …]` names the slots to clear. Three states
+    // that used to be two: a value REPLACES, `null`/absent LEAVES STANDING, and `withdraw` CLEARS. Nothing else
+    // can distinguish "I have nothing to report here" from "what I told you before was wrong", and on a value
+    // that authorises a delete those must not collapse.
+    const withdrawn = new Set((Array.isArray(sc.withdraw) ? sc.withdraw : []).filter((k) => SCAFFOLD_SCALAR_KEYS.includes(k)))
     const scalars = {}
-    for (const k of new Set([...Object.keys(prev), ...Object.keys(sc)])) {
-      if (['starterPages', 'details', 'removed', 'couldNotRemove'].includes(k)) continue
-      scalars[k] = nonBlank(sc[k]) ? sc[k] : prev[k]
+    for (const k of SCAFFOLD_SCALAR_KEYS) {
+      if (withdrawn.has(k)) continue
+      const v = nonBlank(sc[k]) ? sc[k] : prev[k]
+      if (v !== undefined) scalars[k] = capped(v)
     }
     // THE PACKAGE THE SCAFFOLD IS IN, stamped by this script and never taken from the agent's own scalars: it is
     // the package name the run READ BACK off the stand (`res.packageName`), which is the same string the
@@ -2688,15 +2739,23 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     const seenCnr = new Set()
     const couldNotRemove = []
     for (const e of [...(prev.couldNotRemove || []), ...(Array.isArray(sc.couldNotRemove) ? sc.couldNotRemove : [])]) {
-      const id = `${e?.what ?? ''}|${e?.why ?? ''}`
+      // The dedup key is UNCHANGED (`what` + `why`) but both halves are CAPPED FIRST, so a re-worded tail past the
+      // cap collapses onto the row it is a re-wording of instead of appending a near-duplicate on every resume.
+      const what = capCarryText(e?.what ?? '')
+      const why = capCarryText(e?.why ?? '')
+      const id = `${what}|${why}`
       if (seenCnr.has(id)) continue
       seenCnr.add(id)
-      couldNotRemove.push(e)
+      couldNotRemove.push({ ...e, what, why })
     }
+    const cnrOverflow = couldNotRemove.length > SCAFFOLD_LIST_CAP ? couldNotRemove.length - SCAFFOLD_LIST_CAP : 0
+    const dropped = SCAFFOLD_LIST_KEYS.reduce((n, k) => n + overflowOf(k), 0) + cnrOverflow
     const merged = {
       ...scalars,
       starterPages: list('starterPages'), details: list('details'), removed: list('removed'),
-      couldNotRemove,
+      couldNotRemove: couldNotRemove.slice(0, SCAFFOLD_LIST_CAP),
+      // Reported, never hidden: a record that quietly lost entries is a licence whose scope nobody can audit.
+      ...(dropped ? { entriesDropped: dropped } : {}),
     }
     standWrites = { ...standWrites, [field]: merged }
     return merged

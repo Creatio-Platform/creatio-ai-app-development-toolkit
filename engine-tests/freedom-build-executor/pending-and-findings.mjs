@@ -632,6 +632,127 @@ check("PR #157 review (Kamil, Minor): `couldNotRemove` is DEDUPED by `what` + `w
   () => !!merged && (merged.couldNotRemove || []).length === 1
     && merged.couldNotRemove[0].what === "UsrBusinessRuleFreedom",
   () => JSON.stringify(merged?.couldNotRemove));
+
+/* ---------------------------------------------------------------------------
+   PR #157 REVIEW (round 2, Majors on core.mjs:2582 and :2584) — THE RECORD THAT LICENSES A DESTRUCTIVE STAND
+   REMOVAL IS BOUNDED, WHITELISTED AND RETRACTABLE.
+
+   `mergeScaffold` iterated `new Set([...Object.keys(prev), ...Object.keys(sc)])` with a four-name skip list, so both
+   the key set and every string were agent-controlled, and `BUILD_SCHEMA_APP.appScaffold` is declared bare. The merged
+   record is serialised VERBATIM into the persist prompt and into the queue file the next Reconcile transcribes under
+   `RECONCILE_ANSWER_MAX_BYTES` — the boundary where an oversized carry faults the folder, spends its retries and
+   does the same on every resume. It was the one new agent payload on this path bound by neither `capCarryText` nor
+   a schema.                                                                                                    */
+const APP_HOSTILE = {
+  unit: "app", packageName: "UsrBusinessRuleFreedom", appName: "Business rules", claimedBuilt: ["application"],
+  starterFormPage: "UsrBusinessRule_FormPage", starterListPage: "UsrBusinessRule_ListPage",
+  appScaffold: {
+    stubSection: "Business rules Freedom", stubEntity: "UsrBusinessRuleFreedom",
+    stubSectionUId: "11111111-2222-3333-4444-555555555555",
+    // NOT on the whitelist — an agent-invented key. It used to be copied straight through into `standWrites`.
+    alsoDeleteThis: "UsrSomebodyElsesPage",
+    injected: "x".repeat(3000),
+    starterPages: Array.from({ length: 60 }, (_, i) => `UsrPage${i}`),
+    details: ["UsrBusinessRule_Detail"], removed: [],
+    // A re-worded `why` PAST THE CAP — the two share a prefix longer than `CARRY_TEXT_CAP` and differ only in the
+    // tail the cap discards. That is the case capping-before-keying collapses, and the case that used to append a
+    // near-duplicate row on every round and every resume. (Two entries differing WITHIN the cap are genuinely two
+    // reports and stay two rows; the golden below pins that too.)
+    couldNotRemove: [
+      { what: "UsrBusinessRuleFreedom", why: `delete-app-section does not remove the stub entity: ${"the entity is referenced elsewhere. ".repeat(30)} first wording` },
+      { what: "UsrBusinessRuleFreedom", why: `delete-app-section does not remove the stub entity: ${"the entity is referenced elsewhere. ".repeat(30)} second wording, re-phrased on the next round` },
+      // A genuinely DIFFERENT blocker, distinct within the cap: the dedup must keep it, so one scenario proves the
+      // collapse in both directions rather than only the direction that shrinks the list.
+      { what: "UsrBusinessRule_Detail", why: "the detail is referenced by another page" },
+    ],
+  },
+  proposals: [], blocked: [],
+};
+let hostileDispatches = 0;
+const hostile = driveRun("app-scaffold-hostile", () => reconcileNewApp(), {
+  Refs: () => ({ written: true, files: [], sliceKeys: ["main"], notes: "" }),
+  Build: (item) => {
+    if (!/app/.test(item.id)) {
+      return { unit: "main", schemaName: "UsrBusinessRule_FormPage", claimedBuilt: [],
+        guidelines: { ran: false, notRunWhy: "not the subject of this golden" },
+        selfCheck: { ran: true, complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, fixAttempted: true },
+        proposals: [], blocked: [] };
+    }
+    hostileDispatches += 1;
+    return APP_HOSTILE;
+  },
+  Verify: () => ({ pagesWritten: [], builtFile: "/mig/built.json", queueWritten: true,
+    reachabilityWritten: {}, evidenceWritten: [], discrepancies: [], notes: "" }),
+}, 24);
+const hostileRec = scaffoldFromPrompt(hostile.dispatched);
+check("PR #157 review (round 2): the scaffold record is a WHITELIST — an agent key that is not one of the documented slots never reaches `standWrites`, so it can never reach the persist prompt or the queue file either",
+  () => !!hostileRec && hostileRec.alsoDeleteThis === undefined && hostileRec.injected === undefined
+    && hostileRec.stubSection === "Business rules Freedom",
+  () => JSON.stringify({ keys: Object.keys(hostileRec || {}) }));
+check("PR #157 review (round 2): the MACHINE IDS are on the whitelist — they are the only fact in this record a later unit can check the stand against before it deletes anything, so dropping them would defeat the corroboration the same review asked for",
+  () => !!hostileRec && hostileRec.stubSectionUId === "11111111-2222-3333-4444-555555555555",
+  () => JSON.stringify({ stubSectionUId: hostileRec?.stubSectionUId }));
+check("PR #157 review (round 2): every retained STRING is capped — `capCarryText` runs on the scalars and on every array element, so no single value can push the carry past the answer ceiling on its own",
+  () => !!hostileRec
+    && (hostileRec.couldNotRemove || []).length > 0
+    // `CARRY_TEXT_CAP` is 400 ASCII bytes and `capCarryText` appends its own truncation marker inside that budget,
+    // so a capped ASCII string is at most 400 characters and CARRIES the marker. Asserted on both halves: a value
+    // merely shorter than the cap would also pass a length-only check while nothing had capped it.
+    // EVERY entry is inside the cap, and the one whose INPUT was oversized carries the truncation marker. Both
+    // halves matter: a length-only check would pass on a short string nothing had capped, and a marker-only check
+    // would fail on the legitimately short third entry.
+    && (hostileRec.couldNotRemove || []).every((e) => e.why.length <= 400)
+    && (hostileRec.couldNotRemove || []).some((e) => /truncated/.test(e.why) && e.why.length > 300)
+    && (hostileRec.starterPages || []).every((p) => p.length <= 400),
+  () => JSON.stringify((hostileRec?.couldNotRemove || []).map((e) => ({ chars: e.why.length, tail: e.why.slice(-24) }))));
+check("PR #157 review (round 2): the LISTS are sliced and the overflow is REPORTED as a count, never dropped silently — 60 starter pages is a miscount, and a record that quietly lost entries is a licence whose scope nobody can audit",
+  () => !!hostileRec && (hostileRec.starterPages || []).length === 40 && hostileRec.entriesDropped >= 20,
+  () => JSON.stringify({ starterPages: (hostileRec?.starterPages || []).length, entriesDropped: hostileRec?.entriesDropped }));
+check("PR #157 review (round 2): capping BEFORE the dedup key collapses a re-worded tail onto the row it re-words — two `couldNotRemove` entries differing only PAST the cap are ONE row, which is the unbounded-growth axis (every round AND every resume) the finding named",
+  () => !!hostileRec && (hostileRec.couldNotRemove || []).filter((e) => e.what === "UsrBusinessRuleFreedom").length === 1,
+  () => JSON.stringify(hostileRec?.couldNotRemove));
+check("PR #157 review (round 2): and it does NOT over-collapse — the third entry is a DIFFERENT blocker, distinct within the cap, and it survives; capping before keying must not become a way to lose a real report",
+  () => !!hostileRec && (hostileRec.couldNotRemove || []).length === 2
+    && (hostileRec.couldNotRemove || []).some((e) => e.what === "UsrBusinessRule_Detail"),
+  () => JSON.stringify((hostileRec?.couldNotRemove || []).map((e) => e.what)));
+
+/* THE RETRACTION CHANNEL. `null` could not be the signal: the app prompt assigns it "there is none of this", and the
+   golden above pins that a narrower second report must NOT erase the licence. So three states where there were two —
+   a value REPLACES, `null`/absent LEAVES STANDING, `withdraw` CLEARS. Without the third, a single bad report was a
+   permanent deletion licence, which is the half of the finding the previous round's defensive merge left open. */
+const APP_WITHDRAWN = {
+  unit: "app", packageName: "UsrBusinessRuleFreedom", appName: "Business rules", claimedBuilt: ["application"],
+  starterFormPage: "UsrBusinessRule_FormPage", starterListPage: "UsrBusinessRule_ListPage",
+  appScaffold: { withdraw: ["stubSection", "stubSectionUId"], details: [], starterPages: [], removed: [], couldNotRemove: [] },
+  proposals: [], blocked: [],
+};
+let withdrawDispatches = 0;
+const withdrawn = driveRun("app-scaffold-withdraw", () => reconcileNewApp(), {
+  Refs: () => ({ written: true, files: [], sliceKeys: ["main"], notes: "" }),
+  Build: (item) => {
+    if (!/app/.test(item.id)) {
+      return { unit: "main", schemaName: "UsrBusinessRule_FormPage", claimedBuilt: [],
+        guidelines: { ran: false, notRunWhy: "not the subject of this golden" },
+        selfCheck: { ran: true, complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, fixAttempted: true },
+        proposals: [], blocked: [] };
+    }
+    withdrawDispatches += 1;
+    return withdrawDispatches === 1 ? APP_PARTIAL : APP_WITHDRAWN;
+  },
+  Verify: () => ({ pagesWritten: [], builtFile: "/mig/built.json", queueWritten: true,
+    reachabilityWritten: {}, evidenceWritten: [], discrepancies: [], notes: "" }),
+}, 24);
+const withdrawnRec = scaffoldFromPrompt(withdrawn.dispatched);
+check("PR #157 review (round 2): `withdraw` CLEARS a recorded slot — a licence an earlier round recorded wrong can be taken back, which is what a once-set `stubSection` could never be",
+  () => withdrawDispatches >= 2 && !!withdrawnRec
+    && withdrawnRec.stubSection === undefined && withdrawnRec.stubSectionUId === undefined,
+  () => JSON.stringify({ withdrawDispatches, rec: withdrawnRec }));
+check("PR #157 review (round 2): `withdraw` clears ONLY what it names — `stubEntity` was not withdrawn and survives, so a retraction is not a way to blank the whole record in one word",
+  () => !!withdrawnRec && withdrawnRec.stubEntity === "UsrBusinessRuleFreedom",
+  () => JSON.stringify({ stubEntity: withdrawnRec?.stubEntity }));
+check("PR #157 review (round 2): a `withdraw` naming a key that is NOT a scaffold slot is ignored rather than acted on — the retraction channel must not become a second way to reach arbitrary keys, which is the hole the whitelist just closed",
+  () => !!withdrawnRec && Object.keys(withdrawnRec).every((k) => k !== "withdraw"),
+  () => JSON.stringify(Object.keys(withdrawnRec || {})));
 // THE THIRD BRANCH — a PACKAGE MISMATCH. `clio` applies the environment's `SchemaNamePrefix`, so the package that
 // comes out need not be the one the plan names; that branch leaves the unit open and blocked. It minted a scaffold
 // all the same, and before the PR #157 fix it recorded nothing at all.
