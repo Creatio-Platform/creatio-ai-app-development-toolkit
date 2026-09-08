@@ -950,8 +950,10 @@ check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unr
 // feature labels). The engine emits the table itself; the skill presents it verbatim.
 check("design-spec: runMigration returns a Markdown design spec string",
   typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
-check("design-spec: ONE Layout table (Region · Placement · Element · Type · Source · Rule · Additional — `Placement` added by ENG-96457: the field cell the plan used to compute and then throw away) under the form-page heading",
-  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec) && /Region \| Placement \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
+check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional) under the form-page heading — no `Placement` column (ENG-96327 B: cells ride --units/verify, not the plan; the agent designs the 12-col layout)",
+  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec)
+  && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec)
+  && !/\| Placement \|/.test(cli.designSpec));
 check("design-spec: one Layout row (PDS attribute) per effective field — nothing dropped/invented",
   cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
 check("design-spec: legacy split tables gone (no Region map / Fields / Details & standard features)",
@@ -3835,7 +3837,7 @@ check("#4 Logic: multiple filters on one attribute collapse to a single row",
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — a new tab, not template-provided",
-  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
+  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
 
 // #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
 // NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
@@ -3851,7 +3853,7 @@ check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema Manag
   dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
   && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
 check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
-  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \|/.test(dcmCs.designSpec)
+  /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
@@ -6456,7 +6458,7 @@ check("ENG-93928 precision: the actions-dashboard module (masterColumnName under
 
 // (5) the design spec must SHOW the card as page content in the side profile (not only as a Confirm line).
 check("ENG-93928 design spec: a `Profile card` Layout row in the Side profile carries the component + referenceColumn",
-  /\| Side profile \| [^|]*\| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
+  /\| Side profile \| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
   () => pcRun.designSpec.split("\n").filter((l) => /Profile card/.test(l)));
 
 // (6) STRUCTURE GATE: a recognised card whose profile schema is missing blocks the plan (its contents are
@@ -6618,7 +6620,7 @@ check("typed template: Main-scope typed row names the form template (not a gener
 check("typed template: DCM present → note recommends PageWithTabsAndProgressBarTemplate (progress bar + top island) + re-bind",
   /\*\*Template:\*\*/.test(cmb.plan) && /PageWithTabsAndProgressBarTemplate/.test(cmb.plan) && /RE-BIND/i.test(cmb.plan));
 check("typed groups: field GROUPS surface in the per-type Layout Region (Tab · … › Group), not flattened to the tab",
-  /Tab · [^\n|›]*›[^\n|]*\|[^\n|]*\| Acc \|/.test(cmb.plan),
+  /Tab · [^\n|›]*›[^\n|]*\| Acc \|/.test(cmb.plan),
   () => cmb.plan.split("\n").filter((l) => /›/.test(l)).slice(0, 4));
 check("typed shared section: inherited base details/features are listed ONCE under 'Shared across all typed forms'",
   /### Shared across all typed forms/.test(cmb.plan) && /Attachments/.test(cmb.plan.slice(cmb.plan.indexOf("### Shared across all typed forms"), cmb.plan.indexOf("### Typed page mappings"))),
@@ -12182,17 +12184,19 @@ check("ENG-96457 fixture: `--plan` on the ENG-96445 manifest is gate-clean (exit
 // The classic `diff` DECLARES City1, Country1, City2, Country2 while PLACING them (r6,c0) (r7,c0) (r6,c12)
 // (r7,c12) — two rows of two. The Layout table used to print the declaration order with no coordinates, so a
 // faithful 2-column build produced `City1 | Country1` / `City2 | Country2`.
-const br1Grid = br1PlanOut.slice(br1PlanOut.indexOf("##### Grid of `Header`"));
-check("ENG-96457 (item 1): the Header grid's last two rows read `City1 | City2` and `Country1 | Country2` — the pairing the classic page has, which the declaration order destroys (the ticket's first acceptance criterion, verbatim)",
-  /\| 7 \| City1 \| City2 \|/.test(br1Grid) && /\| 8 \| Country1 \| Country2 \|/.test(br1Grid),
-  () => br1Grid.split("\n").slice(0, 14));
-check("ENG-96457 (item 1): the Layout table carries a `Placement` column and each header field's cell, and it is SORTED by the cell — City1 and City2 are adjacent rows, which they were not in declaration order",
-  /\| Region \| Placement \| Element \| Type \| Source \| Rule \| Additional \|/.test(br1PlanOut)
-  && /\| Header \| r7 · c1 \(span 12\) \| City1 \|/.test(br1PlanOut)
-  && /\| Header \| r7 · c13 \(span 12\) \| City2 \|/.test(br1PlanOut)
+check("ENG-96457 (item 1) / ENG-96327 B: the 'Grid of Header' placement grid is NO LONGER rendered (Freedom is 12-col; the agent designs the layout itself) — the field PAIRING is preserved instead by the Layout table's reading-order SORT: City1 then City2 then Country1 then Country2, not the declaration order",
+  !/##### Grid of `Header`/.test(br1PlanOut)
+  && br1PlanOut.indexOf("| City1 |") < br1PlanOut.indexOf("| City2 |")
+  && br1PlanOut.indexOf("| City2 |") < br1PlanOut.indexOf("| Country1 |")
+  && br1PlanOut.indexOf("| Country1 |") < br1PlanOut.indexOf("| Country2 |"),
+  () => br1PlanOut.split("\n").filter((l) => /City|Country/.test(l)).slice(0, 8));
+check("ENG-96457 (item 1) / ENG-96327 B: the Layout table has NO `Placement` column and shows no r·c coordinates — the sort keeps City1 and City2 adjacent (the pairing), and the exact cells travel only on --units/verify",
+  /\| Region \| Element \| Type \| Source \| Rule \| Additional \|/.test(br1PlanOut)
+  && !/\| Placement \|/.test(br1PlanOut)
+  && !/r7 · c1/.test(br1PlanOut) && !/r7 · c13/.test(br1PlanOut)
   && br1PlanOut.indexOf("| City2 |") - br1PlanOut.indexOf("| City1 |") > 0
   && br1PlanOut.indexOf("| City2 |") < br1PlanOut.indexOf("| Country1 |"),
-  () => br1PlanOut.split("\n").filter((l) => /\| Header \| r[678]/.test(l)));
+  () => br1PlanOut.split("\n").filter((l) => /City|Country/.test(l)).slice(0, 8));
 const br1Units = JSON.parse(br1(["--units"]).stdout || "{}");
 const br1Expect = br1Units.pages?.[0]?.expect || {};
 const br1Cell = (n) => (br1Expect.fieldLayout || []).find((e) => e.name === n);

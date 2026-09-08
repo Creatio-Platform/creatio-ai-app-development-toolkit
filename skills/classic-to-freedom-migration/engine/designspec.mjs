@@ -147,42 +147,15 @@ const addModeText = (am) => {
   return p.length ? ` — ⚠ ${p.join(", ")}; reproduce with a custom Freedom add handler (verify any service is deployed)` : "";
 };
 
-// ENG-96457 (item 1) — THE COORDINATES, IN THE TABLE. The mapper has always computed each field's Freedom cell
-// (`values.layoutConfig` = { column, row, colSpan, rowSpan }, converted from the classic 24-column grid), and the
-// Layout table has always thrown it away and printed the fields in the classic `diff`'s DECLARATION order. On the
-// ENG-96445 page the classic `Header` declares City1, Country1, City2, Country2 while placing them at
-// (r6,c0) (r7,c0) (r6,c12) (r7,c12) — two rows of two. A builder that read the table in order and filled a
-// 2-column grid produced `City1 | Country1` / `City2 | Country2`: the plan's own field pairing, wrong, and
-// faithfully built. So the table now (a) SORTS by the coordinates and (b) PRINTS them, and `--units` publishes them
-// per field. `null` for an element with no computed cell (a card action, a placed widget) — a dash, never a guess.
-// ENG-96457 (item 1) — THE PAIRING, SHOWN. Coordinates in a column are correct but still have to be assembled by
-// the reader; the failure being fixed is a builder reading the table top-to-bottom. So every MULTI-COLUMN region
-// also renders as its grid: one line per row, the row's fields in column order. On the ENG-96445 header the last
-// two lines read `City1 | City2` and `Country1 | Country2`, which is the pairing the classic page has and the
-// declaration order destroys. Single-column regions are skipped — a one-per-line grid restates the table above it.
-function gridMapTables(order, byRegion) {
-  const out = [];
-  for (const region of order) {
-    const placed = byRegion.get(region).filter((r) => r.layout && Number.isInteger(r.layout.row) && Number.isInteger(r.layout.column));
-    if (placed.length < 2) continue;
-    const cols = [...new Set(placed.map((r) => r.layout.column))].sort((a, b) => a - b);
-    if (cols.length < 2) continue;                       // one column ⇒ the table above already reads in order
-    const rows = [...new Set(placed.map((r) => r.layout.row))].sort((a, b) => a - b);
-    out.push(`##### Grid of \`${region}\` — ${cols.length} columns, ${rows.length} rows (build the fields at THESE cells)`,
-      "| Row | " + cols.map((c) => `Column ${c}`).join(" | ") + " |",
-      "| --- | " + cols.map(() => "---").join(" | ") + " |");
-    for (const r of rows) {
-      const cells = cols.map((c) => {
-        const hit = placed.filter((p) => p.layout.row === r && p.layout.column === c);
-        return hit.length ? hit.map((h) => h.cells[0]).join(" + ") : DASH;
-      });
-      out.push(`| ${r} | ${cells.join(" | ")} |`);
-    }
-    out.push("");
-  }
-  if (out.length) out.unshift("> **The grid below is the placement contract.** A field's row/column comes from the Classic page, NOT from the order of the Layout table above — build each field at its cell. Reading the table top-to-bottom into a multi-column container re-pairs the fields (that is exactly how `City1 | Country1` shipped instead of `City1 | City2`).", "");
-  return out;
-}
+// ENG-96457 (item 1) — THE COORDINATES. The mapper computes each field's Freedom cell (`values.layoutConfig` =
+// { column, row, colSpan, rowSpan }) and the Layout table SORTS by it (row-major reading order) so fields never fall
+// back to the classic `diff`'s DECLARATION order — that was the ENG-96445 re-pairing bug (City1|Country1 built for
+// City1|City2). The coordinates still ride `--units.fieldLayout` and the advisory `--verify` placement leg.
+// ENG-96327 (product decision, B) — but they are NOT SHOWN in the plan: Freedom's grid is 12-column while these cells
+// are in the classic 24-column space, and the agent is meant to DESIGN the 12-column layout ITSELF, so a `Placement`
+// column and a "build the fields at THESE cells" grid both mislead and over-constrain the human/agent. Only the
+// human-facing DISPLAY is dropped (the machine half above is unchanged); the reading-order sort still preserves
+// grouping for the reader without prescribing exact cells.
 // The published shape of a cell — exactly the four numbers, so `--units` carries no framework noise and a diff
 // against a built page's `layoutConfig` compares like with like.
 function pickCell(l) {
@@ -190,13 +163,6 @@ function pickCell(l) {
   const out = {};
   for (const k of ["row", "column", "colSpan", "rowSpan"]) if (Number.isInteger(l[k])) out[k] = l[k];
   return out;
-}
-function placementCell(layoutConfig) {
-  const l = layoutConfig;
-  if (!l || !Number.isInteger(l.row) || !Number.isInteger(l.column)) return null;
-  const span = Number.isInteger(l.colSpan) && l.colSpan > 1 ? ` (span ${l.colSpan})` : "";
-  const rowSpan = Number.isInteger(l.rowSpan) && l.rowSpan > 1 ? ` (rows ${l.rowSpan})` : "";
-  return `r${l.row} · c${l.column}${span}${rowSpan}`;
 }
 // ---- Layout-table row builders (one per element category) — each returns an array of { region, sort, cells }.
 // Extracted from renderDesignSpec so it stays under Sonar CC 15 (S3776). ----
@@ -213,7 +179,7 @@ function rowsForFields(fields, regionOf) {
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
     const lc = v.layoutConfig || null;
-    return { region: regionOf(f.parentName), sort: 0, layout: lc, place: placementCell(lc),
+    return { region: regionOf(f.parentName), sort: 0, layout: lc,
       cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
   });
 }
@@ -370,7 +336,7 @@ function rowsForImages(images, regionOf) {
     if (im.crossDs) note = "→ `crt.ImageInput`, `value` bound through the lookup READ-ONLY (related-object photo); must be an IMAGELOOKUP column";
     else if (im.column) note = "→ `crt.ImageInput` bound via `value` to this IMAGELOOKUP column";
     else note = "→ `crt.ImageInput` — bind `value` to the entity's IMAGELOOKUP (16) column (add it to `entityColumns`); if the photo is from a related object bind through its lookup read-only; if none exists, create an ImageLookup column";
-    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, layout: im.layoutConfig || null, place: placementCell(im.layoutConfig || null),
+    return { region: im.parent ? regionOf(im.parent) : "⚠ unplaced", sort: 0, layout: im.layoutConfig || null,
       cells: [esc(im.classic), "crt.ImageInput", src, im.crossDs ? "read-only" : DASH, note] };
   });
 }
@@ -1081,19 +1047,20 @@ export function renderDesignSpec(result, opts = {}) {
     L.push(
       opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
       "#### Layout",
-      "| Region | Placement | Element | Type | Source | Rule | Additional |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| Region | Element | Type | Source | Rule | Additional |",
+      "| --- | --- | --- | --- | --- | --- |",
     );
     for (const region of order) {
       // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
       // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
+      // ENG-96327 (B) — the cell coordinates are NOT shown (see gridMapTables note above); the sort still groups the
+      // row's fields together for the reader, and the agent designs the 12-column Freedom layout itself.
       const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
         || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
         || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
         || a.i - b.i);
-      for (const it of items) L.push(`| ${region} | ${it.place || DASH} | ${it.cells.join(" | ")} |`);
+      for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
     }
-    L.push("", ...gridMapTables(order, byRegion));
     // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
     // paragraph in every linked field's Additional cell.
     if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
