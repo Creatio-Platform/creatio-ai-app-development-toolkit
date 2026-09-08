@@ -179,7 +179,7 @@ class NativeUpdateCommandsTests(unittest.TestCase):
     def test_unknown_or_copy_target_raises(self):
         with self.assertRaises(ValueError):
             self.upd.native_update_commands("cursor")
-        # ENG-96710: Codex CLI has no `plugin add`/`plugin install`, so Codex is a
+        # Codex CLI has no `plugin add`/`plugin install`, so Codex is a
         # COPY target reinstalled through install.py, not a native one.
         with self.assertRaises(ValueError):
             self.upd.native_update_commands("codex")
@@ -268,7 +268,7 @@ class UpdateAgentsTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_codex_delegates_to_install_py_reinstall(self):
-        # ENG-96710: no `codex plugin add`; the update is a reinstall from the
+        # No `codex plugin add`; the update is a reinstall from the
         # release source, which re-registers the marketplace and re-materializes
         # the plugin cache.
         calls = []

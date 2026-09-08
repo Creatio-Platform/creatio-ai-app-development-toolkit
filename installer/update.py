@@ -16,7 +16,7 @@ How it works:
     back to install.py: each is reinstalled from the latest release, which this
     command downloads on demand (Cursor as a file copy; Codex by re-registering
     the marketplace and re-materializing its plugin cache — Codex CLI has no
-    `plugin install`/`plugin add` subcommand, ENG-96710). Native agents update
+    `plugin install`/`plugin add` subcommand). Native agents update
     from their own marketplace git, so the release zip is fetched *only* when
     Cursor or Codex is present.
 
@@ -66,7 +66,7 @@ import version_check  # noqa: E402
 NATIVE_TARGETS: tuple[str, ...] = ("claude", "copilot")
 # Agents with no native, non-interactive update command — reinstalled from the
 # release source via install.py. Cursor has no plugin CLI at all; Codex CLI has
-# `plugin marketplace` but no `plugin install`/`plugin add` (ENG-96710).
+# `plugin marketplace` but no `plugin install`/`plugin add`.
 COPY_TARGETS: tuple[str, ...] = ("cursor", "codex")
 # Detection/reporting order across every agent we can update. Spelled out so the
 # order stays stable; the assertion keeps it in sync with the two groups above so

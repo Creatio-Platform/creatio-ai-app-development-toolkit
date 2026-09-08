@@ -388,7 +388,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
 
     def test_install_plugin_false_skips_the_install_step_on_both_paths(self):
-        # ENG-96710: Codex CLI has no `plugin add`/`plugin install`; install_codex
+        # Codex CLI has no `plugin add`/`plugin install`; install_codex
         # registers the marketplace only and materializes the plugin itself.
         installer = load_installer()
         commands = []
@@ -1079,7 +1079,7 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 class InstallCodexTests(unittest.TestCase):
     """ENG-90514: Codex registers the remote marketplace via its CLI.
 
-    ENG-96710: Codex CLI has no non-interactive plugin-install subcommand, so the
+    Codex CLI has no non-interactive plugin-install subcommand, so the
     installer performs the two steps the interactive `/plugins` browser does —
     copy the plugin into `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`
     and enable it in config.toml. Skills load only when both exist.

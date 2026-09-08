@@ -250,7 +250,7 @@ def register_remote_marketplace_and_install_plugin(
     the plugin-install step: Codex CLI has no non-interactive plugin-install
     subcommand (`codex plugin` offers only `marketplace`), so install_codex only
     registers the marketplace here and materializes the plugin itself — see
-    materialize_codex_plugin (ENG-96710). `pre_remove_marketplace` converts the
+    materialize_codex_plugin. `pre_remove_marketplace` converts the
     conflict-driven retry into an unconditional remove-then-add sequence — Claude
     and Codex both pass True so cleanup of legacy state is exhaustive.
     """
@@ -938,13 +938,13 @@ def materialize_codex_plugin(
 
     Codex CLI has no non-interactive install command, and it loads plugin skills
     only from `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/` —
-    enabling the plugin in config.toml is not enough on its own (ENG-96710). The
+    enabling the plugin in config.toml is not enough on its own. The
     installer therefore copies the plugin runtime surface (the same
     `.release-manifest.json` `plugin_runtime` list the Cursor install copies) into
     that directory and enables the plugin. Older cached versions of this plugin
     are removed so exactly one version remains. Returns the version directory.
 
-    One plugin per call so the multi-plugin installer (ENG-96692) can run it once
+    One plugin per call so a multi-plugin installer can run it once
     per catalog entry.
     """
     version = plugin_version(repo_root)
@@ -964,7 +964,7 @@ def install_codex(repo_root: Path, home: Path) -> None:
     (a) copies the plugin into `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/`
     and (b) writes `[plugins."<plugin>@<marketplace>"] enabled = true` into
     config.toml. Skills load only when both exist, so after registering the
-    marketplace the installer performs both steps itself (ENG-96710).
+    marketplace the installer performs both steps itself.
 
     Migration cleanup runs first so users coming from the legacy file-copy install
     end up in the same state as a fresh install. The clio MCP block stays in
