@@ -13621,6 +13621,55 @@ check("ENG-96571 review 2 (finding 4): the unmatched report is computed over BOT
   (r24Closed.confirmDispositions.unmatched || []).length === 0,
   () => JSON.stringify(r24Closed.confirmDispositions));
 
+/* ---- ENG-96571 review 3 (finding 7): the `confirmClosed` publication at the TYPED-PAGE and MINI-PAGE fold sites ----
+   Review 3 added the same one-line publication at three fold sites and `closedConfirmQuestions` consumes it for
+   every node from `subPageNodes(result)`, but only the child-page site was exercised. A typed-page or mini-page
+   node that published nothing, or published from the wrong ChangeSet, would silently reproduce the very defect
+   review 3 fixed — a false `resolutionsUnmatched` warning on those pages — and the suite would stay green. The
+   `hasNested` half of this finding is gone rather than tested: the BLOCKER fix removed that predicate, so its
+   `typedPages.length > 0` / `!!manifest.addRecordMiniPage` arms no longer exist to be vacuous.
+   Each page gets a row of its OWN (`TypedOnly` / `MiniOnly`) that `main` does not raise, because a pair still open
+   on `main` is excluded from `resolutionsClosed` by design — sharing `Job` would make the check pass or fail for
+   that reason instead of for the publication. ---- */
+const R7_RULE = (c) => `"${c}": { "${c}Required": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER, "property": BusinessRuleModule.enums.Property.REQUIRED, "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } }`;
+const R7_BODY = (name, cols) => `define("${name}", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", rules: { ${cols.map(R7_RULE).join(", ")} }, diff: [${cols.map((c) => `{ operation: "insert", name: "${c}", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "${c}" } }`).join(", ")}] }; });`;
+const R7_MANIFEST = (disp) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: R7_BODY("PPage", ["Job"]) }],
+  typedPages: [{ schema: "TP", type: "T1" }],
+  typedPageSchemas: { TP: { entity: "PE", noParentTemplate: true, schemas: [{ pkg: "TPP", body: R7_BODY("TP", ["Job", "TypedOnly"]) }] } },
+  addRecordMiniPage: { schema: "MP" },
+  miniPageSchemas: { MP: { entity: "PE", noParentTemplate: true, schemas: [{ pkg: "MPP", body: R7_BODY("MP", ["Job", "MiniOnly"]) }] } },
+  ...(disp ? { confirmDispositions: disp } : {}) });
+const R7_DISP = { "TP::rule-condition:TypedOnly": { resolved: true, disposition: "accepted", note: "closed on the typed page" },
+  "MP::rule-condition:MiniOnly": { resolved: true, disposition: "accepted", note: "closed on the mini page" } };
+const R7_ANSWERS = { resolutions: [{ kind: "rule-condition", item: "TypedOnly", answer: "answered for the typed page" },
+  { kind: "rule-condition", item: "MiniOnly", answer: "answered for the mini page" }] };
+const r7Closed = runMigration(R7_MANIFEST(R7_DISP));
+check("ENG-96571 review 3 (finding 7) SETUP: the typed page and the mini page each raise a `rule-condition` row of their own that `main` does not, and a SCOPED disposition closes each — so the two publications below have something to publish",
+  (r7Closed.typedPages || []).some((t) => (t.confirmClosed || []).some((n) => n.kind === "rule-condition" && n.item === "TypedOnly"))
+  && (r7Closed.miniPage?.confirmClosed || []).some((n) => n.kind === "rule-condition" && n.item === "MiniOnly"),
+  () => JSON.stringify({ typed: (r7Closed.typedPages || []).map((t) => t.confirmClosed), mini: r7Closed.miniPage?.confirmClosed }));
+const r7Units = (r) => pageUnits(r, { resolutions: R7_ANSWERS });
+check("ENG-96571 review 3 (finding 7): the answer to a question closed on the TYPED page and the one closed on the MINI page both reach `resolutionsClosed`, and NEITHER is reported as an answer nobody asked for",
+  (() => { const u = r7Units(r7Closed);
+    const has = (item) => u.resolutionsClosed.some((c) => c.kind === "rule-condition" && c.item === item);
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 2 && has("TypedOnly") && has("MiniOnly"); })(),
+  () => JSON.stringify({ closed: r7Units(r7Closed).resolutionsClosed, unmatched: r7Units(r7Closed).resolutionsUnmatched }));
+check("ENG-96571 review 3 (finding 7) ANTI-VACUITY — the check above is about the PUBLICATION: strip `confirmClosed` off the typed node and off the mini node (a folded node exposes no `changeSet`, so the `closedOf` fallback contributes nothing) and both answers become false `resolutionsUnmatched` entries, which is the defect this line guards",
+  (() => {
+    const r = runMigration(R7_MANIFEST(R7_DISP));
+    for (const t of r.typedPages || []) delete t.confirmClosed;
+    if (r.miniPage) delete r.miniPage.confirmClosed;
+    const u = r7Units(r);
+    return u.resolutionsClosed.length === 0 && u.resolutionsUnmatched.length === 2
+      && u.resolutionsUnmatched.every((x) => /TypedOnly|MiniOnly/.test(x.item || ""));
+  })(),
+  () => "see R7 with confirmClosed removed from the typed/mini nodes");
+check("ENG-96571 review 3 (finding 7) ANTI-VACUITY: with NO disposition recorded the same answers are MATCHED instead — `resolutionsClosed` is empty and nothing is unmatched, so the check is about the disposition and not about the answers file",
+  (() => { const u = r7Units(runMigration(R7_MANIFEST(null)));
+    return u.resolutionsClosed.length === 0 && u.resolutionsUnmatched.length === 0 && u.resolutionsMatched >= 2; })(),
+  () => JSON.stringify(r7Units(runMigration(R7_MANIFEST(null)))?.resolutionsClosed));
+
 /* ---- ENG-96571 review 3 (finding 5): a pair closed on MORE THAN ONE page keeps every page's id ---- */
 // `closedConfirmQuestions` de-duped by `resolutionKey(kind, item)` while the id it emits is page-scoped, so when ONE
 // bare disposition key closed the identical row on `main` AND on a folded sub-page — the normal effect of an
