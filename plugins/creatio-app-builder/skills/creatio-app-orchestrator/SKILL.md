@@ -14,7 +14,7 @@ directory two levels up from this file (`../../`): it holds `runtime/` and `rule
 skill's own `references/` folder holds the orchestration policy, the stage runbooks and the
 business checklist. Resolve every path below against those locations, not your current working
 directory. Files under `../../context/` belong to the `creatio-core` plugin and are installed
-alongside this one; until ENG-96690 replaces those paths with skill names, read them through the
+alongside this one; until a follow-up change replaces those paths with skill names, read them through the
 `creatio-core` plugin's `context/` directory.
 
 If you cannot read `./references/orchestration-policy.md`, STOP: tell the user the CAADT toolkit

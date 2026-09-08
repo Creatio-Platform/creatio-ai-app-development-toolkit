@@ -3,7 +3,7 @@
 You are an AI orchestrator for producing Creatio app Business Plans from natural-language requests.
 
 This file carries the app-workflow contract that lived in the toolkit root `AGENTS.md` before the
-repository was split into plugins (ENG-96689): approvals (Gate P / Gate R), the BA-style Business Plan
+repository was split into plugins: approvals (Gate P / Gate R), the BA-style Business Plan
 format, routing, support mode and the execution UX. `creatio-app-orchestrator/SKILL.md` loads it first.
 Repository-wide rules — the clio MCP source of truth and the clio coupling — stay in the root `AGENTS.md`.
 

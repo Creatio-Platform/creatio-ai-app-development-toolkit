@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
 # orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
 # Contract assertions read the union so a rule can live in whichever file owns it.
 _AGENTS_CONTRACT_FILES = (
@@ -153,9 +153,9 @@ def looks_like_path(token):
     return bool(name) and bool(dot) and ext.isalnum() and not ext.isdigit()
 
 
-# References that ENG-96689 left pointing across plugin roots on purpose. ENG-96690 turns each into a
+# References the plugin split left pointing across plugin roots on purpose. A follow-up change turns each into a
 # skill name or a clio `get-guidance` article and deletes the entry here; a NEW unresolved path is a bug.
-CROSS_PLUGIN_REFS_ENG_96690 = {
+CROSS_PLUGIN_REFS_PENDING_CLEANUP = {
     "skill": {
         "../../.mcp.json", "../../README.md", "../../docs/install.md",
         "../../context/INDEX.md", "../../context/clio-cli-reference.md", "../../context/essentials.md",
@@ -173,7 +173,7 @@ CROSS_PLUGIN_REFS_ENG_96690 = {
 
 class ReleaseStructureTests(unittest.TestCase):
     def test_root_manifest_is_a_meta_plugin_over_the_family(self):
-        # ENG-96689: the root Claude manifest installs the whole family through `dependencies`;
+        # Plugin split: the root Claude manifest installs the whole family through `dependencies`;
         # it ships no components of its own (a plugin rooted at `./` would otherwise auto-discover
         # a root `skills/` dir, the duplication the split removes). Codex/Copilot/Cursor have no
         # meta-plugin concept, so the root carries no manifest for them.
@@ -247,7 +247,7 @@ class ReleaseStructureTests(unittest.TestCase):
         # path must be anchored with `../` and resolve to a real file when
         # joined to the rule's own directory (how a host resolves it at
         # runtime), not when joined to the repo root.
-        self._assert_anchored_paths_resolve(rule_path, "../", known_cross_plugin=CROSS_PLUGIN_REFS_ENG_96690["rule"])
+        self._assert_anchored_paths_resolve(rule_path, "../", known_cross_plugin=CROSS_PLUGIN_REFS_PENDING_CLEANUP["rule"])
 
     def test_marketplace_catalogs_list_every_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
@@ -273,7 +273,7 @@ class ReleaseStructureTests(unittest.TestCase):
         self.assertEqual(tuple(p["name"] for p in codex["plugins"]), PLUGINS)
         for entry in codex["plugins"]:
             self.assertEqual(entry["source"], {"source": "local", "path": f"./plugins/{entry['name']}"})
-        # Copilot: relative paths. ENG-96691 switches these to `github` + `ref: release` + `path`
+        # Copilot: relative paths. The release-tooling follow-up switches these to `github` + `ref: release` + `path`
         # objects so a Copilot install never reads unreleased `main` content.
         self.assertEqual(tuple(p["name"] for p in copilot["plugins"]), PLUGINS)
         for entry in copilot["plugins"]:
@@ -332,10 +332,10 @@ class ReleaseStructureTests(unittest.TestCase):
             )
             resolved = (entry_path.parent / ref).resolve()
             if ref in known_cross_plugin:
-                # ENG-96689 moved the file into another plugin; ENG-96690 replaces the path with a
+                # The plugin split moved the file into another plugin; a follow-up change replaces the path with a
                 # skill name / get-guidance. Until then the reference is a known, listed break —
                 # a NEW unresolved reference is still a failure.
-                self.assertFalse(resolved.exists(), f"{entry_path.name}: `{ref}` resolves again — drop it from CROSS_PLUGIN_REFS_ENG_96690")
+                self.assertFalse(resolved.exists(), f"{entry_path.name}: `{ref}` resolves again — drop it from CROSS_PLUGIN_REFS_PENDING_CLEANUP")
                 continue
             self.assertTrue(resolved.exists(), f"{entry_path.name}: `{ref}` -> {resolved}")
 
@@ -349,7 +349,7 @@ class ReleaseStructureTests(unittest.TestCase):
 
         # The skill sits two levels below its plugin root, so paths anchor
         # with `../../` and must resolve from the skill's own directory.
-        self._assert_anchored_paths_resolve(skill, "../../", known_cross_plugin=CROSS_PLUGIN_REFS_ENG_96690["skill"])
+        self._assert_anchored_paths_resolve(skill, "../../", known_cross_plugin=CROSS_PLUGIN_REFS_PENDING_CLEANUP["skill"])
 
     def test_orchestrator_entry_files_carry_root_anchor_and_fail_loud(self):
         """Both entry files must tell the agent where the toolkit root is and

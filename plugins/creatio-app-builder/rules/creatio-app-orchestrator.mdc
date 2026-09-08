@@ -13,7 +13,7 @@ This rule ships inside the `creatio-app-builder` plugin. Its **toolkit root** is
 directory one level up from this file (`../`): it holds `runtime/` and the orchestrator skill whose
 `references/` folder carries the orchestration policy, the stage runbooks and the business
 checklist. Resolve every path below against those locations, not your current working directory.
-Files under `../context/` belong to the `creatio-core` plugin installed alongside this one (ENG-96690
+Files under `../context/` belong to the `creatio-core` plugin installed alongside this one (a follow-up change
 replaces those paths with skill names).
 
 If you cannot read `../skills/creatio-app-orchestrator/references/orchestration-policy.md`, STOP: tell

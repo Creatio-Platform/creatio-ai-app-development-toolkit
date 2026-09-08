@@ -6,7 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
 # orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
 # Contract assertions read the union so a rule can live in whichever file owns it.
 _AGENTS_CONTRACT_FILES = (
@@ -125,7 +125,7 @@ SKILL_WORKFLOWS = {
 
 
 def read(*parts: str) -> str:
-    """Read a toolkit file by its pre-ENG-96689 segments, resolved to the plugin that ships it now."""
+    """Read a toolkit file by its pre-plugin-split segments, resolved to the plugin that ships it now."""
     if parts[0] == "context":
         parts = ("plugins", "creatio-core", *parts)
     elif parts[0] == "skills":

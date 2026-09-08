@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
 # orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
 # Contract assertions read the union so a rule can live in whichever file owns it.
 _AGENTS_CONTRACT_FILES = (

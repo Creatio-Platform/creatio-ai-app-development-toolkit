@@ -1,6 +1,6 @@
 # Versioning and release
 
-Moved from the root `AGENTS.md` in ENG-96689 so the agent-facing file carries only agent-facing rules.
+Moved from the root `AGENTS.md` when the repository was split into plugins, so the agent-facing file carries only agent-facing rules.
 
 ## Versioning Policy (semver)
 

@@ -13,4 +13,4 @@ list them; the root `.claude-plugin/plugin.json` is a meta-plugin that installs 
 | `creatio-migration` | `classic-to-freedom-migration` and its engine, `classic-ui-expert`, `_workflow-core` (the host-neutral workflow core that generates the shipped `*.workflow.js`) |
 
 Rules that keep the plugins independent: every plugin depends only on `creatio-core`; a reference across plugins is a
-skill name or a clio `get-guidance` article, never a relative path (ENG-96690 finishes that conversion).
+skill name or a clio `get-guidance` article, never a relative path (a follow-up change finishes that conversion).

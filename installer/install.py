@@ -35,7 +35,7 @@ SKILL_NAME = "creatio-app-orchestrator"
 NAMED_WORKFLOW_DIR_NAME = "workflows"
 WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
 WORKFLOW_MANIFEST_RELATIVE = "plugins/creatio-migration/skills/_workflow-core/workflows.json"
-# A single-plugin tree (one cached plugin version, pre-ENG-96689 checkouts) keeps the manifest here.
+# A single-plugin tree (one cached plugin version, checkouts from before the plugin split) keeps the manifest here.
 LEGACY_WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
 # A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
 # than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
@@ -329,7 +329,7 @@ PLUGINS_DIR_NAME = "plugins"
 
 
 def mcp_config_path(repo_root: Path) -> Path:
-    """The clio MCP declaration: shipped by the core plugin; a root `.mcp.json` (pre-ENG-96689
+    """The clio MCP declaration: shipped by the core plugin; a root `.mcp.json` (pre-plugin-split
     layouts and single-plugin fixtures) is still honoured."""
     root_level = repo_root / ".mcp.json"
     return root_level if root_level.exists() else repo_root / MCP_CONFIG_RELATIVE

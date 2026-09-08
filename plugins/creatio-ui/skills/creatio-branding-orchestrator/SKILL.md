@@ -18,7 +18,7 @@ the `creatio-app-orchestrator` skill's orchestration policy.
 This skill ships inside the `creatio-ui` plugin; its own material is under `./references/`.
 Files referenced as `../../context/…` belong to the `creatio-core` plugin installed alongside
 this one, and `../../runbooks/…` to the `creatio-app-builder` plugin's orchestrator references
-(ENG-96690 replaces those paths with skill names). Resolve every path below against those
+(a follow-up change replaces those paths with skill names). Resolve every path below against those
 locations, not your current working directory.
 
 If you cannot read `./references/branding-assets.md`, STOP: tell the user the CAADT toolkit files

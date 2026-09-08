@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
 # orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
 # Contract assertions read the union so a rule can live in whichever file owns it.
 _AGENTS_CONTRACT_FILES = (
@@ -353,7 +353,7 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
     """The hook must be shipped and registered, or it silently does nothing."""
 
     def test_hook_is_registered_in_the_claude_plugin_manifest(self):
-        # The hook ships with the core plugin (ENG-96689); the root manifest is a dependencies-only meta-plugin.
+        # The hook ships with the core plugin; the root manifest is a dependencies-only meta-plugin.
         manifest = json.loads((ROOT / "plugins" / "creatio-core" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
 
         # PostToolUse, not PreToolUse: the floor event should mean the clio call actually
@@ -428,7 +428,7 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
         # does not exist on an installed plugin.
         manifest = json.loads((ROOT / ".release-manifest.json").read_text(encoding="utf-8"))
 
-        # ENG-96689: the hook ships inside the core plugin, which the `plugins` entry covers.
+        # Plugin split: the hook ships inside the core plugin, which the `plugins` entry covers.
         self.assertIn("plugins", manifest["plugin_runtime"])
         self.assertTrue((ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry-routing.mjs").is_file())
         self.assertTrue(HOOK.exists())
