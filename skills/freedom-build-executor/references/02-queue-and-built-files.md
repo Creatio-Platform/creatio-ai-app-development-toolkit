@@ -211,6 +211,30 @@ Rules that make it trustworthy:
   VERIFIER-ONLY — no build unit is scheduled for it (`appliesWhen: false`, `verifierOnly: true`, `emitted: true`),
   because the READING is the verifier's and the REMOVAL is the app unit's — and its menu half drops under
   `pages-only-no-menu`, where the plan registers no section at all.
+  **A `noOrphanScaffold: false` is NOT a build gap (PR #157 review, round 2).** The row used to resolve
+  `❌ MISSING` with no owner, which the tally charges to the BUILDER — on a row nothing scheduled can close: the key
+  is verifier-only, the app unit has already run, and `main`'s own prompt forbids deleting a page on a customer's
+  stand. `main` was re-dispatched every round with a row it may not touch and parked at MAX_ROUNDS. It now resolves
+  `pending`: the PAGE is complete and the RUN holds, closed by a `confirmed` resolution once the stand is handled or
+  an `accepted` one to leave the debris in place by decision. (An `owner: "verifier"` tag alone would NOT have
+  fixed it — the tally clears `p.complete` for every open row whatever its owner, and re-dispatch gates on
+  `complete`, not `buildComplete`.)
+- **The record is WHITELISTED, CAPPED and RETRACTABLE (PR #157 review, round 2).** It licenses a delete on a live
+  customer stand, so it is bounded like every other agent-authored payload on this path: only the documented keys
+  are kept (`stubSection`, `stubEntity`, the three UIds, `starterPages`, `details`, `removed`, `couldNotRemove`,
+  plus the executor-stamped `package`), every retained string goes through `capCarryText`, the lists are sliced with
+  the overflow reported as `entriesDropped`, and `couldNotRemove` de-duplicates on the CAPPED `what` + `why` so a
+  re-worded tail collapses instead of appending a row on every round and every resume.
+  **`stubSectionUId` / `stubEntityUId` / `sectionSchemaUId`** are copied verbatim from the `create-app` /
+  `create-app-section` responses — the only facts in this record that are not a name the same agent asserted — and
+  the step that calls `delete-app-section` re-reads the artefact and checks its package AND that UId before
+  deleting, declining into `proposals` otherwise. A page the run did not create reads exactly like its own debris
+  from a name alone.
+  **To withdraw a value an earlier round recorded wrong, name its key in `withdraw`** (`{"withdraw":
+  ["stubSection"]}`). NOT `null`: `null` means "there is none of this" and deliberately leaves an earlier value
+  standing, because a narrower second report must not erase a licence the first one correctly recorded. Three
+  states, and before `withdraw` existed two of them were indistinguishable — so a single bad report was a permanent
+  deletion licence.
 
 - **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
   start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a

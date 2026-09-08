@@ -226,6 +226,32 @@ the same key, indexed once. It only ever overrides an OPEN row, never an ✅ or 
 later regression. The rule above is untouched for every other kind: an ordinary answer is still an INPUT to the
 build and still closes no row. The row key to address is in `--verify-json`'s `openRows[].rowKey`.
 
+**PR #157 review — TWO kinds are read by `--verify`, and the second one is the one most rows need.** `accepted`
+records a DEVIATION the operator signed off. `confirmed` records the opposite outcome:
+
+```json
+{ "kind": "confirmed", "row": "<rowKey>", "answer": "opened the page, placement matches the plan",
+  "decidedBy": "<who>", "date": "2026-09-08" }
+```
+
+It renders `☑ confirmed` / `CONFIRMED ON-STAND (who, date)` and is tallied on its own axis, so `accepted` keeps
+meaning "the build deviates from the plan and a human signed it off" and a close report can still say how many
+deviations the green verdict rests on. Same `row`/`item` alias, same REQUIRED `decidedBy` + ISO `date`, same
+open-rows-only rule.
+
+Why it exists: `buildLayoutGroupRows` marks every layout group row `human: true`, so a real page holds ☐
+confirmations whose likeliest honest outcome is "I looked, and it is correct". With `accepted` as the only route to
+green, the audit table recorded every confirmed-CORRECT row as a deviation — and the remediation text offered
+"answer each on-stand" first, which closes nothing, so an operator who followed it re-ran forever. **A resolutions
+entry is the only thing that closes a ☐ row**; the on-stand look is the work it records. A row carrying both kinds
+reads as `confirmed`: the later, stronger statement is "it matches the plan".
+
+The same two kinds close the two rows PR #157's round-2 review moved onto this channel — an un-removed
+`noOrphanScaffold` and a component SURPLUS. Neither is a build gap (no unit can remove a page on a customer's
+stand, and a template-provided Feed is not the builder's to delete), so both hold the RUN rather than the page:
+`confirmed` once the stand is handled or the surplus is agreed to belong, `accepted` to leave it in place by
+decision.
+
 ```bash
 node migrate.mjs manifest.json --verify --built built.json --resolutions r.json
 ```
