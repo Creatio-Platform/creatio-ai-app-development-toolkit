@@ -13546,6 +13546,20 @@ check("ENG-96571 review 3 (BLOCKER): a scoped key naming the ROOT's own scope is
     schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
     confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } })
     .confirmDispositions.unmatched.join("|") === "R21Page::enum-drift-advisory:typo");
+// ENG-96571 review 3 (re-review constraint) — a SCOPED key whose SCHEMA PREFIX is itself misspelled
+// (`C1Chidl::` for `C1Child::`) was reported by no scope before either: `scope === scopeSchema` never held for it
+// in any fold, with or without `hasNested`. The re-review's warning about the root aggregate is the reason the
+// union carries `<scope>::<key>` forms and not just bare ones — a bare-key union would let this key match a bare
+// `rule-condition:Job` seen on some other page and stay swallowed exactly as before.
+check("ENG-96571 review 3 (BLOCKER): a scoped key whose SCHEMA PREFIX is misspelled is reported — the union carries `<scope>::<key>` forms, so it cannot be absorbed by the same bare pair legitimately seen on another page",
+  (() => { const r = runMigration(C1_NESTED({ "C1Chidl::rule-condition:Job": { resolved: true, disposition: "accepted", note: "typo in the SCHEMA, not the pair" } }));
+    return (r.confirmDispositions.unmatched || []).join("|") === "C1Chidl::rule-condition:Job"; })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "C1Chidl::rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: the correctly spelled prefix on the same surface is NOT reported and DOES close the child's row — so the check above is about the prefix, not about scoped keys in general",
+  (() => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted", note: "correct prefix" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
 check("ENG-96571 review 3 (BLOCKER): a NESTED run publishes no unmatched report at all — a fold sees one page's rows, so every answer aimed at a sibling would read as unmatched there (the rule `behaviourIndex.unmatched` already follows)",
   runMigration({ entity: "HRRequest", noParentTemplate: true,
     schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },

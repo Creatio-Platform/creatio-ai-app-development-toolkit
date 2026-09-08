@@ -1545,11 +1545,14 @@ function buildCallerIndex(methods) {
 // `resolveInternalTrigger` keeps Sonar CC 15 headroom — the branch plus the chain construction sat two levels deep
 // inside its loop.
 //
-// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the hook is what
-// `from` carries on a `lifecycle` trigger. Overwriting `from` with the immediate caller (which is what the generic
-// composition below does, and what the old shape could afford because the hook sat in its own `lifecycle` field)
-// would make the cell name the wrong method — "cHelper (platform lifecycle)" for a hook called `onSaved`. So the
-// lifecycle answer is passed through unchanged; the immediate caller was never rendered for this shape anyway.
+// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the rendered cell
+// must keep naming the hook: "cHelper (platform lifecycle)" for a hook called `onSaved` is the wrong method. What
+// this used to conclude — that the lifecycle answer is therefore passed through unchanged, `from` carrying the hook
+// — is no longer true, and review 3 (Minor) is right that leaving it here left two accounts of one contract ten
+// lines apart, with the stale one first and carrying the reasoning that would justify reverting the change. The
+// surviving requirement (do not let the caller overwrite the hook in the cell) is met a different way now: see the
+// review-2 paragraph inside the function, where the hook gets its own `hook` field and the lifecycle kind is
+// composed like every other one.
 function composeUpstream(up, caller, all) {
   // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat `from`
   // (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the trigger
