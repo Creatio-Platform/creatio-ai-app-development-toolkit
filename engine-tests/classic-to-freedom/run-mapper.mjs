@@ -3021,7 +3021,49 @@ try {
     check("ENG-96458 D3: the acceptance actually MOVES the arithmetic through the CLI — one fewer `missing`, one `accepted` — and does not merely print a different mark",
       after.missing === before.missing - 1 && after.accepted === 1,
       () => ({ before: { missing: before.missing, accepted: before.accepted }, after: { missing: after.missing, accepted: after.accepted } }));
-  } finally { for (const f of [accPath, accPath + ".vj", accPath + ".vj2"]) { try { fs.unlinkSync(f); } catch { /* best effort */ } } }
+    /* PR #157 REVIEW (round 2, Major on migrate.mjs:3442) — THE SCOPED PATH, WHICH IS THE ONE THE EXECUTOR READS.
+       `verifyOpts()` is threaded into THREE call sites: the unscoped `renderVerify` above and the two SCOPED ones
+       (`verifyUnit(result, verifyOpts(), built, pageArg)` and `renderVerify(result, { ...verifyOpts(),
+       scopePageKey: pageArg }, built)`). The golden above never passes `--page`, so neither scoped site was ever
+       executed with a non-empty resolutions list — and the comment beside the change names exactly this risk ("let
+       the scoped and unscoped verdicts drift apart"). The failure it hides is silent: an acceptance that failed to
+       reach `verifyUnit` leaves a unit reporting `buildComplete: false` / `missing: 1` while the full sweep renders
+       the same row accepted and green, so the run and the operator read two different verdicts for one row. It is
+       the same class as the two defects that were found only by RUNNING the CLI (`--resolutions` refused under
+       `--verify`, and the index-over-index empty match), neither of which the unit tests could see. */
+    const scopedNoRes = accPath + ".scoped-none";
+    const scopedWithRes = accPath + ".scoped-acc";
+    const vScopedBefore = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main", "--verify-json", scopedNoRes], { input: verifyManifest, encoding: "utf8" });
+    // ACCEPT EVERY BUILDER-OWNED ROW ON `main`, read off the scoped verdict itself. Accepting one row would leave
+    // the page short for unrelated reasons and could not show `buildComplete` FLIPPING, which is half of what the
+    // thread asks this golden to prove — and the rows are taken from the scoped file so the keys are the ones the
+    // SCOPED path publishes, not the unscoped sweep's.
+    const scopedBuilderRows = (JSON.parse(fs.readFileSync(scopedNoRes, "utf8")).openRows || []).filter((r) => r.owner !== "verifier");
+    fs.writeFileSync(accPath, JSON.stringify({ resolutions: scopedBuilderRows.map((r) => (
+      { kind: "accepted", row: r.rowKey, answer: "out of scope by decision", decidedBy: "tester", date: "2026-09-03" })) }));
+    const vScopedAfter = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main", "--resolutions", accPath, "--verify-json", scopedWithRes], { input: verifyManifest, encoding: "utf8" });
+    const sBefore = JSON.parse(fs.readFileSync(scopedNoRes, "utf8"));
+    const sAfter = JSON.parse(fs.readFileSync(scopedWithRes, "utf8"));
+    check("PR #157 review (round 2): the SCOPED `--verify --page main --resolutions` path applies the acceptances too — `accepted` counts them and `missing` drops by the number of ❌ rows accepted, measured against the same scoped run WITHOUT `--resolutions`; this is the verdict the build executor reads per unit, and it had no test at all",
+      vScopedAfter.status !== 1 && scopedBuilderRows.length > 0
+      && sAfter.accepted === scopedBuilderRows.length
+      && sAfter.missing === sBefore.missing - scopedBuilderRows.filter((r) => r.outcome === "missing").length,
+      () => ({ before: { missing: sBefore.missing, accepted: sBefore.accepted, buildComplete: sBefore.buildComplete },
+        after: { missing: sAfter.missing, accepted: sAfter.accepted, buildComplete: sAfter.buildComplete },
+        status: vScopedAfter.status, stderr: (vScopedAfter.stderr || "").slice(0, 200) }));
+    check("PR #157 review (round 2): and `buildComplete` FLIPS on the scoped verdict — the accepted row was the unit's last builder-owned gap, so the in-context gate goes from a hard exit 2 to done; a mark that changed without the gate changing would be the drift this pins",
+      sBefore.buildComplete === false && sAfter.buildComplete === true
+      && sAfter.builderOpen === 0
+      && vScopedBefore.status === 2 && vScopedAfter.status === 0,
+      () => ({ beforeComplete: sBefore.buildComplete, afterComplete: sAfter.buildComplete,
+        beforeStatus: vScopedBefore.status, afterStatus: vScopedAfter.status }));
+    check("PR #157 review (round 2): the two verdicts AGREE on the row — the scoped markdown renders the identical `☑ accepted` row the unscoped sweep does, which is the disagreement the thread describes and the reason the scoped path needed its own golden",
+      /☑ accepted \| ACCEPTED BY DECISION \(tester, 2026-09-03\)/.test(vScopedAfter.stdout || "")
+      && scopedBuilderRows.every((r) => (vScopedAfter.stdout || "").includes(r.rowKey))
+      && (vAcc.stdout || "").includes(firstMissing.rowKey),
+      () => ({ scopedRow: (vScopedAfter.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0],
+        unscopedRow: (vAcc.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0] }));
+  } finally { for (const f of [accPath, accPath + ".vj", accPath + ".vj2", accPath + ".scoped-none", accPath + ".scoped-acc"]) { try { fs.unlinkSync(f); } catch { /* best effort */ } } }
   // (c-D12) ENG-94975 (contract v2 D12) — exit 2 is TWO conditions with OPPOSITE responses, and until this line
   // existed `--verify` exited 2 in silence, so an executor could not tell "my build is short" (repair on-stand and
   // re-verify) from "the PLAN is short" (stop, return to the caller — no amount of building clears it). This SU

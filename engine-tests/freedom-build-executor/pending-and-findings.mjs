@@ -199,6 +199,84 @@ check("D4 (PR #157): the operator LOG carries the same two numbers — the count
     && /2 further row\(s\) are counted but NOT named here/.test(truncated.log || ""),
   () => (truncated.log || "").split("\n").filter((l) => /on-stand look/.test(l)).join(" | "));
 
+/* ---------------------------------------------------------------------------
+   PR #157 REVIEW (round 2, Major on pending-and-findings.mjs:185) — `PENDING_RETURN_CAP` IS THE EXECUTOR'S OWN CAP
+   AND IT WAS DEAD IN THE TEST SET.
+
+   `pendingConfirmationRows()` ends in `rows.slice(0, PENDING_RETURN_CAP)` (25) and `pendingUnnamedNow(rows, count)`
+   is computed AFTER the slice. Every D4 scenario above drives a single page with five rows, so the slice never
+   truncated: `PENDING_RETURN_CAP` appeared only in `core.mjs`, the generated workflow and the frozen baseline, never
+   under `engine-tests/`. That cap sits on the exact invariant this ticket exists for — the worklist must never read
+   as the whole set — and the analogous bug ALREADY SHIPPED ONCE in this PR's own history at the engine boundary
+   (`pendingMore` published but not read: "COMPLETE PENDING 7" printed beside five rows). A regression in the slice
+   or in the derivation ORDER — computing `pendingUnnamed` before the slice, or capping in `pendingNext` instead —
+   would restore "printed once, then vanished" at the RUN boundary with no failing test.
+
+   Six pages, five named rows each (30 named), `verify.pending = 34`: past the cap, spread over pages, and with four
+   rows no page named. Every page is `complete: true`, so nothing is dispatched and the run goes straight to its
+   close — the same shape as the scenarios above, at a size that reaches the slice.                             */
+const manyPageKeys = ["main", "list", "child:Documents", "child:Education", "child:Employment", "child:References"];
+const pageRows = (key, n) => Array.from({ length: n }, (_, i) => (
+  { n: i + 1, deliverable: `${key} — region ${i + 1}`, rowKey: `${key}#confirm:region-${i + 1}` }));
+const manyPending = driveRun("pending-over-cap", (() => {
+  const a = reconcileGreenWithPending(ENG96445_PENDING);
+  a.unitKeys = [...manyPageKeys];
+  a.buildOrder = [...manyPageKeys];
+  a.pageSchemas = Object.fromEntries(manyPageKeys.map((k) => [k, `UsrBusinessRule_${k.replace(/[^A-Za-z]/g, "")}Page`]));
+  a.verify.pending = 34;
+  a.verify.pages = Object.fromEntries(manyPageKeys.map((k) => [k, {
+    complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0,
+    // Five named per page and a sixth counted but unnamed — the engine's own per-page shape past `PENDING_ROW_CAP`.
+    pending: 6, pendingRows: pageRows(k, 5), pendingMore: 1,
+  }]));
+  return a;
+})(), 30);
+check("PR #157 review (round 2): `pendingConfirmations` is TRUNCATED at `PENDING_RETURN_CAP` — 30 named rows over six pages come back as 25, so the executor's own cap is exercised instead of being dead code",
+  () => (manyPending.done?.result?.pendingConfirmations || []).length === 25,
+  () => JSON.stringify({ named: (manyPending.done?.result?.pendingConfirmations || []).length,
+    complete: manyPending.done?.result?.complete, done: !!manyPending.done }));
+check("PR #157 review (round 2): `pendingUnnamed` is derived AFTER the slice, from the run's own count — 34 counted minus 25 returned is 9, NOT the 4 the per-page `pendingMore` fields add up to; computing it before the slice is the regression that would restore \"printed once, then vanished\"",
+  () => manyPending.done?.result?.pendingUnnamed === 9,
+  () => JSON.stringify({ pendingUnnamed: manyPending.done?.result?.pendingUnnamed,
+    named: (manyPending.done?.result?.pendingConfirmations || []).length }));
+check("PR #157 review (round 2): the run still HOLDS on the full count, not on the truncated worklist — a cap on how many rows are named must never be a cap on how many hold the run",
+  () => manyPending.done?.result?.complete === false && manyPending.done?.result?.buildComplete === true,
+  () => JSON.stringify({ complete: manyPending.done?.result?.complete, buildComplete: manyPending.done?.result?.buildComplete }));
+check("PR #157 review (round 2): both `next` and the operator LOG state the FULL count and the NAMED count — 34 and 25 — so neither can be read as the whole set",
+  () => /34 ☐ confirmation\(s\)/.test(manyPending.done?.result?.next || "")
+    && /25 of them are named/.test(manyPending.done?.result?.next || "")
+    && /remaining 9 are listed in/.test(manyPending.done?.result?.next || "")
+    && /34 row\(s\) need an on-stand look, 25 named/.test(manyPending.log || "")
+    && /9 further row\(s\) are counted but NOT named here/.test(manyPending.log || ""),
+  () => JSON.stringify({ next: manyPending.done?.result?.next,
+    log: (manyPending.log || "").split("\n").filter((l) => /on-stand look|NOT named/.test(l)) }));
+check("PR #157 review (round 2): the 25 returned rows carry their OWN page in `unit` and span several pages — a cap that silently kept only the first page's rows would pass a length check and hand the operator a worklist for one page out of six",
+  () => { const rows = manyPending.done?.result?.pendingConfirmations || [];
+    return new Set(rows.map((r) => r.unit)).size >= 5 && rows.every((r) => r.rowKey && r.deliverable); },
+  () => JSON.stringify([...new Set((manyPending.done?.result?.pendingConfirmations || []).map((r) => r.unit))]));
+
+/* THE OTHER UNDRIVEN SHAPE the thread names: `count > 0` with `rows.length === 0`. On a large plan the wire budget
+   trims every page to naming nothing, so the run holds on a number with no worklist at all — and it must SAY so
+   rather than printing an empty list beside a non-zero count. */
+const noneNamed = driveRun("pending-none-named", (() => {
+  const a = reconcileGreenWithPending(ENG96445_PENDING);
+  a.verify.pending = 5;
+  a.verify.pages.main = { complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0,
+    builderOpen: 0, pending: 5, pendingRows: [] };
+  return a;
+})());
+check("PR #157 review (round 2): `pending: 5` with an EMPTY `pendingRows` on every page still HOLDS — `pendingConfirmations` is empty, `pendingUnnamed` is the whole 5, and the run does not read an unnamed worklist as no worklist",
+  () => (noneNamed.done?.result?.pendingConfirmations || []).length === 0
+    && noneNamed.done?.result?.pendingUnnamed === 5
+    && noneNamed.done?.result?.complete === false
+    && noneNamed.done?.result?.buildComplete === true,
+  () => JSON.stringify({ named: (noneNamed.done?.result?.pendingConfirmations || []).length,
+    unnamed: noneNamed.done?.result?.pendingUnnamed, complete: noneNamed.done?.result?.complete }));
+check("PR #157 review (round 2): and it points at the verify table for ALL of them — with nothing named, the table is the operator's only route to the rows, so a close that did not name it would be a hold with no worklist anywhere",
+  () => /5 ☐ confirmation\(s\)/.test(noneNamed.done?.result?.next || "")
+    && /remaining 5 are listed in/.test(noneNamed.done?.result?.next || ""),
+  () => noneNamed.done?.result?.next);
+
 /* PR #157 review (Major on `core.mjs:1403`, second half) — THE ONE CONTRADICTION THIS PAIR CAN STILL SHOW FAILS
  * CLOSED. `pending` is a top-level scalar while the rows are nested per page, so an answer that transcribes
  * `pending: 0` beside a non-empty `pendingRows` is entirely plausible — and it used to close `complete: true`

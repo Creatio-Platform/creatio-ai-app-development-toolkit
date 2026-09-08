@@ -4967,10 +4967,17 @@ export function verifyUnit(result, opts = {}, built = {}, pageKey) {
     // (`error`, `complete: false`, `buildComplete: false`) instead so the caller / CLI fails distinctly rather than
     // reading a false green.
     const known = new Set(checklistGroups(result, opts).map((g) => g.pageKey));
-    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
-    return { pageKey, complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, openRows: [], planGaps: gaps };
+    if (!known.has(pageKey)) return { pageKey, error: "unknown page", complete: false, buildComplete: false, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, pending: 0, accepted: 0, confirmed: 0, openRows: [], pendingRows: [], planGaps: gaps };
+    return { pageKey, complete: true, buildComplete: true, missing: 0, buildMissing: 0, unverified: 0, builderOpen: 0, pending: 0, accepted: 0, confirmed: 0, openRows: [], pendingRows: [], planGaps: gaps };
   }
-  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, openRows: p.openRows, planGaps: gaps };
+  // PR #157 review (round 2, Major on migrate.mjs:3442) — THE SCOPED VERDICT CARRIES THE SAME AXES AS THE SWEEP.
+  // It published `missing`/`unverified`/`builderOpen` and NOT `pending`/`accepted`/`confirmed`, so the one verdict
+  // the build executor reads per unit could not see the ☐ rows holding its page or the deviations its green rests
+  // on — and the thread's concern is exactly a silent disagreement between the scoped and unscoped verdicts. Three
+  // integers and one list on a PER-UNIT file (not the wire-capped summary), so this costs nothing the ~16000-byte
+  // Reconcile ceiling cares about. `pendingRows` rides along for the same reason the sweep publishes it: a count
+  // an operator cannot resolve to a row is not a worklist.
+  return { pageKey, complete: p.complete, buildComplete: p.buildComplete, missing: p.missing, buildMissing: p.buildMissing, unverified: p.unverified, builderOpen: p.builderOpen, pending: p.pending || 0, accepted: p.accepted || 0, confirmed: p.confirmed || 0, openRows: p.openRows, pendingRows: p.pendingRows || [], planGaps: gaps };
 }
 
 // The MACHINE-READABLE verdict (`--verify --verify-json <file>`). Everything `renderVerify` already computed —
