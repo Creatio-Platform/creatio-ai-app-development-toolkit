@@ -750,11 +750,15 @@ check("D6: and the record reaches the queue carry as `standWrites.appScaffold`, 
  * emits it as JSON under a fixed sentence — so it is parsed back out of the LAST Verify prompt and read as an
  * object.
  */
+// ENG-96778 — EVERY PROMPT THAT CARRIES THE CARRY, not only Verify's. The carry block is composed once
+// (`carryBlock(carryNow())`) and rendered into BOTH the Verify prompt and the persistence step's, and AC 12 added a
+// stop that persists and returns before Verify — a package mismatch now defers the units behind the app unit
+// instead of dispatching them into a package that is not there. Scanning Verify alone made this reader return
+// `null` on exactly that path, which reads as "nothing was recorded" for a record that was written.
 const standWritesFromPrompt = (dispatched) => {
-  const verifies = dispatched.filter((d) => d.phase === "Verify");
-  for (let i = verifies.length - 1; i >= 0; i -= 1) {
-    const m = /merge under the ROOT key `standWrites` \(create it if absent\), copying the JSON EXACTLY: (\{.*?\})\n/s.exec(verifies[i].prompt || "");
-    if (m) { try { return JSON.parse(m[1]); } catch { /* fall through to the next Verify */ } }
+  for (let i = dispatched.length - 1; i >= 0; i -= 1) {
+    const m = /merge under the ROOT key `standWrites` \(create it if absent\), copying the JSON EXACTLY: (\{.*?\})\n/s.exec(dispatched[i].prompt || "");
+    if (m) { try { return JSON.parse(m[1]); } catch { /* fall through to the next prompt that carries one */ } }
   }
   return null;
 };
@@ -957,8 +961,10 @@ const mismatch = driveRun("app-scaffold-mismatch", () => reconcileNewApp(), {
   Refs: () => ({ written: true, files: [], sliceKeys: ["main"], notes: "" }),
   Build: (item) => (/app/.test(item.id)
     ? { ...APP_PARTIAL, packageName: "SomeOtherPrefix_BusinessRuleFreedom", blocked: [] }
-    // `main` is dispatched in the same round and has to answer, or the run stops before the Verify step whose
-    // carry block is where the record is read back from.
+    // `main` is NO LONGER DISPATCHED in this round (ENG-96778 / AC 12): a package mismatch defers every unit
+    // behind the app unit and stops the run with `app-unit-incomplete`, so this answer is now unreachable on the
+    // mismatch leg. It is kept because the same map drives the matching-package legs above, where `main` does run.
+    // The record is read off the persistence step's carry block instead of Verify's — see `standWritesFromPrompt`.
     : { unit: "main", schemaName: "UsrBusinessRule_FormPage", claimedBuilt: [],
         guidelines: { ran: false, notRunWhy: "not the subject of this golden" },
         selfCheck: { ran: true, complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, fixAttempted: true },

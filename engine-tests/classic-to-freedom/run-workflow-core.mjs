@@ -34,6 +34,7 @@ const CORE = path.join(ROOT, "skills", "_workflow-core");
 import { OUTCOME, ACCESS, step, workItem, record, errorShape, reviveError } from "../../skills/_workflow-core/work-item.mjs";
 import { declareHost, negotiateStep, negotiateRun, CapabilityError } from "../../skills/_workflow-core/capabilities.mjs";
 import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } from "../../skills/_workflow-core/run-state.mjs";
+import { stageGate, gateStop, outcomeState, makePhaseOutcomes, countReturned, RESUME_CLAUSE } from "../../skills/_workflow-core/stage-gate.mjs";
 import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
 import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
 import { INDEX_ENTRY as SCHEMA_INDEX_ENTRY } from "../../skills/_workflow-core/behaviour-analysis/schemas.mjs";
@@ -115,6 +116,90 @@ check("reviveError: a revived error carries the `workItemOutcome` mark — it is
   () => { const r = reviveError(errorShape(new RangeError("nope"))); return r instanceof Error && r.name === "RangeError" && r.message === "nope"; });
 check("record: an unknown outcome throws — there are exactly three states and a fourth is an orchestration bug",
   () => { try { record(workItem(okItem), "maybe"); return false } catch { return true } });
+
+/* ---------------------------------------------------------------------------
+   1b. STAGE GATES (ENG-96778)
+   The pure decision every phase transition now asks before it runs: did the
+   phase before this one actually produce anything? A table, because the input
+   space is small and each branch is a different operator outcome — a stop that
+   fires on a legitimately empty phase refuses every healthy run of a simple
+   surface, and one that does not fire on a dead phase is the whole defect.
+   --------------------------------------------------------------------------- */
+console.log("\n===== stage gates =====");
+// T1 — the headline: every agent of a phase died.
+{
+  const stop = stageGate({ phase: "describe", expected: 3, results: [], label: "Describe" });
+  check("stageGate: expected 3, none returned -> a STOP named `<phase>-produced-nothing`",
+    () => !!stop && stop.stopped === "describe-produced-nothing", () => JSON.stringify(stop));
+  check("stageGate: the stop carries all five keys AC 2 requires — stopped, reason, next, agentsExpected, agentsReturned",
+    () => !!stop && ["stopped", "reason", "next"].every((k) => typeof stop[k] === "string" && stop[k] !== "")
+      && stop.agentsExpected === 3 && stop.agentsReturned === 0,
+    () => JSON.stringify(stop));
+  check("stageGate: the reason says the phase FAILED rather than found nothing — the two need opposite responses, and reading one as the other is the defect this gate exists for",
+    () => /FAILED phase, not an empty one/.test(stop.reason), () => stop.reason);
+  // T5 — the resume clause, so an operator reading a stop knows what to type.
+  check("stageGate: `next` names BOTH hosts' resume paths, including the Claude runtime's `resumeFromRunId`",
+    () => /resumeFromRunId/.test(stop.next) && /cli\.mjs resume/.test(stop.next), () => stop.next);
+  check("stageGate: `next` says a RESUME will not help — the journal records deaths, so replaying it stops in the same place",
+    () => /replays the recorded deaths/.test(stop.next) && /FRESH run/.test(stop.next), () => stop.next);
+}
+// T2 — a phase that dispatched nothing is not a failed phase. This is the branch
+// that keeps the gate off every plan with no ⚠ Confirm items at all.
+check("stageGate: expected 0 -> null. A phase that dispatched NOTHING is not a failed phase, and stopping there would refuse every healthy simple surface",
+  () => stageGate({ phase: "preflight", expected: 0, results: [] }) === null);
+// T3 — partial. The caller's arithmetic decides what to do with the rest.
+check("stageGate: some agents answered -> null. A PARTIAL phase carries on; routing the dead batch's rows is the caller's arithmetic, not the gate's",
+  () => stageGate({ phase: "describe", expected: 3, results: [{ a: 1 }, null, null] }) === null);
+check("stageGate: null holes are not results — the count reads the protocol's null hole, not the array length",
+  () => { const s = stageGate({ phase: "describe", expected: 2, results: [null, undefined] }); return !!s && s.agentsReturned === 0 && s.agentsExpected === 2; });
+check("stageGate: returned === expected -> null",
+  () => stageGate({ phase: "describe", expected: 2, results: [{}, {}] }) === null);
+check("stageGate: a FALSY-but-present answer is a result, not a death — `false` and `0` are answers the protocol distinguishes from a null hole",
+  () => stageGate({ phase: "critique", expected: 1, results: [false] }) === null);
+check("countReturned: a bare (non-array) value counts as one result, and nullish as none — a single-item step hands the gate its one answer, not a batch",
+  () => countReturned({}) === 1 && countReturned(null) === 0 && countReturned(undefined) === 0);
+// T4 — the escape hatch, evaluated ONLY on the branch that would otherwise stop.
+{
+  let calls = 0;
+  check("stageGate: `emptyIsLegit()` true -> null, for the caller that knows an empty answer is a real answer here",
+    () => stageGate({ phase: "preflight", expected: 2, results: [], emptyIsLegit: () => { calls += 1; return true } }) === null);
+  check("stageGate: `emptyIsLegit` is NOT consulted on a phase that answered — a caller may make it as expensive as it likes",
+    () => { const before = calls; stageGate({ phase: "preflight", expected: 2, results: [{}], emptyIsLegit: () => { calls += 1; return true } }); return calls === before; });
+  check("stageGate: `emptyIsLegit()` false still stops",
+    () => stageGate({ phase: "preflight", expected: 2, results: [], emptyIsLegit: () => false })?.stopped === "preflight-produced-nothing");
+}
+check("stageGate: a gate with no `phase` THROWS — an unnamed stop code is a stop nobody can act on",
+  () => { try { stageGate({ expected: 1, results: [] }); return false } catch (e) { return /name the `phase`/.test(e.message) } });
+check("gateStop: the two stops that are NOT `<phase>-produced-nothing` (`nothing-built`, `app-unit-incomplete`) get the identical five keys and the identical resume clause",
+  () => { const s = gateStop({ stopped: "nothing-built", reason: "r", next: "n", agentsExpected: 2, agentsReturned: 0 });
+    return s.stopped === "nothing-built" && s.agentsExpected === 2 && s.agentsReturned === 0 && s.next === `n ${RESUME_CLAUSE}` });
+check("gateStop: a stop with no code THROWS",
+  () => { try { gateStop({ reason: "r" }); return false } catch (e) { return /name its `stopped` code/.test(e.message) } });
+
+console.log("\n===== phase outcomes =====");
+check("outcomeState: 0 expected -> skipped · 0 returned -> none · short -> partial · all -> ok",
+  () => outcomeState(0, 0) === "skipped" && outcomeState(3, 0) === "none" && outcomeState(3, 2) === "partial" && outcomeState(3, 3) === "ok",
+  () => [outcomeState(0, 0), outcomeState(3, 0), outcomeState(3, 2), outcomeState(3, 3)].join(","));
+{
+  const o = makePhaseOutcomes();
+  o.record("Context", 1, [{}]);
+  o.record("Describe", 3, [{}, null, {}]);
+  o.skipped("Critique", "the host cannot give it an independent context");
+  o.note("Merge", "none", { why: "dead" });
+  const snap = o.snapshot();
+  check("phaseOutcomes: each phase carries its state plus the arithmetic it was decided from",
+    () => snap.Context.state === "ok" && snap.Describe.state === "partial" && snap.Describe.agentsReturned === 2
+      && snap.Critique.state === "skipped" && snap.Merge.state === "none",
+    () => JSON.stringify(snap));
+  check("phaseOutcomes: INSERTION order is kept — a phase re-entered on a later round must not jump to the end of the report",
+    () => Object.keys(snap).join(",") === "Context,Describe,Critique,Merge", () => Object.keys(snap).join(","));
+  o.record("Describe", 3, [{}, {}, {}]);
+  check("phaseOutcomes: re-recording a phase overwrites its entry IN PLACE and keeps its position",
+    () => Object.keys(o.snapshot()).join(",") === "Context,Describe,Critique,Merge" && o.snapshot().Describe.state === "ok",
+    () => JSON.stringify(o.snapshot()));
+  check("phaseOutcomes: `snapshot()` is a COPY — a caller mutating the returned object cannot reach back into the run's bookkeeping",
+    () => { const s = o.snapshot(); s.Context.state = "tampered"; return o.snapshot().Context.state === "ok"; });
+}
 
 /* ---------------------------------------------------------------------------
    2. CAPABILITIES
@@ -588,6 +673,173 @@ console.log("\n===== behaviour-analysis: override-only scopes, $TMPDIR, fan-out 
   const noRule = prompts.describePrompt({ RULES: "(no rules)", batch: { scopes: [{ role: "r", label: "l", methodKeys: [], memberKeys: [] }] }, sharedCardList: "", sharedCorePath: "p", partPath: "q", roundNote: "" });
   check("core C5 (anti-vacuity): a Describe prompt built WITHOUT the shared rules block fails the same regex — the check reads the text the phase actually receives, not a constant that happens to exist",
     !/SCRATCH FILES GO OUTSIDE THE REPOSITORY/.test(noRule));
+}
+
+/* ---------------------------------------------------------------------------
+   ENG-96778 — THE ANALYSIS STAGE GATES, driven through the REAL core.
+   Every one of these was a phase that USED to run on nothing and report a
+   perfectly formed answer for it. The unit table above pins the gate's decision;
+   these pin the WIRING — that the decision is taken at the right transition,
+   that the phases after it are genuinely not dispatched, and that the run's own
+   return says which phase died.
+   --------------------------------------------------------------------------- */
+console.log("\n===== analysis stage gates (ENG-96778) =====");
+
+// A surface that fans OUT: `rowsPerAgent: 1` puts the two worked scopes of `CTX`
+// into two describe batches, which is what makes "all of them died" and "one of
+// them died" different scenarios rather than the same one.
+const WIDE = { ...INPUT, rowsPerAgent: 1 };
+// Which describe item this is, by id — the ids are stable and deterministic, and
+// the suite already pins that, so keying a scripted death on one is safe.
+const isBatch2 = (item) => /^describe\.2\./.test(item.id);
+// What batch 1 alone can honestly cover: its own three rows. `initMini` belongs to batch 2.
+const MAIN_ONLY = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.filter((e) => e.key !== "initMini") };
+
+// AC 5 — EVERY Describe agent dies.
+{
+  const { result, asked, phases } = await runCba(WIDE, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") return { outcome: OUTCOME.DEATH };
+    return happyAnswer(i);
+  });
+  check("AC 5: every Describe agent dead -> `describe-produced-nothing`, not a coverage number over an empty card set",
+    () => result.stopped === "describe-produced-nothing" && result.skipped === false,
+    () => JSON.stringify({ stopped: result.stopped, skipped: result.skipped }));
+  check("AC 5: NO Critique and NO Merge item is dispatched — the phases after a dead Describe would have adversarially checked nothing and merged nothing, and both would have looked like phases that ran",
+    () => !asked.some((i) => i.phase === "Critique" || i.phase === "Merge")
+      && phases.join(" -> ") === "Context -> Describe",
+    () => `phases: ${phases.join(" -> ")} · asked: ${asked.map((i) => i.id).join(",")}`);
+  check("AC 2: the stop carries the fan-out arithmetic — 2 agents expected, 0 returned",
+    () => result.agentsExpected === 2 && result.agentsReturned === 0,
+    () => JSON.stringify({ expected: result.agentsExpected, returned: result.agentsReturned }));
+  check("AC 2: and a `next` an operator can act on, naming the resume that will NOT help",
+    () => /resumeFromRunId/.test(result.next || "") && /FRESH run/.test(result.next || ""), () => result.next);
+  check("AC 5: the coverage it reports is the HONEST one — 0 of the 4 rows described, every row uncovered, not complete",
+    () => result.coverage.complete === false && result.coverage.described === 0
+      && result.coverage.digestRows === 4 && result.coverage.uncovered.length === 4,
+    () => JSON.stringify(result.coverage));
+  check("AC 3: `phaseOutcomes` says Context answered, Describe produced NONE, and the two phases after it were SKIPPED — a stop names one phase, this names all four",
+    () => result.phaseOutcomes?.Context?.state === "ok" && result.phaseOutcomes?.Describe?.state === "none"
+      && result.phaseOutcomes?.Critique?.state === "skipped" && result.phaseOutcomes?.Merge?.state === "skipped",
+    () => JSON.stringify(result.phaseOutcomes));
+}
+
+// AC 6 — ONE of the two Describe batches dies. The run must NOT stop.
+{
+  const { result, asked, logs } = await runCba(WIDE, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") {
+      if (isBatch2(i)) return { outcome: OUTCOME.DEATH };
+      // Batch 1 covers ONLY the rows it owns, which is what a real batch does. Handing it the whole surface
+      // would leave nothing uncovered and the repair leg below would pass without a repair round ever running.
+      if (i.id.startsWith("repair.")) return { outcome: OUTCOME.VALUE, value: FULL_DESCRIBE };
+      return { outcome: OUTCOME.VALUE, value: MAIN_ONLY };
+    }
+    return happyAnswer(i);
+  });
+  check("AC 6: one dead batch of two does NOT stop the run — a partial Describe still has cards, and the phases after it have real input",
+    () => !result.stopped && asked.some((i) => i.phase === "Critique") && asked.some((i) => i.phase === "Merge"),
+    () => JSON.stringify({ stopped: result.stopped, asked: asked.map((a) => a.id) }));
+  check("AC 6: Describe is marked PARTIAL, with the arithmetic it was decided from",
+    () => result.phaseOutcomes?.Describe?.state === "partial" && result.phaseOutcomes.Describe.agentsExpected === 2
+      && result.phaseOutcomes.Describe.agentsReturned === 1,
+    () => JSON.stringify(result.phaseOutcomes?.Describe));
+  check("AC 6: the run SAYS which batch died and that its rows are unattempted rather than unanswerable — the two produce the identical uncovered count and only one is a host failure",
+    () => logs.some((l) => /Describe batch\(es\) returned NOTHING/.test(l) && /DealMini/.test(l) && /unattempted, not unanswerable/.test(l)),
+    () => JSON.stringify(logs.filter((l) => /Describe/.test(l))));
+  check("AC 6: the dead batch's rows reach the REPAIR worklist — a repair item is dispatched for the scope that owns them",
+    () => asked.some((i) => i.id.startsWith("repair.")), () => asked.map((i) => i.id).join(","));
+  check("AC 6 (control): the repair round is what CLOSES the surface — coverage is complete only because the rows the dead batch owned were described on the second pass",
+    () => result.coverage.complete === true && result.coverage.described === 4,
+    () => JSON.stringify(result.coverage));
+}
+
+// R9 / transition 4 — the repair round itself produces nothing.
+{
+  let describeCalls = 0;
+  const partial = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.slice(0, 2) };
+  const { result, logs } = await runCba(INPUT, (i) => {
+    if (i.phase === "Context") return { outcome: OUTCOME.VALUE, value: CTX };
+    if (i.phase === "Describe") { describeCalls += 1; return describeCalls === 1 ? { outcome: OUTCOME.VALUE, value: partial } : { outcome: OUTCOME.DEATH } }
+    if (i.phase === "Critique") return { outcome: OUTCOME.VALUE, value: CLEAN_CRITIQUE };
+    return { outcome: OUTCOME.VALUE, value: MERGED };
+  });
+  check("transition 4: a repair round where EVERY batch died is recorded as `repair-produced-nothing` — the rows are unattempted, and reporting them as rows the agents could not describe is a verdict about the surface that no agent earned",
+    () => result.phaseOutcomes?.Repair?.state === "none" && result.phaseOutcomes.Repair.stopped === "repair-produced-nothing"
+      && logs.some((l) => /repair-produced-nothing/.test(l) && /UNATTEMPTED/.test(l)),
+    () => JSON.stringify({ repair: result.phaseOutcomes?.Repair, logs: logs.filter((l) => /repair/i.test(l)) }));
+  check("transition 4: it does NOT stop the run — round 1's cards exist and the Merge deliverable is still worth writing; the rows simply stay uncovered",
+    () => !result.stopped && result.coverage.complete === false && result.coverage.uncovered.length === 2,
+    () => JSON.stringify({ stopped: result.stopped, coverage: result.coverage }));
+}
+
+// AC 7 — a dead Critique. Recorded, never a stop.
+{
+  const { result, asked } = await runCba(INPUT, (i) => (i.phase === "Critique" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("AC 7: a dead Critique returns `critiqueRan: false` and MERGE STILL RUNS — the contradiction check is what was lost, not the deliverable",
+    () => result.critiqueRan === false && !result.stopped && asked.some((i) => i.phase === "Merge"),
+    () => JSON.stringify({ critiqueRan: result.critiqueRan, stopped: result.stopped, asked: asked.map((a) => a.id) }));
+  check("AC 7: `phaseOutcomes.Critique` is `none` and carries the same verdict, so a caller reads one field family for every phase",
+    () => result.phaseOutcomes?.Critique?.state === "none" && result.phaseOutcomes.Critique.critiqueRan === false,
+    () => JSON.stringify(result.phaseOutcomes?.Critique));
+}
+{
+  // The OTHER Critique failure: the host answered, with something that is not a critique. It RETURNED (so
+  // `agentsReturned` is 1) and it did not RUN — two facts the single `critiqueRan` boolean cannot hold apart.
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Critique" ? { outcome: OUTCOME.VALUE, value: { notACritique: true } } : happyAnswer(i)));
+  check("AC 7: a host that ANSWERED with an unusable shape is `none` with `agentsReturned: 1` — 'the host never answered' and 'the host answered garbage' need different repairs",
+    () => result.phaseOutcomes?.Critique?.state === "none" && result.phaseOutcomes.Critique.agentsReturned === 1
+      && result.critiqueRan === false,
+    () => JSON.stringify(result.phaseOutcomes?.Critique));
+}
+
+// AC 8 — a dead Merge.
+{
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("AC 8: a dead Merge returns `stopped: 'merge-produced-nothing'`, not only `complete: false` — an INCOMPLETE surface and a fully described one that was never written out are the same boolean and opposite repairs",
+    () => result.stopped === "merge-produced-nothing" && result.complete !== true,
+    () => JSON.stringify({ stopped: result.stopped, coverage: result.coverage }));
+  check("AC 8: the coverage numbers SURVIVE the stop — they are real, and a caller that lost them would re-derive nothing",
+    () => result.coverage.described === 4 && result.coverage.digestRows === 4 && result.coverage.complete === false,
+    () => JSON.stringify(result.coverage));
+  check("AC 8: `next` is the GATE's, not the happy path's — telling the caller to merge an index that was never written is worse than saying nothing",
+    () => !/merge indexPath into manifest/.test(result.next || "") && /re-merges them/.test(result.next || ""),
+    () => result.next);
+  check("AC 8: `phaseOutcomes` records Merge as `none` beside the phases that did answer",
+    () => result.phaseOutcomes?.Merge?.state === "none" && result.phaseOutcomes.Describe.state === "ok",
+    () => JSON.stringify(result.phaseOutcomes));
+}
+
+// AC 3 — phaseOutcomes on EVERY exit path, the two skips and the context failure included.
+{
+  const pre = await runCba({ ...INPUT, totals: { stubs: 0, members: 0 } }, happyAnswer);
+  check("AC 3: the PRE-CONTEXT skip (a digest declaring zero rows) returns phaseOutcomes — all four phases `skipped`, with the reason, on a run that spent no agent at all",
+    () => ["Context", "Describe", "Critique", "Merge"].every((p) => pre.result.phaseOutcomes?.[p]?.state === "skipped")
+      && /no imperative rows/.test(pre.result.phaseOutcomes.Context.why || ""),
+    () => JSON.stringify(pre.result.phaseOutcomes));
+
+  const CTX_NONE = { ...CTX, scopes: [{ role: "main page", schema: "DealPage", methodKeys: [], memberKeys: [], unresolvedCount: 0 }] };
+  const post = await runCba(INPUT, (i) => (i.phase === "Context" ? { outcome: OUTCOME.VALUE, value: CTX_NONE } : happyAnswer(i)));
+  check("AC 3: the POST-CONTEXT skip returns phaseOutcomes with Context `ok` and the three phases after it `skipped` — the census DID run, and the report has to say so",
+    () => post.result.skipped === true && post.result.phaseOutcomes?.Context?.state === "ok"
+      && post.result.phaseOutcomes.Describe.state === "skipped",
+    () => JSON.stringify(post.result.phaseOutcomes));
+
+  const dead = await runCba(INPUT, (i) => (i.phase === "Context" ? { outcome: OUTCOME.DEATH } : happyAnswer(i)));
+  check("AC 3: the `context-failed` stop returns phaseOutcomes too — Context `none`, everything after it `skipped`",
+    () => dead.result.stopped === "context-failed" && dead.result.phaseOutcomes?.Context?.state === "none"
+      && dead.result.phaseOutcomes.Merge.state === "skipped",
+    () => JSON.stringify(dead.result.phaseOutcomes));
+
+  const happy = await runCba(INPUT, happyAnswer);
+  check("AC 3: the HEALTHY return carries it as well — a run can be complete and still have limped, and until now the only trace of that was a log line",
+    () => ["Context", "Describe", "Critique", "Merge"].every((p) => happy.result.phaseOutcomes?.[p]?.state === "ok")
+      && happy.result.coverage.complete === true,
+    () => JSON.stringify(happy.result.phaseOutcomes));
+  check("AC 4: and the healthy run is otherwise UNCHANGED — same describe fan-out, same coverage, same verdict, same `next`",
+    () => happy.result.describeAgents === 1 && happy.result.coverage.described === 4 && happy.result.critiqueRan === true
+      && /merge indexPath into manifest\.behaviourIndex/.test(happy.result.next),
+    () => JSON.stringify({ describeAgents: happy.result.describeAgents, coverage: happy.result.coverage, next: happy.result.next }));
 }
 
 console.log("\n===== the Critique retry, EXECUTED as a generator =====");
@@ -1283,6 +1535,33 @@ const genSrc = readFileSync(GENERATED, "utf8");
       return lines.length === 2;
     },
     () => `stdout was: ${JSON.stringify(res.stdout)}`);
+}
+/* ENG-96778 (AC 1) — THE GATE IS IN BOTH SHIPPED ARTIFACTS, AND IS DECLARED BEFORE THE CORES THAT CALL IT.
+   `stage-gate.mjs` is a leaf module inlined into a single scope where a `const` is NOT hoisted, so a declaration
+   placed after its caller is a temporal-dead-zone throw at RUN time, not a build error — the drift gate above
+   cannot see it, and neither can a module-path suite, because on that path `import` hoists. The generator's
+   TARGETS list puts it first; this asserts the artifact that came out. */
+{
+  const BEX_GENERATED = readFileSync(path.join(ROOT, "skills/freedom-build-executor/freedom-build-executor.workflow.js"), "utf8");
+  for (const [label, text] of [["classic-behaviour-analysis", genSrc], ["freedom-build-executor", BEX_GENERATED]]) {
+    check(`generated (${label}): the stage gate is INLINED — \`stageGate\` and \`gateStop\` are in the shipped artifact, which is the only copy the Claude host runs`,
+      () => /function stageGate\(/.test(text) && /function gateStop\(/.test(text) && /function makePhaseOutcomes\(/.test(text),
+      () => `stageGate:${/function stageGate\(/.test(text)} gateStop:${/function gateStop\(/.test(text)}`);
+    check(`generated (${label}): it is declared BEFORE the core that calls it — in one inlined scope a \`const\` is not hoisted, so a late declaration throws at run time and nothing but the order can prevent it`,
+      () => text.indexOf("function stageGate(") < text.indexOf("function* run("),
+      () => `stageGate at ${text.indexOf("function stageGate(")}, run at ${text.indexOf("function* run(")}`);
+  }
+  // The `<phase>-produced-nothing` codes are COMPOSED by `stageGate` from its `phase` argument, so what the
+  // artifact carries is the CALL, not the literal — which is the right thing to assert: a gate that is present
+  // but never called is exactly the drift this leg exists to catch.
+  check("generated (classic-behaviour-analysis): the artifact CALLS the gate at transition 2 (Describe) and transition 5 (Merge), and records the repair round's own failure",
+    () => /stageGate\(\{[\s\S]{0,80}phase: 'describe'/.test(genSrc) && /stageGate\(\{[\s\S]{0,80}phase: 'merge'/.test(genSrc)
+      && /repair-produced-nothing/.test(genSrc) && /`\$\{phase\}-produced-nothing`/.test(genSrc),
+    () => "the shipped analysis workflow is missing one of: the describe gate, the merge gate, repair-produced-nothing, or the stop-code composition itself");
+  check("generated (freedom-build-executor): the artifact CALLS the gate at transition 8 (Preflight) and carries the two composed stop codes of transitions 10 and 12",
+    () => /stageGate\(\{[\s\S]{0,80}phase: 'preflight'/.test(BEX_GENERATED)
+      && /'nothing-built'/.test(BEX_GENERATED) && /'app-unit-incomplete'/.test(BEX_GENERATED),
+    () => "the shipped build workflow is missing one of: the preflight gate, nothing-built, app-unit-incomplete");
 }
 /* PR #128 (round 17) — EVERY SIBLING EXPORT A MODULE CALLS MUST BE IN ITS IMPORT LIST.
    This is the one defect class the generated artifact CANNOT show and the slice suite cannot see: the inlined

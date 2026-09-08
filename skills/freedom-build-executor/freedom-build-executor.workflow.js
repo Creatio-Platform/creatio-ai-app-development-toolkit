@@ -21,6 +21,78 @@ export const meta = {
 
 // ---8<--- PURE DECISION HELPERS ---8<---
 
+const RESUME_CLAUSE =
+  'Nothing after this phase ran, and nothing it would have written exists. Fix what killed the agents (host quota, an expired token, a role the host cannot bind), then start a FRESH run — resuming this one (`node cli.mjs resume <run.json>` on the CLI host, `resumeFromRunId` on the Claude Workflow host) replays the recorded deaths and stops here again.'
+
+function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0 }) {
+  if (!stopped) throw new Error('a gate stop must name its `stopped` code')
+  return {
+    stopped,
+    reason,
+    next: next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE,
+    agentsExpected,
+    agentsReturned,
+  }
+}
+
+function countReturned(results) {
+  if (!Array.isArray(results)) return results === null || results === undefined ? 0 : 1
+  let n = 0
+  for (const r of results) if (r !== null && r !== undefined) n += 1
+  return n
+}
+
+function stageGate({ phase, expected = 0, results = [], emptyIsLegit = null, label = '', what = '', fix = '' }) {
+  if (!phase) throw new Error('a stage gate must name the `phase` it guards')
+  const returned = countReturned(results)
+  if (expected <= 0 || returned > 0) return null
+  const legit = typeof emptyIsLegit === 'function' ? emptyIsLegit() : !!emptyIsLegit
+  if (legit) return null
+  const name = label || phase
+  const consequence = what ? ` — ${what}` : ''
+  return gateStop({
+    stopped: `${phase}-produced-nothing`,
+    reason: `all ${expected} ${name} agent(s) returned nothing${consequence}. That is a FAILED phase, not an empty one: the phase after it would have run on no input at all and reported an answer it never computed.`,
+    next: fix,
+    agentsExpected: expected,
+    agentsReturned: returned,
+  })
+}
+
+function outcomeState(expected, returned) {
+  if (expected <= 0) return 'skipped'
+  if (returned <= 0) return 'none'
+  return returned < expected ? 'partial' : 'ok'
+}
+
+function makePhaseOutcomes() {
+  const byPhase = {}
+  const order = []
+  const set = (phase, entry) => {
+    if (!order.includes(phase)) order.push(phase)
+    byPhase[phase] = entry
+    return entry
+  }
+  return {
+    record(phase, expected, results, extra = {}) {
+      const returned = countReturned(results)
+      return set(phase, { state: outcomeState(expected, returned), agentsExpected: expected, agentsReturned: returned, ...extra })
+    },
+    note(phase, state, extra = {}) {
+      return set(phase, { state, ...extra })
+    },
+    skipped(phase, why = '') {
+      return set(phase, why ? { state: 'skipped', why } : { state: 'skipped' })
+    },
+    snapshot() {
+      const out = {}
+      for (const p of order) out[p] = { ...byPhase[p] }
+      return out
+    },
+  }
+}
+
+
 const ACCESS = {
   NONE: 'none',
   STAND_READ_ONLY: 'stand-read-only',
@@ -2480,6 +2552,8 @@ function* run(rawInput, io = {}, opts = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
 
+  const outcomes = makePhaseOutcomes()
+
   const input = normalizeInput(rawInput)
   const ctx = makeContext(input, opts.selfPath)
   const {
@@ -2513,6 +2587,7 @@ function* run(rawInput, io = {}, opts = {}) {
   let pendingContradiction
   let unsettledUnits = new Set()
   let standWrites = {}
+  const buildersReturnedNothing = []
   let orphanedPages = []
 let unconsumed = []
 let resolutionCheckTally = new Map()
@@ -2577,6 +2652,8 @@ let resolutionCheckTally = new Map()
       standUnconfirmedComponents: [],
       templateMismatches: [],
       appIdentityMismatch: null,
+      buildersReturnedNothing: [...buildersReturnedNothing],
+      phaseOutcomes: outcomes.snapshot(),
       next: null,
       ...extra,
     }
@@ -2829,6 +2906,7 @@ const resolutionsReopened = new Set()
   let state = yield* reconcileAgent(round, 'reconcile.baseline', 'reconcile:baseline',
     'the baseline: `--units` + `--verify --verify-json`, the queue file, and the round counters')
 
+  outcomes.record('Reconcile', 1, [state], { where: 'baseline' })
   if (!state) {
     return runReturn({ stopped: 'reconcile-failed', next: reconcileFailedNext() })
   }
@@ -3519,6 +3597,22 @@ Do not build anything. Do not judge your own records — a separate agent does t
       requires: ['subAgents', 'structuredOutput', 'parallelism'],
       note: 'resolve the ⚠ Confirm worklist into evidence records (no stand writes)',
     })).filter(Boolean)
+    outcomes.record('Preflight', batches.length, results)
+    const preflightStop = stageGate({
+      phase: 'preflight', expected: batches.length, results, label: 'Preflight',
+      what: `not one of the ${preflightItems.length} ⚠ Confirm item(s) was resolved, so the Judge has no record to rule on and every build would run against the PRE-preflight verdict`,
+      fix: 'Nothing has been written to the stand — preflight is read-only, and this run stops before its first write.',
+    })
+    if (preflightStop) {
+      log(`all ${batches.length} preflight agent(s) returned nothing — stopping BEFORE the first stand write rather than building against a worklist nobody resolved`)
+      return runReturn({
+        ...preflightStop,
+        rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet], independence,
+        planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems, pageSchemas,
+        targetPackage: state.targetPackage || null, packageState,
+        staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+      })
+    }
     for (const r of results) {
       for (const x of r.resolved || []) {
         if (!x?.id) continue
@@ -3542,9 +3636,14 @@ Do not build anything. Do not judge your own records — a separate agent does t
       const skipped = preflightAll.length - preflightItems.length
       log(`preflight: ${skipped} of ${preflightAll.length} ⚠ Confirm item(s) already have a record the judge has not rejected — left as they are, not re-derived (a second pass would overwrite them). ${preflightItems.length} to resolve.`)
     }
-    if (preflightItems.length) yield* runPreflightBatches(preflightItems)
+    if (!preflightItems.length) {
+      outcomes.skipped('Preflight', 'the plan publishes no ⚠ Confirm items to resolve')
+      return null
+    }
+    return yield* runPreflightBatches(preflightItems)
   }
-  yield* preflightPhase()
+  const preflightFailed = yield* preflightPhase()
+  if (preflightFailed) return preflightFailed
 
   function logUnmatchedResolutions(where) {
     const u = state.resolutionsUnmatched || []
@@ -3905,7 +4004,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       recordStarterPages(res)
       recordPackageCreated(got, sectionPage)
       recordSectionRoute(res.starterListPage)
-      return
+      return 'ok'
     }
     if (got && got === unit.package) {
       recordPackageCreated(got, sectionPage, false)
@@ -3914,10 +4013,11 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
         what: partialAppUnitWhat(got, sectionPage, unitBlocked),
         why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
       log(`app unit: package \`${got}\` exists but the unit is INCOMPLETE (section page: ${sectionPage || 'none'}, blockers: ${unitBlocked}) — it stays open`)
-      return
+      return 'partial'
     }
     blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
     log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
+    return 'mismatch'
   }
 
   function claimFor(unit, res, routed) {
@@ -3983,10 +4083,16 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
 
   function applyUnitResultByKind(unit, res, r) {
     recordUnsettled(unit, res)
-    if (unit.kind === 'app') applyAppUnitResult(unit, res)
+    if (unit.kind === 'app') r.appUnitOutcome = applyAppUnitResult(unit, res)
     if (unit.kind === 'reach') { applyWorkplaceBindings(unit, res); if (recordSectionRoute(res.sectionRoute?.schemaName)) r.sectionRouteWritten = true }
     if (unit.kind === 'page') applyReboundOrphan(unit, res)
     if (unit.kind === 'page') recordPageSchema(unit, res, r)
+  }
+
+  function noteBuilderAnsweredNothing(unit, r) {
+    r.noAnswer.push(unit.key)
+    if (!buildersReturnedNothing.includes(unit.key)) buildersReturnedNothing.push(unit.key)
+    if (unit.kind === 'app') r.appUnitIncomplete = { key: unit.key, why: 'the app build agent returned nothing, so the target package was neither created nor confirmed' }
   }
 
   function* dispatchUnit(unit, r) {
@@ -4005,6 +4111,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     if (!res) {
       chargeBuildAttempt(unit.key)
       log(`build agent returned nothing for ${unit.key} — it stays open`)
+      noteBuilderAnsweredNothing(unit, r)
       reportResolutionAccounting(unit, routed, null, false)
       r.claims.push({ unit: unit.key, kind: unit.kind, noAnswer: true, owesGuidelines: owesGuidelines(unit, state.evidenceIds) })
       return
@@ -4019,6 +4126,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
     reportResolutionAccounting(unit, routed, res)
     applyUnitResultByKind(unit, res, r)
+    if (r.appUnitOutcome === 'mismatch') r.appUnitIncomplete = { key: unit.key, why: `the application was created under a package the plan does not target, so every unit behind it would build into the wrong place` }
     proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
     blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
     if (!continuation && shouldPauseAfter(mode, CHECKPOINT_SET, unit.key)) {
@@ -4032,15 +4140,20 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     log(`round ${round}: ${open.length} open unit(s) — ${open.map((u) => u.key).join(', ')}`)
     logMissingEvidenceIds()
     const r = { built: [], claims: [], noSchema: [], continued: [], deferred: [], checkFirst: [], pausedAfter: null,
-      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false }
+      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false,
+      dispatched: [], noAnswer: [], appUnitOutcome: null, appUnitIncomplete: null }
     for (const unit of open) {
-      if (r.pausedAfter) { r.deferred.push(unit.key); continue }
+      if (r.pausedAfter || r.appUnitIncomplete) { r.deferred.push(unit.key); continue }
+      r.dispatched.push(unit.key)
       yield* dispatchUnit(unit, r)
       if (unit.kind === 'app' && standWrites.packageCreated) yield* persistPending('recording the package the app unit created')
       if (unit.kind === 'reach' && r.sectionRouteWritten) {
         r.sectionRouteWritten = false
         yield* persistPending('recording the section\'s navigation route')
       }
+    }
+    if (r.appUnitIncomplete) {
+      log(`APP UNIT INCOMPLETE (\`${r.appUnitIncomplete.key}\`): ${r.appUnitIncomplete.why} — ${r.deferred.length} unit(s) DEFERRED rather than built into a package that is not there: ${r.deferred.join(', ') || '(none)'}`)
     }
     if (r.noSchema.length) log(`no Freedom schema reported for: ${r.noSchema.join(', ')} — those units cannot be verified until one is`)
     if (r.pausedAfter) {
@@ -4050,7 +4163,8 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       log(`CONTINUATION: ${r.continued.length} unit(s) stopped at a safe boundary and stay open for a fresh BUILD context — ${r.continued.join(', ')}. The rest of this round built as normal.`)
     }
     return { built: r.built, claims: r.claims, pausedAfter: r.pausedAfter, continued: r.continued, deferred: r.deferred,
-      checkFirst: r.checkFirst, selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks }
+      checkFirst: r.checkFirst, selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks,
+      dispatched: r.dispatched, noAnswer: r.noAnswer, appUnitIncomplete: r.appUnitIncomplete }
   }
 
 
@@ -4176,9 +4290,11 @@ Return every verdict you wrote.`,
       const preIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
       log(`${preIds.length} preflight evidence record(s) filed — judging and re-running the gate BEFORE any build, in case that is all a page was waiting on`)
       const judged = yield* judgeRound(preIds, preflightEvidence)
+      outcomes.record('Judge', 1, [judged], { where: 'preflight-evidence' })
       takeJudgeFindings(judged)
       markEvidenceFiled(judged?.evidenceWritten)
-      pendingJudgeIds.clear()
+      if (judged) pendingJudgeIds.clear()
+      else log('the post-preflight Judge returned nothing — its evidence records stay UNJUDGED and their ids stay queued for the next Judge; no unit is charged a repair round for a verdict that never arrived')
       phase('Reconcile')
       const refreshed = yield* reconcileAgent(round, 'reconcile.after-preflight', 'reconcile:after-preflight',
         're-run the gate on the preflight evidence, before anything is built')
@@ -4293,6 +4409,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       { schema: REFS_SCHEMA, phase: 'Refs', label: 'refs:cache', inputFiles: [ctx.REFS_INDEX, ctx.input.planFile],
         note: 'cache the guidance/contracts/component docs every fresh-context builder would refetch' },
     )
+    outcomes.record('Refs', 1, [res])
     if (!res) {
       log('the REFS step returned nothing — build agents will fetch their own guidance and contracts, which is slower but correct')
       return
@@ -4422,10 +4539,14 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const judgeIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
     if (!judgeIds.length) {
       log(`round ${round}: no evidence record is waiting on a verdict — Judge skipped`)
+      outcomes.skipped('Judge', 'no evidence record was waiting on a verdict')
       return
     }
-    takeJudgeFindings(yield* judgeRound(judgeIds))
-    pendingJudgeIds.clear()
+    const judged = yield* judgeRound(judgeIds)
+    outcomes.record('Judge', 1, [judged], { round })
+    takeJudgeFindings(judged)
+    if (judged) pendingJudgeIds.clear()
+    else log(`round ${round}: the JUDGE returned nothing — every evidence record it was given stays UNJUDGED and queued for the next round; no unit is charged a repair round for it`)
   }
 
 
@@ -4457,15 +4578,62 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     }
   }
 
+  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
+    if (!appUnitIncomplete && dispatched.length) return null
+    const common = {
+      rounds: round, verdict: verdictOf(state.verify), deferred,
+      remainingOpen: open.map((u) => u.key),
+      targetPackage: state.targetPackage || null, packageState,
+      parked, blockedByParked: [...blockedSet], independence,
+      planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
+      discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
+      staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+    }
+    outcomes.skipped('Judge', 'no build claim was filed this round')
+    if (appUnitIncomplete) {
+      outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
+      yield* persistPending('stopping on an incomplete app unit')
+      return runReturn({
+        ...gateStop({
+          stopped: 'app-unit-incomplete',
+          reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
+          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them.`,
+          agentsExpected: dispatched.length, agentsReturned: builtThisRound.length,
+        }),
+        ...common, builtThisRound,
+      })
+    }
+    outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
+    outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
+    log(`round ${round}: ${open.length} unit(s) were open and NONE was dispatched — no Verify and no Judge, because nothing wrote to the stand this round`)
+    yield* persistPending(`closing round ${round} without a dispatch`)
+    return runReturn({
+      ...gateStop({
+        stopped: 'nothing-built',
+        reason: `round ${round} had ${open.length} open unit(s) and dispatched none of them, so nothing was written to the stand. Running Verify would have re-published the previous verdict as though this round had produced it.`,
+        next: 'The open units below were not attempted and nothing about them changed. Work out why the round scheduled none of them before re-running.',
+        agentsExpected: open.length, agentsReturned: 0,
+      }),
+      ...common, builtThisRound: [],
+    })
+  }
+
   function* oneRound(open) {
       const layoutPass = layoutPassNow()
       const { built: builtThisRound, claims, pausedAfter, continued, deferred, checkFirst,
-        selfCheckShort, selfChecks } = yield* buildRound(open)
+        selfCheckShort, selfChecks, dispatched, noAnswer, appUnitIncomplete } = yield* buildRound(open)
+      outcomes.record('Build', dispatched.length, builtThisRound, { round })
+
+      const preVerifyStop = yield* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open })
+      if (preVerifyStop) return preVerifyStop
+
+      const buildersAllNull = builtThisRound.length === 0
       if (continued.length) {
         log(`round ${round}: ${continued.length} unit(s) continue into the next round on a fresh context, no repair round charged — ${continued.join(', ')}`)
       }
 
       lastVerifier = yield* verifyRound(builtThisRound, claims, carryNow())
+      outcomes.record('Verify', 1, [lastVerifier], { round })
 
       if (!lastVerifier) {
         log(`round ${round}: the VERIFIER did not answer — the stand was written but not read back, so the verdict on file is STALE. Stopping rather than reporting it as current.`)
@@ -4497,11 +4665,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
 
       yield* persistPending(`closing round ${round}`)
 
-      yield* judgeIfWaiting()
+      if (buildersAllNull) {
+        log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
+        outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
+      } else yield* judgeIfWaiting()
 
       phase('Reconcile')
       const next = yield* reconcileAgent(round, `reconcile.round-${round + 1}`, `reconcile:round-${round + 1}`,
         'refresh the stand and re-run the gate at the tail of the round')
+      outcomes.record('Reconcile', 1, [next], { where: `round-${round}-tail` })
       if (!next) {
         const roundTailFailure = lastHostRejection ? `was REJECTED by the host (${lastHostRejection})` : 'did not answer'
         log(`reconcile after round ${round} ${roundTailFailure} — stopping; the verdict is this round's, the queue state is not refreshed`)

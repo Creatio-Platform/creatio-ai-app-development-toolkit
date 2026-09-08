@@ -27,6 +27,7 @@
 // unit. A stop is always a PAGE BOUNDARY and always returns `stopped: 'paused-at-checkpoint'` — never `complete`.
 
 import { step, ACCESS } from '../work-item.mjs'
+import { stageGate, gateStop, makePhaseOutcomes } from '../stage-gate.mjs'
 import { makeContext, makePaths, normalizeInput, assertContextInput, resolveEngineCli, q } from './context.mjs'
 import {
   absorbPreflight, answeredNoteFor, appCodeInstruction, appIdentityMismatch, appUnitFor, approvalStop,
@@ -240,6 +241,13 @@ export function* run(rawInput, io = {}, opts = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
 
+  // ENG-96778 — WHAT EACH PHASE ACTUALLY DID, on EVERY return (see `runReturn` below, which is the single funnel).
+  // A `stopped` code names the phase that ended the run; this names the ones that limped and did not. Declared UP
+  // HERE with the other facts `runReturn` reads, and for the identical reason: `runReturn` is reachable from the
+  // earliest stop in the script, so a declaration further down is a temporal-dead-zone throw on exactly the run
+  // that stops first.
+  const outcomes = makePhaseOutcomes()
+
   const input = normalizeInput(rawInput)
   // `selfPath` is the caller's own file location. The Claude host wraps its script in a function body, where
   // `__filename` exists and `import.meta` is a parse error; a module is the reverse. Each adapter passes what it
@@ -350,6 +358,9 @@ export function* run(rawInput, io = {}, opts = {}) {
   // before the run state further down exists.
   let unsettledUnits = new Set()
   let standWrites = {}
+  // ENG-96778 — THE UNITS WHOSE BUILD AGENT RETURNED NOTHING. Declared here with `standWrites` and for the same
+  // reason: `runReturn` reads it and is reachable from the earliest stop in the script.
+  const buildersReturnedNothing = []
   // ENG-95850 (B4/C3) — pages a re-bind left pointing at nothing. Its own binding as well as a `standWrites` member,
   // because `applyReboundOrphan` appends to it and the carry persists whatever it holds; declared here for the same
   // reason `standWrites` is — every `runReturn` reads it.
@@ -525,6 +536,15 @@ let resolutionCheckTally = new Map()
       // miss exactly the case these exist for — a placement stop that also carries a template or identity defect.
       templateMismatches: [],
       appIdentityMismatch: null,
+      // ENG-96778 — THE UNITS WHOSE BUILDER ANSWERED NOTHING, accumulated across every round of this invocation and
+      // reported on every return, defaulted for the same reason its neighbours are: "no unit built this round" and
+      // "no unit was open this round" are the same empty `built` list and opposite repairs, and a caller must not
+      // have to infer which happened from `stopped`.
+      buildersReturnedNothing: [...buildersReturnedNothing],
+      // ENG-96778 — WHAT EACH PHASE DID: ok | partial | none | skipped, in the order the phases ran. On EVERY
+      // return, because AC 3 is exactly that: a run that stops names the phase that killed it, and a run that
+      // FINISHES still has to say which of its phases limped.
+      phaseOutcomes: outcomes.snapshot(),
       next: null,
       ...extra,
     }
@@ -990,6 +1010,7 @@ const resolutionsReopened = new Set()
   let state = yield* reconcileAgent(round, 'reconcile.baseline', 'reconcile:baseline',
     'the baseline: `--units` + `--verify --verify-json`, the queue file, and the round counters')
 
+  outcomes.record('Reconcile', 1, [state], { where: 'baseline' })
   if (!state) {
     return runReturn({ stopped: 'reconcile-failed', next: reconcileFailedNext() })
   }
@@ -2285,6 +2306,29 @@ Do not build anything. Do not judge your own records — a separate agent does t
       requires: ['subAgents', 'structuredOutput', 'parallelism'],
       note: 'resolve the ⚠ Confirm worklist into evidence records (no stand writes)',
     })).filter(Boolean)
+    outcomes.record('Preflight', batches.length, results)
+    // TRANSITION 8 — PREFLIGHT → JUDGE / BUILD. Every preflight agent died, so not one evidence record exists. The
+    // run used to walk straight on: `absorbPreflight([])` folds nothing, `pendingJudgeIds` stays empty, the
+    // post-preflight Judge and Reconcile are skipped as "nothing waiting", and the build begins against the
+    // PRE-preflight verdict — with every ⚠ Confirm item still open and nothing saying the phase that was supposed
+    // to settle them never answered. Stopping here costs nothing: preflight is read-only against the stand, its
+    // records are held in this process, and NOTHING has been written yet, so there is no carry to persist and no
+    // agent to spend doing it.
+    const preflightStop = stageGate({
+      phase: 'preflight', expected: batches.length, results, label: 'Preflight',
+      what: `not one of the ${preflightItems.length} ⚠ Confirm item(s) was resolved, so the Judge has no record to rule on and every build would run against the PRE-preflight verdict`,
+      fix: 'Nothing has been written to the stand — preflight is read-only, and this run stops before its first write.',
+    })
+    if (preflightStop) {
+      log(`all ${batches.length} preflight agent(s) returned nothing — stopping BEFORE the first stand write rather than building against a worklist nobody resolved`)
+      return runReturn({
+        ...preflightStop,
+        rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet], independence,
+        planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems, pageSchemas,
+        targetPackage: state.targetPackage || null, packageState,
+        staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+      })
+    }
     // THE RECORDS THEMSELVES, held in this process until a SEQUENTIAL writer files them. There is no per-agent file
     // and no merge agent any more: the fan-out returns structured records, and the Judge/Reconcile sequence that
     // already runs after it performs the one write. `filedAsFalse` becomes the literal `false` here, so the value
@@ -2318,9 +2362,17 @@ Do not build anything. Do not judge your own records — a separate agent does t
       const skipped = preflightAll.length - preflightItems.length
       log(`preflight: ${skipped} of ${preflightAll.length} ⚠ Confirm item(s) already have a record the judge has not rejected — left as they are, not re-derived (a second pass would overwrite them). ${preflightItems.length} to resolve.`)
     }
-    if (preflightItems.length) yield* runPreflightBatches(preflightItems)
+    // AC 9's OTHER HALF: zero ⚠ Confirm items is NOT a failed phase. `preflightPhase` never enters the fan-out,
+    // so the gate inside it is never reached — a plan with nothing to confirm produces no stop, which is the
+    // branch that keeps this guard off every healthy run of a simple surface.
+    if (!preflightItems.length) {
+      outcomes.skipped('Preflight', 'the plan publishes no ⚠ Confirm items to resolve')
+      return null
+    }
+    return yield* runPreflightBatches(preflightItems)
   }
-  yield* preflightPhase()
+  const preflightFailed = yield* preflightPhase()
+  if (preflightFailed) return preflightFailed
 
   // ANSWERS THAT MATCHED NOTHING, said out loud. The engine's own stderr warning is emitted inside the reconcile
   // subagent and never reaches the caller, so without this the operator's mistyped or stale answer is silently inert.
@@ -2983,7 +3035,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       // session, and on the other route — instead of as a stranger's package that stops the run.
       recordPackageCreated(got, sectionPage)
       recordSectionRoute(res.starterListPage)
-      return
+      return 'ok'
     }
     // The package is right but the rest is not — a PARTIAL app unit. Left OPEN and named rather than closed on the one
     // third that worked: `main` has no section to edit, and a stub section left behind is an orphan in the customer's app.
@@ -2997,10 +3049,11 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
         what: partialAppUnitWhat(got, sectionPage, unitBlocked),
         why: 'this unit owns the package AND a section on the migrated entity AND removing the stub section create-app mints; closing it on the package alone would leave the migration with no section on its own object' }]
       log(`app unit: package \`${got}\` exists but the unit is INCOMPLETE (section page: ${sectionPage || 'none'}, blockers: ${unitBlocked}) — it stays open`)
-      return
+      return 'partial'
     }
     blockedItems = [...blockedItems, { unit: unit.key, what: `the application was created but its package is \`${got || '(none reported)'}\`, not the \`${unit.package}\` the plan targets`, why: 'clio applies the environment SchemaNamePrefix to the code, so the package that comes out need not be the one the plan names; every page unit\'s placement row gates on the plan\'s package, so building into this one would fail the whole tree later' }]
     log(`app unit: package MISMATCH — got \`${got || '(none)'}\`, plan targets \`${unit.package}\`; the unit stays open`)
+    return 'mismatch'
   }
 
   // ONE BUILDER'S CLAIM, assembled. Out of the dispatch loop so the loop carries none of these fallbacks (Sonar S3776).
@@ -3106,7 +3159,10 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     // PAGE and the REACH prompts both, so the sighting cannot live in `recordPageSchema` (page-only) or inside the
     // `reach` branch (whose exact source line two goldens pin, deliberately, as "still one `reach`-kind hook").
     recordUnsettled(unit, res)
-    if (unit.kind === 'app') applyAppUnitResult(unit, res)
+    // ENG-96778 — the app unit's verdict is CAPTURED ('ok' | 'partial' | 'mismatch'), not just applied: AC 12
+    // defers the rest of the round on a MISMATCH and not on a partial (a partial's package is the planned one and
+    // is on the stand, so the units behind it have somewhere real to build).
+    if (unit.kind === 'app') r.appUnitOutcome = applyAppUnitResult(unit, res)
     if (unit.kind === 'reach') { applyWorkplaceBindings(unit, res); if (recordSectionRoute(res.sectionRoute?.schemaName)) r.sectionRouteWritten = true }
     if (unit.kind === 'page') applyReboundOrphan(unit, res)
     if (unit.kind === 'page') recordPageSchema(unit, res, r)
@@ -3114,6 +3170,21 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
 
   // ONE UNIT'S DISPATCH — the prompt, the work item, and everything recorded off its answer. Out of the round loop so
   // that loop carries only the round's own control flow, and none of these branches at its nesting depth (Sonar S3776).
+  // ENG-96778 — A BUILDER THAT ANSWERED NOTHING, recorded on the round AND on the run. Out of the dispatch body
+  // (Sonar S3776) for the same reason `applyUnitResultByKind` is: the branches say nothing about the dispatch.
+  //   · `r.noAnswer` is what makes the round able to tell "every builder died" (AC 11 — Verify still runs, Judge
+  //     does not) from "nothing was open" (AC 10 — neither runs); `buildersReturnedNothing` carries it to the caller.
+  //   · AC 12, first half — AN APP UNIT THAT ANSWERED NOTHING BLOCKS EVERY UNIT BEHIND IT. `scheduleUnits` sorts the
+  //     app unit to the front because everything else is built INTO the package it creates, but nothing enforced the
+  //     dependency: `buildRound`'s loop broke only on a checkpoint, and a page unit's openness comes from the verify
+  //     gate, never from `packageState` — so a dead app unit was followed, in the same round, by page builders
+  //     dispatched at a package that does not exist.
+  function noteBuilderAnsweredNothing(unit, r) {
+    r.noAnswer.push(unit.key)
+    if (!buildersReturnedNothing.includes(unit.key)) buildersReturnedNothing.push(unit.key)
+    if (unit.kind === 'app') r.appUnitIncomplete = { key: unit.key, why: 'the app build agent returned nothing, so the target package was neither created nor confirmed' }
+  }
+
   function* dispatchUnit(unit, r) {
     const nth = Math.max(state.roundOf?.[unit.key] ?? 0, (localRounds[unit.key] ?? 0) + 1)
     // THE WORK-ITEM ID HAS TO BE UNIQUE, and `nth` alone is not (ENG-95474). A granted continuation deliberately
@@ -3151,6 +3222,7 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       // a `layout-first` run whose build agent keeps dying would loop forever with no budget to park it.
       chargeBuildAttempt(unit.key)
       log(`build agent returned nothing for ${unit.key} — it stays open`)
+      noteBuilderAnsweredNothing(unit, r)
       // A builder that answered nothing consumed nothing either. Recorded now rather than inferred later: the routed
       // answers are in scope here and nowhere else, and an absent report is not a report of "no answers to apply".
       reportResolutionAccounting(unit, routed, null, false)
@@ -3185,6 +3257,11 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     reportGuidelinesMiss(unit.key, r.claims.at(-1).guidelinesMiss)
     reportResolutionAccounting(unit, routed, res)
     applyUnitResultByKind(unit, res, r)
+    // AC 12, second half — A PACKAGE MISMATCH IS THE SAME BLOCKER AS A DEAD APP UNIT. `applyAppUnitResult` already
+    // refuses to close the unit on it (`packageState` is left untouched, so the app unit stays open); what it could
+    // not do from inside the per-kind fan-out is stop the units behind it being dispatched into a package the plan
+    // does not target. A PARTIAL app unit is deliberately NOT here: its package is the planned one and it exists.
+    if (r.appUnitOutcome === 'mismatch') r.appUnitIncomplete = { key: unit.key, why: `the application was created under a package the plan does not target, so every unit behind it would build into the wrong place` }
     proposals = [...proposals, ...(res.proposals || []).map((p) => ({ unit: unit.key, ...p, applied: false }))]
     blockedItems = [...blockedItems, ...(res.blocked || []).map((b) => ({ unit: unit.key, ...b }))]
     // Only a unit that actually got BUILT can be a checkpoint: pausing after a builder that returned nothing
@@ -3208,12 +3285,23 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
     // `selfCheckShort` / `selfChecks` are the in-context gate's output (ENG-95469): the units that spent their one
     // bounded fix and are still short, and every page's raw self-report for the cross-check against the verifier.
     const r = { built: [], claims: [], noSchema: [], continued: [], deferred: [], checkFirst: [], pausedAfter: null,
-      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false }
+      selfCheckShort: [], selfChecks: [], sectionRouteWritten: false,
+      // ENG-96778 — `dispatched` is what separates AC 10 from AC 11: a round that dispatched NOTHING must not run
+      // Verify (there is no stand write to read back), while a round that dispatched units whose builders all
+      // returned nothing MUST run it once (a builder can write and then die). `noAnswer` names the second case's
+      // units; `appUnitIncomplete` is AC 12's deferral.
+      dispatched: [], noAnswer: [], appUnitOutcome: null, appUnitIncomplete: null }
     for (const unit of open) {
       // ONLY a checkpoint terminates the round. A continuation must NOT: deferring the other open units would buy a
       // full extra Verify + Judge + Reconcile cycle, `--verify` stand read included, for units that do not depend on
       // the continued one. The continued unit still waits for the next round — this loop makes one pass over `open`.
-      if (r.pausedAfter) { r.deferred.push(unit.key); continue }
+      // TWO REASONS TO DEFER RATHER THAN DISPATCH, and they end the round the same way. `pausedAfter` is the
+      // checkpoint the operator asked for. `appUnitIncomplete` is AC 12: every unit after a failed app unit targets
+      // the package that unit was to create — reach units as well as page units, since registering a section into a
+      // package that does not exist fails for the same reason building a page into it does. Both DEFER and name the
+      // unit; neither drops one.
+      if (r.pausedAfter || r.appUnitIncomplete) { r.deferred.push(unit.key); continue }
+      r.dispatched.push(unit.key)
       yield* dispatchUnit(unit, r)
       // ENG-95850 (A2) — THE APP UNIT'S STAND WRITE IS PERSISTED IMMEDIATELY, not at the round's Verify. Every other
       // thing in the carry is a DECISION this run made about its own bookkeeping, and losing one to a kill costs a
@@ -3237,6 +3325,9 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
         yield* persistPending('recording the section\'s navigation route')
       }
     }
+    if (r.appUnitIncomplete) {
+      log(`APP UNIT INCOMPLETE (\`${r.appUnitIncomplete.key}\`): ${r.appUnitIncomplete.why} — ${r.deferred.length} unit(s) DEFERRED rather than built into a package that is not there: ${r.deferred.join(', ') || '(none)'}`)
+    }
     if (r.noSchema.length) log(`no Freedom schema reported for: ${r.noSchema.join(', ')} — those units cannot be verified until one is`)
     if (r.pausedAfter) {
       log(`CHECKPOINT after \`${r.pausedAfter}\` (mode: ${mode}) — ${r.deferred.length} unit(s) deferred to the next run: ${r.deferred.join(', ') || '(none)'}`)
@@ -3245,7 +3336,8 @@ const RESOLUTIONS_BLOCKED_WHAT = 'the operator answers handed to this unit'
       log(`CONTINUATION: ${r.continued.length} unit(s) stopped at a safe boundary and stay open for a fresh BUILD context — ${r.continued.join(', ')}. The rest of this round built as normal.`)
     }
     return { built: r.built, claims: r.claims, pausedAfter: r.pausedAfter, continued: r.continued, deferred: r.deferred,
-      checkFirst: r.checkFirst, selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks }
+      checkFirst: r.checkFirst, selfCheckShort: r.selfCheckShort, selfChecks: r.selfChecks,
+      dispatched: r.dispatched, noAnswer: r.noAnswer, appUnitIncomplete: r.appUnitIncomplete }
   }
 
   // The read-only VERIFIER. A DIFFERENT agent from the ones that built these pages, and that
@@ -3437,10 +3529,18 @@ Return every verdict you wrote.`,
       const preIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
       log(`${preIds.length} preflight evidence record(s) filed — judging and re-running the gate BEFORE any build, in case that is all a page was waiting on`)
       const judged = yield* judgeRound(preIds, preflightEvidence)
+      outcomes.record('Judge', 1, [judged], { where: 'preflight-evidence' })
       takeJudgeFindings(judged)
       // Gated on the ids Judge REPORTED merging, not on it having answered at all: a verdict list is not a filing receipt.
       markEvidenceFiled(judged?.evidenceWritten)
-      pendingJudgeIds.clear()
+      // AC 13 — A DEAD JUDGE LEAVES ITS EVIDENCE UNJUDGED, and the ids STAY PENDING. Clearing them
+      // unconditionally treated "the judge ruled on none of these" as "the judge is finished with these": the
+      // records were never written to the built file (the Judge is their writer), so nothing would bring them back
+      // as `unjudgedEvidenceIds` either, and every page waiting on one stayed open with no phase left to close it.
+      // Nothing is charged a repair round for this — a verdict that never arrived reopens no unit, which is the
+      // fail-closed direction: the row stays open rather than a page being rebuilt over a defect nobody found.
+      if (judged) pendingJudgeIds.clear()
+      else log('the post-preflight Judge returned nothing — its evidence records stay UNJUDGED and their ids stay queued for the next Judge; no unit is charged a repair round for a verdict that never arrived')
       phase('Reconcile')
       const refreshed = yield* reconcileAgent(round, 'reconcile.after-preflight', 'reconcile:after-preflight',
         're-run the gate on the preflight evidence, before anything is built')
@@ -3582,6 +3682,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       { schema: REFS_SCHEMA, phase: 'Refs', label: 'refs:cache', inputFiles: [ctx.REFS_INDEX, ctx.input.planFile],
         note: 'cache the guidance/contracts/component docs every fresh-context builder would refetch' },
     )
+    outcomes.record('Refs', 1, [res])
     if (!res) {
       log('the REFS step returned nothing — build agents will fetch their own guidance and contracts, which is slower but correct')
       return
@@ -3802,10 +3903,17 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     const judgeIds = [...new Set([...pendingJudgeIds, ...(state.unjudgedEvidenceIds || [])])]
     if (!judgeIds.length) {
       log(`round ${round}: no evidence record is waiting on a verdict — Judge skipped`)
+      outcomes.skipped('Judge', 'no evidence record was waiting on a verdict')
       return
     }
-    takeJudgeFindings(yield* judgeRound(judgeIds))
-    pendingJudgeIds.clear()   // whatever the judge skipped comes back as `unjudgedEvidenceIds` next reconcile
+    const judged = yield* judgeRound(judgeIds)
+    outcomes.record('Judge', 1, [judged], { round })
+    takeJudgeFindings(judged)
+    // AC 13 — same rule as the post-preflight Judge above: a verdict list that never arrived is not a filing
+    // receipt, so the ids stay queued instead of being cleared. Whatever the judge SKIPPED still comes back as
+    // `unjudgedEvidenceIds` on the next reconcile; what it never ruled on at all would not have.
+    if (judged) pendingJudgeIds.clear()
+    else log(`round ${round}: the JUDGE returned nothing — every evidence record it was given stays UNJUDGED and queued for the next round; no unit is charged a repair round for it`)
   }
 
   // ENG-95503 / PR #128 review (round 20, Sonar S3776) — THREE FOLDS LIFTED OUT OF `oneRound`.
@@ -3886,13 +3994,77 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     }
   }
 
+  // THE TWO PRE-VERIFY ROUND ENDINGS (ENG-96778), lifted out of `oneRound` exactly as `checkpointPauseReturn` and
+  // `roundPauseReturn` are. Both stop BEFORE Verify, and for the same reason in two shapes: Verify exists to read
+  // the stand back after this round wrote to it, and neither of these rounds produced a write worth reading.
+  //   AC 12  an app unit that returned nothing, or created its application under a package the plan does not
+  //          target. The units behind it were DEFERRED, never dispatched, so there is nothing of theirs to read
+  //          back — and the operator's next move is about the application, not about a page. What the app unit
+  //          itself may have written (a foreign scaffold, its blocker rows) is persisted first: this is a live stand.
+  //   AC 10  a round that had open units and dispatched NONE of them. Verify here would spend an agent and a
+  //          `--verify` stand read to re-publish the verdict the previous Reconcile already produced, as though
+  //          this round had produced it; Judge would rule on evidence nothing filed.
+  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
+    if (!appUnitIncomplete && dispatched.length) return null
+    // Everything both stops report about the run, composed once — they differ in the gate's four fields and in
+    // what they say about the round, not in the state of the folder they were taken from.
+    const common = {
+      rounds: round, verdict: verdictOf(state.verify), deferred,
+      remainingOpen: open.map((u) => u.key),
+      targetPackage: state.targetPackage || null, packageState,
+      parked, blockedByParked: [...blockedSet], independence,
+      planGaps: state.planGaps || [], proposals, unresolvedPreflight, blocked: blockedItems,
+      discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
+      staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
+    }
+    outcomes.skipped('Judge', 'no build claim was filed this round')
+    if (appUnitIncomplete) {
+      outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
+      yield* persistPending('stopping on an incomplete app unit')
+      return runReturn({
+        ...gateStop({
+          stopped: 'app-unit-incomplete',
+          reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
+          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them.`,
+          agentsExpected: dispatched.length, agentsReturned: builtThisRound.length,
+        }),
+        ...common, builtThisRound,
+      })
+    }
+    outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
+    outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
+    log(`round ${round}: ${open.length} unit(s) were open and NONE was dispatched — no Verify and no Judge, because nothing wrote to the stand this round`)
+    yield* persistPending(`closing round ${round} without a dispatch`)
+    return runReturn({
+      ...gateStop({
+        stopped: 'nothing-built',
+        reason: `round ${round} had ${open.length} open unit(s) and dispatched none of them, so nothing was written to the stand. Running Verify would have re-published the previous verdict as though this round had produced it.`,
+        next: 'The open units below were not attempted and nothing about them changed. Work out why the round scheduled none of them before re-running.',
+        agentsExpected: open.length, agentsReturned: 0,
+      }),
+      ...common, builtThisRound: [],
+    })
+  }
+
   function* oneRound(open) {
       // ENG-96204 — CAPTURED AT THE TOP, before anything can flip it: `layoutPassDone` is set at the bottom of
       // this round (that is what makes the NEXT invocation the logic pass), and every consumer below has to know
       // what THIS round was, not what the next one will be.
       const layoutPass = layoutPassNow()
       const { built: builtThisRound, claims, pausedAfter, continued, deferred, checkFirst,
-        selfCheckShort, selfChecks } = yield* buildRound(open)
+        selfCheckShort, selfChecks, dispatched, noAnswer, appUnitIncomplete } = yield* buildRound(open)
+      outcomes.record('Build', dispatched.length, builtThisRound, { round })
+
+      // THE TWO WAYS A ROUND ENDS BEFORE VERIFY (ENG-96778). Its own generator for the same reason
+      // `checkpointPauseReturn` and `roundPauseReturn` below are: `oneRound` carries the round's dispatch sequence
+      // and not the payload of every stop in it (Sonar S3776).
+      const preVerifyStop = yield* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open })
+      if (preVerifyStop) return preVerifyStop
+
+      // AC 11 — UNITS DISPATCHED, EVERY BUILDER DEAD. Verify STILL RUNS, once, and that is deliberate: a builder
+      // can write to the stand and then die, so skipping the read-back would leave a stand change unrecorded and
+      // the verdict on file stale. Judge is what is skipped — it rules on claims, and no claim was filed.
+      const buildersAllNull = builtThisRound.length === 0
       // Open because it stopped mid-unit, NOT because a repair failed — said at the orchestrator level so the run log
       // distinguishes the two. No repair round was charged for these.
       if (continued.length) {
@@ -3904,6 +4076,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // window that stays uncovered is a hard process kill inside Verify. That is the price of one fewer agent per
       // round — restoring a pre-Verify persist restores the agent with it.
       lastVerifier = yield* verifyRound(builtThisRound, claims, carryNow())
+      outcomes.record('Verify', 1, [lastVerifier], { round })
 
       // THE VERIFIER IS THE ONLY THING THAT REFRESHES THE VERDICT. If it did not answer — a host/API failure, a
       // dead agent, an expired token — then `state.verify` still holds the PREVIOUS round's numbers, and this
@@ -3969,11 +4142,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // round decided nothing new.
       yield* persistPending(`closing round ${round}`)
 
-      yield* judgeIfWaiting()
+      if (buildersAllNull) {
+        log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
+        outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
+      } else yield* judgeIfWaiting()
 
       phase('Reconcile')
       const next = yield* reconcileAgent(round, `reconcile.round-${round + 1}`, `reconcile:round-${round + 1}`,
         'refresh the stand and re-run the gate at the tail of the round')
+      outcomes.record('Reconcile', 1, [next], { where: `round-${round}-tail` })
       if (!next) {
         // Same class as the verifier failure above: the numbers on file are the ones the verifier just produced,
         // but nothing re-read the queue, so anything decided after this point would rest on an unrefreshed state.

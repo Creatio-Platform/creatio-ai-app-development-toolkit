@@ -1383,8 +1383,11 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 // declarations hoisted above it (`claimFor` … `dispatchUnit`). A window that reaches only one of them passes on half
 // the mechanism — and one anchored on a single function would go EMPTY the moment another helper is extracted.
 const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function claimFor(unit, res, routed)"), wfSrc.indexOf("// The read-only VERIFIER."));
-check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+// ENG-96778 widened the guard with a SECOND deferral reason — an app unit that did not complete (AC 12) — so the
+// pin names both terms EXACTLY. A third term appearing here still fails it, which is the point: this guard decides
+// whether an open unit is dispatched against a live stand or held back, and it must not grow by accident.
+check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built, or once the app unit has failed — it does not keep dispatching and it does not drop them silently",
+  wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter \|\| r\.appUnitIncomplete\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
     && /!continuation && shouldPauseAfter\(mode, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
   () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
 // ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
@@ -6617,6 +6620,13 @@ const runChain = (verifierSays, seed = {}, keepOpen = false) => {
   const agentStub = async (prompt, opts = {}) => {
     const label = opts.label || "";
     if (label === "reconcile:baseline") return { ...baseline };
+    // ENG-96778 — THIS FIXTURE NOW HAS TO ANSWER PREFLIGHT. `chainItem` is a ⚠ Confirm item with an operator answer
+    // and no evidence record, so the run dispatches a preflight agent for it; the stub used to fall through to the
+    // `return null` below, and the run walked on to Build against a worklist nobody had resolved. That is exactly
+    // the transition AC 9 now stops (`preflight-produced-nothing`). An EMPTY-but-present record is what the run
+    // always effectively got here, so answering with one leaves every assertion in this chain measuring what it
+    // measured before — the answers channel, not the preflight gate.
+    if (label.startsWith("preflight:")) return { resolved: [], unresolved: [] };
     if (label.startsWith("build:")) {
       builds += 1;
       // THE FALSE CLAIM. `applied: true` with a `how` that reads plausibly, and no page effect anywhere — the exact
@@ -6766,6 +6776,11 @@ const runCheckpointPause = (verifierSays, seed = {}) => {
       persisted.push(prompt);
       return { written: true, evidenceWritten: [], unconsumedWritten: [{ unit: "main", id: CHAIN_ID }] };
     }
+    // ENG-96778 — same as the contradiction chain above: `chainItem` is an unresolved ⚠ Confirm item, so a
+    // preflight agent is dispatched for it and a stub that answers nothing there now trips AC 9's
+    // `preflight-produced-nothing` before the checkpoint pause this seam is about. An empty-but-present record
+    // leaves the run behaving exactly as it did.
+    if (label.startsWith("preflight:")) return { resolved: [], unresolved: [] };
     if (label.startsWith("build:")) {
       // The same false claim the contradiction chain uses: `applied: true` with no page effect anywhere.
       return { ...buildAnswer(false), resolutionsApplied: [{ id: CHAIN_ID, applied: true, how: "set the lookup filter on Department" }] };

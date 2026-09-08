@@ -16,6 +16,78 @@ export const meta = {
 
 // ---8<--- PURE DECISION HELPERS ---8<---
 
+const RESUME_CLAUSE =
+  'Nothing after this phase ran, and nothing it would have written exists. Fix what killed the agents (host quota, an expired token, a role the host cannot bind), then start a FRESH run — resuming this one (`node cli.mjs resume <run.json>` on the CLI host, `resumeFromRunId` on the Claude Workflow host) replays the recorded deaths and stops here again.'
+
+function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0 }) {
+  if (!stopped) throw new Error('a gate stop must name its `stopped` code')
+  return {
+    stopped,
+    reason,
+    next: next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE,
+    agentsExpected,
+    agentsReturned,
+  }
+}
+
+function countReturned(results) {
+  if (!Array.isArray(results)) return results === null || results === undefined ? 0 : 1
+  let n = 0
+  for (const r of results) if (r !== null && r !== undefined) n += 1
+  return n
+}
+
+function stageGate({ phase, expected = 0, results = [], emptyIsLegit = null, label = '', what = '', fix = '' }) {
+  if (!phase) throw new Error('a stage gate must name the `phase` it guards')
+  const returned = countReturned(results)
+  if (expected <= 0 || returned > 0) return null
+  const legit = typeof emptyIsLegit === 'function' ? emptyIsLegit() : !!emptyIsLegit
+  if (legit) return null
+  const name = label || phase
+  const consequence = what ? ` — ${what}` : ''
+  return gateStop({
+    stopped: `${phase}-produced-nothing`,
+    reason: `all ${expected} ${name} agent(s) returned nothing${consequence}. That is a FAILED phase, not an empty one: the phase after it would have run on no input at all and reported an answer it never computed.`,
+    next: fix,
+    agentsExpected: expected,
+    agentsReturned: returned,
+  })
+}
+
+function outcomeState(expected, returned) {
+  if (expected <= 0) return 'skipped'
+  if (returned <= 0) return 'none'
+  return returned < expected ? 'partial' : 'ok'
+}
+
+function makePhaseOutcomes() {
+  const byPhase = {}
+  const order = []
+  const set = (phase, entry) => {
+    if (!order.includes(phase)) order.push(phase)
+    byPhase[phase] = entry
+    return entry
+  }
+  return {
+    record(phase, expected, results, extra = {}) {
+      const returned = countReturned(results)
+      return set(phase, { state: outcomeState(expected, returned), agentsExpected: expected, agentsReturned: returned, ...extra })
+    },
+    note(phase, state, extra = {}) {
+      return set(phase, { state, ...extra })
+    },
+    skipped(phase, why = '') {
+      return set(phase, why ? { state: 'skipped', why } : { state: 'skipped' })
+    },
+    snapshot() {
+      const out = {}
+      for (const p of order) out[p] = { ...byPhase[p] }
+      return out
+    },
+  }
+}
+
+
 const ACCESS = {
   NONE: 'none',
   STAND_READ_ONLY: 'stand-read-only',
@@ -849,6 +921,10 @@ function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
 
+  const outcomes = makePhaseOutcomes()
+  const PHASE_ORDER = ['Context', 'Describe', 'Critique', 'Merge']
+  const skipFrom = (first, why) => { for (const p of PHASE_ORDER.slice(PHASE_ORDER.indexOf(first))) outcomes.skipped(p, why) }
+
   const input = normalizeInput(rawInput)
   assertInput(input)
 
@@ -858,7 +934,8 @@ function* run(rawInput, io = {}) {
 
   if (declaredNothingToDo(input.totals)) {
     log(`digest reports no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
-    return skippedReturn(SURFACE, input.totals)
+    skipFrom('Context', NOTHING_TO_DESCRIBE)
+    return skippedReturn(SURFACE, input.totals, { phaseOutcomes: outcomes.snapshot() })
   }
 
   const RULES = rules({ surface: SURFACE, environment: input.environment, outDir: input.outDir, digest: input.digest, manifest: input.manifest })
@@ -880,8 +957,10 @@ function* run(rawInput, io = {}) {
     note: 'census + shared core (base chain, mixins, message register) + the row inventory',
   })
 
+  outcomes.record('Context', 1, [ctx])
   if (!ctx) {
     log('the Context phase returned nothing — the scope census and the shared-core reading are missing, so this run cannot say what there was to describe')
+    skipFrom('Describe', 'the Context phase returned nothing, so there is no inventory to describe')
     return {
       surface: SURFACE,
       skipped: false,
@@ -889,6 +968,7 @@ function* run(rawInput, io = {}) {
       reason: 'the Context phase returned no result, so the scope inventory is unknown — this is a failed run, NOT a surface with no imperative rows. Re-run; nothing was written.',
       coverage: { described: 0, digestRows: null, total: null, ledgerMembers: null, complete: false, uncovered: [], wiringOnly: [] },
       conflicts: [], settledElsewhere: [], gaps: [], refusals: [],
+      phaseOutcomes: outcomes.snapshot(),
     }
   }
 
@@ -899,10 +979,12 @@ function* run(rawInput, io = {}) {
 
   if (!worked.length) {
     log(`no imperative rows on ${SURFACE} — step 5.1 does not apply, nothing to describe`)
+    skipFrom('Describe', NOTHING_TO_DESCRIBE)
     return skippedReturn(SURFACE, input.totals, {
       scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: 0 })),
       censusNote: ctx.censusNote || null,
       refusals: ctx.refusals || [],
+      phaseOutcomes: outcomes.snapshot(),
     })
   }
 
@@ -935,15 +1017,44 @@ function* run(rawInput, io = {}) {
     label: `${roundKind(repair)}:${batch.scopes.map((s) => s.label).join('+').slice(0, 40)}`,
   })
 
+  const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
+
   phase('Describe')
-  let described = (yield step({
+  const describeReturned = yield step({
     items: batches.map((b, i) => describeItem(b, i)),
     parallel: true,
     requires: ['subAgents', 'structuredOutput', 'parallelism'],
     note: 'one item per scope batch — count decided from the inventory, not fixed',
-  })).filter(Boolean)
+  })
+  let described = describeReturned.filter(Boolean)
+  outcomes.record('Describe', batches.length, describeReturned)
 
-  const allKeys = new Set(worked.flatMap((s) => [...s.methodKeys, ...s.memberKeys]))
+  const describeStop = stageGate({
+    phase: 'describe', expected: batches.length, results: describeReturned, label: 'Describe',
+    what: `not one card was written for the ${allKeys.size} row(s) on ${SURFACE}, so the Critique pass has nothing to check and the Merge phase nothing to merge`,
+    fix: 'No card, no report and no index were produced.',
+  })
+  if (describeStop) {
+    log(`the Describe phase returned nothing from any of its ${batches.length} agent(s) — stopping rather than letting Critique and Merge run over an empty card set`)
+    skipFrom('Critique', 'Describe produced nothing, so there was nothing to check and nothing to merge')
+    return {
+      surface: SURFACE,
+      skipped: false,
+      ...describeStop,
+      coverage: { described: 0, digestRows: allKeys.size, total: allKeys.size, ledgerMembers: ledgerOf(input.totals), complete: false, uncovered: [...allKeys], wiringOnly: [] },
+      scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: s.rows })),
+      describeAgents: batches.length,
+      conflicts: [], settledElsewhere: [], gaps: [],
+      refusals: ctx.refusals || [],
+      censusNote: ctx.censusNote || null,
+      phaseOutcomes: outcomes.snapshot(),
+    }
+  }
+  const deadBatches = batches.filter((b, i) => !describeReturned[i])
+  if (deadBatches.length) {
+    log(`⚠ ${deadBatches.length} of ${batches.length} Describe batch(es) returned NOTHING — Describe is PARTIAL. The rows owned by ${deadBatches.map((b) => b.scopes.map((s) => s.label).join('+')).join(' | ')} carry no card and go into the repair round; they are unattempted, not unanswerable.`)
+  }
+
   const rejectedTriggers = rejectTriggers(described, allKeys, log)
   let covered = coveredKeys(described, allKeys)
   let uncoveredKeys = withRejectedTriggers([...allKeys].filter((k) => !covered.has(k)), rejectedTriggers, allKeys, described)
@@ -982,6 +1093,7 @@ function* run(rawInput, io = {}) {
   )
 
   const critiqueRan = reportCritique(critique, critiqueReturned, log)
+  outcomes.note('Critique', critiqueRan ? 'ok' : 'none', { agentsExpected: 1, agentsReturned: critiqueReturned ? 1 : 0, critiqueRan })
 
   const critiqueUncovered = (critique?.uncovered || []).map((u) => u.key).filter((k) => allKeys.has(k))
   const toRepair = repairKeys(uncoveredKeys, critiqueUncovered, wiringOnly)
@@ -989,12 +1101,18 @@ function* run(rawInput, io = {}) {
     const owners = worked.filter((s) => [...s.methodKeys, ...s.memberKeys].some((k) => toRepair.includes(k)))
     log(`repair round: ${toRepair.length} uncovered row(s) across ${owners.length} scope(s)`)
     const repairBatches = packBatches(owners, ROWS_PER_AGENT, Math.max(1, MAX_DESCRIBE - 1))
-    const repaired = (yield step({
+    const repairReturned = yield step({
       items: repairBatches.map((b, i) => describeItem(b, i, { repair: true, roundNote: repairNote(toRepair, b, critique?.notes) })),
       parallel: true,
       requires: ['subAgents', 'structuredOutput', 'parallelism'],
       note: 'repair round: the rows the arithmetic says are not described yet',
-    })).filter(Boolean)
+    })
+    const repaired = repairReturned.filter(Boolean)
+    if (repaired.length) outcomes.record('Repair', repairBatches.length, repairReturned)
+    else {
+      outcomes.note('Repair', 'none', { agentsExpected: repairBatches.length, agentsReturned: 0, stopped: 'repair-produced-nothing' })
+      log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
+    }
     described = [...described, ...repaired]
     rejectedTriggers.push(...rejectTriggers(repaired, allKeys, log))
     covered = coveredKeys(described, allKeys)
@@ -1036,6 +1154,13 @@ function* run(rawInput, io = {}) {
     note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
   })
 
+  outcomes.record('Merge', 1, [merged])
+  const mergeStop = stageGate({
+    phase: 'merge', expected: 1, results: [merged], label: 'Merge',
+    what: 'no report and no index were written, so this run produced no deliverable — the coverage numbers it returns are real, but nothing on disk carries them',
+    fix: `The cards the Describe round wrote are already in ${input.outDir}, so a fresh run re-merges them instead of re-describing the surface.`,
+  })
+
   const mergeOk = !!(merged?.reportPath && merged?.indexPath)
   if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
@@ -1072,6 +1197,8 @@ function* run(rawInput, io = {}) {
     refusals: [...(ctx.refusals || []), ...described.flatMap((r) => r.refusals || [])],
     censusNote: ctx.censusNote || null,
     next: 'merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`',
+    phaseOutcomes: outcomes.snapshot(),
+    ...(mergeStop || {}),
   }
 }
 

@@ -67,6 +67,31 @@
 // inputs and the comparison is deterministic. What is NOT here: the two bundle-size checks (`run-infra.mjs`) and
 // any scenario that depends on a real filesystem — the host has none, and neither do these.
 //
+// BOTH BASELINES WERE REPLACED AGAIN IN ENG-96778 (the stage gates), and this is the record of why — the reviewed,
+// deliberate act this file's own rule above prescribes, not a refresh from the working tree.
+//
+// WHAT MADE IT UNAVOIDABLE. This runner compares the RETURN VALUE WHOLE and has no per-field waiver. ENG-96778 adds
+// `phaseOutcomes` to every return of both cores (AC 3 is exactly that: a run must say what each phase did, on every
+// exit path, not only on the one that stopped it) and `buildersReturnedNothing` to every return of the executor. Both
+// are additions to the object EVERY scenario returns, so every scenario diverged on the return leg — 31 of them —
+// and there is no waiver to write for a field that is supposed to be there.
+//
+// THREE SCENARIOS ALSO DIVERGED BEYOND THE RETURN, and those are the behaviour changes themselves, listed here so a
+// reviewer diffing the new baselines knows exactly which prompt/dispatch differences are intended:
+//   · `REJECTING Describe agent in a single-item parallel batch` — the rejection is absorbed as a null hole, so the
+//     Describe phase produced nothing, and the run now STOPS `describe-produced-nothing` instead of dispatching a
+//     Critique that would adversarially check an empty card set and a Merge that would write a report over it (AC 5).
+//   · `a build agent returns nothing` — the round's only builder died, so Verify still runs (a builder can write and
+//     then die) and JUDGE IS SKIPPED: it rules on claims, and no claim was filed (AC 11).
+//   · `the app unit produces a DIFFERENT package` — the units behind the app unit are DEFERRED rather than dispatched
+//     into a package the plan does not target, and the run returns `app-unit-incomplete` (AC 12).
+// Every other scenario's phase sequence, agent dispatch order and prompt text are byte-identical across the
+// replacement; only the return object grew. The differential evidence for ENG-96778's own change is therefore the
+// review of its diff plus the executed suites — `run-workflow-core.mjs` (the gate's decision table and the analysis
+// goldens) and `engine-tests/freedom-build-executor/stage-gates.mjs` (the build goldens) — exactly as the two earlier
+// replacements recorded. What these baselines give from here on is the forward-looking half: the whole prompt text
+// and return shape of the CURRENT behaviour, pinned byte for byte, so the NEXT change cannot move them unnoticed.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";

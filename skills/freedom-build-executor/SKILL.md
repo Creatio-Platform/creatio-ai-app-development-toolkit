@@ -157,6 +157,37 @@ very different facts, so the source is reported on every return.
 file; that resume path is the same one contract rule 7 already guarantees for a session killed by a
 usage limit. In a round-boundary mode the re-run also needs the operator's word — see below.
 
+
+### When a phase produced nothing
+
+A stop above is a BOUNDARY the operator asked for. These are the other kind: a phase whose predecessor
+returned nothing, refusing to run on empty input. Each carries `stopped`, a `reason`, a `next`, and
+`agentsExpected` / `agentsReturned` — the last two separate "one agent of four died" from "all four did",
+which is the difference between a retry and a host problem.
+
+| `stopped` | What happened | What you do |
+|---|---|---|
+| `preflight-produced-nothing` | Every ⚠ Confirm resolver returned nothing. The run stops at its last read-only point — **before the first stand write** — instead of building against the pre-preflight verdict with the whole worklist still open. | Fix what killed the agents and start a fresh run. Nothing was written and nothing needs undoing. |
+| `nothing-built` | A round had open units and dispatched none of them. Verify would have re-published the previous verdict as though this round had produced it. | `remainingOpen` names the units nobody attempted. Work out why the round scheduled none of them before re-running. |
+| `app-unit-incomplete` | The app unit returned nothing, or created its application under a package the plan does not target. Every unit behind it in that round is **deferred, not dispatched** — they all build into that package. | `deferred` lists them. Settle the application on the stand, or re-plan against a package that can be produced; the deferred units are untouched. |
+
+**Resuming does not clear any of them.** The run journal records a death, so a resumed run replays it and
+stops in the same place — the `next` line says so. Fix the host (quota, an expired token, a role it cannot
+bind) and start a fresh run.
+
+Two related degradations are **recorded rather than stopped**, because the run still has work worth doing:
+
+- **Every builder in a round returned nothing.** Verify still runs, exactly once — a builder can write to the
+  stand and then die, so the read-back is what keeps the verdict honest. **Judge is skipped**: it rules on
+  claims and no claim was filed. The units are named in `buildersReturnedNothing`.
+- **A Judge returned nothing.** Its evidence stays UNJUDGED and its ids stay queued for the next Judge, and
+  **no unit is charged a repair round** for a verdict that never arrived. A page waiting on an evidence row
+  therefore stays open rather than being rebuilt over a defect nobody found.
+
+**`phaseOutcomes` is on every return, stop or not** — one entry per phase (`ok` · `partial` · `none` ·
+`skipped`) with the arithmetic behind it. A run can close green and still have had a phase limp; this is the
+only place that shows.
+
 **Why the pause is a page and not a single row.** Imperative rows are ported INSIDE the page unit,
 so stopping mid-unit would mean telling a builder to deliver less than the plan — which rule 6
 makes a proposal, not an action. The page that carries the row is built in full, and the run stops
