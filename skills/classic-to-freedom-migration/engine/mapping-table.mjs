@@ -271,15 +271,18 @@ const feature = (suffix, { feature: name, freedom, componentType = null, uiShape
 // the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
 // `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
 const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
-const COMMS_NOTE = "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid.";
+// ENG-96327 — the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
+// read get-component-info, do NOT downgrade to a plain grid over ContactCommunication, etc.) lives once in
+// `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
+// PREREQUISITE / decision, which the short note keeps.
+const COMMS_NOTE = "Native Communication-options component — requires the CrtCustomer360App package + CommonCommunicationsBehavior feature on-stand; confirm, or raise adding it.";
 const FEATURE_ROWS = [
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
   // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.
   // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
-    componentType: "crt.ApprovalList", uiShape: "component",
-    notes: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." }),
+    componentType: "crt.ApprovalList", uiShape: "component" }),
   // ENG-96571 — a real Applicant section carried a *plain* `VisaDetail` (no `V2` suffix) and the table missed it:
   // only the `V2`-suffixed row above matched, so a page with the un-versioned detail fell through unrecognised
   // and the built page came out with no Approvals component at all. Same Approvals meta as the V2 row above —
@@ -287,8 +290,7 @@ const FEATURE_ROWS = [
   // schema name could satisfy both (an `…VisaDetailV2` name does not end in the shorter `VisaDetail` suffix, so
   // the two rows do not actually overlap on any real schema name, but the ordering rule still applies on principle).
   feature("VisaDetail", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
-    componentType: "crt.ApprovalList", uiShape: "component",
-    notes: "Same Approvals feature as `VisaDetailV2` (see that row) — a plain `*VisaDetail` schema (no `V2` suffix) is still the Visa/approval infrastructure. Add BOTH the approval MODULE (`crt.Approval`, above the profile island) and the approval LIST (`crt.ApprovalList`). Do not downgrade to a generic related list." }),
+    componentType: "crt.ApprovalList", uiShape: "component" }),
   feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
     uiShape: "component", templateProvided: true }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
@@ -297,10 +299,8 @@ const FEATURE_ROWS = [
   // Emails is NOT the email-client component. A real agent rebuilt these as a Timeline — do not conflate the
   // list feature with the Timeline widget (#6). A list-shaped feature is gated as a related list, so it carries
   // NO `verify.componentType` of its own.
-  feature("ActivityDetailV2", { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list",
-    notes: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." }),
-  feature("EmailDetailV2", { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
-    notes: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." }),
+  feature("ActivityDetailV2", { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list" }),
+  feature("EmailDetailV2", { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list" }),
   // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
   // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
@@ -311,7 +311,9 @@ const FEATURE_ROWS = [
     // produced by an older engine EXPECTED `crt.ContactCommunication` (the entity name with a `crt.` prefix, which
     // resolves to nothing on a stand), and a correctly built page carrying `crt.CommunicationOptions` must read ✅
     // rather than ❌ MISSING. A `satisfies` entry is therefore a name the registry must NOT carry — if it does, it
-    // is a real component being aliased away, and the registry check says so.
+    // is a real component being aliased away, and the registry check says so. The real component is
+    // `crt.CommunicationOptions`, NOT `crt.ContactCommunication` (the ENTITY name with a `crt.` prefix — it resolves
+    // to nothing on a stand; this counter-example is what the code lint exempts the `satisfies` alias by).
     satisfies: ["crt.ContactCommunication"],
     gate: COMMS_GATE,
     notes: COMMS_NOTE }),
@@ -353,9 +355,11 @@ const FEATURE_ENTITY_ROWS = [
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
-const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template. When the object has a DCM case, PREFER building the form page from `PageWithTabsAndProgressBarTemplate` (it ships the bar placed) and RE-BIND the new page to your entity, rather than hand-adding the widget. FALLBACK (already on a no-bar template / page exists): PLACE IT in `MainContainer` (the content container below the header), at the TOP of the content — NOT in `MainHeader`, and not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
-const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set the tab icon to `flag-icon` (do not guess — an invented name renders empty), put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
+// ENG-96327 — SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
+// flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
+// `references/classic-to-freedom-mapping.md`, which the build agent is handed.
+const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
+const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; auto-populates from the object's DCM case.";
 // `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
 // Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
 // (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
