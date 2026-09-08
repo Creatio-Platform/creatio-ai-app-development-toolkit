@@ -13455,10 +13455,10 @@ const r23Run = (dispositions) => runMigration({ entity: "HRRequest", noParentTem
   enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
   ...(dispositions ? { confirmDispositions: dispositions } : {}) });
 const r23Typo = r23Run({ "enum-drift-advisory:enumVocabularyy": { resolved: true, disposition: "accepted", note: "typo" } });
-check("ENG-96571 review 2 (finding 3): a recorded key matching NO row in this scope is reported as `unmatched` and NAMED in a ⚠ line — it used to vanish from every channel",
+check("ENG-96571 review 2 (finding 3): a recorded key matching NO row on this surface is reported as `unmatched` and NAMED in a ⚠ line — it used to vanish from every channel",
   r23Typo.confirmDispositions.unmatched.join("|") === "enum-drift-advisory:enumVocabularyy"
   && r23Typo.confirmDispositions.closed.length === 0
-  && /recorded `confirmDispositions` key\(s\) matched NO ⚠ Confirm row in this scope/.test(r23Typo.designSpec)
+  && /recorded `confirmDispositions` key\(s\) matched NO ⚠ Confirm row on this surface/.test(r23Typo.designSpec)
   && r23Typo.designSpec.includes("enum-drift-advisory:enumVocabularyy"),
   () => ({ reported: r23Typo.confirmDispositions, lines: r23Typo.designSpec.split("\n").filter((l) => /matched NO/.test(l)) }));
 check("ENG-96571 review 2 (finding 3) ANTI-VACUITY: the CORRECT key is not reported unmatched — the report flags a miss, not every key",
@@ -13467,22 +13467,70 @@ check("ENG-96571 review 2 (finding 3) ANTI-VACUITY: the CORRECT key is not repor
   () => JSON.stringify(r21Closed.confirmDispositions));
 check("ENG-96571 review 2 (finding 3): a key with no `resolved: true` is NOT unmatched — an unfinished entry is not a wrong one, the same rule `invalid` follows",
   r23Run({ "enum-drift-advisory:nope": { disposition: "accepted" } }).confirmDispositions.unmatched.length === 0);
-// SCOPE: a key addressed to ANOTHER schema is not this scope's to report, and a bare key is reported at the ROOT
-// only — the inherited map reaches child/typed/mini folds, which run AFTER this pass, so a bare key that closes a
-// row on a child page has matched nothing the root can see yet. Reporting it there would ⚠ about a key that worked.
-check("ENG-96571 review 2 (finding 3): a key scoped to ANOTHER schema is not reported by this scope — it is not addressed to it, so `unmatched` would be a wrong ⚠",
+// SCOPE — ENG-96571 review 3 (BLOCKER) rewrote this rule. It used to be "only the scope the key names", with a
+// `hasNested` suppression standing in for "a fold has not run yet"; that suppression fired on any page with a
+// custom detail, so a bare typo was reported by no scope at all. The report is now judged ONCE AT THE ROOT over the
+// union of every folded scope's rows, so: a bare key matches if ANY page raised the row, a scoped key matches only
+// on the page it names, and a nested run reports nothing (`opts.scopeSchema` → `[]`), exactly as
+// `behaviourIndex.unmatched` already did.
+check("ENG-96571 review 3 (BLOCKER): a key whose `<schema>` prefix names NO page of this run IS reported — the root looked at every scope, so 'not addressed to me' is no longer an answer it can give",
   r23Run({ "OtherPage::enum-drift-advisory:enumVocabulary": { resolved: true, disposition: "accepted" } })
-    .confirmDispositions.unmatched.length === 0);
-check("ENG-96571 review 2 (finding 3): a SCOPED key is reported by the run whose `scopeSchema` it names, when it matches nothing there",
+    .confirmDispositions.unmatched.join("|") === "OtherPage::enum-drift-advisory:enumVocabulary");
+check("ENG-96571 review 3 (BLOCKER): a scoped key naming the ROOT's own scope is judged too — it used to be `mine` in no scope at all (undefined `scopeSchema` at the root, and not that schema in any fold), so it closed nothing and was reported nowhere",
   runMigration({ entity: "HRRequest", noParentTemplate: true,
     schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
     confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } },
-    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.join("|") === "R21Page::enum-drift-advisory:typo");
-check("ENG-96571 review 2 (finding 3) BLOCKER-AVOIDED: a BARE key that legitimately closes a row on a CHILD page is NOT reported unmatched at the root — the child fold runs after this pass, so a root-level report would be a ⚠ about an answer that worked",
+    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.length === 0
+  && runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } })
+    .confirmDispositions.unmatched.join("|") === "R21Page::enum-drift-advisory:typo");
+check("ENG-96571 review 3 (BLOCKER): a NESTED run publishes no unmatched report at all — a fold sees one page's rows, so every answer aimed at a sibling would read as unmatched there (the rule `behaviourIndex.unmatched` already follows)",
+  runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "enum-drift-advisory:enumVocabularyy": { resolved: true, disposition: "accepted" } } },
+    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.length === 0);
+check("ENG-96571 review 3 (BLOCKER): a bare key that legitimately closes a row on a CHILD page is still NOT reported: a BARE key that legitimately closes a row on a CHILD page is NOT reported unmatched at the root — the child fold runs after this pass, so a root-level report would be a ⚠ about an answer that worked",
   (() => { const r = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
     return (r.confirmDispositions.unmatched || []).length === 0
       && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
   () => JSON.stringify(runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+
+// ENG-96571 review 3 (BLOCKER) — THE CASE THE `hasNested` SUPPRESSION SWALLOWED. `enumerateChildPages` yields one
+// entry per custom detail that has an entity, whether or not a child schema was supplied and whether or not the
+// child ever folds. So `hasNested` was true here — a page with a custom detail and NO `childPageSchemas`, the
+// normal shape — and the bare typo was reported by no scope at all: not at the root (suppressed), and not in any
+// fold (there is none, and a bare key is never a fold's anyway). This is the silent swallow, driven directly.
+const C1_DETAIL_NO_CHILD = (dispositions) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const c1DetailTypo = runMigration(C1_DETAIL_NO_CHILD({ "detail-placementt:D1": { resolved: true, disposition: "accepted", note: "typo in the kind" } }));
+check("ENG-96571 review 3 (BLOCKER): a custom detail with NO `childPageSchemas` supplied — nothing folds — and a BARE typo IS reported; `hasNested` used to be true on exactly this shape and suppressed the report on virtually every real run",
+  c1DetailTypo.confirmDispositions.unmatched.join("|") === "detail-placementt:D1"
+  && /matched NO ⚠ Confirm row on this surface/.test(c1DetailTypo.designSpec)
+  && c1DetailTypo.designSpec.includes("detail-placementt:D1"),
+  () => ({ childPages: (c1DetailTypo.childPages || []).map((c) => ({ key: c.schema, folded: !!c.spec })),
+    reported: c1DetailTypo.confirmDispositions }));
+check("ENG-96571 review 3 (BLOCKER) SETUP: that run really does have a childPages ENTRY and really does fold nothing — otherwise the check above would pass for the wrong reason (no `hasNested` to defeat)",
+  (c1DetailTypo.childPages || []).length > 0 && !(c1DetailTypo.childPages || []).some((c) => c.spec),
+  () => JSON.stringify((c1DetailTypo.childPages || []).map((c) => ({ key: c.schema, folded: !!c.spec }))));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: the CORRECT bare key on the same shape is NOT reported — the report flags a miss, not every key on a page that has a detail",
+  runMigration(C1_DETAIL_NO_CHILD({ "detail-placement:D1": { resolved: true, disposition: "accepted" } }))
+    .confirmDispositions.unmatched.length === 0,
+  () => JSON.stringify(runMigration(C1_DETAIL_NO_CHILD({ "detail-placement:D1": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+// …and the other half: a bare typo on a run that DOES fold a child page. The union has the child's rows in it, so
+// the typo still matches nothing and is still named — the fold is no longer a reason to say nothing.
+const c1NestTypo = runMigration(C1_NESTED({ "rule-condition:Jobb": { resolved: true, disposition: "accepted", note: "item typo" } }));
+check("ENG-96571 review 3 (BLOCKER): a BARE typo on a run that really DOES fold a child page is reported too — the union carries the child's rows, so 'a fold might still close it' is answered by fact instead of by suppression",
+  c1NestTypo.confirmDispositions.unmatched.join("|") === "rule-condition:Jobb"
+  && /matched NO ⚠ Confirm row on this surface/.test(c1NestTypo.designSpec),
+  () => JSON.stringify(c1NestTypo.confirmDispositions));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: on that same folding run the CORRECT bare key (the one the child's row answers) is still silent AND still closed the child's row — the union matched it where it actually landed",
+  (() => { const r = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => "see C1_NESTED with the correct bare key");
 
 /* ---- finding 4: the LIST page's rows are closed by the same answer map ---- */
 // `applyConfirmDispositions` ran over the form page's ChangeSet only, while `renderListPage` renders

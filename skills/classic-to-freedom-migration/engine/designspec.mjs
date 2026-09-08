@@ -978,7 +978,7 @@ function renderConfirmWorklist(cs, opts = {}) {
   // this line, would read a plan that neither shows the answer nor says it was not applied.
   // (ENG-96457: it also means every kind that reaches this worklist can carry an answer — including this one.)
   const notApplicable = cs.confirmNotApplicable || [];
-  // ENG-96571 review 2 (finding 3) — a recorded key that matched NO row in this scope: a typo in the kind or the
+  // ENG-96571 review 2 (finding 3) — a recorded key that matched NO row on this surface: a typo in the kind or the
   // item (`rule-condtion:Job`, `rule-condition:Jobb`). It closed nothing, is in none of `closed`/`invalid`/
   // `notApplicable` (those need a row to attach to), and without this line the operator reads a plan where the
   // question is still open and their answer appears nowhere at all. Same channel and same voice as
@@ -1004,12 +1004,11 @@ function renderConfirmWorklist(cs, opts = {}) {
   }
   if (unmatched.length) {
     const list = unmatched.map((k) => "`" + esc(k) + "`").join(", ");
-    // ENG-96571 review 3 — SAY WHICH KEYS THIS REPORT CAN EVEN SEE. `unmatchedConfirmKeys` (migrate.mjs) reports
-    // "only the scope the key names": a SCOPED key on its own page, and a BARE key at the root only when the run
-    // has no nested scope to inherit into. So on a multi-page run a bare typo is NOT reported anywhere — the
-    // inherited map still has child/typed/mini folds ahead of it, and ⚠-ing a key that is about to work would be
-    // worse than the silence. Without this sentence the operator reads the absence of a ⚠ as "my key matched".
-    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row in this scope: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run. **What this line can see:** a \`<schema>::<kind>:<item>\` key is checked on ITS OWN page only, and a BARE key is checked here only when this run folds no child/typed/mini page — on a multi-page run a bare key is left unreported, because the same map is still to be inherited by those folds and a key that closes a row there has matched nothing yet. So on a multi-page run, the absence of this line does NOT prove a bare key landed: confirm the row itself is gone from the worklist.`);
+    // ENG-96571 review 3 (BLOCKER) — the multi-page CAVEAT IS GONE, because the limitation it described is. The
+    // report is judged once AT THE ROOT over the union of every folded scope's rows (`confirmSeenAll`, migrate.mjs),
+    // so a bare key is checked against the WHOLE surface instead of being suppressed whenever the run folds
+    // anything. The absence of this line now does mean every recorded key found a row somewhere on the surface.
+    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row on this surface: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run. **What this line can see:** every page of this run — the record page, the list page, and every child/typed/mini page it folds. A BARE key matches when ANY of them raised that row; a \`<schema>::<kind>:<item>\` key matches only on the page it names, so a key whose \`<schema>\` prefix names no page of this run is reported here too.`);
   }
   return [...L, ""];
 }

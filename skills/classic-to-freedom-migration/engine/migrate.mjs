@@ -439,30 +439,42 @@ function mergeConfirmResults(a, b) {
   };
 }
 
-// ENG-96571 review 2 (finding 3) — recorded keys that matched NO row in this scope: a typo in the kind or the item.
-// They closed nothing and appear in none of the three reported arrays (each of those needs a row to attach to), so
-// without this the answer is simply absent from the plan while the question still reads as open.
+// ENG-96571 review 2 (finding 3) — recorded keys that matched NO row ANYWHERE ON THIS SURFACE: a typo in the kind
+// or the item. They closed nothing and appear in none of the three reported arrays (each of those needs a row to
+// attach to), so without this the answer is simply absent from the plan while the question still reads as open.
 //
-// WHICH scope reports which key is the whole difficulty, and the rule is "only the scope the key names":
-//   · a SCOPED key (`<schema>::<kind>:<item>`) is reported by the run whose `scopeSchema` IS that schema — at the
-//     root a `C1Child::…` key is not unmatched, it is simply not addressed to the root;
-//   · a BARE key is reported at the ROOT only, and only when the run has NO nested scope to inherit into. The
-//     inherited map reaches every child/typed/mini fold, and those folds run AFTER this pass — so a bare key that
-//     legitimately closes a row on a child page has, at this moment, matched nothing the root can see. Reporting it
-//     here would print a ⚠ about a key that worked, which is worse than the silence it replaces. A single-page run
-//     (the case where a typo is most likely and nothing else can explain the miss) still gets the report.
-function unmatchedConfirmKeys(declared, seen, scopeSchema, hasNested) {
-  const matched = new Set(seen);
+// ENG-96571 review 3 (BLOCKER) — this is judged ONCE, AT THE ROOT, over the union of every scope's `seen`. It used
+// to be judged per scope, with a `hasNested` suppression standing in for "a bare key may still close a row in a
+// fold that has not run yet". That suppression disabled the report on virtually every real run: `hasNested` was
+// true whenever `enumerateChildPages` returned an entry — one per custom detail WITH AN ENTITY, whether or not a
+// child schema was supplied and whether or not the child ever folds — so a page with any custom detail (the normal
+// case) reported no bare key at all, while a fold never reports one either (`scopeSchema` is set there, so a bare
+// key is not that scope's). A mistyped bare key was therefore reported by NO scope: the exact silent swallow the
+// report exists to remove. The second hole was a scoped key naming the ROOT's own schema — never `mine` at the root
+// (`opts.scopeSchema` is undefined there) and never `mine` in a fold either.
+//
+// This mirrors the proven `behaviourIndex.unmatched` pattern in this same file: `stubIndex` is "assembled once
+// every scope has folded, so a key can be checked against the WHOLE surface before it is reported as matching
+// nothing". `seenAll` is that union for ⚠ Confirm rows — each scope contributes the keys it has a row for, in BOTH
+// forms it can be addressed by (the bare `<kind>:<item>`, and `<scopeSchema>::<kind>:<item>` where the scope has a
+// schema). So a bare key matches if ANY page of the surface raised that row, and a scoped key matches only on the
+// page it names. A key whose scope prefix names no page of this surface matched nothing and IS reported — the run
+// looked at every scope, so "not addressed to me" is no longer an answer it can give.
+function unmatchedConfirmKeys(declared, seenAll) {
+  const matched = seenAll instanceof Set ? seenAll : new Set(seenAll);
   const out = [];
   for (const [k, v] of Object.entries(plainObject(declared))) {
     if (plainObject(v).resolved !== true) continue;
-    const sep = k.indexOf("::");
-    const scope = sep === -1 ? null : k.slice(0, sep);
-    const bare = sep === -1 ? k : k.slice(sep + 2);
-    const mine = scope === null ? !scopeSchema && !hasNested : scope === scopeSchema;
-    if (mine && !matched.has(bare)) out.push(k);
+    if (!matched.has(k)) out.push(k);
   }
   return out;
+}
+
+// The key forms one scope's rows can be addressed by. A scope WITH a schema answers both the bare pair and its own
+// `<schema>::<pair>` form — `applyConfirmDispositions` tries the scoped form first and falls back to the bare one,
+// so both are legitimately "matched here" and the union has to carry both or a working key reads as a typo.
+function confirmSeenForms(scopeSchema, seen) {
+  return scopeSchema ? seen.flatMap((k) => [k, `${scopeSchema}::${k}`]) : [...seen];
 }
 
 // The `enum-drift-advisory` row's reason, or null when there is nothing advisory to say. Own fn (Sonar CC 15 in
@@ -1429,6 +1441,10 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // key: the memo hands the same `res` to every parent referencing this page.
   const childTpl = CHILD_TEMPLATE_SCHEMA[childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)] || null;
   c.confirmClosed = closedConfirmPairs(res.changeSet);
+  // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+  // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+  // nested run over its own descendants.
+  c.confirmSeenAll = res.confirmSeenAll || [];
   publishPage(c, pageKey, key, `child::${key}`,
     (k) => checklistGroups(res, subPageOpts(foldCtx, k, childTpl, { isChildPage: true })));
 }
@@ -1459,6 +1475,10 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
     // template row rather than one pinned to the parent's template, which a per-type form need not share.
     t.confirmClosed = closedConfirmPairs(res.changeSet);
+    // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+    // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+    // nested run over its own descendants.
+    t.confirmSeenAll = res.confirmSeenAll || [];
     publishPage(t, `typed:${t.schema}`, tkey, `typed::${tkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, t.template || null)));
   }
@@ -1492,6 +1512,10 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
     // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
     miniPage.confirmClosed = closedConfirmPairs(res.changeSet);
+    // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+    // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+    // nested run over its own descendants.
+    miniPage.confirmSeenAll = res.confirmSeenAll || [];
     publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, CHILD_TEMPLATE_SCHEMA.mini, { isMiniPage: true })));
   }
@@ -2810,13 +2834,8 @@ export function runMigration(manifest, opts = {}) {
   // Per PAGE, not merged: each worklist names the keys aimed at rows IT prints.
   changeSet.confirmNotApplicable = formConfirm.notApplicable;
   if (listChangeSet) listChangeSet.confirmNotApplicable = listConfirm.notApplicable;
-  // The unmatched report is computed ONCE, over the union of both pages' rows: computed per page, each call would
-  // report the OTHER page's keys as unmatched. Published on the form page's ChangeSet — the ⚠ line is about the
-  // manifest, not about one of the two grids, and the form worklist is the one every scope renders.
-  const confirmUnmatched = unmatchedConfirmKeys(confirmDispositionsIn, confirmDispositions.seen, opts.scopeSchema,
-    childPages.length > 0 || typedPages.length > 0 || !!manifest.addRecordMiniPage);
-  changeSet.confirmUnmatched = confirmUnmatched;
-  confirmDispositions.unmatched = confirmUnmatched;
+  // The unmatched report is NOT computed here — it needs every fold's rows first, so it is judged once at the root
+  // after the folds (see `confirmSeenAll` below, next to `behaviourIndex.unmatched`, which is judged the same way).
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -2888,6 +2907,22 @@ export function runMigration(manifest, opts = {}) {
   ];
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
+  // ENG-96571 review 3 (BLOCKER) — the ⚠ Confirm equivalent of `stubIndex`, and judged the same way: assembled once
+  // every scope has folded, so a recorded key is checked against the WHOLE surface before it is called a typo. Each
+  // fold publishes the union it computed for its own subtree (`confirmSeenAll` on the node), so a grandchild's rows
+  // reach the root through its parent rather than needing a second traversal here.
+  const confirmSeenAll = [
+    ...confirmSeenForms(opts.scopeSchema, confirmDispositions.seen),
+    ...(miniPage?.confirmSeenAll || []),
+    ...typedPages.flatMap((t) => t.confirmSeenAll || []),
+    ...childPages.flatMap((c) => c.confirmSeenAll || []),
+  ];
+  // Only the ROOT run judges it, for the same reason it alone judges `behaviourIndex.unmatched`: a fold sees one
+  // page's rows, so every answer aimed at a sibling page would read as unmatched there.
+  const confirmUnmatched = opts.scopeSchema ? [] : unmatchedConfirmKeys(confirmDispositionsIn, confirmSeenAll);
+  // Published on the form page's ChangeSet — the ⚠ line is about the manifest, not about one of the two grids, and
+  // the form worklist is the one every scope renders. The render happens after this point (`out.designSpec` below).
+  changeSet.confirmUnmatched = confirmUnmatched;
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
@@ -2982,7 +3017,15 @@ export function runMigration(manifest, opts = {}) {
     behaviourIndex,
     // ENG-96571 C1 — what `manifest.confirmDispositions` actually did on this run: the keys it CLOSED and the ones
     // whose disposition word was not one of the four (recorded, never silently ignored).
-    confirmDispositions,
+    // ENG-96571 review 3 (finding 6) — built EXPLICITLY, in one place, instead of publishing the internal accumulator
+    // and then bolting `unmatched` onto it by mutation. `seen` is a matching accumulator, not part of the caller's
+    // report: it used to ride along in every serialized result. `confirmSeenAll` is the parent-facing channel and is
+    // published beside the report, not inside it.
+    confirmDispositions: {
+      closed: confirmDispositions.closed, invalid: confirmDispositions.invalid,
+      notApplicable: confirmDispositions.notApplicable, unmatched: confirmUnmatched,
+    },
+    confirmSeenAll,
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
