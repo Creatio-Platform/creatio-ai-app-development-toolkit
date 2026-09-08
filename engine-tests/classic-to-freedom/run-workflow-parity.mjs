@@ -182,6 +182,82 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "`discrepancies` as `{ unit, id, kind, claim, found, round }`",
       why: "the refuted-answer dedup keys on `(unit, id)`, so `id`/`kind` must be named in the read step or the identity does not survive an agent transcription and every resume re-files the row",
     },
+    {
+      // PR #157 REVIEW (round 2, Blocker on gate.mjs:114) — the same class of change as the one above, on the same
+      // line, and for a stronger reason. `subject` moves the TERMINAL PARK verdict to the producer: the agent that
+      // hit the blocker says whether the failing artefact is the Classic source it read from or the page it just
+      // wrote, and `classifyBlocker` prefers that answer over its own prose patterns. The field has to be named
+      // HERE or it does not survive a resume — `schemas.mjs` states the rule (an agent reproduces the fields it is
+      // told about and drops the rest), so an unnamed `subject` is a declared verdict silently downgraded to a
+      // regex guess on the one axis where a wrong guess drops a deliverable for good.
+      // The baseline predates the field and has no rows carrying it, so this is a one-way intended divergence
+      // rather than baseline drift — the same standing as the `discrepancies` identity above.
+      baseline: "`blocked` as `{ unit, what, why }`",
+      shipped: "`blocked` as `{ unit, what, why, subject }`",
+      why: "`subject` carries the producer's own source-vs-builder answer for the terminal park verdict; a field the read step does not name is dropped by the transcription, and the park then falls back to the prose patterns this review found five false positives in",
+    },
+    {
+      // The other half of the same change: the BUILD prompts have to ASK for `subject`, or no agent ever supplies
+      // it and the producer channel is inert. `BLOCKER_SUBJECT_RULE` is appended to the page and reach unit prompts
+      // right after `SETTLE_RETRY_RULE`, so the divergence is a SUFFIX on that line — pinned per-substring at the
+      // JUNCTION (the shipped half carries the last words of the baseline line plus the first words of the rule),
+      // which is what stops an unrelated edit to this long line riding in on the entry.
+      // TWO additions now ride on this one line, in order: D7's `unsettled` ask (Minor 5) and the blocker-subject
+      // rule. The shipped half pins the FIRST junction and the tail of the pair, so neither can be removed and
+      // neither an unrelated edit between them nor a re-ordering would still match.
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "an unconfirmed row costs one re-run. **AND RETURN `unsettled: true` WHEN YOU END ON AN UNCONFIRMED READ**",
+      why: "the build agent is the producer of both `unsettled` (D7's per-unit settle memory) and `subject` (the terminal-park verdict), so the page and reach prompts must ask for them; appended rather than inserted because the parity runner compares line counts before consulting this list",
+    },
+    {
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "Omit it when your reads settled. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the second half of the same line: the blocker-subject rule follows D7's `unsettled` ask, and pinning the junction between them stops either being dropped silently",
+    },
+    {
+      // Same rule, on the APP unit prompt, appended to the line that already tells it a substitute package is a
+      // `blocked` rather than a near-enough — the app unit files the `create-app` / `create-app-section` blockers
+      // whose subject is least ambiguous to it and most ambiguous to a regex.
+      baseline: "building into a substitute passes here and fails the whole tree later.",
+      shipped: "building into a substitute passes here and fails the whole tree later. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the app unit files blockers too, and it is the one unit whose `blocked` rows name tool failures a prose classifier reads worst",
+    },
+    {
+      // PR #157 REVIEW (round 2, Major on core.mjs:2584) — THE DELETE IS CORROBORATED BEFORE IT HAPPENS.
+      // `standWrites.appScaffold` decides what may be removed on a live customer stand, and every value in it was a
+      // free-form NAME asserted by the same agent, with `got === unit.package` — an equality between two strings
+      // that agent supplied — as the only guard. A page this run did not create reads exactly like its own debris
+      // from a name alone. So the step that calls `delete-app-section` now re-reads the artefact and checks BOTH its
+      // package and the UId `create-app` returned for the stub it minted, and declines rather than guessing.
+      baseline: "Say in `proposals` if the stub cannot be removed, and never leave it silently.",
+      shipped: "DELETE BY THE ID THE TOOL GAVE YOU, NOT BY THE NAME YOU REMEMBER",
+      why: "an agent-asserted name is not corroboration for a destructive call; the identity check is appended to the step that makes it, on both app arms",
+    },
+    {
+      // The record side of the same finding: the machine ids that make the check possible, and `withdraw` — the
+      // retraction channel. `null` could not be it: the prompt already assigns `null` the meaning "there is none of
+      // this", and reading that as a retraction is the inverse bug the PREVIOUS review round's defensive merge
+      // closed. Three states where there were two — a value replaces, `null`/absent leaves standing, `withdraw`
+      // clears — so a corrected report can withdraw a wrong licence without a narrower one erasing a right it.
+      // Keyed on the phrase BOTH app arms open 5b with — the no-menu arm ends "...removes what is on this list and
+      // nothing else." and the default arm "...never report a removal you did not make." — so one entry covers the
+      // pair without a substring so short it would match unrelated lines.
+      baseline: "WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not",
+      shipped: "AND RECORD THE MACHINE IDS BESIDE THE NAMES",
+      why: "`stubSectionUId`/`stubEntityUId`/`sectionSchemaUId` are the only facts here a later unit can check the stand against, and `withdraw` makes a wrong licence retractable without giving `null` a second meaning",
+    },
+    {
+      // PR #157 REVIEW (round 2, Minor 5) — D7'S SETTLE WINDOW GETS A PER-UNIT MEMORY, and the memory has to
+      // survive an invocation: the rounds an operator drives are separate processes, which is the axis where
+      // re-spending a ~2-minute reload-and-wait per unit per round compounds. `unsettledUnits` therefore rides in
+      // `roundState`, and `schemas.mjs` states the rule that a field the read step does not NAME is dropped by the
+      // transcription — so naming it here is what makes the memory real rather than per-process.
+      // The baseline predates the field and has no folder carrying one, so this is a one-way intended divergence,
+      // the same standing as the two `roundState` siblings before it.
+      baseline: "plus `pendingContradiction` when the file has one.",
+      shipped: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
+      why: "`unsettledUnits` is the folder's memory of which units have already spent D7's settle window; a field the Reconcile read step does not name does not survive a resume, and the waste it prevents is per-resume",
+    },
   ],
 }
 
@@ -296,11 +372,14 @@ function buildScenarios() {
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
   // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
-  // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
-  // and a realistic fixture should look like the real answer, not because the checker demands it.
+  // `required` is complete/missing/unverified/buildMissing/pending/pages) — it is carried here because the engine's
+  // summary publishes it and a realistic fixture should look like the real answer, not because the checker demands
+  // it. `pending` joined that list in ENG-96458 and is why this fixture carries `pending: 0`: an omitted count
+  // leaves the ☐ confirmations hold inert, so the shape refuses the answer rather than defaulting it (the refusal
+  // itself is pinned in `run-infra.mjs`).
   // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
   // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [], pages, ...extra });
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -327,7 +406,7 @@ function buildScenarios() {
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
+    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pending: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({

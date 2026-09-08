@@ -475,3 +475,78 @@ from the stand" signal end to end. At that point the gate could rest on the tool
 the question of an operator override would not arise, because there would be no ambiguous catalog
 answer to override. Any change here belongs in this record with the caller-migration path, because
 it changes what the workflow returns and what it refuses.
+
+## DR-9 (ENG-96458, PR #157 review round 2) — a hold that is not a build gap belongs on the `pending` channel, and `owner: "verifier"` was not enough
+
+**The decision.** A verify row that holds the run but that NO scheduled unit can close resolves `pending`, not
+`missing`/`unverified`. Two rows moved onto that channel in this round: an un-removed `noOrphanScaffold`, and a
+component SURPLUS.
+
+**Why it came up.** Both rows returned a three-element verdict tuple with no `owner`, and `verifyTally.add` charges
+any un-owned open row to the BUILDER (`buildComplete = false`, `builderOpen++`). Neither row can be closed by the
+unit that gets re-dispatched for it: the scaffold removal is forbidden to `main` by its own prompt ("Do NOT delete
+it" — a page on a customer's stand is not a build round's to remove), and a template-merged Feed cannot be removed
+by the build agent at all. Both therefore burned MAX_ROUNDS and parked a page that was correct — which is exactly
+"a correct page held INCOMPLETE on a state that is not a build gap", the defect this ticket exists to remove,
+reintroduced by two rows added to fix it.
+
+**The alternative that was tried and rejected: tag the tuples `"verifier"`.** It is the smaller change and it looks
+sufficient — it clears `buildComplete` and `builderOpen`. It is not sufficient. `verifyTally.add` sets
+`p.complete = false` for EVERY `missing`/`unverified` row whatever its owner, and `isOpenPage` (`helpers.mjs`) gates
+re-dispatch on `complete`, not on `buildComplete`. The unit would still be re-dispatched and would still park; only
+the counters would look better. `pending` is the one outcome that returns from `verifyTally.add` BEFORE
+`p.complete = false`, so the PAGE is done and the RUN holds — which is where a hold that needs a human belongs.
+This was verified by a third reviewer executing both readings against the same head, and it is the reason the fix
+is a channel change rather than a one-word one.
+
+**What made the channel usable: `kind: "confirmed"`.** Routing a hold to `pending` is only an improvement if the
+hold can be released. Before this round the sole route out of `pending` was `kind: "accepted"`, which renders
+"ACCEPTED BY DECISION" — so an operator who opened the page, found it correct and wanted to say so had to file it
+as a signed-off DEVIATION, and the audit table recorded every confirmed-correct layout row that way. `confirmed`
+is the same key form, the same required `decidedBy` + ISO `date`, the same inert-but-counted tally slot, and its
+own axis — so `accepted` keeps meaning "deviates" and a close report can still say how many deviations the green
+verdict rests on. The three remediation strings were reworded with it: they used to offer "answer each on-stand"
+FIRST, which closes nothing, and an operator who followed that re-ran forever.
+
+**When to revisit.** If a later ticket gives the run a unit that CAN remove its own stand debris — a post-`main`
+cleanup step reading `standWrites.appScaffold`, removing only what is on that list and recording `couldNotRemove` —
+then the scaffold row becomes genuine builder work and should move back off `pending`. The surplus row should not:
+"does this extra component belong here" is a question about intent, and no build round can answer it.
+
+
+## DR-10 (ENG-96458, PR #157 review round 2) — the terminal-park verdict is declared by its producer, and the prose patterns are the fallback
+
+**The decision.** A `blocked` item may carry an optional `subject: 'source' | 'builder'`. `classifyBlocker` prefers
+it; the regex patterns run only when it is absent, keeping the conservative `unknown -> retry` default.
+
+**Why it came up.** Park-terminally-and-never-retry is the most consequential unit-level verdict this run makes,
+and it was re-derived downstream from free prose while `schemas.mjs` already declared the producer-side channel for
+it. The fragility is documented rather than hypothetical: within ONE review cycle five failure-mode patterns had to
+be demoted to require a co-occurring subject, `Script error` had to be narrowed to its quoted form, an `ownRoutes`
+exemption had to be added, and this round had to re-order that exemption ahead of the word test — each a repair to
+a false SOURCE positive. The measured failure this round found was `\bsource\b` matching Freedom's own "data
+source" vocabulary, which this run's own prompts use verbatim three times: an ordinary builder blocker ("the page
+fails to render — its primary data source is not bound") parked terminally with `rounds: 0`, and the queue file
+carried the park so it was re-applied on every resumed run. A silently dropped deliverable plus a false diagnosis,
+on the one class of blocker a build round would have fixed.
+
+**Why optional and not required.** An agent that cannot tell must be able to say nothing. A wrong `'source'` drops
+a deliverable for good; a wrong `'builder'` costs only the rounds the run would have spent anyway. The asymmetry is
+stated in the prompt, and a value outside the two words is IGNORED rather than read as a third state.
+
+**What it costs.** Nothing on the byte-capped schema. `blocked` items are already declared as a loose
+`additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object on both the build-answer schema and
+`RECONCILE_SHAPE`, so the value is carried and length-capped without a new `properties` entry — `RECONCILE_SCHEMA`
+stays at 4061 of its 4096-byte ceiling, which ENG-95468 already had to trim it once to reach. It is typed but not
+required in `RECONCILE_SHAPE`, and therefore NAMED in the Reconcile read step: a field the read step does not name
+is dropped by the transcription, which would silently downgrade a declared verdict to a regex guess on a resume.
+
+**The residual.** The regex surface is smaller but not gone, because a blocker that carries no `subject` still has
+to be classified somehow. The narrowing this round (bare `classic` alone; `source`/`original`/`legacy` only when
+they qualify a source noun; `data source` / `dataSource` excised; the `#Section/` reference evidence read before the
+generic words) is what the fallback now is. The durable close is agents reliably declaring the field, at which
+point the patterns can become a warning rather than a decision.
+
+**When to revisit.** If measured runs show the declared field is unreliable — agents saying `'source'` about their
+own writes — the preference order should invert: patterns first, the field only as corroboration. That is a
+one-line change in `classifyBlocker` and belongs in this record with the evidence that prompted it.

@@ -131,3 +131,20 @@ jobs:
         if: always()
         working-directory: engine-tests/freedom-build-executor
         run: node round-guard.mjs
+      # ENG-94859 — the source-blocker park decision, as a pure module and driven through the real core. Both
+      # suites existed and neither was wired here, so they had been passing or failing unobserved; a golden nothing
+      # runs is a golden nobody is warned by.
+      - name: Run freedom-build-executor gate golden
+        if: always()
+        working-directory: engine-tests/freedom-build-executor
+        run: node gate.mjs
+      - name: Run freedom-build-executor source-blocker-park golden
+        if: always()
+        working-directory: engine-tests/freedom-build-executor
+        run: node source-blocker-park.mjs
+      # ENG-96458 — the ☐-confirmation hold on the run's close, the judge's page-defect finding, and the app unit's
+      # own scaffold record. Driven through the real core, asserted on the run's own return and log.
+      - name: Run freedom-build-executor pending-and-findings golden
+        if: always()
+        working-directory: engine-tests/freedom-build-executor
+        run: node pending-and-findings.mjs

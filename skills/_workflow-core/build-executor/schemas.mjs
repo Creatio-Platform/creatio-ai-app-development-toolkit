@@ -72,7 +72,10 @@ export const CARRY_TEXT_CAP = 400
 // string an array-of-object item carries. Named once so a future re-budgeting (they exist to keep the answer
 // under the host's tool-input cap; ENG-96071 owns tightening them) is one edit, not twenty.
 const RECONCILE_LIST_CAP = 400
-const RECONCILE_TEXT_CAP = 400
+// EXPORTED (PR #157 review, Blocker 3): `core.mjs` caps the judge's `pageDefect.what` and its evidence id to the
+// same bound before either reaches a build prompt. `JUDGE_SCHEMA` caps `what` and not the id, and a second literal
+// would be a second number to keep in step.
+export const RECONCILE_TEXT_CAP = 400
 
 export const RECONCILE_SCHEMA = {
   type: 'object',
@@ -280,7 +283,9 @@ export const RECONCILE_SCHEMA = {
     // below degrades to an APPROXIMATION and says so in the return.
     parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
     // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
-    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default.
+    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default. `appliesWhen: false`
+    // does NOT mean the row is empty — a verifier-only row (`noOrphanScaffold`) carries real `what`/`miss` text
+    // with it; see the compacted declaration's own note below.
     reachability: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
     // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
     // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
@@ -464,11 +469,24 @@ export const RECONCILE_SHAPE = {
   // cannot express (see `helpers.mjs` `standUnconfirmedComponents`).
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
-  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: a non-applicable key
+  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: an ORDINARY non-applicable key
   // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
-  // rule rejected that copy on the FIRST attempt of every Reconcile. Applicable rows always carry real strings.
+  // rule rejected that copy on the FIRST attempt of every Reconcile.
+  // AND `appliesWhen: false` DOES NOT IMPLY THE NULLS (PR #157 follow-up review — this comment used to claim
+  // "applicable rows always carry real strings", which reads as the converse and is false). `noOrphanScaffold`
+  // (ENG-96458 D6) is published `appliesWhen: false, verifierOnly: true, emitted: true` WITH a real `what`/`miss`:
+  // it schedules no build unit, and its text is exactly what the VERIFIER is told to check. So the four
+  // combinations are all legal here and the shape cannot express the correlation — `string-or-null` on both
+  // fields is the accurate declaration, not a concession. Anything that reads `what`/`miss` must therefore
+  // handle a null on an emitted row and a string on a non-applicable one (see `reachKindBlock`'s fallbacks).
+  // ENG-96458 D6 — `verifierOnly`/`emitted` are TYPED, NOT required. `--units` publishes them only on a row that has
+  // no build unit of its own (`noOrphanScaffold`: the verifier reads it, the app unit does the removal), so a plan
+  // whose reachability rows are all schedulable legitimately carries neither, and requiring them would reject an
+  // honest answer. The run schedules on `appliesWhen` alone; `verifierOnly && emitted` only widens the set of keys
+  // the VERIFIER is told to write a boolean for.
   reachability: { kind: 'array', required: ['key', 'appliesWhen'],
-    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null' } },
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null',
+      verifierOnly: 'boolean', emitted: 'boolean' } },
   // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
   preflightItems: { kind: 'array', required: ['id', 'pageKey'],
     types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },
@@ -492,12 +510,31 @@ export const RECONCILE_SHAPE = {
   // `layoutPassDone` and `roundsSpent` are TYPED, NOT required, deliberately: absent/`false`/`0` is the correct
   // reading for a fresh folder and for every folder written before these keys existed, so requiring them would
   // reject a well-formed answer about a folder that has nothing to report.
+  // ENG-96458 D4 (PR #157 follow-up review) — `pendingContradiction` is TYPED AND OPTIONAL like the two above, and
+  // for the same reason: the overwhelming majority of folders have no ☐-count contradiction to remember, and
+  // requiring the key would reject a well-formed answer about a healthy folder. When it IS present both its
+  // fields are required — a record with no signature cannot be compared and one with no round count cannot be
+  // counted, and either half missing would silently reset the counter that stops an unclosable run.
+  // `unsettledUnits` (PR #157 review, round 2, Minor 5) — TYPED, NOT REQUIRED, and free: `RECONCILE_SCHEMA`
+  // declares `roundState` as a bare `{ type: 'object' }`, so a new nested key costs the 4096-byte serialized
+  // ceiling nothing (it sits at 4061). A folder written before the field simply has no list, which reads as
+  // the empty set — the state every unit starts in.
   roundState: { kind: 'object', required: ['consumedRoundAnswers'],
-    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]' } },
+    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]', unsettledUnits: 'string[]' },
+    nested: { pendingContradiction: { kind: 'object-or-null', required: ['signature', 'rounds'],
+      types: { signature: 'string', rounds: 'integer' } } } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
-  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  // `subject` (ENG-96458 / PR #157 review, round 2) — the producer's own answer to "which artefact failed",
+  // `'source'` or `'builder'`. TYPED BUT NOT REQUIRED, exactly like `verifierOnly` / `emitted`: the terminal
+  // park verdict used to be re-derived downstream from free prose by `gate.mjs`, and five separate regex
+  // repairs in one review cycle is the evidence that prose was the wrong channel for it. `classifyBlocker`
+  // prefers this field and falls back to the patterns when it is absent, so an agent that cannot tell simply
+  // omits it and nothing changes. It costs the byte-capped `RECONCILE_SCHEMA` nothing — `blocked` items are
+  // already a loose `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object there, so the value is
+  // carried and capped without a new `properties` entry (the same reason `resolvedFrom` was free).
+  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string', subject: 'string' } },
   // `id`/`kind` are TYPED BUT NOT REQUIRED, and the asymmetry is the whole point (round 21 review, finding 2).
   // They are the identity `upsertResolutionDiscrepancy` dedups a refuted-answer row on, so a resume that arrives
   // without them re-files the row the previous session already refreshed — ~900 bytes per resume into a list
@@ -550,16 +587,24 @@ export const RECONCILE_SHAPE = {
   // derivation (`unverified - (builderOpen - buildMissing)`) needs a top-level `builderOpen` that this channel
   // deliberately does not carry. It was one more field name the Reconcile agent had to transcribe with the right type
   // on the run's largest structured answer — a type fault away from a full retry — for a number nothing reads.
-  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pages'],
+  // ENG-96458 D4 — `pending` is REQUIRED for the same reason `evidenceIds` and `buildComplete` are: it is what the
+  // close reads to decide whether the RUN may call itself done, and an answer that omitted it would leave the hold
+  // inert — the gate silently off on exactly the run that needs it. Per-page `pending`/`pendingRows`/`pendingMore`
+  // are typed but not required: the top-level count is what holds the run, the per-page rows are what NAME it, and
+  // a page entry that predates this field must not fail an otherwise honest answer.
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pending', 'pages'],
     // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
     // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
-    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer' },
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer', pending: 'integer', accepted: 'integer' },
     // ENG-96204 (AC 2) — `openCorrectness` / `openFidelity`: the page's open rows counted per severity band, off the
     // engine's own `rowSeverity` stamp. Typed, NOT required: a summary written by an engine older than the field
     // legitimately lacks them, and the executor then tallies that page as `unstamped` rather than refusing the answer.
+    // ENG-96458 D4 — per-page `pending`/`pendingRows`/`pendingMore`/`accepted` are typed for the same reason and on
+    // the same terms: the top-level count is what holds the run, the per-page rows are what NAME it, and a page entry
+    // that predates the field must not fail an otherwise honest answer.
     map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
       types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer',
-        openCorrectness: 'integer', openFidelity: 'integer' } } } },
+        openCorrectness: 'integer', openFidelity: 'integer', pending: 'integer', accepted: 'integer', pendingMore: 'integer' } } } },
 }
 
 export const PREFLIGHT_SCHEMA = {
@@ -601,6 +646,12 @@ export const BUILD_PROPERTIES = {
   schemaName: { type: 'string' },
   packageName: { type: 'string' },
   template: { type: 'string' },
+  // PR #157 review (round 2, Minor 5) — D7'S SETTLE WINDOW, ANSWERED AS A BOOLEAN. The rule asks an agent to
+  // write "unconfirmed after N attempts" into `notes`, and re-deriving a decision from prose is the shape the
+  // round-2 gate.mjs Blocker is about — so the run reads a typed field instead and the folder remembers the
+  // unit, which stops the ~2-minute reload-and-wait being re-spent on every later round up to MAX_ROUNDS.
+  // Optional: a unit whose reads settled says nothing, which is the ordinary case.
+  unsettled: { type: 'boolean' },
   // A CLAIM, not evidence — the read-only verifier files what the stand actually returns, and
   // the script logs any disagreement rather than smoothing it over.
   claimedBuilt: { type: 'array', items: { type: 'string' } },
@@ -778,6 +829,12 @@ export const BUILD_SCHEMA_APP = {
     appName: { type: 'string' },
     starterFormPage: { type: 'string' },   // `main`'s deliverable, created as a side effect of `create-app`
     starterListPage: { type: 'string' },
+    // ENG-96458 D6 — EVERYTHING THIS CALL MINTED, removed or not: `{ stubSection, stubEntity, starterPages[],
+    // details[], removed[], couldNotRemove[{what, why}] }`. It is the record that tells the run's OWN debris from a
+    // page somebody else owns, and that difference is what decides whether anything may be deleted: a later unit
+    // removes what is on this list and touches nothing that is not. Nested shapes stay loose here for the same
+    // reason every other nested object does — the serialized schema has a 4096-byte ceiling.
+    appScaffold: { type: 'object' },
   },
 }
 // Keyed by what `buildSchemaKind` returns, so the dispatch site holds a lookup rather than a chain of ternaries.
@@ -865,7 +922,15 @@ export const JUDGE_SCHEMA = {
       items: {
         type: 'object',
         required: ['id', 'convincing', 'why'],
-        properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' } },
+        // ENG-96458 D5 — `convincing` and `pageDefect` are TWO axes, not one. A judge that reads the built page to
+        // rule on a record often finds a REAL gap in the page while doing it, and with one axis its only exit was
+        // `convincing: false` — an evidence-formatting rejection. Measured: the judge wrote that the built grid
+        // "has no selectionState, _selectionOptions, bulkActions or layoutConfig" — an actual parity defect it had
+        // discovered — and filed it as "the diff was column-scoped", so the run spent two rounds re-writing a
+        // record and never once built the missing props. `pageDefect` is `{ unit, what }`: the unit whose page
+        // carries the gap and what is missing, in the judge's own words. It opens a build row.
+        properties: { id: { type: 'string' }, convincing: { type: 'boolean' }, why: { type: 'string' },
+          pageDefect: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
       },
     },
     // Preflight evidence ids this agent MERGED into the built file. Judging is not filing: without this the workflow

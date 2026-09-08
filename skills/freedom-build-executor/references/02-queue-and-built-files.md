@@ -182,6 +182,60 @@ Rules that make it trustworthy:
 - `nonPageUnits` keys are the reachability keys from `--units.reachability[]` whose
   `appliesWhen` is `true`. A key with `appliesWhen: false` is not an obligation of this run and
   gets no entry.
+- **`standWrites.appScaffold` is what THIS RUN minted, and the only thing that licenses a deletion (ENG-96458 / D6).**
+  `create-app` mints a stub entity and starter pages bound to it; `create-app-section` adds a starter form page on
+  its default template. Once the real page is built and bound, each of those is dead — and two measured runs shipped
+  them: a `*_FormPage` bound to nothing, a stub entity `UsrBusinessRuleFreedom`, an unused `*_Detail`, and a
+  look-alike section "Business rules Freedom" sitting in the menu one bracket from the real "Business rules
+  (Freedom)". A user cannot tell those apart, and a later diagnosis read the dead page as the live one. The app unit
+  returns `appScaffold` = `{ stubSection, stubEntity, starterPages[], details[], removed[], couldNotRemove[{what,
+  why}] }` — everything it created, removed or not — and it is recorded here MERGED, never replaced, so a unit that
+  reports twice does not lose the first report's `removed` list. The merge is recorded on EVERY outcome of the app
+  unit, not only the complete one (PR #157 review): the run that could not remove the stub is the one whose
+  `couldNotRemove` list matters most. Scalars merge defensively — an incoming `null` (which the prompt asks the
+  agent to send where there is none) never erases a recorded `stubSection`/`stubEntity`, because that record is
+  what licenses the removal — and `couldNotRemove` is de-duplicated by `what` + `why`. Each record carries the
+  `package` it describes, stamped by the executor from the package name the app unit READ BACK off the stand.
+- **`standWrites.foreignScaffold` is the same report about a package the plan does NOT target, and it licenses
+  nothing (PR #157 follow-up review).** `create-app` derives the package from the app code through the
+  environment's `SchemaNamePrefix`, so an app can perfectly well land in `SomeOtherPrefix_…`; that is the
+  package-MISMATCH outcome, and the unit stays open on it. Recording that scaffold on every outcome is right — the
+  debris exists either way — but writing it into `appScaffold` would have declared a stub section in a package the
+  plan never named to be this run's own removable debris. So it is recorded here instead: reported for a human to
+  settle, never merged into `appScaffold`, and never read by `noOrphanScaffold`.
+  **`appScaffold` is the line between the run's own debris and somebody else's property**: a later unit may remove
+  what is named there and nothing that is not. A page you cannot tie to that record is an `orphanedPages` entry —
+  reported for a human, never deleted; so is anything under `foreignScaffold`. The verify row
+  `noOrphanScaffold` is the gate: `list-pages` on the target package
+  returns no starter page bound to nothing, and the menu shows one section for the entity. That row is
+  VERIFIER-ONLY — no build unit is scheduled for it (`appliesWhen: false`, `verifierOnly: true`, `emitted: true`),
+  because the READING is the verifier's and the REMOVAL is the app unit's — and its menu half drops under
+  `pages-only-no-menu`, where the plan registers no section at all.
+  **A `noOrphanScaffold: false` is NOT a build gap (PR #157 review, round 2).** The row used to resolve
+  `❌ MISSING` with no owner, which the tally charges to the BUILDER — on a row nothing scheduled can close: the key
+  is verifier-only, the app unit has already run, and `main`'s own prompt forbids deleting a page on a customer's
+  stand. `main` was re-dispatched every round with a row it may not touch and parked at MAX_ROUNDS. It now resolves
+  `pending`: the PAGE is complete and the RUN holds, closed by a `confirmed` resolution once the stand is handled or
+  an `accepted` one to leave the debris in place by decision. (An `owner: "verifier"` tag alone would NOT have
+  fixed it — the tally clears `p.complete` for every open row whatever its owner, and re-dispatch gates on
+  `complete`, not `buildComplete`.)
+- **The record is WHITELISTED, CAPPED and RETRACTABLE (PR #157 review, round 2).** It licenses a delete on a live
+  customer stand, so it is bounded like every other agent-authored payload on this path: only the documented keys
+  are kept (`stubSection`, `stubEntity`, the three UIds, `starterPages`, `details`, `removed`, `couldNotRemove`,
+  plus the executor-stamped `package`), every retained string goes through `capCarryText`, the lists are sliced with
+  the overflow reported as `entriesDropped`, and `couldNotRemove` de-duplicates on the CAPPED `what` + `why` so a
+  re-worded tail collapses instead of appending a row on every round and every resume.
+  **`stubSectionUId` / `stubEntityUId` / `sectionSchemaUId`** are copied verbatim from the `create-app` /
+  `create-app-section` responses — the only facts in this record that are not a name the same agent asserted — and
+  the step that calls `delete-app-section` re-reads the artefact and checks its package AND that UId before
+  deleting, declining into `proposals` otherwise. A page the run did not create reads exactly like its own debris
+  from a name alone.
+  **To withdraw a value an earlier round recorded wrong, name its key in `withdraw`** (`{"withdraw":
+  ["stubSection"]}`). NOT `null`: `null` means "there is none of this" and deliberately leaves an earlier value
+  standing, because a narrower second report must not erase a licence the first one correctly recorded. Three
+  states, and before `withdraw` existed two of them were indistinguishable — so a single bad report was a permanent
+  deletion licence.
+
 - **`standWrites.orphanedPages` are pages a RE-BIND left pointing at nothing (ENG-95850 / B4).** `create-app` seeds
   start pages (`<Code>_FormPage`, `_ListPage`, `_Detail`); a builder that builds the real page as a NEW schema on a
   different template and re-points the section at it leaves the seeded one on the stand, bound to no key. It is
@@ -242,6 +296,28 @@ Rules that make it trustworthy:
   grant — so the derivation over-marked exactly those units and denied them the repair they were owed. Copy the
   arrays verbatim; the keys are unit keys and the run trims them on read, so incidental whitespace cannot re-grant
   a spent round.
+- **`roundState.pendingContradiction` is the folder's memory of a ☐-count contradiction, and it is what stops an
+  unclosable run (ENG-96458 / D4, PR #157 follow-up review).** `roundState` carries the folder's round record —
+  `roundsSpent`, `consumedRoundAnswers`, `layoutPassDone` (see DR-7 in `05-decision-records.md`) — and this fourth
+  key is the only optional one: `{ signature, rounds }`, absent on every healthy folder.
+  It exists because the run FAILS CLOSED on a contradiction it cannot otherwise escape. `verify.pending` is a
+  top-level scalar and the ☐ rows are nested per page, so a Reconcile answer that reports `pending: 0` beside named
+  `pendingRows` is entirely plausible — a dropped scalar, or a `verify.md` copied in from an older run. The run
+  holds on the ROWS, which is right; but BOTH documented ways to close a ☐ row (confirm it on the stand, or record
+  an `{ kind: "accepted", row, … }` entry) work through the engine's own count, and that count already reports
+  nothing to close. So no operator action can release the hold, and every re-run holds again.
+  The rule: the FIRST Reconcile to read that way records `{ signature, rounds: 1 }` and the run holds and warns
+  exactly as before — one transcription slip can be right on the next read, and stopping on it would spend a
+  session on a fault about to disappear. The SECOND Reconcile to read the same contradiction stops the run
+  `pending-contradiction`, whose `next` names the COUNT as the thing to repair (re-run the engine's `--verify` so
+  the scalar is transcribed from the summary's top level, or fix the ☐ rows if they belong to an earlier plan) and
+  says explicitly not to record `accepted` entries, which would change the same count.
+  A "Reconcile" here is any re-read of the gate — the baseline, the post-preflight refresh, a round tail — because
+  what has to be independent is the READ, not the round around it. The record travels in this file precisely
+  because the case that motivates it is the ZERO-WORK close, which performs exactly one Reconcile per invocation.
+  Copy it VERBATIM: a recomputed signature or a lowered `rounds` restarts the count on every read and the folder
+  holds for ever. And it is REMOVED, not kept, once a Reconcile reads a count that covers the rows — a record left
+  behind on a healed folder makes the next sighting the second one and stops a run that deserves to hold once.
 - **`standWrites` is the run's own memory of what it did TO THE STAND, and it lives at the ROOT.** Everything
   else in this file is bookkeeping about units; this is the one section that records a change made outside the
   file, so it is not under a unit — the package is not a page, and the next run's placement gate reads it before

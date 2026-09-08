@@ -233,6 +233,20 @@ came from `standWrites.sectionRoute`.**
   that cannot find `standWrites.sectionRoute` reports the gap, it does not reconstruct a `#Section/<guess>`
   string from the schema name or section code — that reconstruction is the defect this section exists to stop,
   not a workaround for it.
+- **The same rule binds the source-blocker classifier** (`_workflow-core/build-executor/gate.mjs`). A blocker
+  is parked TERMINALLY, with no build round, only when its text names the CLASSIC/source side — and
+  `#Section/<code>` counts as naming it, because that is the identifier the migration publishes for a Classic
+  surface. But the run composes that same prefix for the section IT BUILT, so a `#Section/<code>` **equal to
+  `standWrites.sectionRoute.route` is not a source subject**: a blocker quoting the built section's own URL is
+  a report about the built page, and a failure-mode entry whose only source-looking subject is that reference
+  stays `unknown` → retried. Parking it would tell the operator "the blocker is in the SOURCE" about the one
+  class a build round would have fixed. The comparison is on the exact code after the prefix, and it is
+  deliberately not a prefix or fuzzy match: a Classic surface is routinely a prefix of the Freedom route built
+  from it (`#Section/Applicant` vs `#Section/UsrApplicant_ListPage`), so a looser rule would stop genuine
+  Classic-source blockers from parking at all. A DIFFERENT `#Section/<code>` — including one quoted alongside
+  the run's own route — still parks. **With no route recorded yet** the run can vouch against nothing, so
+  `#Section/<code>` is read as the source side, as before; that is the residual gap, and it is why the record
+  is written the moment the `sectionRegistered` unit reports it.
 
 ## Never weaken a gate to reach green
 
