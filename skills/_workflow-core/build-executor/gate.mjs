@@ -107,11 +107,33 @@ const FAILURE_MODE_PATTERNS = [
   /render\s+check\b[^.]*\b(could\s+not|cannot|failed)/i,
 ]
 
-// A SOURCE SUBJECT, in two halves. The WORDS stand on their own: they are the ones the run's own prompts use for
-// the side being migrated FROM. Deliberately NOT `schema` and NOT `page`: "the schema I just wrote" and "the page
-// errors at runtime" are the builder's own artifact, so either word would re-admit the very case this split exists
-// to exclude.
-const SOURCE_SUBJECT_WORDS = /(\bclassic\b|\bsource\b|\boriginal\b|\blegacy\b)/i
+// A SOURCE SUBJECT. PR #157 review (round 2, Blocker on gate.mjs:114) — THE WORDS HAD TO QUALIFY AN ARTEFACT.
+// `\bsource\b` standing on its own is not a subject test at all: "data source" is core Freedom-page vocabulary and
+// this run's OWN prompts use it verbatim three times ("the data source named by `primaryDataSourceName`"), so an
+// everyday builder blocker —
+//     the page fails to render — its primary data source is not bound
+// — matched `fails to render` here and `source` there, and `sourceBlockerParks` emitted a TERMINAL park with
+// `rounds: 0` and the diagnosis "the blocker is in the SOURCE this migration reads from". The queue file carries the
+// park, so it was re-parked on every resumed run: a silently dropped deliverable plus a false diagnosis, on the one
+// class of blocker a build round would have fixed. This module's own header names that as the worst outcome it has.
+//
+// So: `classic` still stands alone — nothing in a Freedom page is called that — while the three GENERIC words must
+// qualify a source NOUN. `data source` / `dataSource` is excised from the text before the test as well, belt and
+// braces: the noun requirement already refuses it, and an explicit exclusion is what stops a future noun being
+// added to the list and quietly re-admitting it.
+// Deliberately NOT `page` or `schema` as bare words: "the schema I just wrote" and "the page errors at runtime" are
+// the builder's own artefact, so either would re-admit the very case this split exists to exclude — they are
+// admitted only after `source` / `original` / `legacy`.
+// TWO STRENGTHS OF WORD, because they do not deserve the same standing against the reference evidence below.
+// `classic` is UNAMBIGUOUS: nothing in a Freedom page is called that, so a text using it is talking about the side
+// being migrated from even when the only route it quotes is the run's own (ENG-96147 pins exactly that — "the
+// Classic original at `#Section/<own route>` fails to render" is a source blocker).
+const CLASSIC_WORD = /\bclassic\b/i
+// The GENERIC words are ambiguous, which is the whole finding, so they must qualify a source NOUN — and they lose
+// to the reference evidence. `source` on its own was the defect: "data source" is core Freedom vocabulary.
+const SOURCE_NOUN_PHRASE = /\b(?:source|original|legacy)\s+(?:page|schema|section|module|form|surface|record)\b/i
+// Freedom's own "data source" vocabulary, removed before either word test rather than special-cased inside them.
+const DATA_SOURCE_RX = /\bdata\s+source\b|\bdataSource\b/gi
 // The RENDER-SURFACE REFERENCE is the conditional half — see "THE RUN'S OWN ROUTE IS NOT A SOURCE SUBJECT" above.
 // Every `#Section/<code>` in the text is extracted and tested against the routes the run recorded for the section it
 // built; a reference that is not one of those names the source side, a reference that is one of those does not. The
@@ -148,16 +170,32 @@ function ownRouteCodes(ownRoutes) {
   return codes
 }
 
-// Does this text name the Classic/SOURCE side? A subject word does it outright; otherwise it takes one
-// `#Section/<code>` reference that is NOT among the run's own recorded routes. Per reference, not per text: a
-// genuine Classic surface quoted next to the run's own route still answers `true`.
+// Does this text name the Classic/SOURCE side?
+//
+// PR #157 review (round 2) — THE REFERENCE EVIDENCE IS READ BEFORE THE GENERIC WORDS, and that ordering is the fix.
+// The word test used to run before the `ownRoutes` exemption, so the exemption `263d9711` added could never apply to
+// a text containing a generic subject word — which is EVERY text that says "data source". A `#Section/` reference is
+// POSITIVE evidence about which side is being described; a generic word is a weaker signal. So, in order:
+//   1. `classic` decides outright. It outranks the exemption on purpose — see `CLASSIC_WORD`.
+//   2. a reference that is NOT one the run recorded names the source side. Per reference, not per text: a genuine
+//      Classic surface quoted next to the run's own route still answers `true`.
+//   3. otherwise, if the text carries a reference at all, every one of them is the run's OWN route — the text is a
+//      report about the page this run built, and it is NOT a source subject however it is phrased.
+//   4. only a text with no reference at all falls through to the generic noun-phrase test.
+// Step 3 is the case the third reviewer executed as the sharpest: "opening #Section/Usr..._ListPage errors at
+// runtime / the data source is not bound" quotes the run's own recorded route and used to park terminally, because
+// the word test at step 4 ran first and `source` matched.
 function namesSourceSubject(text, ownRoutes) {
-  if (SOURCE_SUBJECT_WORDS.test(text)) return true
+  const clean = text.replace(DATA_SOURCE_RX, ' ')
+  if (CLASSIC_WORD.test(clean)) return true
   const own = ownRouteCodes(ownRoutes)
+  let sawRef = false
   for (const m of text.matchAll(SECTION_REF)) {
+    sawRef = true
     if (!own.has(m[1].toLowerCase())) return true
   }
-  return false
+  if (sawRef) return false
+  return SOURCE_NOUN_PHRASE.test(clean)
 }
 
 // The key a blocker names, whichever field carries it (the round loop uses `unit`, some records use `key`).
@@ -169,8 +207,35 @@ export function blockerKey(b) {
 // needs no separate 'builder' label to act on — the caller retries everything that is not 'source').
 // `ownRoutes` — the `#Section/...` route(s) the run recorded for the section IT BUILT (route strings or
 // `{ route }` records, one or many). Passing none keeps the classifier's pre-route behaviour exactly.
+// THE PRODUCER'S OWN ANSWER. PR #157 review (round 2) — the root issue is upstream of every regex above: the most
+// consequential unit-level verdict this run makes (park terminally, never attempt a build round) was re-derived
+// downstream from free prose, while `schemas.mjs` already declares the producer-side channel for it. Within one
+// review cycle five failure-mode patterns had to be demoted to require a co-occurring subject, `Script error` had to
+// be narrowed to its quoted form, `263d9711` added the `ownRoutes` exemption and this round re-ordered it — each a
+// repair to a false SOURCE positive. So the agent that HIT the blocker is asked which artefact failed, and its
+// answer is preferred; the patterns become the legacy fallback for a blocker that does not carry one.
+// OPTIONAL, exactly like `verifierOnly` / `emitted`, and it costs no schema bytes: the `blocked` items are already
+// a loose `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object on both the build-answer schema and
+// `RECONCILE_SHAPE`, so `RECONCILE_SCHEMA` stays at its size (it has ~35 bytes of headroom under the 4096-byte
+// serialized-schema ceiling, and ENG-95468 already had to trim it once to fit).
+// A value outside the two words is IGNORED rather than read as a third state — the same rule the prose test keeps:
+// what is not positively source stays retryable. `subject: 'builder'` can never be parked as source, however the
+// blocker is phrased, which closes both false-park holes this header admits to.
+const DECLARED_SUBJECTS = new Set(['source', 'builder'])
+function declaredSubject(blocker) {
+  const v = typeof blocker?.subject === 'string' ? blocker.subject.trim().toLowerCase() : ''
+  return DECLARED_SUBJECTS.has(v) ? v : null
+}
+
 export function classifyBlocker(blocker, ownRoutes = []) {
   const text = `${blocker?.what || ''} ${blocker?.why || ''}`.trim()
+  const declared = declaredSubject(blocker)
+  if (declared === 'builder') {
+    return { class: 'unknown', reason: 'the agent that hit this blocker DECLARED the failing artefact is the page it just wrote (`subject: "builder"`), so it stays retryable — a declared subject outranks the prose patterns' }
+  }
+  if (declared === 'source') {
+    return { class: 'source', reason: 'the agent that hit this blocker DECLARED the failing artefact is the Classic source this migration reads from (`subject: "source"`) — a rebuild of the Freedom page cannot change it' }
+  }
   if (!text) return { class: 'unknown', reason: 'blocker carries no `what`/`why` text to classify on' }
   if (SOURCE_PATTERNS.some((re) => re.test(text))) {
     return { class: 'source', reason: 'blocker text names the source side on its own — the Classic runtime\'s own `Script error for "<schema>"`, or a dependency the migration reads from that is not installed; neither changes when the Freedom page is rebuilt' }

@@ -1612,6 +1612,15 @@ check("ENG-95468 (residual): `resolvedFrom` costs the byte-capped schema NOTHING
 // indistinguishable from the deliberate `published`-empty → gate-all state and from every single-field fixture here.
 // The fix is `componentTypes` in `RECONCILE_SCHEMA.required`, asserted just below; room for it was made by trimming
 // `sectionRouteByRun`'s superfluous per-string cap, and the schema-size cap loop later in this file re-measures it.)
+// PR #157 review (round 2) — THE SAME "COSTS THE CAPPED SCHEMA NOTHING" ARGUMENT, for `subject`. `blocked` items
+// are declared on both the build-answer schema and RECONCILE_SCHEMA as a LOOSE object
+// (`additionalProperties: { maxLength: RECONCILE_TEXT_CAP }`), so the field is carried AND length-capped without a
+// `properties` entry of its own. Asserted rather than argued: RECONCILE_SCHEMA has ~35 bytes of headroom under the
+// 4096-byte serialized ceiling (ENG-95468 already had to trim it once to fit), so "free" is a claim worth pinning.
+check("PR #157 review (round 2): `subject` is TYPED in RECONCILE_SHAPE.blocked, NOT required, and costs the byte-capped RECONCILE_SCHEMA nothing — the loose `additionalProperties` cap already carries it, so no agent can be refused for supplying it and none is refused for omitting it",
+  /blocked: \{ kind: 'array', required: \['what', 'why'\], types: \{ unit: 'string', what: 'string', why: 'string', subject: 'string' \} \}/.test(wfSrc)
+    && !/subject: \{ type: /.test(wfSrc),
+  () => ({ shapeTyped: /subject: 'string'/.test(wfSrc), schemaProperty: /subject: \{ type: /.test(wfSrc) }));
 check("ENG-95468 (PR #159, RC-4): `componentTypes` is in RECONCILE_SCHEMA.required — so an answer omitting BOTH it and `componentResolution` cannot switch the component gate off by absence; the host refuses the key's omission before the model runs. `[]` stays legal for a plan with no gated types (RECONCILE_SHAPE does not require entries).",
   () => (wf.RECONCILE_SCHEMA?.required || []).includes("componentTypes")
     && JSON.stringify(wf.RECONCILE_SCHEMA).length <= 4096
@@ -8044,6 +8053,11 @@ const VERIFICATION_SURFACE_NOTE = " VERIFICATION SURFACE FOR THIS BUILD: automat
 // belongs to the verifier and not to a build agent. This is the build-agent half, and it is now appended to the
 // PAGE arm as well as the reachability one: the measured hard block happened in the main page unit.
 const SETTLE_RETRY_RULE = " <settle-and-retry>"
+// PR #157 review (round 2, Blocker on gate.mjs:114) — the producer-side subject rule, appended to all THREE build
+// arms (page, reach, app). A module-scope constant in the shipped script, so it is a free variable here and gets a
+// stub, exactly as the check above demands of every new one. It is a SUFFIX rather than its own prompt line
+// deliberately: the parity runner can declare a substituted line and not an inserted one.
+const BLOCKER_SUBJECT_RULE = " <blocker-subject>"
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])
@@ -8178,6 +8192,17 @@ export { buildPrompt };
       () => /<settle-and-retry>/.test(rendered.main || "") && /<settle-and-retry>/.test(rendered.reach || ""),
       () => ({ main: /<settle-and-retry>/.test(rendered.main || ""), reach: /<settle-and-retry>/.test(rendered.reach || ""),
         list: /<settle-and-retry>/.test(rendered.list || "") }));
+    // PR #157 review (round 2, Blocker on gate.mjs:114) — THE PRODUCER IS ACTUALLY ASKED. `classifyBlocker` now
+    // prefers a declared `subject` over its own prose patterns, which is only worth anything if every agent that
+    // can FILE a `blocked` row is told to supply one. All THREE build arms file them, so all three carry the rule —
+    // the page arm (its own render check), the reach arm (the verification surface it may not reach) and the app arm
+    // (a `create-app-section` that returned the wrong package). An arm that is missing it produces rows the gate
+    // still has to guess about, on the one axis where a wrong guess drops a deliverable for good.
+    check("PR #157 review (round 2): the producer-side blocker-subject rule reaches ALL THREE build arms that can file a `blocked` row — page, reachability and app; an arm without it keeps sending the terminal-park verdict back to the prose patterns",
+      () => /<blocker-subject>/.test(rendered.main || "") && /<blocker-subject>/.test(rendered.reach || "")
+        && /<blocker-subject>/.test(rendered.app || "") && /<blocker-subject>/.test(rendered.list || ""),
+      () => ({ main: /<blocker-subject>/.test(rendered.main || ""), reach: /<blocker-subject>/.test(rendered.reach || ""),
+        app: /<blocker-subject>/.test(rendered.app || ""), list: /<blocker-subject>/.test(rendered.list || "") }));
     check("PR #157 review (D7): and the RECORD half is NOT in a build prompt — `false`-vs-OMIT instructs whoever writes `reachability` into the built file, which is the read-only verifier, so a build agent handed it would be told to write a file it may not touch",
       () => !/AN UNSETTLED READ IS NOT A/.test(rendered.main || "") && !/AN UNSETTLED READ IS NOT A/.test(rendered.reach || ""),
       () => ({ main: /AN UNSETTLED READ IS NOT A/.test(rendered.main || "") }));

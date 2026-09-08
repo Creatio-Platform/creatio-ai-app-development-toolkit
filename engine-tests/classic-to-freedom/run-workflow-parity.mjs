@@ -182,6 +182,38 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "`discrepancies` as `{ unit, id, kind, claim, found, round }`",
       why: "the refuted-answer dedup keys on `(unit, id)`, so `id`/`kind` must be named in the read step or the identity does not survive an agent transcription and every resume re-files the row",
     },
+    {
+      // PR #157 REVIEW (round 2, Blocker on gate.mjs:114) — the same class of change as the one above, on the same
+      // line, and for a stronger reason. `subject` moves the TERMINAL PARK verdict to the producer: the agent that
+      // hit the blocker says whether the failing artefact is the Classic source it read from or the page it just
+      // wrote, and `classifyBlocker` prefers that answer over its own prose patterns. The field has to be named
+      // HERE or it does not survive a resume — `schemas.mjs` states the rule (an agent reproduces the fields it is
+      // told about and drops the rest), so an unnamed `subject` is a declared verdict silently downgraded to a
+      // regex guess on the one axis where a wrong guess drops a deliverable for good.
+      // The baseline predates the field and has no rows carrying it, so this is a one-way intended divergence
+      // rather than baseline drift — the same standing as the `discrepancies` identity above.
+      baseline: "`blocked` as `{ unit, what, why }`",
+      shipped: "`blocked` as `{ unit, what, why, subject }`",
+      why: "`subject` carries the producer's own source-vs-builder answer for the terminal park verdict; a field the read step does not name is dropped by the transcription, and the park then falls back to the prose patterns this review found five false positives in",
+    },
+    {
+      // The other half of the same change: the BUILD prompts have to ASK for `subject`, or no agent ever supplies
+      // it and the producer channel is inert. `BLOCKER_SUBJECT_RULE` is appended to the page and reach unit prompts
+      // right after `SETTLE_RETRY_RULE`, so the divergence is a SUFFIX on that line — pinned per-substring at the
+      // JUNCTION (the shipped half carries the last words of the baseline line plus the first words of the rule),
+      // which is what stops an unrelated edit to this long line riding in on the entry.
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "an unconfirmed row costs one re-run. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the build agent is the producer of `subject`, so the page and reach prompts must ask for it; appended rather than inserted because the parity runner compares line counts before consulting this list",
+    },
+    {
+      // Same rule, on the APP unit prompt, appended to the line that already tells it a substitute package is a
+      // `blocked` rather than a near-enough — the app unit files the `create-app` / `create-app-section` blockers
+      // whose subject is least ambiguous to it and most ambiguous to a regex.
+      baseline: "building into a substitute passes here and fails the whole tree later.",
+      shipped: "building into a substitute passes here and fails the whole tree later. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the app unit files blockers too, and it is the one unit whose `blocked` rows name tool failures a prose classifier reads worst",
+    },
   ],
 }
 

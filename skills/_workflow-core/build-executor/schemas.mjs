@@ -522,7 +522,15 @@ export const RECONCILE_SHAPE = {
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
-  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string' } },
+  // `subject` (ENG-96458 / PR #157 review, round 2) — the producer's own answer to "which artefact failed",
+  // `'source'` or `'builder'`. TYPED BUT NOT REQUIRED, exactly like `verifierOnly` / `emitted`: the terminal
+  // park verdict used to be re-derived downstream from free prose by `gate.mjs`, and five separate regex
+  // repairs in one review cycle is the evidence that prose was the wrong channel for it. `classifyBlocker`
+  // prefers this field and falls back to the patterns when it is absent, so an agent that cannot tell simply
+  // omits it and nothing changes. It costs the byte-capped `RECONCILE_SCHEMA` nothing — `blocked` items are
+  // already a loose `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object there, so the value is
+  // carried and capped without a new `properties` entry (the same reason `resolvedFrom` was free).
+  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string', subject: 'string' } },
   // `id`/`kind` are TYPED BUT NOT REQUIRED, and the asymmetry is the whole point (round 21 review, finding 2).
   // They are the identity `upsertResolutionDiscrepancy` dedups a refuted-answer row on, so a resume that arrives
   // without them re-files the row the previous session already refreshed — ~900 bytes per resume into a list

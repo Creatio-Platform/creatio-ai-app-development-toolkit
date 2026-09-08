@@ -226,6 +226,83 @@ check("ENG-96147: `sourceBlockerParks` threads the recorded route through, so th
     && sourceBlockerParks([{ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }]).length === 1,
   () => JSON.stringify(sourceBlockerParks([{ unit: "list", what: "the render check could not be performed", why: "`#Section/UsrApplicants_ListPage` errors at runtime" }], [OWN_ROUTE])));
 
+/* ---------------------------------------------------------------------------
+   PR #157 REVIEW (round 2, Blocker on gate.mjs:114) — `\bsource\b` MATCHED FREEDOM'S OWN VOCABULARY.
+
+   "data source" is core Freedom-page language and this run's own prompts use it verbatim three times ("the data
+   source named by `primaryDataSourceName`"). A bare `source` in SOURCE_SUBJECT_WORDS therefore turned an everyday
+   builder blocker into a TERMINAL park with `rounds: 0` — a silently dropped deliverable plus a false diagnosis, on
+   the one class of blocker a build round would have fixed — and the queue file carried the park, so it was re-parked
+   on every resumed run.
+
+   The five phrasings below are the ones the third reviewer EXECUTED against `263d971` and reported parking. Every
+   one of them must now stay retryable. There was no "data source" text in any suite before this block, which is
+   why the goldens could not see it.                                                         */
+const cls5 = (what, why = "") => classifyBlocker({ unit: "list", what, why }, [OWN_ROUTE]).class;
+const FIVE_MEASURED = [
+  ["the page fails to render", "its primary data source is not bound"],
+  ["the list page fails to load", "the data source named by primaryDataSourceName is missing"],
+  // The third reviewer wrote this one against `#Section/UsrApplicant_ListPage`; the suite's recorded route is
+  // `UsrApplicants_ListPage`, and the exemption is EXACT-MATCH ONLY by design (a Classic surface is routinely a
+  // prefix of the Freedom route built from it, so no prefix rule could tell a guess from a real Classic id). Driven
+  // with the route the run actually recorded, which is the state the reviewer's example assumes.
+  [`opening ${OWN_ROUTE} errors at runtime`, "the data source is not bound"],
+  ["the schema does not compile", "the source of the error is a typo I wrote"],
+  ["the page fails to render", "the field moved from its original position"],
+];
+check("PR #157 review (round 2): all FIVE measured builder-side phrasings stay `unknown` — each pairs a real failure MODE with a word that only looks like a source subject (`data source`, `the source of the error`, `its original position`), and each used to park terminally with rounds: 0",
+  () => FIVE_MEASURED.every(([what, why]) => cls5(what, why) === "unknown"),
+  () => FIVE_MEASURED.map(([what, why]) => `${cls5(what, why)}  <=  ${what} / ${why}`));
+check("PR #157 review (round 2): the two negative goldens the thread asked for by name",
+  () => cls5("the primary data source is not bound, so the page fails to render") === "unknown"
+    && cls5("the built page fails to render the original layout's Feed tab") === "unknown",
+  () => JSON.stringify({
+    a: classifyBlocker({ what: "the primary data source is not bound, so the page fails to render" }, [OWN_ROUTE]),
+    b: classifyBlocker({ what: "the built page fails to render the original layout's Feed tab" }, [OWN_ROUTE]) }));
+check("PR #157 review (round 2): the exclusion does not depend on a recorded route — `data source` is not a subject even when the run has no route on file at all, which is the state of every run before its app unit reports",
+  () => classifyBlocker({ what: "the page fails to render", why: "its primary data source is not bound" }).class === "unknown"
+    && classifyBlocker({ what: "the list page fails to load", why: "dataSource `PDS` is missing" }, []).class === "unknown",
+  () => JSON.stringify(classifyBlocker({ what: "the page fails to render", why: "its primary data source is not bound" })));
+check("PR #157 review (round 2): a GENERIC word still parks when it QUALIFIES a source artefact — the narrowing removes the false positives, it does not make the generic half inert",
+  () => cls5("the source page does not compile") === "source"
+    && cls5("the legacy schema fails to load") === "source"
+    && cls5("the original form errors at runtime") === "source",
+  () => JSON.stringify(["source page", "legacy schema", "original form"].map((p) => cls5(`the ${p} does not compile`))));
+check("PR #157 review (round 2): the ENG-94859 blocker this whole module exists for STILL PARKS — the narrowing must not cost the one case it was written to catch",
+  () => classifyBlocker(APPLICANT_LIST_BLOCKER, [OWN_ROUTE]).class === "source"
+    && sourceBlockerParks([APPLICANT_LIST_BLOCKER], [OWN_ROUTE]).length === 1,
+  () => JSON.stringify(classifyBlocker(APPLICANT_LIST_BLOCKER, [OWN_ROUTE])));
+
+/* ---------------------------------------------------------------------------
+   PR #157 REVIEW (round 2) — THE PRODUCER'S DECLARED SUBJECT.
+
+   The thread's second half: the park verdict was re-derived downstream from free prose while `schemas.mjs` already
+   declares the producer-side channel for it. `subject` is optional, prefers the agent's own answer, and shrinks the
+   regex surface from a decision to a legacy fallback.                                       */
+check("PR #157 review (round 2): `subject: \"builder\"` can NEVER be parked as source, however the blocker is phrased — the declared field outranks both the self-naming patterns and the failure-mode/subject pair",
+  () => classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: "builder" }).class === "unknown"
+    && classifyBlocker({ what: "the Classic page does not compile", subject: "builder" }).class === "unknown"
+    && classifyBlocker({ what: 'Script error for "Applicant..."', subject: "builder" }).class === "unknown"
+    && sourceBlockerParks([{ ...APPLICANT_LIST_BLOCKER, subject: "builder" }]).length === 0,
+  () => JSON.stringify(classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: "builder" })));
+check("PR #157 review (round 2): `subject: \"source\"` parks a blocker whose prose says nothing — the agent that hit it is allowed to answer the question directly, which is the point of moving the decision to the producer",
+  () => classifyBlocker({ unit: "list", what: "the surface will not open", subject: "source" }).class === "source"
+    && sourceBlockerParks([{ unit: "list", what: "the surface will not open", subject: "source" }]).length === 1,
+  () => JSON.stringify(classifyBlocker({ unit: "list", what: "the surface will not open", subject: "source" })));
+check("PR #157 review (round 2): the declared verdict SAYS it was declared — an operator reading a park must be able to tell an agent's answer from a regex's guess",
+  () => /DECLARED/.test(classifyBlocker({ what: "x", subject: "source" }).reason)
+    && /DECLARED/.test(classifyBlocker({ what: "x", subject: "builder" }).reason),
+  () => JSON.stringify([classifyBlocker({ what: "x", subject: "source" }).reason, classifyBlocker({ what: "x", subject: "builder" }).reason]));
+check("PR #157 review (round 2): a value OUTSIDE the two words is ignored, not read as a third state — a typo, a translated word or a sentence falls back to the patterns and keeps the conservative `unknown -> retry` default",
+  () => classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: "Source-ish" }).class === "source"
+    && classifyBlocker({ what: "the page fails to render", why: "the data source is not bound", subject: "" }).class === "unknown"
+    && classifyBlocker({ what: "the page fails to render", why: "the data source is not bound", subject: 7 }).class === "unknown",
+  () => JSON.stringify(classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: "Source-ish" })));
+check("PR #157 review (round 2): the declared field is read case- and whitespace-insensitively — an agent writing `\" Builder\"` meant `builder`, and treating that as unrecognised would send it back to the prose it is meant to replace",
+  () => classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: " BUILDER " }).class === "unknown"
+    && classifyBlocker({ what: "x", subject: "Source" }).class === "source",
+  () => JSON.stringify(classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: " BUILDER " })));
+
 /* --------------------------------------------------------------------------- */
 console.log(`\n=================\nGATE GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
