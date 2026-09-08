@@ -383,3 +383,170 @@ direction that matters: garbage in `roundsSpent` falls through to the per-unit c
 measured 4085 rather than to a round number above it, precisely so the next property added here turns
 a check red locally instead of turning into a refused agent on a live run. Adding anything to this
 contract means buying the bytes back first; this record is the worked example of how.
+
+---
+
+## DR-8 (ENG-95468) — the `plan-unvalidated-against-stand` stop has no operator override
+
+**Status:** accepted, shipped in ENG-95468.
+
+**Decision.** When a round's component answers did not come from the target stand — every
+`componentResolution` entry carries `resolvedFrom`, and only `'stand'` confirms — the run stops
+with `stopped: 'plan-unvalidated-against-stand'` and there is **deliberately no flag, answer, or
+run-scoped acknowledgement that turns a catalog-sourced answer into a confirmation**. The only way
+forward is to make the environment answerable and re-run. The stop fires before the first build
+unit and again at every in-run Reconcile, so a stand that goes away mid-run stops the next unit
+rather than clearing the gate on a catalog answer (ENG-95468, residual).
+
+**Why.** The whole defect this axis closes is *a catalog answer being read as a stand
+confirmation*. `get-component-info` does not fail when it cannot probe the environment: it answers
+from its bundled `latest` catalog and still reports `resolved: true`, recording the substitution
+only in free text (`resolvedFromReason=probe-error`). A stand that is up but whose version cannot
+be probed produces the **same** catalog answer as one that is down. An override that let an
+operator declare "proceed anyway on this catalog answer" would therefore be an override of the
+exact condition the gate exists to detect — it would re-open the defect under a different name, and
+the round would build against a `latest` catalog that may not match the stand at all. The rationale
+is stated inline at the stop (`skills/_workflow-core/build-executor/core.mjs`, the Hard Stop 3.4
+header: *"There is deliberately no override…"*).
+
+**Consistency, not exception.** Every sibling hard stop in this executor is terminal with no
+operator override: the approval stop, the package-precondition stop
+(`new-app-over-existing-package` / `target-package-unknown`), and `plan-invalid-against-stand`. A
+gate returns a `stopped` verdict and a `next`; the caller acts out of contract (fix the stand, fix
+the plan, re-approve) and re-runs. `plan-unvalidated-against-stand` is a member of that family, not
+the lone outlier.
+
+**Alternatives considered and rejected.**
+
+| Alternative | Why rejected |
+|---|---|
+| A boolean override flag ("proceed on a catalog answer") | Re-opens the defect directly — it authorises exactly the catalog-as-confirmation read the gate closes. |
+| A run-scoped acknowledgement routed through an existing operator-answer channel | There is no such run-scoped gate-override channel to reuse. `resolutions.json` → `resolutionsForUnit` is the **per-build-unit ⚠ Confirm preflight** channel (it answers open plan questions for a unit), not a mechanism for overriding a hard stop; no hard stop consults it to clear itself. Building a new run-scoped acknowledgement channel purely to weaken this gate would add the override the first alternative was rejected for, only with more machinery. |
+| Downgrade the stop to a warning and build anyway | This is the pre-ENG-95468 behaviour and the measured failure (ST_2 round 5: five agents, ~1.68M weighted tokens, zero stand writes, on a round that had already seen a hard DNS failure in its own first phase). |
+
+**What the operator does instead.** The `next` points at the environment, not the plan: check the
+registered environment, its DNS and its credentials (`clio ping`), confirm `get-component-info`
+answers from the environment itself, then re-run. Nothing about a catalog answer implicates the
+plan, so this is never a re-plan (a catalog `resolved: false` is no more evidence about this stand
+than a catalog `resolved: true`).
+
+**Cross-repo note.** CAADT is driven against real stands by the `creatio-adaclio-testing` harness,
+so a transient probe failure hard-stops a harness run with no in-contract bypass. That is intended:
+a harness run that "passed" without reaching the stand is the false green this gate exists to
+prevent. The remedy is the same — make the stand answerable and re-run — and the stop is cheap
+(no agents are spent confirming a record on a round that is already over).
+
+**Trust boundary (related).** The gate keys on the agent's `resolvedFrom` *classification* of
+clio's free-text note, not on a machine field carried across the MCP contract. Rather than trust
+that classification blindly, `componentSweepFaults` FAULT 3 refuses a `resolvedFrom: 'stand'` claim
+whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`)
+(PR #159 review, Major 7). This is a **best-effort** cross-check, **not** a guarantee — and the
+earlier wording here ("cannot be mis-classified into a stand confirmation at the model layer
+either") overstated it and has been corrected. FAULT 3 fires only while clio's own tokens survive
+into the `note`; a `stand` claim that carries **no `note` at all** is not cross-checked. Faulting the
+empty-note case was considered and rejected for this round (PR #159 review, round 2): a healthy
+`resolved: true` stand answer legitimately carries no note, so requiring one would tax every healthy
+round — a permanent cost — to close a bypass whose durable fix is clio-side anyway (below). A green
+round is therefore **model-attested and best-effort cross-checked**, not machine-verified, and the
+residual empty-note bypass is stated plainly rather than papered over.
+
+*Undeclared-coupling risk, now declared.* FAULT 3's token match is a coupling to free-text prose
+that **clio owns and nothing pins**: `AGENTS.md` says the CAADT↔clio contract is the MCP tool
+contract resolved at runtime, not an independent contract defined in repo docs. If clio rewords the
+`get-component-info` probe-failure note, FAULT 3 silently becomes a no-op (every in-repo test still
+passes, because those tests feed author-written strings that contain the tokens by construction) and
+the gate degrades to a bare model attestation with no signal. The coupling is therefore declared in
+`AGENTS.md` (CAADT↔clio section) and guarded by a **token-drift test** in the engine suite, so a
+wording change fails a named test instead of switching the cross-check off unseen. The residual gap
+that this does not close — a real `get-component-info` probe-failure response captured as a fixture
+with the clio version recorded beside it — is named as the follow-up.
+
+**The durable fix.** Transcribing clio's own `resolvedFromReason` verbatim across the contract — or,
+better, clio emitting a structured `resolvedFrom` response field — would remove the guesswork
+entirely (it would let the script, not the model, own the stand/catalog mapping). The contradiction
+and missing-note faults were chosen for this round as the self-contained way to narrow the
+one-directional hole; the structured-field change is the design that closes it and belongs in this
+record when it lands.
+
+**When to revisit.** This decision changes only if the underlying tool behaviour changes — for
+example, if `get-component-info` gains a way to *fail* (rather than silently substitute the catalog)
+when it cannot probe the environment, or carries an unambiguous machine-readable "this answer is
+from the stand" signal end to end. At that point the gate could rest on the tool signal directly and
+the question of an operator override would not arise, because there would be no ambiguous catalog
+answer to override. Any change here belongs in this record with the caller-migration path, because
+it changes what the workflow returns and what it refuses.
+
+## DR-9 (ENG-96458, PR #157 review round 2) — a hold that is not a build gap belongs on the `pending` channel, and `owner: "verifier"` was not enough
+
+**The decision.** A verify row that holds the run but that NO scheduled unit can close resolves `pending`, not
+`missing`/`unverified`. Two rows moved onto that channel in this round: an un-removed `noOrphanScaffold`, and a
+component SURPLUS.
+
+**Why it came up.** Both rows returned a three-element verdict tuple with no `owner`, and `verifyTally.add` charges
+any un-owned open row to the BUILDER (`buildComplete = false`, `builderOpen++`). Neither row can be closed by the
+unit that gets re-dispatched for it: the scaffold removal is forbidden to `main` by its own prompt ("Do NOT delete
+it" — a page on a customer's stand is not a build round's to remove), and a template-merged Feed cannot be removed
+by the build agent at all. Both therefore burned MAX_ROUNDS and parked a page that was correct — which is exactly
+"a correct page held INCOMPLETE on a state that is not a build gap", the defect this ticket exists to remove,
+reintroduced by two rows added to fix it.
+
+**The alternative that was tried and rejected: tag the tuples `"verifier"`.** It is the smaller change and it looks
+sufficient — it clears `buildComplete` and `builderOpen`. It is not sufficient. `verifyTally.add` sets
+`p.complete = false` for EVERY `missing`/`unverified` row whatever its owner, and `isOpenPage` (`helpers.mjs`) gates
+re-dispatch on `complete`, not on `buildComplete`. The unit would still be re-dispatched and would still park; only
+the counters would look better. `pending` is the one outcome that returns from `verifyTally.add` BEFORE
+`p.complete = false`, so the PAGE is done and the RUN holds — which is where a hold that needs a human belongs.
+This was verified by a third reviewer executing both readings against the same head, and it is the reason the fix
+is a channel change rather than a one-word one.
+
+**What made the channel usable: `kind: "confirmed"`.** Routing a hold to `pending` is only an improvement if the
+hold can be released. Before this round the sole route out of `pending` was `kind: "accepted"`, which renders
+"ACCEPTED BY DECISION" — so an operator who opened the page, found it correct and wanted to say so had to file it
+as a signed-off DEVIATION, and the audit table recorded every confirmed-correct layout row that way. `confirmed`
+is the same key form, the same required `decidedBy` + ISO `date`, the same inert-but-counted tally slot, and its
+own axis — so `accepted` keeps meaning "deviates" and a close report can still say how many deviations the green
+verdict rests on. The three remediation strings were reworded with it: they used to offer "answer each on-stand"
+FIRST, which closes nothing, and an operator who followed that re-ran forever.
+
+**When to revisit.** If a later ticket gives the run a unit that CAN remove its own stand debris — a post-`main`
+cleanup step reading `standWrites.appScaffold`, removing only what is on that list and recording `couldNotRemove` —
+then the scaffold row becomes genuine builder work and should move back off `pending`. The surplus row should not:
+"does this extra component belong here" is a question about intent, and no build round can answer it.
+
+
+## DR-10 (ENG-96458, PR #157 review round 2) — the terminal-park verdict is declared by its producer, and the prose patterns are the fallback
+
+**The decision.** A `blocked` item may carry an optional `subject: 'source' | 'builder'`. `classifyBlocker` prefers
+it; the regex patterns run only when it is absent, keeping the conservative `unknown -> retry` default.
+
+**Why it came up.** Park-terminally-and-never-retry is the most consequential unit-level verdict this run makes,
+and it was re-derived downstream from free prose while `schemas.mjs` already declared the producer-side channel for
+it. The fragility is documented rather than hypothetical: within ONE review cycle five failure-mode patterns had to
+be demoted to require a co-occurring subject, `Script error` had to be narrowed to its quoted form, an `ownRoutes`
+exemption had to be added, and this round had to re-order that exemption ahead of the word test — each a repair to
+a false SOURCE positive. The measured failure this round found was `\bsource\b` matching Freedom's own "data
+source" vocabulary, which this run's own prompts use verbatim three times: an ordinary builder blocker ("the page
+fails to render — its primary data source is not bound") parked terminally with `rounds: 0`, and the queue file
+carried the park so it was re-applied on every resumed run. A silently dropped deliverable plus a false diagnosis,
+on the one class of blocker a build round would have fixed.
+
+**Why optional and not required.** An agent that cannot tell must be able to say nothing. A wrong `'source'` drops
+a deliverable for good; a wrong `'builder'` costs only the rounds the run would have spent anyway. The asymmetry is
+stated in the prompt, and a value outside the two words is IGNORED rather than read as a third state.
+
+**What it costs.** Nothing on the byte-capped schema. `blocked` items are already declared as a loose
+`additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object on both the build-answer schema and
+`RECONCILE_SHAPE`, so the value is carried and length-capped without a new `properties` entry — `RECONCILE_SCHEMA`
+stays at 4061 of its 4096-byte ceiling, which ENG-95468 already had to trim it once to reach. It is typed but not
+required in `RECONCILE_SHAPE`, and therefore NAMED in the Reconcile read step: a field the read step does not name
+is dropped by the transcription, which would silently downgrade a declared verdict to a regex guess on a resume.
+
+**The residual.** The regex surface is smaller but not gone, because a blocker that carries no `subject` still has
+to be classified somehow. The narrowing this round (bare `classic` alone; `source`/`original`/`legacy` only when
+they qualify a source noun; `data source` / `dataSource` excised; the `#Section/` reference evidence read before the
+generic words) is what the fallback now is. The durable close is agents reliably declaring the field, at which
+point the patterns can become a warning rather than a decision.
+
+**When to revisit.** If measured runs show the declared field is unreliable — agents saying `'source'` about their
+own writes — the preference order should invert: patterns first, the field only as corroboration. That is a
+one-line change in `classifyBlocker` and belongs in this record with the evidence that prompted it.

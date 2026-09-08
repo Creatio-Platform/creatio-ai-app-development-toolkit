@@ -3159,6 +3159,8 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 // The `--resolutions` file shape, in ONE place — the same reason `BUILT_SHAPE` is a constant.
 const RESOLUTIONS_SHAPE = `{"resolutions":[{"kind":"…","item":"…","answer":"…"}]}` +
   " (or a bare array); each entry needs a non-blank `answer` plus either an `id` or both `kind` and `item`" +
+  '; a `kind: "accepted"` or `kind: "confirmed"` entry (the two `--verify` ROW kinds, keyed by `row` as well as by `item`) ALSO needs a non-blank `decidedBy` and a parseable ISO `date` —' +
+  " both take a row out of the gate's way, so each must name the human who decided and when; `confirmed` says the row was looked at on-stand and is CORRECT, `accepted` says it deviates and the deviation is signed off" +
   '; the reserved kind `run` carries the RUN-level answers — `{"kind":"run","item":"control-mode","answer":"round1"}`' +
   " and `item: \"round-<N>\"` to authorise round N";
 // THREE OUTCOMES, and they must stay distinguishable — "no answers yet" and "the file is broken" have opposite fixes:
@@ -3252,6 +3254,87 @@ function writePageSlices(dir, prefix, units, sliceOf, fail) {
   return written;
 }
 
+// IS THIS FOLDER INSIDE A GIT WORKING TREE? (ENG-96011) — the walk-up that answers it, and the only version-control
+// knowledge anywhere in this engine.
+//
+// BY FILESYSTEM, NOT BY `git`. No module under engine/ spawns a child process, and this warning is not worth being
+// the first that does: `spawnSync("git", ["rev-parse", …])` would put a `git`-on-PATH dependency into a pure engine,
+// and a process per run onto Windows CI, to answer a question the filesystem already answers for every layout the
+// skill's folders actually take.
+//
+// A `.git` ENTRY — existence, deliberately NOT `statSync(...).isDirectory()`. An ordinary clone has a `.git`
+// DIRECTORY, but a linked worktree and a submodule both have a `.git` FILE holding a `gitdir:` pointer, so a
+// directory test reads a perfectly tracked worktree as untracked and warns at an operator who did nothing wrong.
+// `fs.existsSync` is also the only fs call here that cannot throw — it answers false for a path it may not stat —
+// which is exactly the "unknown" behaviour the caller needs (see warnUnversionedWriteTargets).
+//
+// THE ACCEPTED GAP: a `GIT_DIR`-only setup, where the environment names a repository that has no `.git` on disk,
+// goes undetected and stays silent. That is the deliberate price of staying subprocess-free; the ticket asks only to
+// surface the "no repository at all" case that was actually observed. The mirror-image gap — a migration folder
+// nested inside an UNRELATED repository reads as versioned — is accepted for the same reason: it is the same answer
+// `git status` gives from that folder.
+//
+// Returns the working-tree ROOT (so a caller can name it) or null for "nothing found, up to the filesystem root".
+// A path this cannot even resolve is null too: UNKNOWN, never a throw.
+export function versionedRootFor(dir) {
+  try {
+    let cur = path.resolve(dir);
+    // TERMINATES BY FIXPOINT — `path.dirname` shortens the path until it stops changing, which is the only root test
+    // that reads the same on both legs of the goldens matrix: POSIX stops at "/", Windows at "C:\" and at a UNC
+    // share root, and each is its own dirname. Comparing against a literal "/" would loop forever on windows-latest.
+    let prev = null;
+    while (cur !== prev) {
+      if (fs.existsSync(path.join(cur, ".git"))) return cur;
+      prev = cur;
+      cur = path.dirname(cur);
+    }
+    return null;
+  } catch { return null; } // a non-path argument — an answer, never an exception into a run that was about to write
+}
+
+// THE WARNING (ENG-96011): one stderr line per un-versioned directory this run is about to write into.
+//
+// WHY THE ENGINE AND NOT THE SKILL. "Keep the migration folder under version control" was already prose in three
+// documents when a run produced a folder that was not a repository at all; a fourth restatement would repeat the
+// failure. The engine is the only component that performs the writes, so it is the only one that can say so before
+// the first one happens.
+//
+// ONCE, UP FRONT, DEDUPED BY RESOLVED DIRECTORY. A guard at each of the six write sites would repeat the same line
+// up to six times for one folder and would still be ordered AFTER the first write for some flags. `--out plan.md`
+// and `--slices slices/` normally point into the same migration folder, and the operator needs telling about that
+// folder once.
+//
+// STDERR, NEVER STDOUT. Without `--out`, stdout IS the artifact the agent presents verbatim, so a notice there would
+// be pasted into the plan. stderr already carries this engine's other advisory lines (the retention sweep, the
+// summary-size warning), which is where an operator already looks for them.
+//
+// THE TEXT IS CONSTRAINED, not merely styled. `_workflow-core/build-executor/helpers.mjs` classifies a plan-level
+// gap by CONTAINMENT and case-INSENSITIVELY over exactly `gate BLOCKED` / `structure INCOMPLETE` /
+// `coverage INCOMPLETE` / `plan INCOMPLETE`, because such an entry is sometimes a pasted engine stderr line. An
+// advisory line that happened to carry one of those phrases would be read as a blocking plan gap and would stop a
+// build. So none of them appear here, the ⛔ marker stays reserved for the gates that really do block, and the line
+// says in its own words that the run continues. `run-infra.mjs` pins all three properties.
+//
+// NON-BLOCKING, UNCONDITIONALLY. Nothing in here throws, and it changes no exit code, no artifact and no byte of
+// stdout. The worst this may ever do is stay quiet.
+export function warnUnversionedWriteTargets(paths) {
+  const seen = new Set();
+  for (const p of paths) {
+    if (!p) continue; // an output flag this run did not pass
+    let dir;
+    // THE DIRECTORY, NOT THE FILE — and `--slices <dir>` reduces to its PARENT on purpose, rather than being special
+    // -cased. Walk-up detection returns the same verdict for a folder and its parent (a `.git` inside `slices/`
+    // itself is not a thing), the parent is the migration folder an operator recognises, and it is already what
+    // `sweepAnswerCaptures` treats as the run's folder. It also makes `--out <d>/plan.md` and `--slices <d>/slices`
+    // dedupe to the single line they ought to be.
+    try { dir = path.dirname(path.resolve(p)); } catch { continue; }
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    if (versionedRootFor(dir)) continue; // inside a working tree — a correct run gains NO output at all
+    process.stderr.write(`migrate.mjs: ⚠ NOT UNDER VERSION CONTROL — this run writes into ${dir}, where neither the folder nor any parent holds a \`.git\` entry, so nothing it writes will have history to diff or revert. The migration folder is expected to be a git working tree. This is ADVISORY: the run continues and writes exactly what it would otherwise write. Put the folder under git, or move the migration inside a working tree, if this run's output is meant to be kept.\n`);
+  }
+}
+
 // RETENTION FOR THE RECONCILE ANSWER CAPTURES (`reconcile-answer-*.json` beside the queue file). The submission
 // protocol writes the agent's full answer to disk — the evidence a rejected submission needs — and instructs the
 // agent to delete an ACCEPTED attempt's copies; an instruction to an agent is probabilistic, and a REJECTED
@@ -3341,11 +3424,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--units` only, like `--verify-digest` is `--verify` only: in any other mode there is nothing to attach an answer
   // to, and accepting the flag silently would leave a caller believing answers had been applied.
   const resolutionsFile = valueFlagArg(argv, "--resolutions", "--resolutions resolutions.json", fail);
+  // ENG-96458 D3 — `--verify` reads this file too, for the two ROW kinds only: a deviation the operator approved
+  // (`{ kind: "accepted", row: "<rowKey>", answer, decidedBy, date }`) renders `☑ accepted` and leaves
+  // `missing`, and — PR #157 review — a ☐ row the operator looked at and found CORRECT
+  // (`{ kind: "confirmed", ... }`) renders `☑ confirmed` and clears the pending hold WITHOUT recording a
+  // deviation. Without this the mechanism was reachable from the API and NOT from the command line, which is
+  // the only way anyone actually runs the gate — caught by running the CLI, not by the unit tests.
+  // Every other kind stays what it was: an INPUT to the build that closes no verify row.
   // ENG-96457 (item 5) — `--plan` accepts it too. It used to be `--units`-only, which is precisely how the approved
   // `plan.md` and the payload the builder acted on came to disagree: every ⚠ question was answered, and the document
   // a human had signed off still showed the unanswered worklist and the 1-column fallback table.
-  if (resolutionsFile && !(unitsMode || planMode))
-    fail("`--resolutions <file>` applies to `--units` and `--plan` — it attaches the operator's answers to that run's ⚠ Confirm items. Add `--units` or `--plan`, or drop `--resolutions`.");
+  if (resolutionsFile && !(unitsMode || planMode || verifyMode))
+    fail("`--resolutions <file>` applies to `--units`, `--plan` (it attaches the operator's answers to that run's ⚠ Confirm items) and to `--verify` (it applies `kind: \"accepted\"` and `kind: \"confirmed\"` decisions to verify rows). Add one of them, or drop `--resolutions`.");
   // `--page <key>` — render ONE page's slice of `--checklist` / `--spec`. The key is a PUBLISHED `--units` key; a
   // key that matches no page is an error, never a silent fall-back to the whole tree, because a caller that asked
   // for one page and got all of them hands a build agent another page's rows.
@@ -3390,6 +3480,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), resolutions: resolutionIndex }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
+  // THE VERSION-CONTROL PREFLIGHT (ENG-96011) — the LAST thing before the run's earliest write, and the only place
+  // it is called from. `--resolved-gates` below is that earliest write; everything else this CLI writes (`--slices`,
+  // the three `--verify-*` files, `--out`) happens further down, so one call here is "before it writes anything" for
+  // every mode. Deliberately AFTER the manifest has parsed and `runMigration` has returned: a run that dies on a bad
+  // manifest writes nothing at all, and telling that operator about git would be noise about a run that never
+  // touched the folder. All six output paths go in together and the callee dedupes them by resolved directory, so
+  // the six flags of a full `--units` run produce one line for the one folder they share.
+  warnUnversionedWriteTargets([outFile, slicesDir, verifyJsonFile, verifySummaryFile, verifyDigestFile, resolvedGatesFile]);
   // `--resolved-gates <file>` (ENG-95683 item 1) — the durable machine-readable copy of THIS run's resolved gate set,
   // written before the mode output below (its own artifact, not part of stdout). Always the full set the run gathered,
   // `[]` included, so a reader can tell "no gated types" from "the flag was never passed".
@@ -3482,6 +3580,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (units.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(units.resolutionsClosed));
   }
   else if (verifyMode) {
+    // ENG-96458 D3 — the SAME opts `--checklist` renders with (so the two produce the same row set), plus the
+    // operator's resolutions. Read ONCE and reused by all three call sites below: reading the file per site would
+    // print its duplicate/parse warnings three times and let the scoped and unscoped verdicts drift apart.
+    const verifyResolutions = readResolutions(resolutionsFile, fail);
+    const verifyOpts = () => ({ ...checklistOpts(manifest), resolutions: verifyResolutions });
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
     // `--verify --built <file> --page <key>` — ONE page's row of the built file, printed. A READ, not the gate:
@@ -3512,7 +3615,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // shortfall `missing` or `unverified`; the post-hoc full-sweep `--verify` below still
       // reads the combined `complete` (AC7/AC8) — an unconfirmed row still blocks the human-facing "done" verdict.
       // Without `--verify-json` the `--page` path stays the pure built-slice read (below).
-      const unitVerdict = verifyUnit(result, checklistOpts(manifest), built, pageArg);
+      const unitVerdict = verifyUnit(result, verifyOpts(), built, pageArg);
       // `--page` is already guarded by `requirePublishedKey` above, so this normally cannot fire — but a `verifyUnit`
       // that returns an explicit `error` (an unknown/mismatched page key, PR review T4) must fail LOUDLY and
       // distinctly here rather than be written to the verdict file as a false green, in case the two key notions ever
@@ -3520,7 +3623,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (unitVerdict.error) fail(`--verify --page '${pageArg}': ${unitVerdict.error} — this key is not a page this plan reconciles. Run \`--units\` on this manifest for the exact page keys.`);
       try { fs.writeFileSync(verifyJsonFile, JSON.stringify(unitVerdict, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-json '${verifyJsonFile}': ${e.message}`); }
-      verifyRes = renderVerify(result, { ...checklistOpts(manifest), scopePageKey: pageArg }, built);
+      verifyRes = renderVerify(result, { ...verifyOpts(), scopePageKey: pageArg }, built);
       output = verifyRes.markdown + "\n";
       verifyIncomplete = !unitVerdict.buildComplete;
     }
@@ -3530,7 +3633,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else {
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built);
+    verifyRes = renderVerify(result, verifyOpts(), built);
     output = verifyRes.markdown + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
     // The machine-readable verdict, written from the SAME object the table was rendered from — so the numbers a
