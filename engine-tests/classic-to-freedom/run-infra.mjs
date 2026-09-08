@@ -5550,12 +5550,12 @@ check("ENG-95930: a short answer FOLLOWED BY host refusals reports the REFUSAL, 
 // schedule off a state nobody produced. Each one spends the whole budget and its fault has to reach `next` —
 // a stop that reads as a host problem sends the operator to look for one that is not there.
 const WIRE_FAULTS = [
-  ["no line at all", { summary: "" }, /the state line is missing/],
-  ["a line that does not parse", { summary: '{"planVersion":' }, /does not parse as JSON/],
-  ["a line that parsed to the wrong type", { summary: "[1,2]" }, /parsed to an array, not the state object/],
-  ["a partial line", { summary: JSON.stringify({ planVersion: "v1", unitKeys: [] }) }, /is missing planGaps, buildOrder, verify, roundOf, targetPackage/],
+  { what: "no line at all", answer: { summary: "" }, expected: /the state line is missing/ },
+  { what: "a line that does not parse", answer: { summary: '{"planVersion":' }, expected: /does not parse as JSON/ },
+  { what: "a line that parsed to the wrong type", answer: { summary: "[1,2]" }, expected: /parsed to an array, not the state object/ },
+  { what: "a partial line", answer: { summary: JSON.stringify({ planVersion: "v1", unitKeys: [] }) }, expected: /is missing planGaps, buildOrder, verify, roundOf, targetPackage/ },
 ];
-for (const [what, answer, expected] of WIRE_FAULTS) {
+for (const { what, answer, expected } of WIRE_FAULTS) {
   let calls = 0;
   // eslint-disable-next-line no-await-in-loop -- sequential runs, each a whole Reconcile budget
   const res = await runWith({}, async () => { calls += 1; return answer; }).catch((e) => ({ threw: e.message }));
@@ -7338,7 +7338,7 @@ check("workflow: the ZERO-WORK early return rests on `openNow()` ALONE — short
     && !/if \(state\.verify\?\.complete === true \|\| !openNow\(\)\.length\)/.test(coreSrc));
 check("ENG-96776: Reconcile MUST still return `packageState` — the one package fact only a stand read can give. The target package NAME is computed into the state line, so there is nothing left for an answer to omit there, and an undefined `packageState` would be neither 'unknown' (so nothing stops) nor 'exists' (so an app unit is scheduled)",
   (wf.RECONCILE_SCHEMA?.required || []).includes("packageState")
-    && !(wf.RECONCILE_SCHEMA?.properties || {}).targetPackage
+    && !wf.RECONCILE_SCHEMA?.properties?.targetPackage
     && wf.RECONCILE_SCHEMA?.properties?.packageState?.enum?.join(",") === "exists,absent,unknown",
   () => ({ required: wf.RECONCILE_SCHEMA?.required, packageState: wf.RECONCILE_SCHEMA?.properties?.packageState }));
 check("workflow: `packagePreconditionStop` treats ANYTHING that is not one of the two published states as unknown — the schema asks, this is what guarantees",
@@ -7496,9 +7496,10 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // ENG-95472 — the executor hands each unit its OWN row, as a path.
 // ---------------------------------------------------------------------------
 
-check("ENG-95472: BOTH engine runs Reconcile already makes carry `--slices`, so the per-unit slices cost no extra invocation",
+check("ENG-95472 / ENG-96776: BOTH engine runs Reconcile already makes carry `--slices`, so the per-unit slices cost no extra invocation. The gate run is `--reconcile` now, which writes the same table, json, digest and summary the old `--verify` run did, plus the state — one command, not two",
   /const CLI_UNITS = cli\(`--units [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc)
-    && /const CLI_VERIFY = cli\(`--verify [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc),
+    && /const CLI_RECONCILE = cli\(`--verify [^`]*--slices \$\{q\(SLICE_DIR\)\}`\)/.test(wfSrc)
+    && !/const CLI_VERIFY = /.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("const CLI_UNITS"), wfSrc.indexOf("const cliSpec")));
 // ENG-95930 (mode B) T2 — THE REPAIR-SEED GATE. A round-2+ page builder no longer receives its open rows in the
 // prompt; it reads them from its OWN scoped verdict, written over the verifier's last read of the page (`built-N.json`,
@@ -9141,7 +9142,7 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       check("ENG-96776: a plan whose state OVERFLOWS the wire ceiling is called out by the producer, with the byte count, the unit count and the file that still holds it — the caller cannot report this usefully, because by then the line is all it has",
         over.bytes > ENGINE_WIRE_CEILING && /OVER the \d+-byte answer ceiling \(\d+ units\)/.test(over.stderr)
           && /smaller slices/.test(over.stderr) && /wide-state-40\.json/.test(over.stderr),
-        () => describe({ bytes: over.bytes, said: (over.stderr.match(/^migrate\.mjs: .*reconcile state.*$/m) || [""])[0].slice(0, 220) }));
+        () => describe({ bytes: over.bytes, said: (/^migrate\.mjs: .*reconcile state.*$/m.exec(over.stderr) || [""])[0].slice(0, 220) }));
       check("ENG-96776: and the state is STILL printed and STILL written when it is over the ceiling — a run whose state the wire cannot carry is a run the operator has to inspect, so nothing is withheld",
         over.line !== null && JSON.parse(over.line).unitKeys.length > 0
           && JSON.parse(readFileSync(path.join(dir, "wide-state-40.json"), "utf8")).unitKeys.length > 0,

@@ -250,9 +250,9 @@ export function* run(rawInput, io = {}, opts = {}) {
     SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS,
     MAX_PREFLIGHT, MODE_REQUESTED, DEFAULT_MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     VERIFICATION_SURFACE_NOTE,
-    QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
+    QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON,
     REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
-    CLI_UNITS, CLI_VERIFY, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+    CLI_UNITS, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
     dataFence, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   // A finding reopens its unit for ONE repair attempt, and this set is what makes that terminate. It is MUTABLE run
@@ -865,8 +865,11 @@ const resolutionsReopened = new Set()
   // decision axis reads on its own and the pair stays under Sonar's cognitive-complexity ceiling (rule S3776); a
   // usable answer is returned, every failure updates the module state and returns null so the loop spends the next
   // attempt on it.
-  function* reconcileAttempt(roundNo, id, label, note, attempt) {
-    const willRetry = attempt < RECONCILE_ATTEMPTS
+  // THE ATTEMPT'S INPUT, assembled on its own. Split from `reconcileAttempt` so that function reads as
+  // dispatch and classification and neither half carries the other's branches (Sonar S3776). The prompt
+  // text below is RELOCATED verbatim: a retry is only worth spending if the next dispatch differs from the
+  // last, and `note` is work-item metadata that never reaches the model, so the faults ride the prompt.
+  function reconcileAttemptInput(roundNo, id, label, attempt) {
     const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
     const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
     // A RETRY AFTER A SHAPE FAULT CARRIES THE FAULT. `note` is work-item metadata and never reaches the model, so
@@ -874,7 +877,6 @@ const resolutionsReopened = new Set()
     // the whole budget. The fault list is appended to the PROMPT instead, which is the one channel the agent reads.
     const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
     const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
-    let prompt = base
     // PR #159 review (Major 3) — THE GENERIC RETRY ADVICE IS WRONG FOR ONE FIELD, and it is wrong in the expensive
     // direction. It ends "leave the object it belongs to out entirely", which for `componentResolution` is the
     // NON-GATING path: an omitted entry reads as un-swept, the provenance stop cannot fire, and the run builds on a
@@ -891,13 +893,19 @@ const resolutionsReopened = new Set()
       ? ' **This does NOT apply to `componentResolution`:** do not drop those entries. Return one entry per published component type, with `resolvedFrom` on every one — `catalog` on every entry if the whole sweep fell back to the bundled catalog. An omitted entry is read as un-swept and this run would then build on a round it never validated, which is the failure this field exists to prevent.'
       : ''
     if (lastShapeFaults.length) {
-      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}`
-    } else if (lastHostRejection) {
+      return { attemptId, attemptLabel, prompt: `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}` }
+    }
+    if (lastHostRejection) {
       // THE HOST'S REJECTION REACHES THE NEXT ATTEMPT. A workflow-level retry is a FRESH context: recomposing blind,
       // it would most likely re-send the same bytes and spend the budget on nothing. The shape-fault branch above
       // already threads its faults through; this is the same rule for the other failure kind.
-      prompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
+      return { attemptId, attemptLabel, prompt: `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.` }
     }
+    return { attemptId, attemptLabel, prompt: base }
+  }
+  function* reconcileAttempt(roundNo, id, label, note, attempt) {
+    const willRetry = attempt < RECONCILE_ATTEMPTS
+    const { attemptId, attemptLabel, prompt } = reconcileAttemptInput(roundNo, id, label, attempt)
     let answer
     try {
       answer = yield* dispatch(attemptId, prompt, {

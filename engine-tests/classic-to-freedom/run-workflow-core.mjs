@@ -1534,7 +1534,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
 {
   const ctx = makeContext(BEX_INPUT, "/plug/skills/_workflow-core/build-executor/core.mjs");
   check("build-executor context: every engine command line is SHELL-QUOTED — a migration folder with a space would otherwise split into two arguments and every phase would read or write the wrong path, with no error",
-    /--units --resolutions '\/mig\/resolutions\.json' --slices '\/mig\/slices'/.test(ctx.CLI_UNITS) && ctx.CLI_VERIFY.includes("'/mig/built.json'"),
+    /--units --resolutions '\/mig\/resolutions\.json' --slices '\/mig\/slices'/.test(ctx.CLI_UNITS) && ctx.CLI_RECONCILE.includes("'/mig/built.json'"),
     () => ctx.CLI_UNITS);
   check("build-executor context: the round budget is the DESIGN value by default and the operator's when given — the helpers take it as a parameter now, so a configured value that never reached them would park early or never",
     ctx.MAX_ROUNDS === DEFAULT_MAX_ROUNDS && makeContext({ ...BEX_INPUT, maxRounds: 5 }, "").MAX_ROUNDS === 5);

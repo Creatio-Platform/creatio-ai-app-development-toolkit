@@ -13,7 +13,7 @@
 // answer through `mergeSectionRoute` into the classifier — the pure goldens in `gate.mjs` cannot see that wiring.
 // The Reconcile answers below are written FLAT, the way the run consumes them; the shared wrapper puts them on
 // the wire in the shape a real agent submits — the engine's state as one copied line, the stand facts beside it.
-import { asReconcileAnswer, isReconcileStateAnswer } from "../classic-to-freedom/_testkit.mjs";
+import { asReconcileAnswer } from "../classic-to-freedom/_testkit.mjs";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";

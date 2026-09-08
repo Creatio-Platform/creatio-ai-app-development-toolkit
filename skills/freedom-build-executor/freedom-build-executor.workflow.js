@@ -2208,7 +2208,6 @@ function makeContext(input, selfPath) {
   const SLICE_DIR = `${input.outDir}/slices`
   const RESOLUTIONS_FILE = input.resolutionsFile || `${input.outDir}/resolutions.json`
   const CLI_UNITS = cli(`--units --resolutions ${q(RESOLUTIONS_FILE)} --slices ${q(SLICE_DIR)}`)
-  const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
   const RECONCILE_FILE = `${input.outDir}/reconcile.json`
   const CLI_RECONCILE = cli(`--verify --built ${q(BUILT_FILE)} --reconcile ${q(RECONCILE_FILE)} --queue ${q(QUEUE_FILE)} --resolutions ${q(RESOLUTIONS_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
   const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
@@ -2254,7 +2253,7 @@ return {
   FINDINGS, FINDING_KEYS,
   QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
-  cli, CLI_UNITS, CLI_VERIFY, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+  cli, CLI_UNITS, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
   dataFence, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
 }
 }
@@ -2487,9 +2486,9 @@ function* run(rawInput, io = {}, opts = {}) {
     SURFACE, MAX_ROUNDS, BUILD_TURN_BUDGET, MAX_CONTINUATIONS,
     MAX_PREFLIGHT, MODE_REQUESTED, DEFAULT_MODE, CHECKPOINT_AFTER, CHECKPOINT_SET, FINDINGS, FINDING_KEYS,
     VERIFICATION_SURFACE_NOTE,
-    QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
+    QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON,
     REFS_DIR, REFS_INDEX, RESOLUTIONS_FILE,
-    CLI_UNITS, CLI_VERIFY, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+    CLI_UNITS, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
     dataFence, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
   } = ctx
   const findingsPending = new Set(FINDING_KEYS)
@@ -2750,22 +2749,26 @@ const resolutionsReopened = new Set()
     }
     return null
   }
-  function* reconcileAttempt(roundNo, id, label, note, attempt) {
-    const willRetry = attempt < RECONCILE_ATTEMPTS
+  function reconcileAttemptInput(roundNo, id, label, attempt) {
     const attemptId = attempt === 1 ? id : `${id}.retry-${attempt - 1}`
     const attemptLabel = attempt === 1 ? label : `${label}:retry-${attempt - 1}`
     const base = reconcilePrompt(roundNo, answerFileStem(attemptLabel))
     const faultLines = lastShapeFaults.map((f) => `- ${f}`).join('\n')
-    let prompt = base
     const sweepFaulted = lastShapeFaults.some((f) => /componentResolution[[:]/.test(f))
     const sweepRule = sweepFaulted
       ? ' **This does NOT apply to `componentResolution`:** do not drop those entries. Return one entry per published component type, with `resolvedFrom` on every one — `catalog` on every entry if the whole sweep fell back to the bundled catalog. An omitted entry is read as un-swept and this run would then build on a round it never validated, which is the failure this field exists to prevent.'
       : ''
     if (lastShapeFaults.length) {
-      prompt = `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}`
-    } else if (lastHostRejection) {
-      prompt = `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.`
+      return { attemptId, attemptLabel, prompt: `${base}\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY THIS SCRIPT — not by the host, and not for its content. It was missing fields, or carried the wrong type, HERE:\n${faultLines}\nReturn the SAME answer with exactly those fields present and correctly typed, copied from the engine files as instructed above. Do not re-run anything you already ran, and do not invent a value to fill a field: if you genuinely cannot read one, say so in \`notes\` and leave the object it belongs to out entirely.${sweepRule}` }
     }
+    if (lastHostRejection) {
+      return { attemptId, attemptLabel, prompt: `${base}\n\nYOUR PREVIOUS DISPATCH WAS REJECTED BY THE HOST — its reason, verbatim: ${lastHostRejection}\nThe submission protocol above exists for exactly this failure, so follow it STRICTLY this time: compose the answer on disk, run the encoder, and submit the \`.ascii.json\` content character for character. The earlier attempt's \`reconcile-answer-*\` files are already in the migration folder — read them before recomposing, and leave them in place.` }
+    }
+    return { attemptId, attemptLabel, prompt: base }
+  }
+  function* reconcileAttempt(roundNo, id, label, note, attempt) {
+    const willRetry = attempt < RECONCILE_ATTEMPTS
+    const { attemptId, attemptLabel, prompt } = reconcileAttemptInput(roundNo, id, label, attempt)
     let answer
     try {
       answer = yield* dispatch(attemptId, prompt, {
