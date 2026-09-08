@@ -8058,6 +8058,11 @@ const SETTLE_RETRY_RULE = " <settle-and-retry>"
 // stub, exactly as the check above demands of every new one. It is a SUFFIX rather than its own prompt line
 // deliberately: the parity runner can declare a substituted line and not an inserted one.
 const BLOCKER_SUBJECT_RULE = " <blocker-subject>"
+// PR #157 review (round 2, Minor 5) — D7's rule is now chosen PER UNIT: a unit whose settle window is
+// already spent is told to take the first read instead of waiting another ~2 minutes. The stub returns the
+// first-dispatch text, which is the state every unit in this render starts in, so the prompts these checks
+// assert on are the unchanged ones.
+const settleRuleFor = () => SETTLE_RETRY_RULE
 const state = { applicationCode: "UsrApp", unitKeys: ["child:Education", "list", "main"] }
 const pageSchemas = { main: "UsrMainPage" }
 const sliceKeys = new Set(["main"])

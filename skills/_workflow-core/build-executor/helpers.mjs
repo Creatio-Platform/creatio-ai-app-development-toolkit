@@ -752,7 +752,22 @@ export function roundStateOf(state) {
     // `roundsSpent` and `consumedRoundAnswers` already make: garbage on file can only ever reset the counter to 1,
     // which HOLDS the run (the safe direction) rather than stopping it.
     pendingContradiction: pick('pendingContradiction'),
+    // PR #157 review (round 2, Minor 5) — THE UNITS THAT HAVE ALREADY SPENT THE SETTLE WINDOW.
+    // D7's settle-and-retry rule asks a unit to reload and wait ~60 s twice before calling a read broken. It
+    // had NO per-unit memory, so a unit that reported `unsettled` re-spent the whole ~2-minute window on
+    // every subsequent round up to MAX_ROUNDS — the rule that exists to save a session costing several
+    // minutes of it per unit instead. Persisted on the folder rather than kept in this process because the
+    // rounds an operator drives are separate invocations, which is the axis where the waste compounds.
+    // Read RAW and normalised by the caller, the same division of labour as `pendingContradiction`: garbage
+    // on file can only make a unit re-spend the window (the safe direction), never skip a first attempt.
+    unsettledUnits: pick('unsettledUnits'),
   }
+}
+
+// The recorded set, normalised: a list of non-blank strings and nothing else. Its own function so both the
+// reader (the prompt decision) and the writer (the carry) agree on what the field holds.
+export function unsettledUnitSet(raw) {
+  return new Set((Array.isArray(raw) ? raw : []).filter((k) => typeof k === 'string' && k.trim() !== ''))
 }
 
 // ---------------------------------------------------------------------------

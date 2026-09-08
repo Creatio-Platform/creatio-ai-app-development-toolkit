@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, deriveApplicationCode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, ONSTAND_EVIDENCE_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, verifyRowKeys, reuseChildGroups, encodedAsciiBytes, PENDING_WIRE_BUDGET, PENDING_DELIVERABLE_CAP, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, ONSTAND_EVIDENCE_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, verifyRowKeys, reuseChildGroups, encodedAsciiBytes, PENDING_WIRE_BUDGET, PENDING_DELIVERABLE_CAP, rowSlug, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 // ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
 // function the ENG-95468 identifiers gate compares it to. Two copies of "target package minus prefix" that are
@@ -11965,6 +11965,43 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     injKeys.length >= 20 && new Set(injKeys).size === injKeys.length
     && injKeys.every((k) => !/~\d+$/.test(k)),
     () => { const dupes = injKeys.filter((k, i) => injKeys.indexOf(k) !== i); return { total: injKeys.length, unique: new Set(injKeys).size, dupes, suffixed: injKeys.filter((k) => /~\d+$/.test(k)) }; });
+  /* PR #157 REVIEW (round 2, Minor 2) — THE SLUG IS NOT ASCII-ONLY ANY MORE.
+     `[^a-z0-9]+` deleted every non-ASCII character, so a fully Cyrillic caption slugged to the EMPTY string: every
+     such row on a page shared `<pageKey>#confirm:` and fell back to `dedupeRowKey`'s POSITIONAL `~2`/`~3` suffix,
+     which is not a stable address — inserting a deliverable above renumbers it and a recorded resolution silently
+     stops matching. Cyrillic captions are ordinary on a Creatio stand, and D3/D4 rest on this key.
+     `resolveRow` is the shortest path to `rowSlug` for a vk-less row, so the keys are read through `verifyRowKeys`
+     on rows built the way `buildLayoutGroupRows` emits them. */
+  const cyr = ["Регіон 1", "Регіон 2", "Вкладка · Загальна інформація"];
+  const cyrKeys = cyr.map((l) => rowSlug(l));
+  check("PR #157 review (round 2, Minor 2): a fully localized label no longer slugs to the EMPTY string — each Cyrillic caption yields its own non-empty slug, so localized rows stop sharing one key and stop depending on the positional `~N` suffix",
+    cyrKeys.every((k) => k && k.length > 0) && new Set(cyrKeys).size === cyr.length,
+    () => JSON.stringify({ labels: cyr, slugs: cyrKeys }));
+  check("PR #157 review (round 2, Minor 2): the fallback is DETERMINISTIC — the same label slugs to the same key on every call, which is the property a positional suffix could never promise and the reason a recorded resolution keeps matching across runs",
+    cyr.every((l) => rowSlug(l) === rowSlug(l)) && rowSlug("Регіон 1") === cyrKeys[0]
+    // The digest rides on whatever ASCII survived, so `Регіон 1` keys as `1-x<digest>` rather than the bare `1`
+    // an emptiness-only fallback would have accepted — and `Вкладка 1` would have shared.
+    && /-x[0-9a-z]+$/.test(cyrKeys[0]) && cyrKeys[0] !== "1"
+    && rowSlug("Вкладка 1") !== rowSlug("Регіон 1"),
+    () => JSON.stringify({ first: cyrKeys[0], again: rowSlug("Регіон 1"), otherLabelSameDigit: rowSlug("Вкладка 1") }));
+  check("PR #157 review (round 2, Minor 2): ACCENTED LATIN folds to ASCII rather than falling back to a digest — `Régions générales` reads as words in a resolutions file, and NFKD is what an ASCII filter alone could not do",
+    rowSlug("Régions générales") === "regions-generales",
+    () => rowSlug("Régions générales"));
+  check("PR #157 review (round 2, Minor 2): plain ASCII labels are UNCHANGED — the fix must not move a key that already worked, or every resolution recorded before it stops matching",
+    rowSlug("Tab · New Tab — 3 fields") === "tab-new-tab-3-fields"
+    && rowSlug("Header — 16 fields · Feed (ESN)") === "header-16-fields-feed-esn",
+    () => JSON.stringify([rowSlug("Tab · New Tab — 3 fields"), rowSlug("Header — 16 fields · Feed (ESN)")]));
+  check("PR #157 review (round 2, Minor 2): non-ASCII PUNCTUATION does not trigger the digest — `·` and `—` are in almost every label this engine emits and carry no identity, so a byte-level test would have appended a digest to every existing key and invalidated every resolution already recorded; the trigger is a lost LETTER or DIGIT",
+    !/-x[0-9a-z]+$/.test(rowSlug("Tab · New Tab — 3 fields"))
+    && !/-x[0-9a-z]+$/.test(rowSlug("Header — 16 fields · Feed (ESN)"))
+    && /-x[0-9a-z]+$/.test(rowSlug("Вкладка · Загальна — 3 поля")),
+    () => JSON.stringify({ punctuationOnly: rowSlug("Tab · New Tab — 3 fields"), cyrillic: rowSlug("Вкладка · Загальна — 3 поля") }));
+  check("PR #157 review (round 2, Minor 2): and a localized verify table needs NO `~N` suffix at all — the whole point is that `dedupeRowKey` goes back to being a backstop for a genuine same-label collision instead of absorbing every localized row on the page",
+    (() => { const cyrRes = { ...injResult, tabs: undefined };
+      const keys = verifyRowKeys(cyrRes, brOpts());
+      return keys.length > 0 && keys.filter((k) => /~\d+$/.test(k)).length === 0; })(),
+    () => verifyRowKeys({ ...injResult, tabs: undefined }, brOpts()).filter((k) => /~\d+$/.test(k)));
+
   check("PR #157 review (Blocker 1): the two typed-form rows read ONE evidence boolean and still get their OWN keys — the discriminator is the form's schema AND its Type, a stable identity, not the row's ordinal",
     injKeys.includes("main#onstand:typedFormsBuilt:usrtypeda-a") && injKeys.includes("main#onstand:typedFormsBuilt:usrtypedb-b"),
     () => injKeys.filter((k) => k.includes("typedFormsBuilt")));

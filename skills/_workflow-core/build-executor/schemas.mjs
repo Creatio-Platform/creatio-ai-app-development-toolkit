@@ -515,8 +515,12 @@ export const RECONCILE_SHAPE = {
   // requiring the key would reject a well-formed answer about a healthy folder. When it IS present both its
   // fields are required — a record with no signature cannot be compared and one with no round count cannot be
   // counted, and either half missing would silently reset the counter that stops an unclosable run.
+  // `unsettledUnits` (PR #157 review, round 2, Minor 5) — TYPED, NOT REQUIRED, and free: `RECONCILE_SCHEMA`
+  // declares `roundState` as a bare `{ type: 'object' }`, so a new nested key costs the 4096-byte serialized
+  // ceiling nothing (it sits at 4061). A folder written before the field simply has no list, which reads as
+  // the empty set — the state every unit starts in.
   roundState: { kind: 'object', required: ['consumedRoundAnswers'],
-    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]' },
+    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]', unsettledUnits: 'string[]' },
     nested: { pendingContradiction: { kind: 'object-or-null', required: ['signature', 'rounds'],
       types: { signature: 'string', rounds: 'integer' } } } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
@@ -642,6 +646,12 @@ export const BUILD_PROPERTIES = {
   schemaName: { type: 'string' },
   packageName: { type: 'string' },
   template: { type: 'string' },
+  // PR #157 review (round 2, Minor 5) — D7'S SETTLE WINDOW, ANSWERED AS A BOOLEAN. The rule asks an agent to
+  // write "unconfirmed after N attempts" into `notes`, and re-deriving a decision from prose is the shape the
+  // round-2 gate.mjs Blocker is about — so the run reads a typed field instead and the folder remembers the
+  // unit, which stops the ~2-minute reload-and-wait being re-spent on every later round up to MAX_ROUNDS.
+  // Optional: a unit whose reads settled says nothing, which is the ordinary case.
+  unsettled: { type: 'boolean' },
   // A CLAIM, not evidence — the read-only verifier files what the stand actually returns, and
   // the script logs any disagreement rather than smoothing it over.
   claimedBuilt: { type: 'array', items: { type: 'string' } },

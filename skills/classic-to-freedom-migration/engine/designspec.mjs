@@ -4741,7 +4741,53 @@ function planGapBanner(result) {
 // global `[^a-z0-9]+` above collapses every run of non-alphanumerics into ONE `-`, so the intermediate string can
 // never hold two adjacent dashes. Which is also why dropping it is not a weaker trim: there is at most one dash to
 // strip at each end.
-const rowSlug = (label) => String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, "").slice(0, 96);
+// PR #157 review (Minor 2) — A FULLY LOCALIZED LABEL USED TO SLUG TO THE EMPTY STRING. `[^a-z0-9]+` deletes every
+// non-ASCII character, so "Регіон 1" collapsed to a single `-`, both edge trims removed it, and every such row on a
+// page shared `<pageKey>#confirm:` — falling back to `dedupeRowKey`'s POSITIONAL `~2` / `~3` suffix. That suffix is
+// not a stable address: inserting a deliverable above renumbers it, so an `accepted`/`confirmed` resolution
+// recorded against it silently stops matching. Cyrillic captions are ordinary on a Creatio stand, and D3/D4 rest on
+// this key, so the addressing primitive cannot be ASCII-only.
+//
+// TWO STEPS, in this order:
+//   1. NFKD-normalise and strip combining marks, which folds the accented Latin an ASCII filter would otherwise
+//      delete ("Régions" → `regions`, not `r-gions`). This alone fixes every Latin-script locale.
+//   2. When the slug is STILL empty — a script NFKD cannot fold to ASCII at all (Cyrillic, Greek, CJK) — fall back
+//      to a short deterministic DIGEST of the original label. Deterministic is the whole point: the same label
+//      slugs to the same key on every run, so a recorded resolution keeps matching, which a positional suffix
+//      could never promise. Prefixed `x` so a digest slug is recognisable as one in a resolutions file.
+// `dedupeRowKey` stays the backstop for a genuine same-label collision; what it no longer has to absorb is EVERY
+// localized row on the page.
+const asciiFold = (s) => String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+// FNV-1a, 32-bit, base36. Not a security hash and not required to be: it needs to be stable across runs and short
+// enough to type, and the collision it has to avoid is between the handful of unfoldable labels on ONE page.
+function labelDigest(label) {
+  let h = 0x811c9dc5;
+  const str = String(label);
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.codePointAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+// EXPORTED for its own goldens (PR #157 review, round 2). The ASCII-only defect was invisible through
+// `verifyRowKeys` alone — a collapsed slug still produces a unique key once `dedupeRowKey` appends `~N`, so the
+// suite could only see it by reading the slug itself.
+export const rowSlug = (label) => {
+  const folded = asciiFold(label);
+  const slug = folded.replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, "").slice(0, 96);
+  // THE FALLBACK TRIGGERS ON LOST WORD CHARACTERS, and each half of that is deliberate.
+  // NOT on an EMPTY result: "Регіон 1" leaves the ASCII digit behind, so an emptiness test would accept the slug
+  // `1` — and "Вкладка 1" and every other numbered Cyrillic caption on the page slug to `1` as well, which is the
+  // shared key this Minor is about with one character of camouflage.
+  // NOT on any non-ASCII BYTE either: `·` (U+00B7) and `—` (U+2014) appear in almost every label this engine emits
+  // ("Tab · New Tab — 3 fields"), they are punctuation, they carry no identity, and NFKD does not fold them — so a
+  // byte test would append a digest to every existing key and invalidate every resolution already recorded.
+  // What matters is whether a LETTER OR DIGIT was dropped: test the characters NFKD could not reduce to ASCII and
+  // ask whether any of them is `\p{L}` / `\p{N}`.
+  if (!/[\p{L}\p{N}]/u.test(folded.replace(/[ -]/g, ""))) return slug;
+  const digest = `x${labelDigest(label)}`;
+  return slug ? `${slug.slice(0, 96 - digest.length - 1)}-${digest}` : digest;
+};
 function verifyRowKey(r, pageKey) {
   // `part` (PR #157 review, Blocker 1): the quality-gate deliverable is TWO rows on ONE evidence id — the record was
   // FILED, and it was independently JUDGED — so the id alone names both. The part is the row's own identity within

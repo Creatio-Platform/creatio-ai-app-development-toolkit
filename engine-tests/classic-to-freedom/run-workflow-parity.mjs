@@ -202,9 +202,17 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // right after `SETTLE_RETRY_RULE`, so the divergence is a SUFFIX on that line — pinned per-substring at the
       // JUNCTION (the shipped half carries the last words of the baseline line plus the first words of the rule),
       // which is what stops an unrelated edit to this long line riding in on the entry.
+      // TWO additions now ride on this one line, in order: D7's `unsettled` ask (Minor 5) and the blocker-subject
+      // rule. The shipped half pins the FIRST junction and the tail of the pair, so neither can be removed and
+      // neither an unrelated edit between them nor a re-ordering would still match.
       baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
-      shipped: "an unconfirmed row costs one re-run. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
-      why: "the build agent is the producer of `subject`, so the page and reach prompts must ask for it; appended rather than inserted because the parity runner compares line counts before consulting this list",
+      shipped: "an unconfirmed row costs one re-run. **AND RETURN `unsettled: true` WHEN YOU END ON AN UNCONFIRMED READ**",
+      why: "the build agent is the producer of both `unsettled` (D7's per-unit settle memory) and `subject` (the terminal-park verdict), so the page and reach prompts must ask for them; appended rather than inserted because the parity runner compares line counts before consulting this list",
+    },
+    {
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "Omit it when your reads settled. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the second half of the same line: the blocker-subject rule follows D7's `unsettled` ask, and pinning the junction between them stops either being dropped silently",
     },
     {
       // Same rule, on the APP unit prompt, appended to the line that already tells it a substitute package is a
@@ -237,6 +245,18 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       baseline: "WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not",
       shipped: "AND RECORD THE MACHINE IDS BESIDE THE NAMES",
       why: "`stubSectionUId`/`stubEntityUId`/`sectionSchemaUId` are the only facts here a later unit can check the stand against, and `withdraw` makes a wrong licence retractable without giving `null` a second meaning",
+    },
+    {
+      // PR #157 REVIEW (round 2, Minor 5) — D7'S SETTLE WINDOW GETS A PER-UNIT MEMORY, and the memory has to
+      // survive an invocation: the rounds an operator drives are separate processes, which is the axis where
+      // re-spending a ~2-minute reload-and-wait per unit per round compounds. `unsettledUnits` therefore rides in
+      // `roundState`, and `schemas.mjs` states the rule that a field the read step does not NAME is dropped by the
+      // transcription — so naming it here is what makes the memory real rather than per-process.
+      // The baseline predates the field and has no folder carrying one, so this is a one-way intended divergence,
+      // the same standing as the two `roundState` siblings before it.
+      baseline: "plus `pendingContradiction` when the file has one.",
+      shipped: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
+      why: "`unsettledUnits` is the folder's memory of which units have already spent D7's settle window; a field the Reconcile read step does not name does not survive a resume, and the waste it prevents is per-resume",
     },
   ],
 }
