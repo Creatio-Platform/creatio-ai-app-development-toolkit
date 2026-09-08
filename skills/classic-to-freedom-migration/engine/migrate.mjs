@@ -1070,7 +1070,12 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides, and plan-vs-built
+// drift on it is still caught by the checklist verify-key (ENG-95470). `formTemplate` stays required — a genuine
+// multi-way choice (top-area / progress-bar / mini / …).
+const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
+const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "formTemplate"];
 // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
 // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
 // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
@@ -1229,8 +1234,12 @@ export function placementIssues(manifest) {
 // as no row helper read the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
-  const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
+  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
+  // renderers read this normalized `pm`, so the Main-scope row and the verify-key drift guard all see the default.
+  const pm0 = manifest.planMeta || {};
+  const pm = blank(pm0.listTemplate) ? { ...pm0, listTemplate: DEFAULT_LIST_TEMPLATE } : pm0;
   // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
   // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
@@ -1240,7 +1249,7 @@ export function checklistOpts(manifest, opts = {}) {
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
-    planMeta: manifest.planMeta,
+    planMeta: pm,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
@@ -1380,6 +1389,12 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
     const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0 || (res.changeSet?.needsDecision?.length || 0) > 0;
     c.formless = hasBehaviour ? "inline-grid" : "empty";
+    // ENG-96327 — an inline-editable grid has NO form page, so the plan shows only its LOGIC (Business rules / ⚠
+    // Custom methods / ⚠ Other declared logic), not a form-page mapping. Render that logic-only, embedded spec here
+    // (renderPlan's inline-grid branch prefers `c.logicSpec`). `resolutions` rides along so answered ⚠ rows drop.
+    if (c.formless === "inline-grid") {
+      c.logicSpec = renderDesignSpec(res, { embedded: true, logicOnly: true, resolutions: foldCtx.resolutions });
+    }
   }
   // This child's OWN checklist rows, derived from ITS ChangeSet — the whole point of the page-scoped gate: the
   // parent's row set never sees this page's counts, and this page's counts can never be closed by the parent's
@@ -2946,7 +2961,10 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan`/`pageUnits` can read it — both take it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  out.designSpec = renderDesignSpec(out, specOpts);
+  // ENG-96327 — a CHILD page's design spec is only ever EMBEDDED into the parent plan (foldOneChildPage → c.spec),
+  // never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no Entity/Size
+  // preamble, no Member ledger — the parent plan owns those, and the main page in the same plan already omits them.
+  out.designSpec = renderDesignSpec(out, opts.isChildPage ? { ...specOpts, embedded: true } : specOpts);
   out.plan = renderPlan(out, specOpts);
   // ENG-96571 C3 — the agent-facing half of the plan, published as its OWN artifact so `plan.md` carries only what
   // the approver needs. The CLI writes it to `<out-basename>.notes.md` beside the plan (or echoes it to stderr).

@@ -578,20 +578,10 @@ function listColumnLine(section) {
 // renders as an ordered column set plus one filter container plus one command bar, never as the form's
 // `Region | Element | Type | Source | Rule | Additional` table.
 // ONE table per function: each surface reads as its own shape, and no single function carries every branch.
-// The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
-function listColumnsTable(columns) {
-  if (!columns.length) return [];
-  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
-  columns.forEach((c, i) => {
-    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
-    const type = c.dataValueType == null
-      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
-      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
-    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
-    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
-  });
-  return L;
-}
+// ENG-96327 (product decision) — the detailed "#### List columns (in order)" table (Grid column / Source / Type
+// per column) is NOT rendered in the plan: the plain `- **List columns:**` line above already names the set, the
+// field types/sources are on the form-page Layout, and the one genuine unknown (an unresolved column type) rides
+// its own `[list-column-type]` ⚠ Confirm. The columns still travel to the build via `result.listChangeSet`.
 // A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
 function listFiltersTable(filters) {
   if (!filters.length) return [];
@@ -638,7 +628,6 @@ function listCommandBarTable(actions) {
 }
 function renderListLayoutTables(lcs) {
   return [
-    ...listColumnsTable(lcs.columns),
     ...listFiltersTable(lcs.quickFilters),
     ...listRowActionsTable(lcs.rowActions),
     ...listCommandBarTable(lcs.commandBarActions),
@@ -651,9 +640,10 @@ function renderListLayoutTables(lcs) {
 // `list-filter-attributes` ⚠ Confirm item, where it is gated rather than merely printed.)
 function renderListBuildNotes(lcs) {
   const L = [];
-  if (lcs.columnIdsAssignedByBuilder) {
-    L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
-  }
+  // ENG-96327 (product decision) — the "column ids assigned by the builder" note is a pure builder detail (the
+  // fact rides `listChangeSet.columnIdsAssignedByBuilder` for the agent) and reads as noise to a human approver,
+  // so it is not printed in the plan. The quick-filter build note stays — it names a partial op the reader must
+  // complete from a component's own docs, which is a genuine build instruction.
   if (lcs.quickFilterConfigCompletedByBuilder) {
     L.push("", "> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its container and index, the filtered column and the control — the engine's resolvable facts. `crt.QuickFilter` also needs its own nested filter config and value binding, and it is `compositeOnly` with no published composite recipe, so complete it from that component's documentation (`get-component-info crt.QuickFilter`) rather than treating these `values` as the whole body.");
   }
@@ -781,8 +771,14 @@ function childFormRecommendation(cs, fields, opts) {
 // field-count rule (childFormRecommendation → Mini vs Grid), and a top-area-template steer there both conflicts
 // with that (a mini page has no header area) and mis-fires on a flat child whose fields merely sit in a Header
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
-function headerTemplateRecommendation(cs, opts) {
+function headerTemplateRecommendation(cs, opts, result) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // ENG-96327 (product decision) — when the object HAS a DCM case, the plan already carries the DCM template banner
+  // (renderTemplateBanner → `PageWithTabsAndProgressBarTemplate`), and this recommendation's own advice in that case
+  // is "prefer the progress-bar template" anyway. So it repeats a steer the reader already has: drop it, and let the
+  // DCM banner be the single template instruction. Non-DCM wide-header pages still get this (it is their only steer).
+  const dcmPresent = result?.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  if (dcmPresent) return [];
   // ENG-96327 (product decision) — the operator already chose this page's Header template (a `layout-type:Header`
   // answer in `resolutions.json`), so the engine's recommendation (and its capability caveat) is a settled question:
   // drop it from the plan rather than re-argue a decision the operator made. Fires only when the render carries
@@ -928,6 +924,23 @@ const COSMETIC_CONFIRM_KINDS = new Set([
   "element-caption", "group-caption", "detail-caption", "field-labels", "field-hint", "field-control",
   "layout-density", "layout-truncated", "image-column", "image-placement",
 ]);
+// ENG-96327 (product decision) — kinds whose decision is ALREADY printed in a TABLE the plan renders, so repeating
+// them in the ⚠ Confirm list makes the approver read the same question twice: `rule-condition` and `entity-filter`
+// are each a row in the form-page **Business rules** table (`⚠ condition unread — parse gap` / `⚠ dynamic — resolve
+// value`), and `detail-add-mechanism` is the Layout table's `⚠ INLINE-EDITABLE` annotation. Same treatment as the
+// cosmetic set: kept in the MACHINE channel (`confirmWorklistRows` → `--units.preflight`), dropped only from the
+// human list. A DENYLIST, not an allowlist — a new kind stays visible by default.
+const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter", "detail-add-mechanism"]);
+// ENG-96327 (product decision) — BUILDER/ANALYST-facing decisions: real questions that GATE the build (they ride
+// `--units.preflight` to the build agent, unchanged), but nothing about the answer is the business APPROVER's call —
+// wiring a dynamic visibility rule, a stale/entity-only rule target, an unmapped classic container, an attribute the
+// parser could not read, or the composite-only mechanics of `crt.FileList`/`crt.ApprovalList`. They are the migration
+// agent's work, so they are kept OUT of the human approval plan (same treatment, and same machine channel, as the
+// cosmetic set). NB `plan.notes.md` is read only at PLAN stage, never at build/reconcile — so `--units` is the
+// channel that actually reaches the builder, and these already ride it. A DENYLIST: a new kind stays visible.
+const BUILDER_ONLY_CONFIRM_KINDS = new Set([
+  "visibility-rule", "ancestor-visibility", "rule-target-missing", "unmapped-component", "parse-gap", "registry-composite-only",
+]);
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -955,7 +968,7 @@ function renderConfirmWorklist(cs, opts = {}) {
   // ENG-96327 — the RENDERED open list is the HUMAN shrink: cosmetic/agent-only kinds (see COSMETIC_CONFIRM_KINDS)
   // are dropped from the plan (they still ride the machine channel). The disposition machinery above
   // (closed / invalid / notApplicable) is left on the broader set — a disposition the operator wrote is still reported.
-  const confirm = open.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !isAnswered(d)).map((d) =>
+  const confirm = open.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind) && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !isAnswered(d)).map((d) =>
     `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
@@ -1058,26 +1071,34 @@ export function renderDesignSpec(result, opts = {}) {
   // A mini page's form section is titled "Mini page (quick-add)" — NOT "<entity> form page" — so it can't be
   // mistaken for the record page's form section (the two rendered under the SAME "<entity> form page" heading,
   // which read as a duplicated block for the same page).
-  L.push(
-    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
-    "#### Layout",
-    "| Region | Placement | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-  );
-  for (const region of order) {
-    // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
-    // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
-    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
-      || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
-      || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
-      || a.i - b.i);
-    for (const it of items) L.push(`| ${region} | ${it.place || DASH} | ${it.cells.join(" | ")} |`);
-  }
-  L.push("", ...gridMapTables(order, byRegion));
-  // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
-  // paragraph in every linked field's Additional cell.
-  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
-    L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  // ENG-96327 (product decision) — `logicOnly` renders JUST the behaviour (Business rules / ⚠ Custom methods / ⚠
+  // Other declared logic), NOT the form-page framing (page heading, Layout table, placement grid, base-field
+  // overrides, template recommendations, member ledger). It exists for an INLINE-EDITABLE grid child: renderPlan's
+  // intro for it says "No separate form page — inline-editable grid … port the page's logic below", and printing a
+  // full form-page mapping right after that contradicts it (and a 0-field grid's Layout table is only template
+  // furniture anyway). The columns/logic still reach the build through the child's own unit.
+  if (!opts.logicOnly) {
+    L.push(
+      opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
+      "#### Layout",
+      "| Region | Placement | Element | Type | Source | Rule | Additional |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+    );
+    for (const region of order) {
+      // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
+      // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
+      const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
+        || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
+        || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
+        || a.i - b.i);
+      for (const it of items) L.push(`| ${region} | ${it.place || DASH} | ${it.cells.join(" | ")} |`);
+    }
+    L.push("", ...gridMapTables(order, byRegion));
+    // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
+    // paragraph in every linked field's Additional cell.
+    if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+      L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+    }
   }
 
   L.push(...renderLogicSection(cs));
@@ -1086,7 +1107,7 @@ export function renderDesignSpec(result, opts = {}) {
   // reconfigured (hid / moved). The parallel-analog build does NOT re-create base fields, so these are CONCRETE
   // changes to APPLY onto the template's existing field — a build instruction, not a ⚠ decision to confirm.
   const bfo = cs.baseFieldOverrides || [];
-  if (bfo.length) {
+  if (bfo.length && !opts.logicOnly) {
     L.push(
       "#### Base-field overrides (apply onto the template's fields)",
       `> These base fields ship with the Freedom template; the client schema reconfigured them. APPLY each change onto the existing base field — do NOT re-create the field, and do NOT ship the bare template default.`,
@@ -1111,7 +1132,10 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs, result.coverage),
     ...renderImperativeMembers(cs, result.coverage),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs, opts),
+    // Template recommendations are form-page framing, not logic — dropped in `logicOnly` (an inline grid has no such
+    // template choice). The ⚠ Confirm worklist stays: its rows are genuine decisions, not form-page furniture.
+    ...(opts.logicOnly ? [] : [...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts)]),
+    ...renderConfirmWorklist(cs, opts),
     // ENG-96327: the Member ledger is dense per-kind coverage accounting (mapped/decision/resolved/context/decoration/
     // unaccounted) a non-technical approver cannot act on. Keep it on the standalone `--spec` surface (QA / the build
     // agent) but OUT of the human approval plan (`embedded`). The coverage GATE is unaffected (computed in migrate.mjs),
@@ -1748,7 +1772,10 @@ function renderChildMappings(childs) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
     } else if (c.formless === "inline-grid") {
       P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`, "");
-      P.push("", demoteHeadings(c.spec, lvl - 2)); // still show the logic (Business rules / ⚠ Custom methods / ⚠ Other declared logic)
+      // ENG-96327 — show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT the full form-page mapping: the
+      // intro just said there is no form page. `c.logicSpec` is produced by `foldOneChildPage` for inline-grid
+      // children; fall back to the full spec if (defensively) it is absent.
+      P.push("", demoteHeadings(c.logicSpec || c.spec, lvl - 2)); // Business rules / ⚠ Custom methods / ⚠ Other declared logic
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
     } else if (c.formless === "empty") {
       P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");

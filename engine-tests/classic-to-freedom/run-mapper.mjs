@@ -1466,10 +1466,12 @@ check("ENG-95218: the command-bar set does NOT claim to be complete — ONE deci
     && /#### ⚠ Confirm before I build/.test(lpRun.designSpec)
     && /\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
-check("ENG-95218: the design spec renders the list page as POSITIONED tables (columns in order, filters with container+index, actions) instead of the old prose bullets",
-  () => /#### List columns \(in order\)/.test(lpRun.designSpec) && /#### Quick filters/.test(lpRun.designSpec)
+check("ENG-95218 / ENG-96327: the list page renders POSITIONED tables for filters + actions (not prose bullets); columns travel via the ChangeSet + the plain `- **List columns:**` line — the detailed columns table was dropped as a table-of-a-table",
+  () => /#### Quick filters/.test(lpRun.designSpec)
     && /#### Command-bar actions/.test(lpRun.designSpec)
-    && /\| 1 \| Name \| `PDS_Name` \| PDS\.Name \| Text \(`dataValueType` 1\) \|/.test(lpRun.designSpec)
+    && !/#### List columns \(in order\)/.test(lpRun.designSpec)                 // ENG-96327: the detailed table is gone
+    && /- \*\*List columns:\*\*[^\n]*Name/.test(lpRun.designSpec)               // the plain line still names the set
+    && lcs.columns.some((c) => c.name === "Name" && c.code === "PDS_Name")      // SOURCE the build consumes (unchanged)
     && /`LeftFilterContainerInner` · index 1/.test(lpRun.designSpec)
     && !/- \*\*Quick filters:\*\*/.test(lpRun.designSpec) && !/- \*\*Section actions:\*\*/.test(lpRun.designSpec),
   () => lpRun.designSpec.split("\n").filter((l) => /List columns|Quick filter|Command-bar|Section actions/.test(l)).slice(0, 12));
@@ -6962,10 +6964,15 @@ check("detail add-mechanism: lookup + backend SERVICE (name + method) detected",
   regDetail?.addMode?.lookup === true && regDetail?.addMode?.service === "DocumentRegistryService"
   && regDetail?.addMode?.method === "AddCorrespondencesToRegistry",
   () => regDetail?.addMode);
-check("detail add-mechanism: each raised as a decision + rendered in the plan (custom Freedom add handler; verify service)",
-  dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
-  && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
-  () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// ENG-96327 — `detail-add-mechanism` is a DECISION carried to the build via `needsDecision` (→ `--units.preflight`),
+// no longer duplicated in the human ⚠ Confirm list (the Layout table's `⚠ INLINE-EDITABLE` already flags it there).
+// So the guidance is asserted on the decision's OWN `reason`, not on the rendered plan prose.
+const dmAdd = dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism");
+check("detail add-mechanism: each raised as a decision carrying its add-flow guidance (custom Freedom add handler; verify service) — in the ChangeSet, not the human ⚠ Confirm list",
+  dmAdd.length === 2
+  && dmAdd.some((n) => /NOT a plain related list/.test(n.reason)) && dmAdd.some((n) => /DocumentRegistryService/.test(n.reason))
+  && !/\*\*\[detail-add-mechanism\]\*\*/.test(dmRun.plan),
+  () => dmAdd.map((n) => n.item));
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
 // "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before
@@ -6984,19 +6991,22 @@ check("#11 detail add-mechanism: add-disabled + custom grid action (attachReques
   && vacDetail?.addMode?.fixedFilters === true
   && ["Category", "Type", "Status"].every((c) => (vacDetail.addMode.filterCols || []).includes(c)),
   () => vacDetail?.addMode);
-check("#11 detail add-mechanism: rendered as a decision — add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns",
-  /add-new DISABLED/.test(attachRun.plan) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(attachRun.plan) && /FIXED list filters on Category, Type, Status/.test(attachRun.plan));
+const vacAdd = attachRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("#11 detail add-mechanism: the decision carries add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns (in the ChangeSet reason, not the human ⚠ Confirm list)",
+  /add-new DISABLED/.test(vacAdd.reason) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(vacAdd.reason) && /FIXED list filters on Category, Type, Status/.test(vacAdd.reason),
+  () => vacAdd?.reason);
 const openCardOnlyRun = runMigration({
   entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OpenCardDetail",entitySchemaName:"OpenChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
   detailSchemas: { OpenCardDetail: { body: `define("OpenCardDetail",[],function(){return{entitySchemaName:"OpenChild",methods:{openCardByMode:function(){this.openCardInChain();}}};});`, editPage: false } },
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the plan",
-  () => /overrides the default add-card open/.test(openCardOnlyRun.plan)
-    && /CUSTOM add request-handler/.test(openCardOnlyRun.plan)
-    && /overridden add-card flow/.test(openCardOnlyRun.plan),
-  () => openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism")?.reason);
+const ocAdd = openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the decision (ChangeSet reason)",
+  () => /overrides the default add-card open/.test(ocAdd.reason)
+    && /CUSTOM add request-handler/.test(ocAdd.reason)
+    && /overridden add-card flow/.test(ocAdd.reason),
+  () => ocAdd?.reason);
 // review (Applicant #12, verified on-stand): a system-maintained detail (stage history) is read-only via
 // `getAddRecordButtonVisible: return false` — declared in the BASE replacing layer (HRApplicant), NOT the client
 // top override (WorkHrBase). Supplying the detail's full replacing CHAIN (bodies:[base→top]) lets the engine scan
@@ -7007,8 +7017,9 @@ const roPageBody = `define("XPage",[],function(){return{entitySchemaName:"X",dif
 const roChain = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { bodies: [roBaseLayer, roTopLayer], editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
 const roDetail = roChain.changeSet.details.find((d) => d.detailSchema === "StageDetail");
-check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED",
-  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roChain.plan),
+const roAdd = roChain.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED (carried on the decision)",
+  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roAdd?.reason || ""),
   () => roDetail?.addMode);
 const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { body: roTopLayer, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
@@ -11601,8 +11612,9 @@ check("ENG-96571 A3: the ACTION is still mapped and still in the ChangeSet — o
   a3Ruleset(a3Deg).action === "make-required" && a3Ruleset(a3Deg).inverseAction === "make-optional"
   && /required \(else optional\)/.test(a3Row(a3Deg)),
   () => a3Row(a3Deg));
-check("ENG-96571 A3: the gap reaches the ⚠ Confirm worklist as its own `rule-condition` row",
-  /\*\*\[rule-condition\]\*\* Job/.test(a3Deg.designSpec), () => a3Deg.designSpec.split("\n").filter((l) => /rule-condition/.test(l)));
+check("ENG-96571 A3 / ENG-96327: the gap is a `rule-condition` DECISION in the ChangeSet (rides `--units`), and is NOT duplicated in the human ⚠ Confirm list — the Business rules table already shows `⚠ condition unread — parse gap`",
+  a3Gap(a3Deg).some((d) => d.item === "Job") && !/\*\*\[rule-condition\]\*\*/.test(a3Deg.designSpec),
+  () => ({ decisions: a3Gap(a3Deg), shownInPlan: /\*\*\[rule-condition\]\*\*/.test(a3Deg.designSpec) }));
 
 // (iii) DECLARED but DROPPED — an object-MAP `conditions`, which `sanitizeConditions` returns as `[]`. Same cell:
 // the rule declared a condition, so `always` would be a claim nobody verified.
@@ -11628,10 +11640,12 @@ const C1_MAN = (dispositions) => ({ entity: "HRRequest",
   ...(dispositions ? { confirmDispositions: dispositions } : {}) });
 const c1Open = runMigration(C1_MAN(null));
 const c1OpenCount = (c1Open.designSpec.match(/#### ⚠ Confirm before I build \((\d+)\)/) || [])[1];
-check("ENG-96571 C1: the SETUP — with no disposition the `rule-condition` row is OPEN and the header counts it",
-  /\*\*\[rule-condition\]\*\* Job/.test(c1Open.designSpec) && Number(c1OpenCount) >= 1
+check("ENG-96571 C1 / ENG-96327: the SETUP — with no disposition the `rule-condition` decision is OPEN in the ChangeSet (closed:[]), and is NOT shown in the human plan (bucket A: the Business rules table shows it)",
+  c1Open.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job")
+  && c1Open.confirmDispositions.closed.length === 0
+  && !/\*\*\[rule-condition\]\*\* Job/.test(c1Open.designSpec)
   && !/CLOSED by a recorded disposition/.test(c1Open.designSpec),
-  () => c1Open.designSpec.split("\n").filter((l) => /Confirm before I build|rule-condition/.test(l)));
+  () => [c1Open.confirmDispositions, c1OpenCount]);
 
 const c1Closed = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "resolved-on-stand", note: "read the rule on-stand: required only while Stage = New" } }));
 check("ENG-96571 C1: a recorded disposition CLOSES the row — it leaves the open list, the header says `(N open, M closed)`, and it is still printed with its note",
@@ -11656,18 +11670,18 @@ check("ENG-96571 C1: a SECOND render from the same manifest keeps the row closed
 // the same question on another page of the same migration.
 const c1Scoped = runMigration(C1_MAN({ "A3Page::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
 const c1WrongScope = runMigration(C1_MAN({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
-check("ENG-96571 C1: the SCOPED key closes the row for its own schema and NOT for another — a per-page answer stays per-page",
+check("ENG-96571 C1: the SCOPED key closes the row for its own schema and NOT for another — a per-page answer stays per-page (the wrong-scope decision stays OPEN in the ChangeSet)",
   c1Scoped.confirmDispositions.closed.join("|") === "rule-condition:Job"
   && c1WrongScope.confirmDispositions.closed.length === 0
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1WrongScope.designSpec),
+  && c1WrongScope.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job"),
   () => JSON.stringify([c1Scoped.confirmDispositions, c1WrongScope.confirmDispositions]));
 // An INVALID disposition word does NOT close the row: a truthy `resolved` with a typo would clear a question
 // nobody answered. It is named, so the discrepancy is fixable instead of invisible.
 const c1Bad = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "sorted-it", note: "typo" } }));
-check("ENG-96571 C1: an INVALID disposition word does not close the row, and an advisory line NAMES the word and the key",
+check("ENG-96571 C1: an INVALID disposition word does not close the row (it stays OPEN in the ChangeSet), and an advisory line NAMES the word and the key",
   c1Bad.confirmDispositions.closed.length === 0
   && c1Bad.confirmDispositions.invalid.join("|") === "rule-condition:Job"
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1Bad.designSpec)
+  && c1Bad.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job")
   && /recorded disposition\(s\) were NOT applied/.test(c1Bad.designSpec)
   && /`rule-condition:Job` → `sorted-it`/.test(c1Bad.designSpec)
   && !/CLOSED by a recorded disposition/.test(c1Bad.designSpec),
@@ -11697,8 +11711,8 @@ const C1_NESTED = (dispositions) => ({ entity: "PE", noParentTemplate: true,
 const c1NestSpecOf = (r) => r.childPages.find((c) => c.spec)?.spec || "";
 
 const c1NestOpen = runMigration(C1_NESTED(null));
-check("ENG-96571 C1 (review) SETUP: the CHILD page raises its own `rule-condition` row, open, so the assertions below are about a row that really exists",
-  /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestOpen))
+check("ENG-96571 C1 (review) SETUP / ENG-96327: with no disposition the child's `rule-condition` row is NOT shown in the human plan (bucket A) and NOT closed — the scoped-close test below proves the row really exists by closing it into an ℹ line",
+  !/\*\*\[rule-condition\]\*\* Job/.test(c1NestSpecOf(c1NestOpen))
   && !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestOpen)),
   () => c1NestSpecOf(c1NestOpen).split("\n").filter((l) => /rule-condition|Confirm before/.test(l)));
 
@@ -11713,9 +11727,9 @@ check("ENG-96571 C1 (review) BLOCKER: a SCOPED `<ChildSchema>::<kind>:<item>` ke
 // …and a key scoped to a DIFFERENT schema still closes nothing on the child: the inheritance carries the map, it
 // does not widen the precedence.
 const c1NestWrong = runMigration(C1_NESTED({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "not this page" } }));
-check("ENG-96571 C1 (review): inheriting the map does NOT widen it — a key scoped to another schema leaves the child's row OPEN",
+check("ENG-96571 C1 (review): inheriting the map does NOT widen it — a key scoped to another schema closes nothing on the child (no ℹ CLOSED line), and the row stays out of the human plan (bucket A)",
   !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestWrong))
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestWrong)),
+  && !/\*\*\[rule-condition\]\*\* Job/.test(c1NestSpecOf(c1NestWrong)),
   () => c1NestSpecOf(c1NestWrong).split("\n").filter((l) => /rule-condition|CLOSED/.test(l)));
 
 // PRECEDENCE, on the row itself: with BOTH forms present the SCOPED one is the answer that lands. This is what
