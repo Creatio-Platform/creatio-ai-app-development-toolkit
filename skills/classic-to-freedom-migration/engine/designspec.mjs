@@ -3511,10 +3511,20 @@ function closedConfirmQuestions(result, byKey) {
       // never carry `closed` anyway (`applyConfirmDispositions` reports it as `notApplicable` and closes nothing),
       // so this guard is symmetry, not load-bearing logic.
       if (SHOWN_ELSEWHERE.has(n.kind)) continue;
-      const k = resolutionKey(n.kind, n.item);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({ id: `${pageKey}#confirm:${confirmKeyOf(n)}`, kind: n.kind, item: n.item });
+      // ENG-96571 review 3 (finding 5) — de-duped on the EMITTED `id`, not on `resolutionKey(kind, item)`. The id is
+      // page-scoped (`${pageKey}#confirm:…`) while the pair is not, so a pair-keyed dedupe kept only the FIRST page
+      // visited: one bare disposition key closing the identical row on `main` and on a folded sub-page — the normal
+      // effect of an inherited bare key, and the documented "one answer for the whole surface" pattern — published
+      // `main#confirm:<pair>` and dropped `C1Child#confirm:<pair>`. An operator who answered by the sub-page's
+      // published id (an id `--units.preflight` printed before the disposition was recorded) then landed in
+      // `resolutionsUnmatched` through the `byId` loop, because `pairMatched` needs a `kind`/`item` an id-only entry
+      // does not carry — the exact false "an answer nobody asked for" this block exists to remove, on the path its
+      // own comment promises to cover. Keeping every page's id makes the id-form exemption hold on every page.
+      // `closedResolutions` de-dupes its OUTPUT by pair, so one answer still produces one `resolutionsClosed` row.
+      const id = `${pageKey}#confirm:${confirmKeyOf(n)}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, kind: n.kind, item: n.item });
     }
   };
   const takeChangeSet = (cs, pageKey) => takePairs(closedOf(cs), pageKey);
@@ -3543,10 +3553,18 @@ function closedResolutions(index, closedQuestions, published) {
   if (!index) return [];
   const open = new Set(published.map((p) => resolutionKey(p.kind, p.item)));
   const out = [];
+  // ENG-96571 review 3 (finding 5) — `closedQuestions` now carries ONE DESCRIPTOR PER PAGE for a pair closed on more
+  // than one page (that is what makes the id-form exemption hold everywhere). This report is per QUESTION, not per
+  // page: the field's own ℹ line counts answers that reach no open question, so emitting the same pair once per page
+  // would inflate it. De-duped on the pair here, which is the shape this output has always had.
+  const emitted = new Set();
   for (const q of closedQuestions) {
-    if (open.has(resolutionKey(q.kind, q.item))) continue;
+    const pair = resolutionKey(q.kind, q.item);
+    if (open.has(pair) || emitted.has(pair)) continue;
     const hit = matchResolution(index, q);
-    if (hit) out.push({ kind: q.kind, item: q.item, answer: hit.answer });
+    if (!hit) continue;
+    emitted.add(pair);
+    out.push({ kind: q.kind, item: q.item, answer: hit.answer });
   }
   return out;
 }

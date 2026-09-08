@@ -13560,6 +13560,46 @@ check("ENG-96571 review 2 (finding 4): the unmatched report is computed over BOT
   (r24Closed.confirmDispositions.unmatched || []).length === 0,
   () => JSON.stringify(r24Closed.confirmDispositions));
 
+/* ---- ENG-96571 review 3 (finding 5): a pair closed on MORE THAN ONE page keeps every page's id ---- */
+// `closedConfirmQuestions` de-duped by `resolutionKey(kind, item)` while the id it emits is page-scoped, so when ONE
+// bare disposition key closed the identical row on `main` AND on a folded sub-page — the normal effect of an
+// inherited bare key, the documented "one answer for the whole surface" pattern — only `main#confirm:<pair>` reached
+// `askedKeys`. An operator answering by the sub-page's published id (an id `--units.preflight` prints) landed in
+// `resolutionsUnmatched` via the `byId` loop, since `pairMatched` needs a kind/item an id-only entry does not carry.
+// The closed-on-BOTH case is exactly the one the dedupe hit and the one the earlier goldens did not cover.
+const R5_RULES = `rules: { "Job": { "JobRequired": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.REQUIRED,
+    "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } } },`;
+const R5_BOTH = (disp) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", ${R5_RULES}
+    diff: [{ operation: "insert", name: "Job", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Job" } }],
+    details: { D1: { schemaName: "D1", entitySchemaName: "Shared" } } }; });` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: `define("C1Child", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "Shared", ${R5_RULES}
+    diff: [{ operation: "insert", name: "Job", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Job" } }] }; });` }] } },
+  ...(disp ? { confirmDispositions: disp } : {}) });
+const r5Open = runMigration(R5_BOTH(null));
+const r5OpenIds = pageUnits(r5Open, {}).preflight.map((u) => u.id);
+check("ENG-96571 review 3 (finding 5) SETUP: the SAME `rule-condition:Job` row is raised on `main` AND on the folded child page, and BOTH ids are published in `preflight[]` — otherwise the dedupe below has nothing to hit",
+  r5OpenIds.includes("main#confirm:rule-condition:Job") && r5OpenIds.includes("child:Shared#confirm:rule-condition:Job"),
+  () => JSON.stringify(r5OpenIds));
+const r5Closed = runMigration(R5_BOTH({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+const r5Units = (answerId) => pageUnits(r5Closed, { resolutions: { resolutions: [{ id: answerId, answer: "checked on the stand" }] } });
+check("ENG-96571 review 3 (finding 5): an answer addressed to the SUB-PAGE's published id is exempt too — `resolutionsUnmatched` is empty and `resolutionsClosed` names the pair exactly ONCE, not once per page",
+  (() => { const u = r5Units("child:Shared#confirm:rule-condition:Job");
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 1
+      && u.resolutionsClosed[0].kind === "rule-condition" && u.resolutionsClosed[0].item === "Job"; })(),
+  () => JSON.stringify({ closed: r5Units("child:Shared#confirm:rule-condition:Job").resolutionsClosed,
+    unmatched: r5Units("child:Shared#confirm:rule-condition:Job").resolutionsUnmatched }));
+check("ENG-96571 review 3 (finding 5): the `main` id — the one form that already worked — still works, and still yields exactly one `resolutionsClosed` row",
+  (() => { const u = r5Units("main#confirm:rule-condition:Job");
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 1; })(),
+  () => JSON.stringify(r5Units("main#confirm:rule-condition:Job")));
+check("ENG-96571 review 3 (finding 5) ANTI-VACUITY: the exemption is not blanket — an id naming a page of this run that never raised that row is STILL reported unmatched",
+  (() => { const u = r5Units("child:Shared#confirm:rule-condition:Nope");
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].id === "child:Shared#confirm:rule-condition:Nope"; })(),
+  () => JSON.stringify(r5Units("child:Shared#confirm:rule-condition:Nope").resolutionsUnmatched));
+
 /* ---- finding 5: ONE copy of the authoring rule ---- */
 // `renderPlanNotes` hand-wrote the same two sentences `PLAN_AUTHORING_NOTE` carries, in its own wording, so the
 // rule existed twice and an edit to either left the other stating the old version of it.
