@@ -1241,7 +1241,9 @@ const SCOPED_GOOD = SCOPED_ENTRY("attribute", "attributes.Stage.onChange");
   // generalised here to the real killer class) would DEATH the agent while these two asserts stayed green. So walk
   // EVERY exported response schema of BOTH workflow cores and assert not one carries a keyword outside Ajv's
   // draft-07 vocabulary — the same thing the host would refuse to compile.
-  for (const [modName, mod] of [["behaviour-analysis", behaviourSchemas], ["build-executor", buildSchemas]]) {
+  const SCHEMA_MODULES = [["behaviour-analysis", behaviourSchemas], ["build-executor", buildSchemas]];
+  for (const pair of SCHEMA_MODULES) {
+    const modName = String(pair[0]), mod = pair[1];
     for (const [name, val] of Object.entries(mod)) {
       if (val == null || typeof val !== "object" || Array.isArray(val)) continue;
       if (!("type" in val || "properties" in val || "enum" in val)) continue; // skip exported scalars/consts
