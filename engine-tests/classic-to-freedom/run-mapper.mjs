@@ -8334,6 +8334,67 @@ try {
   fs.rmSync(unitsManifestPath, { force: true });
 }
 
+/* ---- ENG-96571 review 3 (finding 8): `resolutionsClosed` and its ℹ note, END TO END through the CLI ----
+   Every golden for review 3 called `pageUnits(...)` in-process, so nothing exercised the CLI wiring at the
+   `--units` site, the new field's presence in the `--units` machine artifact a downstream consumer reads, or the
+   `.slice(0, 5)` / "and N more" branch of the note. If the guarded field never populated on the CLI path the
+   operator-facing half of review 3 would be dead and the suite would stay green — the same reason ENG-95503 pins
+   its sibling note (`/matched NO/` on `withRes.stderr`) rather than trusting the in-process match. ---- */
+const R8_RULE = (c) => `"${c}": { "${c}Required": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER, "property": BusinessRuleModule.enums.Property.REQUIRED, "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } }`;
+const R8_COLS = ["Job", "Job2", "Job3", "Job4"];
+const R8_MANIFEST = (dispositions) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", rules: { ${R8_COLS.map(R8_RULE).join(", ")} }, diff: [${R8_COLS.map((c) => `{ "operation": "insert", "name": "${c}", "parentName": "ProfileContainer", "propertyName": "items", "values": { "bindTo": "${c}" } }`).join(", ")}], details: { D1: { schemaName: "D1", entitySchemaName: "Shared" } } }; });` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r8ManPath = path.join(os.tmpdir(), `c2f_r8_man_${process.pid}.json`);
+const r8ResPath = path.join(os.tmpdir(), `c2f_r8_res_${process.pid}.json`);
+try {
+  const disp = (keys) => Object.fromEntries(keys.map((k) => [k, { resolved: true, disposition: "accepted", note: "closed by the manifest" }]));
+  const answers = (keys) => ({ resolutions: keys.map(([kind, item]) => ({ kind, item, answer: "also answered through resolutions.json" })) });
+  const r8Cli = () => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), r8ManPath, "--units", RES_FLAG, r8ResPath], { encoding: "utf8" });
+  // ONE closed answer: the field is present in the artifact with the right kind/item/answer, the ℹ note is on
+  // stderr, and — the assertion that actually matters — the ⚠ "matched NO" note is NOT, because a closed question
+  // was asked. Those two notes claiming the same entry is both asked and unasked is the defect review 3 removed.
+  fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(disp(["rule-condition:Job"]))));
+  fs.writeFileSync(r8ResPath, JSON.stringify(answers([["rule-condition", "Job"]])));
+  const one = r8Cli();
+  const oneOut = (() => { try { return JSON.parse(one.stdout); } catch { return null; } })();
+  check("ENG-96571 review 3 (finding 8): `--units --resolutions` publishes `resolutionsClosed` in the CLI's machine artifact and states the ℹ note on stderr — and does NOT also report the entry as an answer nobody asked for",
+    !!oneOut && Array.isArray(oneOut.resolutionsClosed) && oneOut.resolutionsClosed.length === 1
+    && oneOut.resolutionsClosed[0].kind === "rule-condition" && oneOut.resolutionsClosed[0].item === "Job"
+    && /also answered through resolutions\.json/.test(oneOut.resolutionsClosed[0].answer || "")
+    && /already CLOSED by a disposition/.test(one.stderr || "")
+    && !/matched NO/.test(one.stderr || "") && (oneOut.resolutionsUnmatched || []).length === 0
+    && !/not valid JSON|cannot read/.test(one.stderr || ""),
+    () => ({ status: one.status, closed: oneOut?.resolutionsClosed, unmatched: oneOut?.resolutionsUnmatched,
+      err: (one.stderr || "").slice(0, 400) }));
+  check("ENG-96571 review 3 (finding 8) ANTI-VACUITY: with the SAME answers file and NO disposition recorded, the same run reports the answer as MATCHED and prints neither note — so the check above is about the disposition, not about the file",
+    (() => {
+      fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(null)));
+      const r = r8Cli();
+      const o = (() => { try { return JSON.parse(r.stdout); } catch { return null; } })();
+      return !!o && (o.resolutionsClosed || []).length === 0 && o.resolutionsMatched >= 1
+        && !/already CLOSED by a disposition/.test(r.stderr || "") && !/matched NO/.test(r.stderr || "");
+    })(),
+    () => "see --units --resolutions on R8 with no confirmDispositions");
+  // SIX closed answers → the truncation branch: five named, "and 1 more". Six is the smallest count that takes it.
+  const sixKeys = [["field-control", "(4 fields)"], ["field-labels", "(all fields)"], ["rule-condition", "Job"],
+    ["rule-condition", "Job2"], ["rule-condition", "Job3"], ["rule-condition", "Job4"]];
+  fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(disp(sixKeys.map(([k, i]) => `${k}:${i}`)))));
+  fs.writeFileSync(r8ResPath, JSON.stringify(answers(sixKeys)));
+  const six = r8Cli();
+  const sixOut = (() => { try { return JSON.parse(six.stdout); } catch { return null; } })();
+  check("ENG-96571 review 3 (finding 8): the note's `.slice(0, 5)` branch — six closed answers state the count, name five, and end `…and 1 more`, with all six carried in the artifact rather than truncated there too",
+    !!sixOut && sixOut.resolutionsClosed.length === 6
+    && /ℹ 6 --resolutions answer\(s\) target questions already CLOSED by a disposition/.test(six.stderr || "")
+    && /…and 1 more/.test(six.stderr || "")
+    && (six.stderr || "").split("already CLOSED by a disposition:")[1].split("…and 1 more")[0].split("|").map((x) => x.trim()).filter(Boolean).length === 5,
+    () => ({ closed: sixOut?.resolutionsClosed?.length, err: (six.stderr || "").slice(0, 600) }));
+} finally {
+  fs.rmSync(r8ManPath, { force: true });
+  fs.rmSync(r8ResPath, { force: true });
+}
+
 /* ---- Y1 — THE PLAN VERSION. The approval gate hard-stops unless the recorded approval names a plan version
    that matches the plan on disk, and `plan.md` is ENGINE-WRITTEN — so an engine that publishes no version made
    that gate unsatisfiable: every engine-written plan stopped the run before it built. The engine now emits a
