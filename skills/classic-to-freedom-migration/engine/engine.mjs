@@ -244,6 +244,35 @@ function resolveEnumMember(table, key, aliases = null) {
   }
   return { found: false, key: canonical, value: null };
 }
+// THE runtime property read — the ONE implementation of it, called by both the body-side terminal read
+// (`resolveEnumTerminal`, through `walkTagAutomaton`) and the drift guard's severity decision.
+//
+// ENG-96571 review 3 — it used to be two. `runtimeSpelling` was a second hand-written copy of these very two
+// `Object.hasOwn` lookups, and the only thing holding it to the real read was a comment saying it mirrored it
+// exactly; the alias-map CHOICE was duplicated as well (`tag === "t:dvt"` on one side, `enumName ===
+// "DataValueType"` on the other). Those lookups had already drifted apart once, and that drift is the whole
+// reason the guard mis-classified `STRING`. The remedy for a duplication defect cannot be another copy plus
+// prose, so the read is a primitive both sides call, and `aliasesFor` makes the `t:dvt` / `DataValueType`
+// mapping exist once. This is the pattern `resolveEnumMember` (one screen above) already sets for the
+// case-insensitive vocabulary lookup.
+//
+// `via` is WHICH lookup answered, and it is what decides drift severity: `"exact"` / `"alias"` mean the runtime
+// WOULD answer that spelling with a number (so a wrong number really is applied to every element a body declares
+// with it), `null` means it would not — a mere CASE variant reads `undefined` on a real stand, so no element of
+// the run can carry the wrong number. `Object.hasOwn` on both lookups, so a member naming `constructor` /
+// `toString` / `valueOf` cannot resolve to a native function.
+function runtimeRead(table, member, aliases = null) {
+  if (Object.hasOwn(table, member)) return { value: table[member], via: "exact" };
+  const alias = aliases && Object.hasOwn(aliases, member) ? aliases[member] : null;
+  if (alias !== null && Object.hasOwn(table, alias)) return { value: table[alias], via: "alias" };
+  return { value: null, via: null };
+}
+// The alias map for an enum, named EITHER by its automaton tag (`t:dvt`, the body-read side) or by its own name
+// (`DataValueType`, the drift-guard side). One function so the two sides cannot disagree about which enum has
+// aliases — they used to derive it independently, which is half of the duplication above.
+function aliasesFor(enumNameOrTag) {
+  return enumNameOrTag === "DataValueType" || enumNameOrTag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
+}
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
@@ -255,9 +284,13 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 // Severities are deliberately unequal:
 //  • MISMATCH on a member both sides carry UNDER THE SAME NAME ⇒ blocking. The engine's number is wrong for this
 //    stand, so every element of that kind is mis-read and there is no safe partial reading.
-//  • A disagreement on a member that resolved only by ALIAS or by CASE (`Guid` against pinned `GUID`) ⇒ advisory.
-//    The engine reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has
-//    no element it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
+//  • A disagreement on a member the engine resolves through an EXACT-CASE ALIAS (`STRING`, which the runtime read
+//    really does resolve to pinned `TEXT`) ⇒ blocking, exactly like a same-name mismatch. The body CAN name
+//    `STRING`, the engine DOES answer it, and if the stand's `STRING` is not the number the engine returns then
+//    every element declared with it is mis-read.
+//  • A disagreement on a member that resolved only by CASE (`Guid` against pinned `GUID`) ⇒ advisory. The engine
+//    reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has no element
+//    it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
 //    see the reasoning at the comparison itself.
 //  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
 //    stop every migration on the day a release adds a member.
@@ -274,22 +307,26 @@ function driftIssuesForEnum(enumName, standTable, pinned, aliases, out) {
     const resolved = resolveEnumMember(pinned, member, aliases);
     if (!resolved.found) { out.newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
     if (resolved.value === standValue) continue;               // same member, same number — nothing to report
-    // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
-    // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
-    // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
-    // member the body names. Two defects came from ignoring that:
-    //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
-    //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
-    //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
-    //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
-    //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
-    //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
-    // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
-    // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
-    if (resolved.key === member) out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    // ENG-96571 (review 2, finding 1) — BLOCK ON EVERY SPELLING THE RUNTIME READ ANSWERS. What decides the
+    // severity is not "is the spelling identical" but "would `resolveEnumTerminal` have returned a number for
+    // THIS spelling" — that is the read a page body performs, so that is the read whose number can be wrong.
+    // `runtimeRead` IS that read — the same primitive `resolveEnumTerminal` performs, not a copy of it (review 3).
+    // Review 1 (finding K) got the case arm right and
+    // the alias arm wrong by collapsing both into `resolved.key === member`:
+    //   • `Guid: 5` must NOT block: the engine reads `GUID`, never `Guid`, so no element of this run can be
+    //     mis-read by the disagreement. Blocking stopped every migration on a fact that cannot bite.
+    //   • `STRING: 2` MUST block: `STRING` is a real member of a real stand and `resolveEnumTerminal` answers it
+    //     with pinned `TEXT`'s 1. If this stand's `STRING` is 2, every attribute declared with it is read as the
+    //     wrong data type — same damage as a same-name mismatch, so the same severity.
+    // The blocking message names BOTH spellings for the alias arm, because the old text ("DataValueType.STRING:
+    // engine 1") asserted a pinned `STRING` whose value is 1: there is no pinned `STRING`, the 1 is `TEXT`'s, and
+    // an operator sent to `engine.mjs` to fix `STRING` found nothing to fix. Flat strings, no nested templates.
+    const { via } = runtimeRead(pinned, member, aliases);
+    if (via === "exact") out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    else if (via === "alias") out.mismatches.push(`${enumName}.${member} (alias of ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
     // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
-    // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
-    // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
+    // table" — and every clause of it is false for a case-variant row: the engine DOES pin the member (under
+    // the other case), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
     // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
     // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
     // which means the two categories cannot share one line.
@@ -303,7 +340,7 @@ export function enumDriftIssues(vocabulary) {
   for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
     const standTable = plainObj(live[enumName]);
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
-    const aliases = enumName === "DataValueType" ? DATA_VALUE_TYPE_ALIASES : null;
+    const aliases = aliasesFor(enumName);
     driftIssuesForEnum(enumName, standTable, pinned, aliases, { mismatches, newMembers, spellingDrift });
   }
   mismatches.sort(byLocale);
@@ -407,10 +444,12 @@ function spliceAliasChain(path, base, scope) {
 // The terminal enum read itself, extracted for CC (Sonar S3776) — the exact-case rule and its one alias exception
 // are documented at the call site in `walkTagAutomaton`; this is the read they describe, unchanged.
 function resolveEnumTerminal(tag, enumTable, k) {
-  const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
-  if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
-  const alias = aliases && Object.hasOwn(aliases, k) ? aliases[k] : null;
-  if (alias !== null && Object.hasOwn(enumTable, alias)) return { value: enumTable[alias] };
+  // ENG-96571 review 3 — the read itself is `runtimeRead`, the one primitive the drift guard's severity decision
+  // also calls, with the alias map from the one `aliasesFor`. The return SHAPE here is unchanged (`{ value }`, or
+  // `{ value: null, unknown }`): `via` is what the guard needs and this caller does not, and `walkTagAutomaton`'s
+  // result travels into the mapper, so widening it would put a field with no consumer on the body-read path.
+  const hit = runtimeRead(enumTable, k, aliasesFor(tag));
+  if (hit.via !== null) return { value: hit.value };
   return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
 }
 

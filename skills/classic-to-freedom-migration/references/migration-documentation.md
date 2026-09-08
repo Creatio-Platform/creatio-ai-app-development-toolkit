@@ -112,6 +112,17 @@ named in a `⚠` advisory line rather than silently ignored; its home is **`memb
 coverage gate's own issue text hands you. This is stated because it used to be a silent no-op that the run
 reported as a successful close.
 
+**A key that matches NO row is NAMED, not swallowed (`confirmDispositions.unmatched`).** A typo in the kind or the
+item (`rule-condtion:Job`, `rule-condition:Jobb`, or a `<schema>::` prefix naming a page this run has not got)
+closes nothing and cannot appear in `closed` / `invalid` / `notApplicable` — each of those needs a row to attach
+to. The run reports it as `confirmDispositions.unmatched` and prints a `⚠ … matched NO ⚠ Confirm row on this
+surface` line naming every such key, so the answer is not simply absent from a plan whose question still reads as
+open. **The scope rule, so you can read the line correctly:** it is judged ONCE, for the WHOLE run, after every
+child / typed / mini page has folded. A BARE `<kind>:<item>` key matches when ANY page of the run raised that row —
+which is how one recorded answer legitimately covers the whole surface. A `<schema>::<kind>:<item>` key matches only
+on the page it names. So the ABSENCE of this line does mean every recorded key found a row somewhere; if a key you
+expected to work is listed, check the spelling against the worklist rows and against `preflight[]` in `--units`.
+
 **`decisions.md` is still the source of record.** The disposition map is how the ENGINE learns the decision; the
 decision itself is a `decisions.md` entry with a date and who made it. And note what the plan's `Adjustments` list
 is NOT: it is DERIVED text at the end of a generated file, and every `--plan --out` overwrites `plan.md` wholesale.

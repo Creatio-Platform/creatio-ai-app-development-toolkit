@@ -1384,6 +1384,15 @@ function attributeDecisions(a, hasColumn) {
 // A kind with no arm now names itself rather than inventing two fields it does not carry.
 function triggerPhrase(t) {
   if (t.kind === "attribute-dependency") return `${t.attribute} changes (${(t.columns || []).join(", ")})`;
+  // ENG-96571 review 3 (finding 2) — the LIFECYCLE kind before the generic `from` arm, because for that kind alone
+  // `from` is NOT the answer: review 2 moved the platform hook into its own `hook` field and gave `from` to the
+  // IMMEDIATE caller (`composeUpstream`). `triggerText` in designspec.mjs was taught `hook ?? from`; this second
+  // renderer was not, so on `onSaved → mid → leaf` the `method` row's reason read "triggered by lifecycle mid" —
+  // `mid` is not a platform lifecycle method, so the sentence was false AND contradicted the same run's trigger
+  // cell. `hook ?? from` for the same reason it holds there: a one-hop chain carries no `hook`, and there the
+  // immediate caller IS the hook. This phrase is deliberately comparable with a REPORTED answer
+  // (`{ trigger: "lifecycle", from: "onSaved" }`), which names the hook — so it has to name the hook too.
+  if (t.kind === "lifecycle") return `lifecycle ${t.hook ?? t.from}`;
   // the DECLARATION-backed kinds carry the declaration path itself — that path IS the answer, and it is the same
   // string a behaviour-analysis run would have to report for the row, so the two are directly comparable
   if (t.from) return `${t.kind} ${t.from}`;
@@ -1536,19 +1545,31 @@ function buildCallerIndex(methods) {
 // `resolveInternalTrigger` keeps Sonar CC 15 headroom — the branch plus the chain construction sat two levels deep
 // inside its loop.
 //
-// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the hook is what
-// `from` carries on a `lifecycle` trigger. Overwriting `from` with the immediate caller (which is what the generic
-// composition below does, and what the old shape could afford because the hook sat in its own `lifecycle` field)
-// would make the cell name the wrong method — "cHelper (platform lifecycle)" for a hook called `onSaved`. So the
-// lifecycle answer is passed through unchanged; the immediate caller was never rendered for this shape anyway.
+// ENG-96571 B1 — a chain that ended on a PLATFORM LIFECYCLE method is answered by that hook, and the rendered cell
+// must keep naming the hook: "cHelper (platform lifecycle)" for a hook called `onSaved` is the wrong method. What
+// this used to conclude — that the lifecycle answer is therefore passed through unchanged, `from` carrying the hook
+// — is no longer true, and review 3 (Minor) is right that leaving it here left two accounts of one contract ten
+// lines apart, with the stale one first and carrying the reasoning that would justify reverting the change. The
+// surviving requirement (do not let the caller overwrite the hook in the cell) is met a different way now: see the
+// review-2 paragraph inside the function, where the hook gets its own `hook` field and the lifecycle kind is
+// composed like every other one.
 function composeUpstream(up, caller, all) {
-  if (up.kind === "lifecycle") return { ...up, ...all };
   // `from` is the IMMEDIATE caller and `via` the hops between it and the root — so `via` must never repeat `from`
   // (it rendered as "from onContractInserted via onContractInserted") nor end on the root, which the trigger
   // already names. Build the chain from this caller upward, drop duplicates, then peel off the head.
+  //
+  // ENG-96571 review 2 (finding 2) — the LIFECYCLE kind is composed the SAME way, and the platform hook rides in
+  // its own `hook` field instead of squatting on `from`. It used to pass straight through (`{...up, ...all}`), so
+  // on a chain longer than one hop the immediate caller was LOST: `onSaved → mid → leaf` gave `leaf` a trigger of
+  // `{kind:"lifecycle", from:"onSaved"}`, and since `from` is what `foldParentLinks` folds by, `leaf` folded under
+  // the platform hook (or, when the hook is filtered out of the worklist, under nothing) instead of under `mid` —
+  // its Freedom target read "port with `onSaved`" and `mid` disappeared from the chain entirely. `hook` keeps the
+  // answer the cell must name; the ROOT of the chain for de-duplication purposes is that hook.
+  const root = up.kind === "lifecycle" ? (up.hook ?? up.from) : up.root;
   const chain = [caller, ...(up.from && up.from !== caller ? [up.from] : []), ...(up.via || [])]
-    .filter((v, i, a) => v && a.indexOf(v) === i && v !== up.root);
-  return { ...up, from: caller, via: chain.slice(1), ...all };
+    .filter((v, i, a) => v && a.indexOf(v) === i && v !== root);
+  const hook = up.kind === "lifecycle" ? { hook: root } : {};
+  return { ...up, ...hook, from: caller, via: chain.slice(1), ...all };
 }
 
 // caller sets are sorted so the result never depends on iteration order.
