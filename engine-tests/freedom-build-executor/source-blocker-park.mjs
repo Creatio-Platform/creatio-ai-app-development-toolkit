@@ -11,6 +11,9 @@
 // so the run proceeds past the baseline instead of closing. The third pair does the same for ENG-96147's
 // own-route exemption, and it is the only leg that proves the RECORDED ROUTE is threaded from the Reconcile
 // answer through `mergeSectionRoute` into the classifier — the pure goldens in `gate.mjs` cannot see that wiring.
+// The Reconcile answers below are written FLAT, the way the run consumes them; the shared wrapper puts them on
+// the wire in the shape a real agent submits — the engine's state as one copied line, the stand facts beside it.
+import { asReconcileAnswer, isReconcileStateAnswer } from "../classic-to-freedom/_testkit.mjs";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -91,7 +94,7 @@ const BUILDER_BLOCKER = {
 // Close/persist writer). Anything else returns null, which drops that item and stops the drive loop, so a
 // run that unexpectedly tried to BUILD is caught (its Build item gets no answer and `dispatched` records it).
 const cannedFor = (item, reconcileAnswer) => {
-  if (item.id === "reconcile.baseline") return reconcileAnswer;
+  if (item.id === "reconcile.baseline") return asReconcileAnswer(reconcileAnswer);
   if (item.phase === "Close") return { written: true };
   return null; // Refs / Preflight / Build / Verify / Judge — not expected on the zero-work path
 };

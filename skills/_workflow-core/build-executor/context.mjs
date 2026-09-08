@@ -274,6 +274,11 @@ export function makeContext(input, selfPath) {
   const RESOLUTIONS_FILE = input.resolutionsFile || `${input.outDir}/resolutions.json`
   const CLI_UNITS = cli(`--units --resolutions ${q(RESOLUTIONS_FILE)} --slices ${q(SLICE_DIR)}`)
   const CLI_VERIFY = cli(`--verify --built ${q(BUILT_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
+  // ONE COMMAND FOR THE RUN STATE. It computes what the folder already holds — plan facts, queue rows, built rows,
+  // this run's verdict, key drift — writes `reconcile.json`, and prints the state as one line for the caller to copy.
+  // It carries `--verify` because the state carries the verdict, so this replaces the separate verify run.
+  const RECONCILE_FILE = `${input.outDir}/reconcile.json`
+  const CLI_RECONCILE = cli(`--verify --built ${q(BUILT_FILE)} --reconcile ${q(RECONCILE_FILE)} --queue ${q(QUEUE_FILE)} --resolutions ${q(RESOLUTIONS_FILE)} --out ${q(VERIFY_TABLE)} --verify-json ${q(VERIFY_JSON)} --verify-digest ${q(VERIFY_DIGEST)} --verify-summary ${q(VERIFY_SUMMARY)} --slices ${q(SLICE_DIR)}`)
   const cliChecklistPage = (key) => cli(`--checklist --page ${q(key)}`)
   // The fallbacks when a pre-cut slice is missing: the same row, cut on demand. Never the whole artifact.
   const cliUnitsPage = (key) => cli(`--units --page ${q(key)} --resolutions ${q(RESOLUTIONS_FILE)}`)
@@ -320,9 +325,9 @@ return {
   MODE_REQUESTED, DEFAULT_MODE, CHECKPOINT_AFTER, CHECKPOINT_SET,
   VERIFICATION_SURFACE, VERIFICATION_SURFACE_NOTE,
   FINDINGS, FINDING_KEYS,
-  QUEUE_FILE, BUILT_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
+  QUEUE_FILE, BUILT_FILE, RECONCILE_FILE, RUN_STATUS_FILE, VERIFY_TABLE, VERIFY_JSON, VERIFY_DIGEST, VERIFY_SUMMARY,
   REFS_DIR, REFS_INDEX, SLICE_DIR, RESOLUTIONS_FILE,
-  cli, CLI_UNITS, CLI_VERIFY, cliChecklistPage, cliUnitsPage, cliBuiltPage,
+  cli, CLI_UNITS, CLI_VERIFY, CLI_RECONCILE, cliChecklistPage, cliUnitsPage, cliBuiltPage,
   dataFence, DATA_OPEN, DATA_CLOSE, RULES, READ_ONLY_RULE, BEHAVIOUR_BLOCK,
 }
 }

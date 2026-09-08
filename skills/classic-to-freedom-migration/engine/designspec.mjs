@@ -5239,3 +5239,156 @@ export function encodedAsciiBytes(s) {
   }
   return n;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// THE RUN STATE, COMPUTED
+// ---------------------------------------------------------------------------------------------------------------
+
+export const isRecordObject = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+
+// The line a caller looks for to find the state on stdout, and the byte ceiling its own answer has for carrying it.
+// The workflow side holds its own copies of both — the two cannot share a module across that boundary — and
+// run-infra pins them equal.
+export const RECONCILE_STATE_MARKER = "--- RECONCILE STATE (one line follows; copy it verbatim) ---";
+export const RECONCILE_WIRE_CEILING = 16000;
+
+// A key list that came from object iteration is SORTED before it is published: the same folder must produce the
+// same bytes, and insertion order is a property of how a file was written rather than of what it holds. Lists the
+// engine orders itself (`buildOrder`, `unitKeys`, `reachability`) keep that order — it is meaning, not iteration.
+const sortedKeys = (o) => Object.keys(o || {}).sort();
+
+// One reachability key's recorded state, as one of three LITERAL STRINGS. `'unset'` is "not in the file" and is
+// distinct from `'false'` ("recorded absent"): a caller that reads them as booleans re-dispatches confirmed wiring.
+function reachabilityStateOf(built, key) {
+  const v = (built?.reachability || {})[key];
+  if (v === undefined) return "unset";
+  return v ? "true" : "false";
+}
+
+// THE RUN STATE the build executor schedules on: the plan's own published facts, the folder's two state files, and
+// the drift between them. Pure — every input is already parsed, so the golden runner calls it directly.
+// `units` is `pageUnits(result, opts)`, `verify` is `verifySummary(result, verifyRes)`, `queue` and `built` are the
+// parsed build-queue.json / built.json (`null` when the folder has neither).
+//
+// WHAT IS NOT HERE, and must not be added: the approval (free text in decisions.md, so no deterministic read) and
+// the four stand facts (package state, component and template resolution, the stand's SchemaNamePrefix). Those need
+// a live environment and stay the caller's to report.
+//
+// Field names are the executor's state contract. A rename here is a rename there.
+export function reconcileState(units, verify, queue, built) {
+  const pages = units.pages || [];
+  const main = pages.find((p) => p.key === "main") || null;
+  const q = queue || {};
+  const qUnits = isRecordObject(q.units) ? q.units : {};
+  const standWrites = isRecordObject(q.standWrites) ? q.standWrites : {};
+  const evidence = isRecordObject(built?.evidence) ? built.evidence : {};
+  const judge = isRecordObject(built?.judge) ? built.judge : {};
+  const builtPages = isRecordObject(built?.pages) ? built.pages : {};
+  const unitKeys = pages.map((p) => p.key);
+  const published = new Set(unitKeys);
+  const filed = sortedKeys(evidence).filter((id) => isRecordObject(evidence[id]));
+  const pageSchemas = {};
+  const roundOf = {};
+  const continuationOf = {};
+  for (const k of sortedKeys(qUnits)) {
+    const u = qUnits[k];
+    if (typeof u?.schemaName === "string" && u.schemaName) pageSchemas[k] = u.schemaName;
+    roundOf[k] = Number.isFinite(u?.rounds) ? u.rounds : 0;
+    continuationOf[k] = Number.isFinite(u?.continuations) ? u.continuations : 0;
+  }
+  const reachabilityState = {};
+  for (const r of units.reachability || []) {
+    if (r.appliesWhen) reachabilityState[r.key] = reachabilityStateOf(built, r.key);
+  }
+  return {
+    planVersion: units.planVersion ?? null,
+    planGaps: units.planGaps || [],
+    unitKeys,
+    buildOrder: units.buildOrder || [],
+    parents: units.parents || {},
+    reachability: units.reachability || [],
+    preflightItems: units.preflight || [],
+    evidenceIds: (units.evidenceRows || []).map((r) => r.id),
+    componentTypes: [...new Set(pages.flatMap((p) => p.componentTypes || []))].sort(),
+    templateNames: units.templateNames || [],
+    mainEntity: main?.entity ?? null,
+    targetPackage: main?.targetPackage ?? null,
+    sectionHost: units.sectionHost ?? null,
+    applicationCode: units.applicationCode ?? null,
+    resolutionsUnmatched: units.resolutionsUnmatched || [],
+    resolutionsConflicts: units.resolutionsConflicts || [],
+    runResolutions: units.runResolutions || [],
+    verify,
+    // Queue-file rows, verbatim. The counters are READ here and never moved: this state is computed before anything
+    // is attempted, and a counter charged for an unattempted unit parks a page nobody built.
+    roundOf,
+    continuationOf,
+    pageSchemas,
+    parkedUnits: sortedKeys(qUnits).filter((k) => qUnits[k]?.parked === true)
+      .map((k) => ({ key: k, parkedWhy: qUnits[k].parkedWhy ?? null, rounds: roundOf[k] })),
+    proposals: q.proposals || [],
+    blocked: q.blocked || [],
+    discrepancies: q.discrepancies || [],
+    unconsumedResolutions: q.unconsumedResolutions || [],
+    resolutionsReopened: q.resolutionsReopened || [],
+    resolutionsPending: q.resolutionsPending || [],
+    // The folder-level round record, VERBATIM, plus the four legacy ROOT keys a folder written before the fold
+    // still carries. Both are published because the reader takes `roundState` first and the root key only as a
+    // fallback: dropping either half grants a round the operator already spent.
+    roundState: isRecordObject(q.roundState) ? q.roundState : null,
+    layoutPassDone: q.layoutPassDone,
+    roundsSpent: q.roundsSpent,
+    consumedRoundAnswers: q.consumedRoundAnswers,
+    unsettledUnits: q.unsettledUnits,
+    pendingContradiction: q.pendingContradiction,
+    // Stand-write records, verbatim — including their timestamps. They say what an earlier run did; recomputing or
+    // re-stamping one turns another run's memory into this run's guess.
+    packageCreatedByRun: standWrites.packageCreated ?? null,
+    orphanedPagesOnFile: standWrites.orphanedPages || [],
+    sectionRouteByRun: standWrites.sectionRoute ?? null,
+    // Built-file rows.
+    reachabilityState,
+    pagesRecorded: sortedKeys(builtPages),
+    evidenceFiled: filed,
+    evidenceRejected: filed.filter((id) => judge[id]?.convincing === false),
+    unjudgedEvidenceIds: filed.filter((id) => !isRecordObject(judge[id])),
+    // Drift between the plan and the queue file. Reported, never resolved: a stale key gates nothing, a new key has
+    // no queue row yet, and both mean the plan was regenerated under a run that had already started.
+    staleQueueKeys: sortedKeys(qUnits).filter((k) => !published.has(k)),
+    newKeys: unitKeys.filter((k) => !(k in qUnits)),
+  };
+}
+
+// THE WIRE FORM. The file carries the whole state; the printed line carries only what the CALLER computes on, and
+// the two differ because the line crosses an answer with a byte ceiling while the file does not.
+//
+// A DENY LIST, never an allow list: every field travels unless a path below names it, so a field added to the
+// state reaches the caller by default and no new arithmetic can go dark by omission. `field[].key` drops `key`
+// from every element of an array; `field.key` drops it from an object.
+//
+// A PATH EARNS ITS PLACE ONLY BY HAVING NO READER ON THE CALLER'S SIDE, and that is a claim about the caller's
+// source, not about which prompt names the field. `preflightItems[].item` does NOT qualify: an answered Confirm
+// item's text is the QUESTION its answer answers, and the caller renders it into the builder's prompt (and into
+// the claim and unconsumed rows). Dropped, a builder reads `question: \`preflight.1\`` above an operator answer
+// and has lost what the answer is about. `requires` is the engine's own evidence rule, and `verify.planGaps`
+// duplicates the root field every caller-side reader already takes.
+export const RECONCILE_WIRE_OMIT = ["preflightItems[].requires", "verify.planGaps"];
+const withoutKey = (o, key) => {
+  if (!isRecordObject(o) || !(key in o)) return o;
+  const copy = { ...o };
+  delete copy[key];
+  return copy;
+};
+export function reconcileWireState(state, omit = RECONCILE_WIRE_OMIT) {
+  if (!isRecordObject(state)) return state;
+  const wire = { ...state };
+  for (const path of omit) {
+    const m = /^([A-Za-z]+)(\[\])?\.([A-Za-z]+)$/.exec(path);
+    if (!m) continue;
+    const [, field, isList, key] = m;
+    if (isList) {
+      if (Array.isArray(wire[field])) wire[field] = wire[field].map((row) => withoutKey(row, key));
+    } else wire[field] = withoutKey(wire[field], key);
+  }
+  return wire;
+}

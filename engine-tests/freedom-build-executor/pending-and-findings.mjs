@@ -12,6 +12,9 @@
 //       unit can tell the run's own debris from a page somebody else owns.
 //
 // The assertions read the run's OWN return, not an agent's prose — same rule as source-blocker-park.mjs.
+// The Reconcile answers below are written FLAT, the way the run consumes them; the shared wrapper puts them on
+// the wire in the shape a real agent submits — the engine's state as one copied line, the stand facts beside it.
+import { asReconcileAnswer, isReconcileStateAnswer } from "../classic-to-freedom/_testkit.mjs";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -129,7 +132,8 @@ function driveRun(tag, reconcileAnswer, extraAnswers = {}, cap = 12) {
       dispatched.push({ id: item.id, phase: item.phase, label: item.label, prompt: item.prompt || "" });
       let answer = null;
       if (item.phase === "Reconcile") {
-        answer = typeof reconcileAnswer === "function" ? reconcileAnswer(reconcileSeen, item) : reconcileAnswer;
+        const flat = typeof reconcileAnswer === "function" ? reconcileAnswer(reconcileSeen, item) : reconcileAnswer;
+        answer = isReconcileStateAnswer(item) ? asReconcileAnswer(flat) : flat;
         reconcileSeen += 1;
       }
       else if (item.phase === "Close") answer = { written: true };

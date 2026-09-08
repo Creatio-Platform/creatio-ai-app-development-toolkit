@@ -77,7 +77,7 @@ import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
 import { GATE_KIND, gateForComponentType, APPROVALS_SIGNAL, resolveFeatureRow } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
+  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, reconcileState, reconcileWireState, RECONCILE_STATE_MARKER, RECONCILE_WIRE_CEILING, isRecordObject, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS, renderPlanNotes,
   boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
 
@@ -3329,6 +3329,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifySummaryFile = valueFlagArg(argv, "--verify-summary", "--verify-summary verify-summary.json", fail);
   if (verifySummaryFile && !verifyMode)
     fail("`--verify-summary <file>` only applies to `--verify` — it writes THAT run's counts-only verdict. Add `--verify --built <file>`, or drop `--verify-summary`.");
+  // `--reconcile <file>` — the RUN STATE the build executor schedules on, computed here instead of transcribed by an
+  // agent: the plan's published facts, the two state files, and the drift between them, in ONE file plus one stdout
+  // line the caller copies verbatim. Everything in it is a pure function of the folder, so two runs over an unchanged
+  // folder produce the same bytes. What it CANNOT compute — the approval (free text) and the four stand facts — stays
+  // the caller's to report.
+  // `--verify --built <file>` is required: the state carries this run's verdict, and a state without one would send a
+  // caller to schedule on counts nobody produced. `--out <file>` is required too — the table would otherwise share
+  // stdout with the state line.
+  const reconcileFile = valueFlagArg(argv, "--reconcile", "--reconcile reconcile.json", fail);
+  if (reconcileFile && !verifyMode)
+    fail("`--reconcile <file>` needs the verdict it carries: add `--verify --built <file>`, or drop `--reconcile`.");
+  if (reconcileFile && !outFile)
+    fail("`--reconcile <file>` needs `--out <file>` for the verification table — stdout carries the state line, and one file cannot be both.");
+  // `--queue <file>` — the executor's build-queue.json, READ. Its rows (schema names, parks, proposals, blockers,
+  // round counters, stand-write records) are republished verbatim; nothing here writes or moves them.
+  const queueFile = valueFlagArg(argv, "--queue", "--queue build-queue.json", fail);
+  if (queueFile && !reconcileFile)
+    fail("`--queue <file>` only applies to `--reconcile` — no other mode reads the queue. Add `--reconcile <file>`, or drop `--queue`.");
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
@@ -3561,15 +3579,47 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const summary = verifySummary(result, verifyRes);
       try { fs.writeFileSync(verifySummaryFile, JSON.stringify(summary, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-summary '${verifySummaryFile}': ${e.message}`); }
-      // The summary is bounded PER PAGE but linear in page count, and the Reconcile agent transcribes it whole into
-      // an answer whose wire ceiling is 16000 bytes (the workflow's RECONCILE_ANSWER_MAX_BYTES; run-infra.mjs pins
-      // the two numbers equal). A plan large enough to approach that ceiling on counts alone cannot fit its verify
-      // verdict through the answer at all — SAY it here, at the producer, instead of letting the run discover it as
-      // a shape fault the retry cannot shrink. The unbounded-scale close (counts on disk, per-unit reads) is
-      // follow-up work, not this warning's job. Measured in ENCODED wire bytes, the form the ceiling is stated in:
-      // a raw `.length` undercounts localized page keys six-fold and would warn only after the ceiling is crossed.
-      const summaryBytes = encodedAsciiBytes(JSON.stringify(summary));
-      if (summaryBytes > 16000 * 0.75) process.stderr.write(`migrate.mjs: ⚠ the verify SUMMARY alone is ${summaryBytes} B against the Reconcile answer's 16000-byte wire ceiling (${Object.keys(summary.pages || {}).length} pages). A plan this size is at or past what the counts-only answer can carry; splitting the run (or the ENG-96071 answer-slimming) is needed before the ceiling, not after.\n`);
+    }
+    if (reconcileFile) {
+      // The queue file is OPTIONAL and its absence is a state, not a fault: no queue ⇒ the run is starting fresh and
+      // every queue-derived list is empty. A queue that exists and does not parse IS a fault — proceeding would
+      // publish that same empty state and silently re-open every park the file records.
+      let queue = null;
+      if (queueFile) {
+        // ABSENT AND UNPARSEABLE ARE DIFFERENT FAULTS, and one of them is not a fault. The caller always passes
+        // this flag, and the file's first writer is a later step of the same run, so a first run in a folder
+        // reaches here with nothing on disk: failing would leave that run with no state at all, which is the
+        // failure this command exists to remove. A file that EXISTS and does not parse still fails hard.
+        let raw = null;
+        try { raw = fs.readFileSync(queueFile, "utf8"); }
+        catch (e) { if (e?.code !== "ENOENT") fail(`cannot read --queue '${queueFile}': ${e.message}`); }
+        if (raw !== null) {
+          try { queue = JSON.parse(raw); }
+          catch (e) { fail(`cannot parse --queue '${queueFile}': ${e.message}`); }
+          if (!isRecordObject(queue)) fail(`--queue '${queueFile}' must be a JSON object keyed by the executor's queue keys (units, proposals, blocked, discrepancies, standWrites).`);
+        }
+      }
+      // `planCompleteness` so the state's `planGaps` carries all four plan-level legs, the same set `--units`
+      // publishes: the executor stops on that field before its first stand write.
+      const state = reconcileState(pageUnits(result, { ...verifyOpts(), planCompleteness: true }), verifySummary(result, verifyRes), queue, built);
+      try { fs.writeFileSync(reconcileFile, JSON.stringify(state, null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --reconcile '${reconcileFile}': ${e.message}`); }
+      // ONE LINE, after a fixed marker: a caller whose only route from a file into its own arithmetic is copying
+      // needs one token to find and one token to copy. Compact, so the copy carries no reformatting choices.
+      // The FILE above holds the whole state; the line holds the wire form, which drops the fields only the file's
+      // own readers use. The line grows with the plan and has a ceiling; the file has none.
+      const wire = JSON.stringify(reconcileWireState(state));
+      process.stdout.write(RECONCILE_STATE_MARKER + "\n" + wire + "\n");
+      // The state still crosses a caller's answer, and that answer has a wire ceiling. Said at the producer, where
+      // the size is known, rather than left for the caller to discover as a truncated payload it cannot shrink.
+      const wireBytes = encodedAsciiBytes(wire);
+      // Over the ceiling the caller stops on the line's size, so the number and the unit count are what the
+      // operator needs — a copy cannot be made smaller by re-asking for it.
+      const units = state.unitKeys.length;
+      if (wireBytes > RECONCILE_WIRE_CEILING) process.stderr.write(`migrate.mjs: ✖ the reconcile state is ${wireBytes} B, OVER the ${RECONCILE_WIRE_CEILING}-byte answer ceiling (${units} units). The caller refuses a line this size and cannot shrink it: build this plan in smaller slices. The full state is still in '${reconcileFile}'.
+`);
+      else if (wireBytes > RECONCILE_WIRE_CEILING * 0.75) process.stderr.write(`migrate.mjs: ⚠ the reconcile state is ${wireBytes} B against a ${RECONCILE_WIRE_CEILING}-byte answer ceiling (${units} units). A plan this size is at or past what one copied line can carry.
+`);
     }
     if (verifyDigestFile) {
       try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }
