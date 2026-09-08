@@ -16,6 +16,8 @@
 # tree. There is ONE exception, and it is exactly the case where the rule would be unsafe — see `fixtures` below.
 *.mjs text eol=lf
 *.js text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
 
 # Review (m-dymytrova) — the captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
 # Seven of them (contract/ContractInInvoice, ContractInOrder, CoreContracts, DocumentInContract, SalesContracts,

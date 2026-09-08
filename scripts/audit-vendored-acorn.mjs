@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const prov = path.join(root, "skills/classic-to-freedom-migration/engine/vendor/provenance.json");
+const prov = path.join(root, "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/vendor/provenance.json");
 if (!existsSync(prov)) {
   console.log("audit-vendored-acorn: no vendor/provenance.json present — nothing pinned yet; skip.");
   process.exit(0);

@@ -21,15 +21,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
+# Contract assertions read the union so a rule can live in whichever file owns it.
+_AGENTS_CONTRACT_FILES = (
+    ROOT / "AGENTS.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+)
+
+
+def agents_contract_text() -> str:
+    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+
+
 def read_text(path: Path) -> str:
+    if path.name == "AGENTS.md":
+        return agents_contract_text()
     return path.read_text(encoding="utf-8")
 
 
 class ReasoningLatencyProgressUxContractTests(unittest.TestCase):
     def setUp(self):
-        self.agents = read_text(ROOT / "AGENTS.md")
+        self.agents = agents_contract_text()
         self.agents_lower = self.agents.lower()
-        self.runbook01 = read_text(ROOT / "runbooks/01-environment-setup.md")
+        self.runbook01 = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md")
 
     def test_agents_defines_execution_ux_and_effort_budget_section(self):
         # The three mitigations live under one dedicated policy section.

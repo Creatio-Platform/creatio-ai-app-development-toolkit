@@ -5,10 +5,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
+# Contract assertions read the union so a rule can live in whichever file owns it.
+_AGENTS_CONTRACT_FILES = (
+    ROOT / "AGENTS.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+)
+
+
+def agents_contract_text() -> str:
+    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+
 # Bind the ENG-92985 doc-token assertions to the gate script's own constants so a
 # rename in clio_mcp_preflight.py cannot pass both this suite and the behavioral suite
 # while the docs silently describe a sentinel/exit code the script no longer emits.
-sys.path.insert(0, str(ROOT / "runtime" / "scripts"))
+sys.path.insert(0, str(ROOT / "plugins" / "creatio-app-builder" / "runtime" / "scripts"))
 import clio_mcp_preflight as pf  # noqa: E402  (path set above)
 
 
@@ -18,66 +32,66 @@ def existing(paths):
 AUTHORITY_DOCS = existing([
     ROOT / "AGENTS.md",
     ROOT / "README.md",
-    ROOT / "context/essentials.md",
-    ROOT / "context/INDEX.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
 ])
 
 WORKFLOW_ONLY_SCHEMA_DOCS = existing([
-    ROOT / "context/INDEX.md",
-    ROOT / "context/essentials.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
 ])
 
 ACTIVE_CONTRACT_SURFACE_DOCS = existing([
     ROOT / "README.md",
-    ROOT / "context/INDEX.md",
-    ROOT / "context/essentials.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
 ])
 
 DOC_PATHS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/02-requirements-gathering.md",
-    ROOT / "context/essentials.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
 ]
 
 CANONICAL_FLOW_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "README.md",
-    ROOT / "context/essentials.md",
-    ROOT / "context/INDEX.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
 ]
 
 FALLBACK_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "context/essentials.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
 ]
 
 CHECKLIST_SOURCE_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/02-requirements-gathering.md",
-    ROOT / "context/business-checklist.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
     ROOT / "README.md",
 ]
 
 PRE_ANALYSIS_DOCS = [
-    ROOT / "runbooks/02-requirements-gathering.md",
-    ROOT / "context/business-checklist.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
 ]
 
 FIRST_TURN_LATENCY_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
 ]
 
 DOMAIN_EXPERTISE_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/02-requirements-gathering.md",
-    ROOT / "context/business-checklist.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
 ]
 
 STDIO_ONLY_DOCS = existing([
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/01-environment-setup.md",
-    ROOT / "runbooks/02-requirements-gathering.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
     ROOT / "README.md",
     ROOT / "skills/README.md",
 ])
@@ -85,37 +99,37 @@ STDIO_ONLY_DOCS = existing([
 DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "README.md",
-    ROOT / "context/business-checklist.md",
-    ROOT / "context/essentials.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
 ]
 
 # ENG-91276: native MCP tool-calls are preferred over the mcp_client.py stdio wrapper.
 NATIVE_MCP_FIRST_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "context/INDEX.md",
-    ROOT / "context/essentials.md",
-    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
 ]
 
 # ENG-91276: native MCP and the wrapper must share one clio config / environment list.
 SINGLE_CLIO_CONTEXT_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
 ]
 
 # ENG-91276: a writable package context must be resolved before schema/page edits.
 WRITABLE_PACKAGE_CONTEXT_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/01-environment-setup.md",
-    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
 ]
 
 # ENG-91558: a prompt URL with no matching environment is auto-registered with
 # default Supervisor/Supervisor credentials, no confirmation turn; auth failure stops.
 AUTO_REGISTER_PROMPT_URL_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
 ]
 
 # ENG-91558: adding a section for a named entity creates the app without an extra
@@ -129,22 +143,24 @@ DEFAULT_APP_CREATION_DOCS = [
 # self-bootstrap the environment or silently degrade to the Python wrapper.
 CLIO_MCP_PREFLIGHT_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-    ROOT / "runbooks/01-environment-setup.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
 ]
 
 # ENG-92985: the mcp_client.py wrapper is an explicit opt-in escape hatch, not the
 # default degraded path. Every transport-aware doc must frame it that way.
 OPT_IN_ESCAPE_HATCH_DOCS = [
     ROOT / "AGENTS.md",
-    ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-    ROOT / "runbooks/01-environment-setup.md",
-    ROOT / "context/essentials.md",
-    ROOT / "context/INDEX.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+    ROOT / "plugins/creatio-core/context/INDEX.md",
 ]
 
 
-def read_text(path):
+def read_text(path: Path) -> str:
+    if path.name == "AGENTS.md":
+        return agents_contract_text()
     return path.read_text(encoding="utf-8")
 
 
@@ -161,7 +177,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         for path in AUTHORITY_DOCS:
             content = read_text(path)
             self.assertIn("get-tool-contract", content, str(path))
-        agents_doc = read_text(ROOT / "AGENTS.md")
+        agents_doc = agents_contract_text()
         self.assertRegex(agents_doc, r"only authoritative source|single source of truth")
         self.assertRegex(agents_doc, r"must not define an independent MCP API contract|must not define an independent MCP contract")
 
@@ -176,7 +192,7 @@ class DefaultContractDocsTests(unittest.TestCase):
                 ]) or "default requirement" in content.lower(),
                 str(path),
             )
-        requirements_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        requirements_doc = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md")
         self.assertTrue(
             contains_all(requirements_doc, [
                 "`schema default`",
@@ -239,10 +255,10 @@ class DefaultContractDocsTests(unittest.TestCase):
             )
 
     def test_docs_define_fixed_business_plan_rendering_contract(self):
-        agents_doc = read_text(ROOT / "AGENTS.md")
+        agents_doc = agents_contract_text()
         self.assertTrue(contains_all(agents_doc, ["exact", "BA-style Business Plan structure"]))
 
-        agent_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md")
+        agent_doc = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md")
         self.assertIn("Document Rendering Contract", agent_doc)
         self.assertIn("Hard Fail Conditions", agent_doc)
         self.assertTrue(contains_all(agent_doc, ["Use tables only", "## 3. Object Model"]))
@@ -257,15 +273,15 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertTrue(contains_all(agent_doc, ["`schema default`", "`ui default`", "visible BA draft"]))
         self.assertNotIn("## 6. Implementation-shaping decisions and assumptions", agent_doc)
 
-        checklist_doc = read_text(ROOT / "context/business-checklist.md").lower()
+        checklist_doc = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md").lower()
         self.assertIn("business logic quality bar", checklist_doc)
         self.assertIn("markdown tables outside the object model section", checklist_doc)
 
     def test_docs_keep_persistence_and_internal_mechanics_out_of_ba_dialogue(self):
-        agents_doc = read_text(ROOT / "AGENTS.md").lower()
+        agents_doc = agents_contract_text().lower()
         self.assertIn("do not expose internal commands", agents_doc)
 
-        agent02_doc = read_text(ROOT / "runbooks/02-requirements-gathering.md").lower()
+        agent02_doc = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md").lower()
         self.assertIn("do not expose internal commands", agent02_doc)
 
     def test_docs_define_stdio_only_mcp_contract(self):
@@ -306,7 +322,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("docs://mcp/guides/existing-app-maintenance", content, str(path))
 
     def test_repo_preserves_policy_surfaces(self):
-        agents_doc = read_text(ROOT / "AGENTS.md")
+        agents_doc = agents_contract_text()
         self.assertTrue("Business context" in agents_doc or "Business Outcome" in agents_doc)
         self.assertTrue(
             "Users, access and ownership" in agents_doc
@@ -340,8 +356,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         ]
         scoped_docs = [
             ROOT / "README.md",
-            ROOT / "context/INDEX.md",
-            ROOT / "context/essentials.md",
+            ROOT / "plugins/creatio-core/context/INDEX.md",
+            ROOT / "plugins/creatio-core/context/essentials.md",
         ]
         for path in scoped_docs:
             content = read_text(path)
@@ -358,12 +374,12 @@ class DefaultContractDocsTests(unittest.TestCase):
 
     def test_docs_route_page_edits_to_web_vs_mobile(self):
         # Routing surfaces force reading essentials before a page edit (pointer, not nuance).
-        for path in [ROOT / "AGENTS.md", ROOT / "skills/creatio-app-orchestrator/SKILL.md"]:
+        for path in [ROOT / "AGENTS.md", ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md"]:
             content = read_text(path)
             self.assertIn("essentials", content, str(path))
             self.assertRegex(content, r"(?i)web.{0,20}mobile|mobile.{0,20}web", str(path))
         # The page-schema nuance lives in essentials, not in the routers.
-        essentials = read_text(ROOT / "context/essentials.md")
+        essentials = read_text(ROOT / "plugins/creatio-core/context/essentials.md")
         self.assertIn("_MobileFormPage", essentials)
         self.assertRegex(essentials, r"(?i)web vs mobile")
         self.assertRegex(essentials, r"(?i)default to web")
@@ -449,8 +465,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         # ENG-91558 (review RC-23): the host-pattern trust boundary is stated in
         # both AGENTS.md and the runbook; assert the pattern set is identical in
         # both so a future edit to one copy cannot silently drift from the other.
-        agents = read_text(ROOT / "AGENTS.md").lower()
-        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        agents = agents_contract_text().lower()
+        runbook = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md").lower()
         host_pattern_tokens = [
             "*.creatio.com", "*.tscrm.com", "ts1-", "localhost", "127.0.0.1",
             "no dots", "zero-confirmation", ":port", "authority",
@@ -463,8 +479,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
         # sanitized to a safe slug before reaching reg-web-app, and the canonical
         # AGENTS.md contract must state it (not only the runbook).
-        agents = read_text(ROOT / "AGENTS.md").lower()
-        runbook = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        agents = agents_contract_text().lower()
+        runbook = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md").lower()
         for content in (agents, runbook):
             self.assertIn("slug", content)
             self.assertIn("metacharacter", content)
@@ -472,7 +488,7 @@ class DefaultContractDocsTests(unittest.TestCase):
     def test_docs_remind_default_password_rotation_after_auto_register(self):
         # ENG-91558 (review RC-8): the runbook must remind the developer to rotate
         # the default Supervisor password after auto-registering a non-local env.
-        content = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
+        content = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md").lower()
         self.assertIn("change the default", content)
         self.assertIn("supervisor", content)
         self.assertIn("password", content)
@@ -533,14 +549,14 @@ class DefaultContractDocsTests(unittest.TestCase):
         # ENG-92985 (M1): the "default 20s" probe bound stated in the docs is bound to
         # the script constant, so changing DEFAULT_PROBE_TIMEOUT flags the stale docs.
         timeout_token = f"{pf.DEFAULT_PROBE_TIMEOUT}s"
-        for path in [ROOT / "AGENTS.md", ROOT / "runbooks/01-environment-setup.md"]:
+        for path in [ROOT / "AGENTS.md", ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md"]:
             self.assertIn(timeout_token, read_text(path), str(path))
 
     def test_docs_define_precise_wrapper_opt_in_signal(self):
         # ENG-92985 (elevation, challenge C2): a generic approval is not opt-in; the
         # escape hatch is unlocked only by an explicit developer instruction, and the
         # contract-level doc (AGENTS.md) must say so.
-        content = read_text(ROOT / "AGENTS.md").lower()
+        content = agents_contract_text().lower()
         self.assertIn("opt-in signal", content)
         # markup-tolerant: matches "not opt-in" or "not** opt-in" (bold emphasis)
         self.assertRegex(content, r"not\*{0,2}\s*opt-in")
@@ -571,7 +587,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             )
         # Finding 3: prefer-native is an ORDERING guarantee, not just token presence —
         # within AGENTS.md State B, the native recommendation must precede the wrapper.
-        agents = read_text(ROOT / "AGENTS.md")
+        agents = agents_contract_text()
         sb_start = agents.index("**State B")
         sb = agents[sb_start:agents.index("**State C", sb_start)]
         self.assertLess(
@@ -586,7 +602,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         # edits, installer commands) inside the preflight section — those belong in the
         # install docs. Scope the check to the preflight section so the unrelated
         # installer mention elsewhere in AGENTS.md does not trip it.
-        agents = read_text(ROOT / "AGENTS.md")
+        agents = agents_contract_text()
         start = agents.index("clio MCP availability preflight")
         end = agents.index("clio MCP transport preference", start)
         section = agents[start:end].lower()
@@ -600,7 +616,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         # ENG-92985 (State B refinement): the wrapper fallback must be framed in plain
         # language — slower, no progress, not recommended — never buried behind jargon
         # like "may appear to hang".
-        agents = read_text(ROOT / "AGENTS.md").lower()
+        agents = agents_contract_text().lower()
         self.assertIn("slower", agents)
         self.assertIn("no progress", agents)
         self.assertIn("frozen", agents)
@@ -609,8 +625,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         )
         # Finding 4: the compact mirrors must carry the same plain-language framing so a
         # mirror cannot silently drop it (repo's identical-rules-across-docs ethos).
-        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-                     ROOT / "runbooks/01-environment-setup.md"):
+        for path in (ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md"):
             mirror = read_text(path).lower()
             self.assertIn("slower", mirror, str(path))
             self.assertIn("no progress", mirror, str(path))
@@ -624,7 +640,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         # config snippet the developer applies), and be honest that enabling native MCP
         # usually needs a session reload (fresh context), so "retry" is a new session,
         # not this one — recommend native at task start, name the mid-task trade-off.
-        agents = read_text(ROOT / "AGENTS.md").lower()
+        agents = agents_contract_text().lower()
         # #2 — actionable how-to (not just "what")
         self.assertIn("config snippet", agents)
         self.assertIn("docs/install.md", agents)
@@ -632,7 +648,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("session reload", agents)
         self.assertIn("mid-task", agents)
         # Finding 2 (section-scoped) — the two safety invariants of this increment:
-        raw = read_text(ROOT / "AGENTS.md")
+        raw = agents_contract_text()
         sb_start = raw.index("**State B")
         sb = raw[sb_start:raw.index("**State C", sb_start)].lower()
         # (a) snippet apply-boundary: showing is fine, APPLYING it is self-bootstrap —
@@ -651,15 +667,15 @@ class DefaultContractDocsTests(unittest.TestCase):
         # proceed in State B, the connect-native option must be listed FIRST and marked
         # recommended, and the wrapper must never be the first/default choice — leading
         # with the wrapper (even if native is offered second) violates prefer-native.
-        agents = read_text(ROOT / "AGENTS.md").lower()
+        agents = agents_contract_text().lower()
         self.assertIn("first choice and is labelled the recommended", agents)
         self.assertIn("never list the wrapper as the first", agents)
         # Finding 2 (self-review): selecting the labelled wrapper option IS the explicit
         # opt-in; a generic yes outside such a choice is not — closes the offer-vs-opt-in
         # circularity the presented choice introduces.
         self.assertIn("counts as the developer's explicit opt-in", agents)
-        for path in (ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-                     ROOT / "runbooks/01-environment-setup.md"):
+        for path in (ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+                     ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md"):
             mirror = read_text(path).lower()
             # Finding 1 (self-review): assert the SPECIFIC composite anchor (encodes
             # native-listed-first) — not bare "first"/"recommended", which are satisfied
@@ -674,7 +690,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         # home-page-to-workplace binding and regress to the shared FreedomDashboards.
         # We anchor the FLOW (not exact clio tool call names, which are resolved at
         # runtime via get-tool-contract), plus the "do not use FreedomDashboards" guard.
-        impl = read_text(ROOT / "runbooks/03-app-implementation.md")
+        impl = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md")
         self.assertTrue(contains_all(impl, [
             "BaseHomePage",
             "SysWorkplace.HomePageUId",
@@ -716,8 +732,8 @@ class DefaultContractDocsTests(unittest.TestCase):
         n = len(wv.REQUIRED_REQUIREMENTS_SECTIONS)
         count_docs = [
             ROOT / "AGENTS.md",
-            ROOT / "context/business-checklist.md",
-            ROOT / "runbooks/02-requirements-gathering.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
         ]
         for path in count_docs:
             doc = read_text(path)
@@ -738,15 +754,15 @@ class DefaultContractDocsTests(unittest.TestCase):
         # as the section-count test above).
         literal = "access rights: All Employees"
         docs = [
-            ROOT / "runbooks/02-requirements-gathering.md",
-            ROOT / "runbooks/03-app-implementation.md",
-            ROOT / "context/business-checklist.md",
-            ROOT / "skills/creatio-app-orchestrator/SKILL.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
         ]
         for path in docs:
             self.assertIn(literal, read_text(path), f"{path} must state '{literal}'")
         # the validator pins the same literal value in DASHBOARD_ACCESS_RIGHTS_RE
-        validator = read_text(ROOT / "runtime/scripts/workflow_validators.py")
+        validator = read_text(ROOT / "plugins/creatio-app-builder/runtime/scripts/workflow_validators.py")
         self.assertRegex(validator, r"DASHBOARD_ACCESS_RIGHTS_RE\s*=.*All Employees")
 
 

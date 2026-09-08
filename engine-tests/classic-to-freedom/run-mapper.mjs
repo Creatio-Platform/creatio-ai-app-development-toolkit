@@ -4,19 +4,19 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
-  VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+  VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/engine.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
-  LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
+  LIST_DECISION_KINDS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
-  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, dedupeStubScopes } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
+const ENGINE_DIR = path.join(DIR, "..", "..", "plugins", "creatio-migration", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
 const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
@@ -3150,7 +3150,7 @@ check("ENG-95021: a reuse child publishes BOTH the RelatedPage-binding row and t
 // would force exit 2 with no sanctioned answer.
 check("ENG-95021: the reconcile rows carry NO vk — visible obligation, not an unclosable gate",
   reconcileRows.every((r) => !r.vk), () => reconcileRows.map((r) => r.vk));
-const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
+const DESIGNSPEC_SRC = fs.readFileSync(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url), "utf8");
 
 // --- ENG-95861: THE SECTION BOUNDARY — the fourth child resolution ----------------------------------------------
 // Migrating "this section" means this section's own pages. A related list whose child entity owns ANOTHER SECTION is

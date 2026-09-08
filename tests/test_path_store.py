@@ -1,4 +1,4 @@
-"""Contract tests for `runtime/path_store.py`.
+"""Contract tests for `plugins/creatio-app-builder/runtime/path_store.py`.
 
 The point of the module is not "rejects bad input" -- it is that a returned
 path is assembled from the trusted base plus names the file system reported,
@@ -16,8 +16,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "plugins" / "creatio-app-builder") not in sys.path:
+    sys.path.insert(0, str(ROOT / "plugins" / "creatio-app-builder"))
 
 from runtime.path_store import (  # noqa: E402
     PathNotInStore,

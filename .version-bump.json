@@ -1,12 +1,125 @@
 {
   "files": [
-    { "path": ".claude-plugin/plugin.json", "field": "version" },
-    { "path": ".codex-plugin/plugin.json", "field": "version" },
-    { "path": ".cursor-plugin/plugin.json", "field": "version" },
-    { "path": ".github/plugin/plugin.json", "field": "version" },
-    { "path": ".agents/plugins/marketplace.json", "field": "plugins.0.version" },
-    { "path": ".claude-plugin/marketplace.json", "field": "plugins.0.version" },
-    { "path": ".github/plugin/marketplace.json", "field": "plugins.0.version" }
+    {
+      "path": ".claude-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-core/.claude-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-core/.codex-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-core/.cursor-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-core/.github/plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-app-builder/.claude-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-app-builder/.codex-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-app-builder/.cursor-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-app-builder/.github/plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-ui/.claude-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-ui/.codex-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-ui/.cursor-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-ui/.github/plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-migration/.claude-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-migration/.codex-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-migration/.cursor-plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": "plugins/creatio-migration/.github/plugin/plugin.json",
+      "field": "version"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "field": "plugins.0.version"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "field": "plugins.1.version"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "field": "plugins.2.version"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "field": "plugins.3.version"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "field": "plugins.4.version"
+    },
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "field": "plugins.0.version"
+    },
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "field": "plugins.1.version"
+    },
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "field": "plugins.2.version"
+    },
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "field": "plugins.3.version"
+    },
+    {
+      "path": ".github/plugin/marketplace.json",
+      "field": "plugins.0.version"
+    },
+    {
+      "path": ".github/plugin/marketplace.json",
+      "field": "plugins.1.version"
+    },
+    {
+      "path": ".github/plugin/marketplace.json",
+      "field": "plugins.2.version"
+    },
+    {
+      "path": ".github/plugin/marketplace.json",
+      "field": "plugins.3.version"
+    }
   ],
   "audit": {
     "exclude": [
@@ -14,7 +127,7 @@
       "CHANGELOG.md",
       "tests/**",
       "docs/**",
-      "runbooks/**",
+      "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/**",
       ".github/**"
     ]
   }

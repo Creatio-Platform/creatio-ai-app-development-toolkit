@@ -8,6 +8,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
+# Contract assertions read the union so a rule can live in whichever file owns it.
+_AGENTS_CONTRACT_FILES = (
+    ROOT / "AGENTS.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+)
+
+
+def agents_contract_text() -> str:
+    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+
 # GitHub Copilot's skill loader drops any skill whose `description` exceeds this
 # limit; Claude Code / Codex do not enforce it. ENG-92957: the
 # creatio-ui-guidelines description silently grew past the cap and Copilot
@@ -62,7 +76,7 @@ def _git_tracked_skill_md():
     """
     try:
         out = subprocess.run(
-            ["git", "-C", str(ROOT), "ls-files", "skills"],
+            ["git", "-C", str(ROOT), "ls-files", "plugins"],
             capture_output=True, text=True, check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
@@ -77,11 +91,20 @@ def skill_dirs():
     Falls back to all on-disk skills when git is unavailable (e.g. a released
     tarball), which contains no untracked WIP dirs anyway.
     """
-    dirs = sorted(p.parent for p in (ROOT / "skills").glob("*/SKILL.md"))
+    dirs = sorted(p.parent for p in (ROOT / "plugins").glob("*/skills/*/SKILL.md"))
     tracked = _git_tracked_skill_md()
     if tracked is None:
         return dirs
-    return [d for d in dirs if f"skills/{d.name}/SKILL.md" in tracked]
+    return [d for d in dirs if f"{d.relative_to(ROOT).as_posix()}/SKILL.md" in tracked]
+
+
+PLUGINS = ("creatio-core", "creatio-app-builder", "creatio-ui", "creatio-migration")
+
+
+def skill_path(name):
+    """The shipped SKILL.md of a skill, whichever plugin ships it."""
+    matches = list((ROOT / "plugins").glob(f"*/skills/{name}/SKILL.md"))
+    return matches[0] if matches else ROOT / "plugins" / "missing" / "skills" / name / "SKILL.md"
 
 
 def parse_fenced_flat_mapping(text):
@@ -130,38 +153,73 @@ def looks_like_path(token):
     return bool(name) and bool(dot) and ext.isalnum() and not ext.isdigit()
 
 
+# References that ENG-96689 left pointing across plugin roots on purpose. ENG-96690 turns each into a
+# skill name or a clio `get-guidance` article and deletes the entry here; a NEW unresolved path is a bug.
+CROSS_PLUGIN_REFS_ENG_96690 = {
+    "skill": {
+        "../../.mcp.json", "../../README.md", "../../docs/install.md",
+        "../../context/INDEX.md", "../../context/clio-cli-reference.md", "../../context/essentials.md",
+        "../../context/model-discovery-evidence.md", "../../context/naming-conventions.md",
+        "../../context/product-telemetry.md",
+    },
+    "rule": {
+        "../.mcp.json",
+        "../context/INDEX.md", "../context/clio-cli-reference.md", "../context/essentials.md",
+        "../context/model-discovery-evidence.md", "../context/naming-conventions.md",
+        "../context/product-telemetry.md",
+    },
+}
+
+
 class ReleaseStructureTests(unittest.TestCase):
-    def test_root_plugin_manifests_exist_and_share_identity(self):
-        manifests = [
-            read_json(".claude-plugin/plugin.json"),
-            read_json(".codex-plugin/plugin.json"),
-            read_json(".cursor-plugin/plugin.json"),
-            read_json(".github/plugin/plugin.json"),
-        ]
+    def test_root_manifest_is_a_meta_plugin_over_the_family(self):
+        # ENG-96689: the root Claude manifest installs the whole family through `dependencies`;
+        # it ships no components of its own (a plugin rooted at `./` would otherwise auto-discover
+        # a root `skills/` dir, the duplication the split removes). Codex/Copilot/Cursor have no
+        # meta-plugin concept, so the root carries no manifest for them.
+        meta = read_json(".claude-plugin/plugin.json")
+        self.assertEqual(meta["name"], "creatio-ai-app-development-toolkit")
+        self.assertRegex(meta["version"], r"^\d+\.\d+\.\d+$")
+        self.assertIn("Creatio", meta["description"])
+        self.assertEqual(tuple(meta["dependencies"]), PLUGINS)
+        for key in ("hooks", "skills", "mcpServers"):
+            self.assertNotIn(key, meta)
+        for stale in (".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"):
+            self.assertFalse((ROOT / stale).exists(), f"{stale} must not exist at the root any more")
 
-        for manifest in manifests:
-            self.assertEqual(manifest["name"], "creatio-ai-app-development-toolkit")
-            self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
-            self.assertIn("Creatio", manifest["description"])
-
-        self.assertEqual(read_json(".codex-plugin/plugin.json")["skills"], "./skills/")
-
-        cursor = read_json(".cursor-plugin/plugin.json")
-        self.assertEqual(cursor["displayName"], "Creatio AI App Development Toolkit")
-        self.assertEqual(cursor["skills"], "./skills/")
-        self.assertEqual(cursor["rules"], "./rules/")
-        self.assertEqual(cursor["mcpServers"], "./.mcp.json")
+    def test_every_plugin_ships_four_manifests_that_share_identity(self):
+        for plugin in PLUGINS:
+            with self.subTest(plugin=plugin):
+                manifests = {
+                    host: read_json(f"plugins/{plugin}/{host}/plugin.json")
+                    for host in (".claude-plugin", ".codex-plugin", ".cursor-plugin", ".github/plugin")
+                }
+                for manifest in manifests.values():
+                    self.assertEqual(manifest["name"], plugin)
+                    self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
+                    self.assertIn("Creatio", manifest["description"])
+                # One flat skills dir per plugin: Codex reads exactly one directory.
+                self.assertEqual(manifests[".codex-plugin"]["skills"], "./skills/")
+                self.assertEqual(manifests[".cursor-plugin"]["skills"], "./skills/")
+                self.assertEqual(manifests[".github/plugin"]["skills"], "./skills/")
+                self.assertTrue((ROOT / "plugins" / plugin / "skills").is_dir())
+                if plugin != "creatio-core":
+                    self.assertEqual(manifests[".claude-plugin"]["dependencies"], ["creatio-core"])
+        core_cursor = read_json("plugins/creatio-core/.cursor-plugin/plugin.json")
+        self.assertEqual(core_cursor["mcpServers"], "./.mcp.json")
+        self.assertIn("hooks", read_json("plugins/creatio-core/.claude-plugin/plugin.json"))
+        app_cursor = read_json("plugins/creatio-app-builder/.cursor-plugin/plugin.json")
+        self.assertEqual(app_cursor["rules"], "./rules/")
 
     def test_public_trigger_text_uses_general_creatio_app_wording(self):
         public_text_paths = [
             ".claude-plugin/plugin.json",
-            ".codex-plugin/plugin.json",
-            ".cursor-plugin/plugin.json",
-            ".github/plugin/plugin.json",
+            *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/*/plugin.json")),
+            *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/.github/plugin/plugin.json")),
             ".claude-plugin/marketplace.json",
             ".github/plugin/marketplace.json",
-            "skills/creatio-app-orchestrator/SKILL.md",
-            "rules/creatio-app-orchestrator.mdc",
+            "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+            "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc",
         ]
 
         for relative_path in public_text_paths:
@@ -171,41 +229,35 @@ class ReleaseStructureTests(unittest.TestCase):
             self.assertNotIn("composable application", content, relative_path)
 
     def test_mcp_config_runs_global_clio_mcp_server(self):
-        config = read_json(".mcp.json")
+        config = read_json("plugins/creatio-core/.mcp.json")
         clio = config["mcpServers"]["clio"]
         self.assertEqual(clio["command"], "clio")
         self.assertEqual(clio["args"], ["mcp-server"])
 
     def test_cursor_plugin_rule_is_valid(self):
         self.assertFalse((ROOT / ".cursor").exists())
-        rule_path = ROOT / "rules/creatio-app-orchestrator.mdc"
+        rule_path = ROOT / "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc"
         rule = rule_path.read_text(encoding="utf-8")
         self.assertTrue(rule.startswith("---\n"))
         self.assertIn("description:", rule)
         self.assertIn("alwaysApply: false", rule)
         self.assertIn("Creatio App Orchestrator", rule)
-        self.assertIn("runbooks/02-requirements-gathering.md", rule)
-        # The rule sits one level below the toolkit root, so every referenced
+        self.assertIn("references/02-requirements-gathering.md", rule)
+        # The rule sits one level below its plugin root, so every referenced
         # path must be anchored with `../` and resolve to a real file when
         # joined to the rule's own directory (how a host resolves it at
         # runtime), not when joined to the repo root.
-        self._assert_anchored_paths_resolve(rule_path, "../")
+        self._assert_anchored_paths_resolve(rule_path, "../", known_cross_plugin=CROSS_PLUGIN_REFS_ENG_96690["rule"])
 
-    def test_marketplace_catalogs_point_to_plugin(self):
+    def test_marketplace_catalogs_list_every_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
         codex = read_json(".agents/plugins/marketplace.json")
         copilot = read_json(".github/plugin/marketplace.json")
         canonical_version = read_json(".claude-plugin/plugin.json")["version"]
-        cursor_version = read_json(".cursor-plugin/plugin.json")["version"]
-        self.assertEqual(cursor_version, canonical_version)
 
+        # Claude: the meta-plugin first (pinned to the moving `release` branch as before), then
+        # every plugin of the family from its subdirectory.
         self.assertEqual(claude["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(claude["plugins"][0]["version"], canonical_version)
-        # Claude and Copilot marketplaces pin the plugin payload to the moving
-        # `release` branch so installs always fetch the latest published release
-        # rather than whatever sits on main. The release workflow force-updates
-        # `release` to the released SHA after `gh release create`. See
-        # docs/install.md → "Release-pinned plugin source".
         self.assertEqual(
             claude["plugins"][0]["source"],
             {
@@ -214,36 +266,25 @@ class ReleaseStructureTests(unittest.TestCase):
                 "ref": "release",
             },
         )
+        self.assertEqual(tuple(p["name"] for p in claude["plugins"][1:]), PLUGINS)
+        for entry in claude["plugins"][1:]:
+            self.assertEqual(entry["source"], f"./plugins/{entry['name']}")
+        # Codex: `local` sources (the only subdirectory form Codex documents for an in-repo catalog).
+        self.assertEqual(tuple(p["name"] for p in codex["plugins"]), PLUGINS)
+        for entry in codex["plugins"]:
+            self.assertEqual(entry["source"], {"source": "local", "path": f"./plugins/{entry['name']}"})
+        # Copilot: relative paths. ENG-96691 switches these to `github` + `ref: release` + `path`
+        # objects so a Copilot install never reads unreleased `main` content.
+        self.assertEqual(tuple(p["name"] for p in copilot["plugins"]), PLUGINS)
+        for entry in copilot["plugins"]:
+            self.assertEqual(entry["source"], f"./plugins/{entry['name']}")
+        for catalog in (claude, codex, copilot):
+            for entry in catalog["plugins"]:
+                self.assertEqual(entry["version"], canonical_version, entry["name"])
+        for plugin in PLUGINS:
+            self.assertEqual(read_json(f"plugins/{plugin}/.cursor-plugin/plugin.json")["version"], canonical_version)
 
-        plugin = codex["plugins"][0]
-        self.assertEqual(plugin["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(plugin["version"], canonical_version)
-        # Codex marketplace pins the plugin payload to the moving `release`
-        # branch via `source.url + ref`, matching Claude/Copilot exactly. The
-        # plugin payload is fetched separately at the `release` SHA into
-        # Codex CLI's plugin cache; the marketplace clone itself tracks `main`
-        # (where this marketplace.json lives).
-        self.assertEqual(
-            plugin["source"],
-            {
-                "source": "url",
-                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
-                "ref": "release",
-            },
-        )
-
-        self.assertEqual(copilot["plugins"][0]["name"], "creatio-ai-app-development-toolkit")
-        self.assertEqual(copilot["plugins"][0]["version"], canonical_version)
-        self.assertEqual(
-            copilot["plugins"][0]["source"],
-            {
-                "source": "url",
-                "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
-                "ref": "release",
-            },
-        )
-
-    def _assert_anchored_paths_resolve(self, entry_path, anchor_prefix):
+    def _assert_anchored_paths_resolve(self, entry_path, anchor_prefix, known_cross_plugin=()):
         """Every backticked path reference in an entry file must be anchored
         with ``anchor_prefix`` and resolve to a real file when joined to the
         entry file's own directory.
@@ -258,7 +299,7 @@ class ReleaseStructureTests(unittest.TestCase):
         content = entry_path.read_text(encoding="utf-8")
         references = re.findall(r"`([^`]+)`", content)
         # Decide which backtick tokens are *read-paths* that must be anchored:
-        #   - any token with a directory component (e.g. context/INDEX.md),
+        #   - any token with a directory component (e.g. plugins/creatio-core/context/INDEX.md),
         #     excluding bare directory mentions like `skills/` / `rules/`;
         #   - the toolkit-root files that are read by bare name (AGENTS.md,
         #     .mcp.json) — a bare `AGENTS.md` is the defect this guards against.
@@ -283,25 +324,32 @@ class ReleaseStructureTests(unittest.TestCase):
             # A BARE path (e.g. `AGENTS.md`) resolves against the skill's own
             # directory at runtime, where the file does not exist. Reject it
             # here even though it would "resolve" against the repo root.
+            # `./…` is the skill's own directory (its `references/`), also a runtime-safe anchor.
             self.assertTrue(
-                ref.startswith(anchor_prefix),
-                f"{entry_path.name}: `{ref}` is not anchored with `{anchor_prefix}` "
+                ref.startswith(anchor_prefix) or ref.startswith("./"),
+                f"{entry_path.name}: `{ref}` is not anchored with `{anchor_prefix}` or `./` "
                 f"(bare paths resolve to the wrong directory at runtime)",
             )
             resolved = (entry_path.parent / ref).resolve()
+            if ref in known_cross_plugin:
+                # ENG-96689 moved the file into another plugin; ENG-96690 replaces the path with a
+                # skill name / get-guidance. Until then the reference is a known, listed break —
+                # a NEW unresolved reference is still a failure.
+                self.assertFalse(resolved.exists(), f"{entry_path.name}: `{ref}` resolves again — drop it from CROSS_PLUGIN_REFS_ENG_96690")
+                continue
             self.assertTrue(resolved.exists(), f"{entry_path.name}: `{ref}` -> {resolved}")
 
     def test_main_skill_frontmatter_and_references_are_valid(self):
-        skill = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
+        skill = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md"
         content = skill.read_text(encoding="utf-8")
 
         self.assertTrue(content.startswith("---\n"))
         self.assertIn("name: creatio-app-orchestrator", content)
         self.assertIn("description:", content)
 
-        # The skill sits two levels below the toolkit root, so paths anchor
+        # The skill sits two levels below its plugin root, so paths anchor
         # with `../../` and must resolve from the skill's own directory.
-        self._assert_anchored_paths_resolve(skill, "../../")
+        self._assert_anchored_paths_resolve(skill, "../../", known_cross_plugin=CROSS_PLUGIN_REFS_ENG_96690["skill"])
 
     def test_orchestrator_entry_files_carry_root_anchor_and_fail_loud(self):
         """Both entry files must tell the agent where the toolkit root is and
@@ -310,8 +358,8 @@ class ReleaseStructureTests(unittest.TestCase):
         plan when the skill loads from outside the repo.
         """
         entry_files = [
-            ROOT / "skills/creatio-app-orchestrator/SKILL.md",
-            ROOT / "rules/creatio-app-orchestrator.mdc",
+            ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+            ROOT / "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc",
         ]
         # Match on the load-bearing concepts (root anchor + a fail-loud
         # directive that forbids fabricating a plan), not an exact sentence, so
@@ -373,10 +421,10 @@ class ReleaseStructureTests(unittest.TestCase):
         This intentionally does NOT require every shipped skill to be wired:
         standalone skills are invoked directly and have no orchestrator handoff.
         """
-        orchestrator = (ROOT / "skills/creatio-app-orchestrator/SKILL.md").read_text(encoding="utf-8")
+        orchestrator = (ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md").read_text(encoding="utf-8")
         for name in self.ORCHESTRATOR_HANDOFF_SKILLS:
             self.assertTrue(
-                (ROOT / "skills" / name / "SKILL.md").exists(),
+                skill_path(name).exists(),
                 f"{name}/SKILL.md is required by the orchestrator handoff",
             )
             self.assertIn(
@@ -424,7 +472,7 @@ class ReleaseStructureTests(unittest.TestCase):
         in an OpenAI manifest, which routes on `short_description` / `default_prompt`.
         """
         skill_name = "creatio-app-orchestrator"
-        manifest_path = ROOT / "skills" / skill_name / "agents" / "openai.yaml"
+        manifest_path = skill_path(skill_name).parent / "agents" / "openai.yaml"
         data = parse_fenced_flat_mapping(manifest_path.read_text(encoding="utf-8"))
         manifest_text = " ".join(
             data.get(key, "") for key in ("short_description", "default_prompt"))
@@ -492,8 +540,8 @@ class ReleaseStructureTests(unittest.TestCase):
     def test_docs_and_runbooks_do_not_reference_deleted_runtime_helper_paths(self):
         docs = [
             *Path(ROOT / "docs").glob("*.md"),
-            *Path(ROOT / "runbooks").glob("*.md"),
-            *Path(ROOT / "runtime" / "scripts").glob("find_python.*"),
+            *Path(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references").glob("0*.md"),
+            *Path(ROOT / "plugins" / "creatio-app-builder" / "runtime" / "scripts").glob("find_python.*"),
             ROOT / "README.md",
         ]
         stale_paths = [

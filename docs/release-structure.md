@@ -17,8 +17,8 @@ Included release files (full list lives in `.release-manifest.json`):
 - `.github/plugin/plugin.json` and `.github/plugin/marketplace.json` for GitHub Copilot CLI.
 - `.agents/plugins/marketplace.json` for the Codex CLI marketplace catalog (pins the plugin payload to the `release` branch).
 - `.mcp.json` for global clio MCP server configuration.
-- `rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
-- `AGENTS.md`, `context/`, `runbooks/`, `runtime/`, and `skills/` for the installed CAADT orchestration runtime.
+- `plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc` for Cursor plugin rule support.
+- `AGENTS.md` and `plugins/` (every plugin with its `skills/`, and the core `context/` and `hooks/`, the app-builder `runtime/`, `rules/` and orchestrator `references/`) for the installed CAADT orchestration runtime.
 - `LICENSE`, `README.md`, and `SECURITY.md` for license compliance, in-zip product overview, and the vulnerability-reporting channel.
 - `installer/` so the extracted release zip can install itself.
 

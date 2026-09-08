@@ -1,0 +1,41 @@
+{
+  "name": "creatio-core",
+  "version": "1.10.0",
+  "description": "Creatio core knowledge for Creatio app development: schema naming, Freedom UI guidelines, shared context, clio MCP and the product telemetry hook.",
+  "author": {
+    "name": "Creatio"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*clio.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/telemetry-routing.mjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/telemetry-routing.mjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/telemetry-routing.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

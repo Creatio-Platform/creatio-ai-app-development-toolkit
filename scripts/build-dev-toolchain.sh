@@ -8,7 +8,7 @@
 #
 #   Python resolution order (side-effect-free first):
 #     1. A local probe: the first of python3/python whose --version reports Python 3.x.
-#     2. Fallback ONLY if that fails: the repo's runtime/scripts/find_python.sh, which
+#     2. Fallback ONLY if that fails: the repo's plugins/creatio-app-builder/runtime/scripts/find_python.sh, which
 #        additionally tries standard install locations and, if still nothing is found,
 #        may INSTALL Python via the system package manager (`brew install python3`, or
 #        `sudo apt-get install python3` -- which can prompt for a password).
@@ -18,7 +18,7 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRIVER="$DIR/build_dev_toolchain.py"
-RESOLVER="$DIR/../runtime/scripts/find_python.sh"
+RESOLVER="$DIR/../plugins/creatio-app-builder/runtime/scripts/find_python.sh"
 
 PYTHON_CMD=""
 # 1. Local, side-effect-free probe (never installs anything). Reject an unversioned `python` that is

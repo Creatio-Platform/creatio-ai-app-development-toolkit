@@ -34,7 +34,9 @@ MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-develo
 SKILL_NAME = "creatio-app-orchestrator"
 NAMED_WORKFLOW_DIR_NAME = "workflows"
 WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
-WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+WORKFLOW_MANIFEST_RELATIVE = "plugins/creatio-migration/skills/_workflow-core/workflows.json"
+# A single-plugin tree (one cached plugin version, pre-ENG-96689 checkouts) keeps the manifest here.
+LEGACY_WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
 # A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
 # than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
 # the base and an absolute value discards the base entirely, which would turn the installer into an
@@ -56,18 +58,18 @@ SETUP_WIZARD_AGENT_DISPLAY_NAMES = {
 }
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
-    "context/product-telemetry.md",
-    "context/INDEX.md",
-    "context/business-checklist.md",
-    "context/essentials.md",
-    "context/naming-conventions.md",
-    "context/clio-cli-reference.md",
-    "context/model-discovery-evidence.md",
-    "runbooks/01-environment-setup.md",
-    "runbooks/02-requirements-gathering.md",
-    "runbooks/03-app-implementation.md",
-    "runtime/scripts/mcp_client.py",
-    "runtime/scripts/workflow_validators.py",
+    "plugins/creatio-core/context/product-telemetry.md",
+    "plugins/creatio-core/context/INDEX.md",
+    "plugins/creatio-core/context/essentials.md",
+    "plugins/creatio-core/context/naming-conventions.md",
+    "plugins/creatio-core/context/clio-cli-reference.md",
+    "plugins/creatio-core/context/model-discovery-evidence.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md",
+    "plugins/creatio-app-builder/runtime/scripts/mcp_client.py",
+    "plugins/creatio-app-builder/runtime/scripts/workflow_validators.py",
 )
 
 
@@ -322,12 +324,23 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     return targets
 
 
+MCP_CONFIG_RELATIVE = "plugins/creatio-core/.mcp.json"
+PLUGINS_DIR_NAME = "plugins"
+
+
+def mcp_config_path(repo_root: Path) -> Path:
+    """The clio MCP declaration: shipped by the core plugin; a root `.mcp.json` (pre-ENG-96689
+    layouts and single-plugin fixtures) is still honoured."""
+    root_level = repo_root / ".mcp.json"
+    return root_level if root_level.exists() else repo_root / MCP_CONFIG_RELATIVE
+
+
 def is_plugin_checkout(path: Path) -> bool:
-    return (
-        (path / ".claude-plugin" / "plugin.json").exists()
-        and (path / ".mcp.json").exists()
-        and (path / "skills").is_dir()
-    )
+    if not (path / ".claude-plugin" / "plugin.json").exists():
+        return False
+    multi_plugin = (path / PLUGINS_DIR_NAME).is_dir() and (path / MCP_CONFIG_RELATIVE).exists()
+    single_plugin = (path / ".mcp.json").exists() and (path / "skills").is_dir()
+    return multi_plugin or single_plugin
 
 
 def current_checkout_root() -> Path | None:
@@ -359,7 +372,7 @@ def ensure_required_references(repo_root: Path) -> None:
 
 
 def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
-    source = repo_root / ".mcp.json"
+    source = mcp_config_path(repo_root)
     if not source.exists():
         raise RuntimeError(f"MCP config not found: {source}")
     config = json.loads(source.read_text(encoding="utf-8"))
@@ -391,7 +404,7 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
 def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
 
-    Read from the GENERATED manifest at ``skills/_workflow-core/workflows.json``, which
+    Read from the GENERATED manifest at ``plugins/creatio-migration/skills/_workflow-core/workflows.json`` (or the single-plugin ``skills/_workflow-core/workflows.json``), which
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
@@ -412,6 +425,8 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     the coupling this replaced and re-introduce the silent mis-parse.
     """
     manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if not manifest_path.is_file() and (source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE).is_file():
+        manifest_path = source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE
     if not manifest_path.is_file():
         raise RuntimeError(
             f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
@@ -456,11 +471,16 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
 
 
 def discover_workflow_scripts(source_root: Path) -> list[Path]:
-    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    """Bundled ``*.workflow.js`` scripts, sorted for a stable order.
+
+    Scanned under every plugin's ``skills/`` (``plugins/*/skills/*/``) and, for a
+    single-plugin tree such as one cached plugin version, under the root ``skills/*/``.
+    """
+    found = set(source_root.glob(f"{PLUGINS_DIR_NAME}/*/skills/*/*{WORKFLOW_SCRIPT_SUFFIX}"))
     skills_dir = source_root / "skills"
-    if not skills_dir.is_dir():
-        return []
-    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+    if skills_dir.is_dir():
+        found.update(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+    return sorted(found)
 
 
 def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
@@ -548,7 +568,7 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file."""
-    source = repo_root / ".mcp.json"
+    source = mcp_config_path(repo_root)
     if not source.exists():
         raise RuntimeError(f"MCP config not found: {source}")
 
@@ -813,15 +833,15 @@ def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
 
 def render_load_order(repo_root: Path) -> str:
     return (
-        f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` for the active orchestration contract.\n"
-        f"2. Read `{repo_file(repo_root, 'context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
-        f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
-        f"4. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
-        f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
+        f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` and `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md')}` for the active orchestration contract.\n"
+        f"2. Read `{repo_file(repo_root, 'plugins/creatio-core/context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
+        f"3. Read `{repo_file(repo_root, 'plugins/creatio-core/context/INDEX.md')}` to choose the smallest relevant reference set.\n"
+        f"4. For environment setup, read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md')}`.\n"
+        f"5. For requirements gathering, read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md')}`.\n"
         f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
-        f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
-        f"7. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
-        f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
+        f"failure playbook), read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md')}`.\n"
+        f"7. For executable helper behavior, use `{repo_file(repo_root, 'plugins/creatio-app-builder/runtime/scripts/mcp_client.py')}` "
+        f"and `{repo_file(repo_root, 'plugins/creatio-app-builder/runtime/scripts/workflow_validators.py')}`.\n"
     )
 
 
@@ -847,9 +867,9 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         f"{render_analytics_context(repo_root, 'Cursor')}"
         "## Core Rules\n"
         "\n"
-        "- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
+        "- Pages are separate for web and mobile: before any page edit, read `plugins/creatio-core/context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
         "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
+        "- Follow `plugins/creatio-core/context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
@@ -867,7 +887,7 @@ def render_cursor_telemetry_rule(repo_root: Path) -> str:
     unimportant). This rule stays deliberately small so it can be always-on without
     the cost of loading the whole orchestrator rule.
     """
-    contract = repo_file(repo_root, "context/product-telemetry.md")
+    contract = repo_file(repo_root, "plugins/creatio-core/context/product-telemetry.md")
     return f"""---
 description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
 alwaysApply: true

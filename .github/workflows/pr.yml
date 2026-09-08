@@ -52,7 +52,7 @@ jobs:
       # the vendored file's SHA-256 equals what npm publishes — so a pin bumped WITHOUT re-vendoring is caught
       # in the PR, not just tamper-evidenced against a same-commit pin.
       - name: Anchor vendored parser to upstream npm
-        run: node skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
+        run: node plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
 
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})
@@ -69,9 +69,9 @@ jobs:
       # supply-chain gate: the vendored acorn parser (the one executable processing untrusted schema-body)
       # must match its pinned upstream SHA-256 — a swapped/drifted bundle fails the build here.
       - name: Verify vendored parser integrity
-        run: node skills/classic-to-freedom-migration/engine/verify-vendor.mjs
+        run: node plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor.mjs
       # zero-dependency pure-ESM goldens (live in engine-tests/, outside the shipped skill); import the
-      # runtime engine from skills/…/engine. Each runner exits 1 on any failed check.
+      # runtime engine from plugins/creatio-migration/skills/…/engine. Each runner exits 1 on any failed check.
       - name: Run merge goldens
         if: always()   # run even if the integrity gate failed, so its result is still visible
         working-directory: engine-tests/classic-to-freedom
@@ -86,7 +86,7 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-infra.mjs
-      # The shipped Claude `.workflow.js` files are GENERATED from skills/_workflow-core/ (a workflow script cannot
+      # The shipped Claude `.workflow.js` files are GENERATED from plugins/creatio-migration/skills/_workflow-core/ (a workflow script cannot
       # `import`, so the host-neutral core is inlined into them). This is the drift gate: an edit to the generated
       # file alone, or a core edit that was never re-generated, fails here instead of shipping two divergent
       # orchestrations — the Claude one and the one Codex runs through the CLI.

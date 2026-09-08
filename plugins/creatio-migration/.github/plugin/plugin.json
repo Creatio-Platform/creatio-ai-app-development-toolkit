@@ -1,0 +1,6 @@
+{
+  "name": "creatio-migration",
+  "version": "1.10.0",
+  "description": "Creatio Classic UI to Freedom UI migration engine and the Classic UI expert for Creatio app modernization.",
+  "skills": "./skills/"
+}

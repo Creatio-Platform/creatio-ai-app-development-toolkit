@@ -7,12 +7,12 @@ import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdir
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTarEntry, integrityOk, sha256Lf } from "../../skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
-import { checkVendorIntegrity } from "../../skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
-import { parseSchema } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
-import { LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
-import { MAPPING_ROWS } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { readTarEntry, integrityOk, sha256Lf } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs";
+import { checkVendorIntegrity } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/verify-vendor.mjs";
+import { parseSchema } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_DECISION_KINDS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs";
+import { MAPPING_ROWS } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-table.mjs";
+import { vendoredIndex } from "../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
@@ -101,7 +101,7 @@ console.log("\n===== vendor runtime integrity gate (offline) =====");
 // Fix A: parseSchema feeds UNTRUSTED bodies to the vendored acorn parser; it now verifies vendor/ integrity at
 // RUNTIME (not only in CI) via the PURE checkVendorIntegrity export. These goldens exercise that pure check
 // offline against copied/tampered fixtures under the OS temp dir — never touching the real vendor files.
-const VENDOR = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
+const VENDOR = fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/vendor/", import.meta.url));
 check("vendor-gate: importing verify-vendor.mjs did NOT exit the process (CLI run is guarded by import.meta.url) — the pure export is a function",
   typeof checkVendorIntegrity === "function");
 check("vendor-gate: the REAL vendor dir passes (positive control — the check is not vacuously failing)",
@@ -136,9 +136,9 @@ console.log("\n===== engine + classic-behaviour-analysis: source pins (offline) 
 // thing it exists to guarantee did not happen. They read the shipped source because the guarantee is a call site or
 // a construction, which no behavioural test of the pure helpers can see.
 const bhSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-  "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+  "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
 const mgSrc = readFileSync(path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-  "skills/classic-to-freedom-migration/engine/migrate.mjs"), "utf8");
+  "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/migrate.mjs"), "utf8");
 
 check("plan version: EVERY file-backed manifest input contributes its CONTENT, not its path — a `section` / `detailSchemas` / `profileSchemas` file could be rewritten with the version unchanged, so an old approval authorised a plan the user never saw",
   /typeof value\.file === "string" \|\| typeof value\.body === "string"/.test(mgSrc)
@@ -176,7 +176,7 @@ check("behaviour analysis: a BLANK card is not coverage — the schema sets no m
    "a kind absent from a run's plan means the run had nothing to ask, never that the question went unasked" — which a
    reader ACTS on: a kind the engine raises while the doc names a smaller set reads as spurious rather than as a
    question they must answer. That makes the list load-bearing prose, so it is pinned here. --- */
-const specDoc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
+const specDoc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/references/page-design-spec.md", import.meta.url)), "utf8");
 const docKinds = [...new Set([...specDoc.matchAll(/\*\*\[(list-[a-z-]+)\]\*\*/g)].map((m) => m[1]))].sort((a, b) => a.localeCompare(b));
 const engineKinds = [...LIST_DECISION_KINDS].sort((a, b) => a.localeCompare(b));
 check("page-design-spec.md: documents EVERY `list-*` decision kind the engine can raise, and no kind it cannot — the doc calls the set closed, so a reader treats an undocumented item as spurious instead of answering it",
@@ -185,7 +185,7 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
     notEmittedByEngine: docKinds.filter((k) => !engineKinds.includes(k)) }));
 // …and the registry has to BE the source. A push site that inlines the string would grow the emitted set without
 // growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
-const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
+const mapperSrc = readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
   !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 8,
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
@@ -202,14 +202,17 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
    ================================================================================================== */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const skillsDir = path.join(repoRoot, "skills");
   const wfFiles = [];
-  for (const d of readdirSync(skillsDir)) {
-    const dir = path.join(skillsDir, d);
-    if (!statSync(dir).isDirectory()) continue;
-    for (const f of readdirSync(dir)) if (f.endsWith(".workflow.js")) wfFiles.push(path.join(dir, f));
+  for (const plugin of readdirSync(path.join(repoRoot, "plugins"))) {
+    const skillsDir = path.join(repoRoot, "plugins", plugin, "skills");
+    if (!existsSync(skillsDir) || !statSync(skillsDir).isDirectory()) continue;
+    for (const d of readdirSync(skillsDir)) {
+      const dir = path.join(skillsDir, d);
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) if (f.endsWith(".workflow.js")) wfFiles.push(path.join(dir, f));
+    }
   }
-  check("workflow scripts: at least one `*.workflow.js` ships under skills/ (else the checks below are vacuous)",
+  check("workflow scripts: at least one `*.workflow.js` ships under plugins/*/skills/ (else the checks below are vacuous)",
     wfFiles.length >= 1, () => ({ found: wfFiles.map((f) => path.basename(f)) }));
 
   /* LINE ENDINGS. A CR in one of these files does not break the script — it stops the host from ever running it.
@@ -321,7 +324,7 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
 // ---------------------------------------------------------------------------
 const BEGIN = "// ---8<--- PURE DECISION HELPERS ---8<---";
 const END = "// ---8<--- END PURE DECISION HELPERS ---8<---";
-const CBA = fileURLToPath(new URL("../../skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
+const CBA = fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js", import.meta.url));
 const cbaSrc = readFileSync(CBA, "utf8");
 const cbaFrom = cbaSrc.indexOf(BEGIN), cbaTo = cbaSrc.indexOf(END);
 check("cba workflow: the pure-helper block is present and delimited in the shipped file",
@@ -477,7 +480,7 @@ check("cba workflow: a return that is present but NOT a critique gets its own lo
     && /treating the pass as dead/.test(cbaSrc));
 /* ---- the Critique retry, EXECUTED — MOVED --------------------------------------------------------------
    `retryOnDeath`, `critiqueDeathLine` and `isCritiqueShape` now live in the host-neutral core
-   (skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
+   (plugins/creatio-migration/skills/_workflow-core/behaviour-analysis/helpers.mjs), and the retry is a DELEGATING GENERATOR: it asks the
    driver for one more attempt instead of calling `agent()` itself. Their executable goldens moved with them, to
    `engine-tests/classic-to-freedom/run-workflow-core.mjs` — driven there against the real generator, plus the
    same checks through the real core (a rejecting Critique retried once, `critiqueRan:false`, the CAUSE in the
@@ -509,7 +512,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
   // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
   const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
-  const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
+  const docPath = "plugins/creatio-migration/skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
   // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect (ENG-95555) in its
@@ -562,7 +565,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // measured on a live stand as a type no platform builds. The engine never EMITS it, and the golden suite asserts
   // that separately (a rich tabbed page emits `crt.TabContainer`).
   const engineSrc = ["mapper.mjs", "designspec.mjs", "migrate.mjs", "mapping-table.mjs", "mapping-registry.mjs"]
-    .map((f) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
+    .map((f) => readFileSync(fileURLToPath(new URL("../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/" + f, import.meta.url)), "utf8")).join("\n");
   const ACCEPTANCE_ONLY = new Set(["crt.Tab"]);
   // The same counter-example rule the doc lint applies: a note saying "NOT `crt.X`" is a WARNING that the type does
   // not exist, and the engine's own notes carry one (`crt.ContactCommunication` — the `ContactCommunication` ENTITY
@@ -601,9 +604,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // could not see it because it compares two outputs of the same broken transform.
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const coreDir = path.join(repoRoot, "skills/_workflow-core");
+  const coreDir = path.join(repoRoot, "plugins/creatio-migration/skills/_workflow-core");
   const generated = readFileSync(
-    path.join(repoRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
+    path.join(repoRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"), "utf8");
   const declRe = /^export\s+(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
   // The module list is read out of the build script itself, so this check follows the target's
   // declared dependency order rather than every file under _workflow-core (the CLI-only adapters
@@ -677,7 +680,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 {
   const cliSrc = readFileSync(path.join(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
-    "skills/_workflow-core/cli.mjs"), "utf8");
+    "plugins/creatio-migration/skills/_workflow-core/cli.mjs"), "utf8");
   const advanceCalls = [...cliSrc.matchAll(/await advance\(\{[\s\S]{0,400}?\}\)/g)].map((m) => m[0]);
   const withoutRequires = advanceCalls.filter((c) => !/requires:/.test(c));
   check("cli.mjs: every `advance(...)` replay carries the workflow's WORKFLOW_REQUIRES — a run-level gate enforced on one command and not the others is a guarantee in name only",
@@ -689,12 +692,12 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
    `installer/install.py` used to recover each workflow's name by lexing the generated JavaScript with a
    hand-written JS sub-lexer in Python - the consumer parsing the producer's output language, while
    `TARGETS` held `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
-   now emits `skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
+   now emits `plugins/creatio-migration/skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
    Asserted here as well as in the drift gate, because the consequence of a stale row is not a red test:
    `provision_named_workflows` refuses a script the manifest does not carry, so it is a failed INSTALL. */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const manifestPath = path.join(repoRoot, "skills/_workflow-core/workflows.json");
+  const manifestPath = path.join(repoRoot, "plugins/creatio-migration/skills/_workflow-core/workflows.json");
   const shipped = existsSync(manifestPath) ? readFileSync(manifestPath, "utf8") : null;
   check("build-workflows: the shipped workflow manifest is exactly what TARGETS generates — a stale mapping fails an install, not a test, so it is pinned on both sides",
     shipped === buildManifest(), () => {
@@ -705,11 +708,15 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("build-workflows: every manifest row names a script that EXISTS, and every shipped `*.workflow.js` has a row — a row without a file provisions nothing, a file without a row refuses to install",
     () => {
       const rows = manifest.workflows.map((w) => w.script);
-      const onDisk = readdirSync(path.join(repoRoot, "skills"))
-        .flatMap((skill) => {
-          const dir = path.join(repoRoot, "skills", skill);
-          if (!statSync(dir).isDirectory()) return [];
-          return readdirSync(dir).filter((f) => f.endsWith(".workflow.js")).map((f) => `skills/${skill}/${f}`);
+      const onDisk = readdirSync(path.join(repoRoot, "plugins"))
+        .flatMap((plugin) => {
+          const skillsDir = path.join(repoRoot, "plugins", plugin, "skills");
+          if (!existsSync(skillsDir) || !statSync(skillsDir).isDirectory()) return [];
+          return readdirSync(skillsDir).flatMap((skill) => {
+            const dir = path.join(skillsDir, skill);
+            if (!statSync(dir).isDirectory()) return [];
+            return readdirSync(dir).filter((f) => f.endsWith(".workflow.js")).map((f) => `plugins/${plugin}/skills/${skill}/${f}`);
+          });
         });
       return rows.every((r) => existsSync(path.join(repoRoot, r)))
         && onDisk.every((f) => rows.includes(f)) && rows.length === onDisk.length;
@@ -731,7 +738,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
    the guarantee is this assertion instead: the two lists must name the same runners, in the same order. */
 {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
+  const enginePkg = JSON.parse(readFileSync(path.join(repoRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/engine/package.json"), "utf8"));
   const prYml = readFileSync(path.join(repoRoot, ".github/workflows/pr.yml"), "utf8");
   // The engine-goldens job only — the file carries other jobs whose `run:` lines are none of this contract's
   // business (the upstream-drift job runs `verify-vendor-upstream.mjs`, which is not part of the module's gate).

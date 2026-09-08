@@ -1483,7 +1483,7 @@ class InstallCursorTests(unittest.TestCase):
             self.assertIn("## Analytics Context", rule_body)
             self.assertIn("`coding_agent`: Cursor", rule_body)
             self.assertIn("`plugin_version`:", rule_body)
-            self.assertIn("Follow `context/product-telemetry.md`", rule_body)
+            self.assertIn("Follow `plugins/creatio-core/context/product-telemetry.md`", rule_body)
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())

@@ -22,12 +22,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+# ENG-96689: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
+# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
+# Contract assertions read the union so a rule can live in whichever file owns it.
+_AGENTS_CONTRACT_FILES = (
+    ROOT / "AGENTS.md",
+    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
+    ROOT / "plugins/creatio-core/context/essentials.md",
+)
+
+
+def agents_contract_text() -> str:
+    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+
 AGENTS = ROOT / "AGENTS.md"
-CHECKLIST = ROOT / "context/business-checklist.md"
-ESSENTIALS = ROOT / "context/essentials.md"
-REQUIREMENTS_RUNBOOK = ROOT / "runbooks/02-requirements-gathering.md"
-IMPLEMENTATION_RUNBOOK = ROOT / "runbooks/03-app-implementation.md"
-ORCHESTRATOR_SKILL = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
+CHECKLIST = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md"
+ESSENTIALS = ROOT / "plugins/creatio-core/context/essentials.md"
+REQUIREMENTS_RUNBOOK = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md"
+IMPLEMENTATION_RUNBOOK = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md"
+ORCHESTRATOR_SKILL = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md"
 
 # The three tables a workplace spans. The toolkit must name them so an agent knows the model exists,
 # while clio stays the owner of the recipes.
@@ -39,6 +53,8 @@ WORKPLACE_TABLES = [
 
 
 def read_text(path: Path) -> str:
+    if path.name == "AGENTS.md":
+        return agents_contract_text()
     return path.read_text(encoding="utf-8")
 
 
@@ -46,7 +62,7 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
     """The first discovery batch is composed BEFORE any reference file is read.
 
     `AGENTS.md` forbids reading large repository files until the first clarification turn is done, so
-    a requirement that lives only in `context/business-checklist.md` cannot reach the opening question
+    a requirement that lives only in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` cannot reach the opening question
     set. A live behavioural run confirmed it: asked to build a Todo app, the agent opened with metric
     scope, description, list editing, and platform — and never asked where the app belonged, because
     the business-discovery priority list did not mention it. These tests pin the requirement onto the
@@ -96,7 +112,7 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
         content = read_text(AGENTS)
         self.assertIn("Ask it from the PROMPT ALONE", content)
         self.assertNotIn("READ where that app's sections already live", content)
-        self.assertIn("runbooks/02-requirements-gathering.md", content)
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md", content)
 
     def test_existing_app_read_back_never_recommends_my_applications(self):
         # Every app this toolkit built before the placement question existed sits in My applications.
@@ -110,7 +126,7 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
             self.assertIn("administrators-only", content)
 
     def test_multi_workplace_read_back_has_a_stated_tie_break(self):
-        # context/essentials.md documents SysModuleInWorkplace as one row per placement, so an app's
+        # plugins/creatio-core/context/essentials.md documents SysModuleInWorkplace as one row per placement, so an app's
         # sections can legitimately span several workplaces. Without a stated order the agent picks
         # arbitrarily from a set the developer never saw.
         for path in (CHECKLIST, REQUIREMENTS_RUNBOOK):
@@ -147,8 +163,8 @@ class OrchestratorTriggerContractTests(unittest.TestCase):
     only one that could not match a natural request.
     """
 
-    ORCHESTRATOR_SKILL_MD = ROOT / "skills/creatio-app-orchestrator/SKILL.md"
-    ORCHESTRATOR_RULE_MDC = ROOT / "rules/creatio-app-orchestrator.mdc"
+    ORCHESTRATOR_SKILL_MD = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md"
+    ORCHESTRATOR_RULE_MDC = ROOT / "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc"
 
     @staticmethod
     def _description(path: Path) -> str:
@@ -169,7 +185,7 @@ class OrchestratorTriggerContractTests(unittest.TestCase):
         # `interface:`) and never its wording, so the trigger fix reached SKILL.md and the .mdc while
         # OpenAI-format hosts kept selecting on artifact names alone — the exact non-selection this
         # whole fix exists to remove.
-        manifest = read_text(ROOT / "skills/creatio-app-orchestrator/agents/openai.yaml").lower()
+        manifest = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/agents/openai.yaml").lower()
         for verb in ("create", "add", "scaffold"):
             self.assertIn(verb, manifest, f"openai.yaml must match a plain '{verb}' request")
         self.assertIn("section", manifest,
@@ -279,7 +295,7 @@ class NavigationPlacementContractTests(unittest.TestCase):
 class PlacementRuleConsistencyTests(unittest.TestCase):
     """The rule is deliberately written twice, and each file's own test pins only its own wording.
 
-    `AGENTS.md` carries it into the first discovery batch; `context/business-checklist.md` carries the
+    `AGENTS.md` carries it into the first discovery batch; `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` carries the
     reference version that is read afterwards. Nothing previously compared the two, so they could drift
     apart while both files' individual substring assertions still passed — and they had already drifted on
     trigger scope before this test existed.

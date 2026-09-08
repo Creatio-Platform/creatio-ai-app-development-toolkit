@@ -298,7 +298,7 @@ const PAIRS = [
   {
     name: "classic-behaviour-analysis",
     baseline: path.join(HERE, "baseline/classic-behaviour-analysis.baseline.js"),
-    shipped: path.join(ROOT, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"),
+    shipped: path.join(ROOT, "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js"),
     scenarios: () => behaviourScenarios(),
   },
 ];
