@@ -3653,12 +3653,32 @@ function surplusNames(ctx, types, expected) {
 // count could not check without duplicating the comparison chain. Empty for every existing caller — the tabs /
 // details / image / element wording is byte-for-byte what it was.
 const NO_FIELD_NAMES_NOTE = " — this deliverable published no expected field names, so identity was not checkable";
+// PR #157 review (round 2, Blocker on designspec.mjs:3640) — A SURPLUS IS NOT BUILDER WORK, AND THE CELL MUST
+// NOT ASK FOR A REMOVAL.
+//
+// AC2 asks for a WARN instead of a green on `1 expected, 2 built (+1: Feed)`. It does not ask for the surplus to
+// be charged to the builder's round budget, and this branch returned three elements — no `owner` — so
+// `verifyTally.add` did charge it: `buildComplete: false`, `builderOpen++`. Now that tabs, details, image and
+// field-type counts all read through this one function, that had two costs, and the ticket's own measured case
+// hits both:
+//   1. the surplus a builder CANNOT legitimately remove — a template-merged Feed / FileList / ApprovalList /
+//      DCM component — made the page build-incomplete, so the executor re-dispatched that unit every round
+//      until MAX_ROUNDS and parked it. Correct page, red run.
+//   2. the evidence string reached the build agent through its scoped `--verify --page` gate, i.e. it told a
+//      delete-capable agent on a live customer stand to REMOVE a component the template supplied.
+// `pending`, not an `owner` tag, for the reason written out at `resolveOnstandVk`: an owner tag leaves
+// `p.complete` false, and re-dispatch gates on `complete`. So the page reports `buildComplete: true`, no repair
+// is scheduled, and the question lands on the operator worklist where it can actually be answered — with
+// `confirmed` when the surplus belongs (the template case), `accepted` when it is a deviation being signed off.
+// SIDE EFFECT, DELIBERATE AND NOW HARMLESS: `resolveFieldsVk` closed on `b >= vk.n` before this PR and warns on
+// `b > vk.n` now, so a pre-existing plan whose page has a surplus changed verdict. Under `unverified` that was a
+// silent RED on a correct page; under `pending` it is a question on a worklist and the build stays green.
 function countVerdict(b, expected, noun, ctx, types, note = "") {
   if (b === expected) return ["✅ Done", `${b} ${noun} built${note}`, "ok"];
   if (b > expected) {
     const extra = surplusNames(ctx, types, expected);
     const named = extra.length ? `: ${extra.join(", ")}` : "";
-    return ["⚠ verify", `${expected} expected, ${b} built (+${b - expected}${named}) — the surplus is NOT in the plan; confirm it belongs here or remove it${note}`, "unverified"];
+    return ["☐ confirm on-stand", `${expected} expected, ${b} built (+${b - expected}${named}) — the surplus is NOT in the plan. Confirm it belongs here (a template-provided Feed / FileList / ApprovalList / DCM component does, and is not the builder's to remove): record \`{ kind: "confirmed", row: "<row key>", answer, decidedBy, date }\` in resolutions.json, or \`kind: "accepted"\` if it is a deviation you are signing off${note}`, "pending"];
   }
   return null; // shortfall — the caller owns the ⚠-partial / ❌-none split, which differs per row kind
 }
@@ -4058,12 +4078,40 @@ function resolveOnstandExactMatch(want, v) {
   }
   return ["✅ Done", `bound to exactly ${want} workplace${want === 1 ? "" : "s"}${onstandNames(v)}`, "ok"];
 }
+// PR #157 review (round 2, Blocker on designspec.mjs:2510) — A VERIFIER-ONLY KEY REPORTED `false` IS NOT A
+// BUILD GAP, AND NOTHING SCHEDULED CAN CLOSE IT.
+//
+// `VERIFIER_ONLY_REACHABILITY_KEYS` stops a build unit being scheduled for the key (`appliesWhen: false`), which
+// was the first half of the fix. The half it left open was this branch: `v === false` returned a THREE-element
+// tuple, and `verifyTally.add` charges any un-owned open row to the builder — `buildComplete: false`,
+// `builderOpen++`, `buildMissing++` on `main`. So an honest verifier reporting "this run's scaffold is still on
+// the stand" produced a row that:
+//   · no unit is scheduled for (it is verifier-only);
+//   · the app unit cannot revisit (it is judged on `packageState` and has already run when `main` re-binds);
+//   · `main` is FORBIDDEN to close — its own prompt says "Do NOT delete it" about a page on a customer stand.
+// `main` was therefore re-dispatched every round with a row it may not touch, parked at MAX_ROUNDS, and the run
+// reported INCOMPLETE: exactly "a correct page held INCOMPLETE on a state that is not a build gap", the defect
+// this ticket exists to remove, reintroduced by D6's own row.
+//
+// TAGGING IT `"verifier"` DOES NOT FIX IT, and that is the part worth writing down. `verifyTally.add` sets
+// `p.complete = false` for every `missing`/`unverified` row whatever its owner, and `isOpenPage`
+// (`helpers.mjs`) gates re-dispatch on `complete`, NOT on `buildComplete`. An owner tag would clear
+// `builderOpen`/`buildComplete` and leave the page open, so the unit would still be re-dispatched and still
+// park. `pending` is the one outcome that returns from `verifyTally.add` BEFORE `p.complete = false`, so the
+// PAGE is done and the RUN holds — which is where this hold belongs: it needs a human, and since PR #157 it
+// has a closing action (`kind: "confirmed"` once the debris is gone, `kind: "accepted"` to leave it by
+// decision). Derived from `VERIFIER_ONLY_REACHABILITY_KEYS` rather than from a per-row flag, so a second
+// verifier-only key cannot be added and forgotten here.
+const isVerifierOnlyEvidence = (evidence) => VERIFIER_ONLY_REACHABILITY_KEYS.includes(evidence);
 function resolveOnstandVk(vk, ctx) {
   const v = reachabilityValue(ctx.root, vk.evidence);
   const what = vk.what ? ` — run the on-stand ${vk.what}` : "";
   if (vk.expectCount) return resolveOnstandCountVk(vk, v);
   if (v === true) return ["✅ Done", `${vk.evidence} confirmed on-stand`, "ok"];
-  if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  if (v === false) {
+    if (isVerifierOnlyEvidence(vk.evidence)) return ["☐ confirm on-stand", `reported present on-stand (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}. NOT a build gap and no build unit can close it: a page on a customer stand is not the builder's to remove. Handle it on the stand, then record \`{ kind: "confirmed", row: "<row key>", answer, decidedBy, date }\` in resolutions.json — or \`kind: "accepted"\` to leave it in place by decision`, "pending"];
+    return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
+  }
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified", "verifier"];
 }
 const VK_ONSTAND = new Set(["onstand"]);

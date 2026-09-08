@@ -11745,13 +11745,50 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     /Card action — Print \| ✅ Done \| ˋPrintInvoiceButtonˋ on the built page is bound to the Print action/.test(brBound.markdown),
     () => brBound.markdown.split("\n").filter((l) => /Card action/.test(l)));
 
+  // PR #157 review (round 2) — the ☐ helpers these Blocker checks share. Per ROW, never on the run total: this
+  // fixture already holds one layout-group `human: true` row, so a `pending === 1` assertion would either fail for
+  // the wrong reason or, worse, keep passing while the row under test stopped being pending at all.
+  const pendingRowFor = (v, rx, page = "main") => (v.pages[page]?.pendingRows || []).find((r) => rx.test(r.deliverable));
+  const rowLine = (v, rx) => v.markdown.split("\n").filter((l) => rx.test(l));
+
   // ── AC2 — row 17 reports the surplus ──────────────────────────────────────────────────────────────────────
   // ENG-96444's row 17 verbatim: "Tabs — 1 expected | ✅ Done | 2 crt.TabContainer built".
   const brTwoTabs = renderVerify(brResult(NOT_MIGRATED), brOpts(), brBuilt([...oneTab, { name: "Feed", type: "crt.TabContainer" }]));
-  check("ENG-96458 AC2: 1 tab expected and 2 built reads `1 expected, 2 built (+1: Feed)` with a ⚠ — not the ✅ ENG-96444 printed, and the surplus is NAMED",
-    /Tabs — 1 expected \| ⚠ verify \| 1 expected, 2 built \(\+1: Feed\)/.test(brTwoTabs.markdown)
-    && brTwoTabs.complete === false,
+  check("ENG-96458 AC2: 1 tab expected and 2 built is NOT the ✅ ENG-96444 printed — it reads `1 expected, 2 built (+1: Feed)`, the surplus is NAMED, and the run does not call itself done",
+    /Tabs — 1 expected \| ☐ confirm on-stand \| 1 expected, 2 built \(\+1: Feed\)/.test(brTwoTabs.markdown)
+    && !!pendingRowFor(brTwoTabs, /^Tabs — 1 expected/),
+    () => ({ pendingRows: brTwoTabs.pages.main.pendingRows, row: rowLine(brTwoTabs, /Tabs/) }));
+  // PR #157 review (round 2, Blocker on designspec.mjs:3640) — AND IT IS NOT CHARGED TO THE BUILDER. AC2 asked for
+  // a warn instead of a green; it did not ask for the surplus to spend the builder's round budget. The three
+  // assertions are the three consequences the Blocker named: the page's BUILD is complete, `builderOpen` is
+  // untouched (so nothing schedules a repair dispatch for it — `openNow()` reads `complete`, which `pending` does
+  // not clear either), and the cell no longer tells a delete-capable agent on a live stand to remove a component
+  // the template supplied.
+  check("PR #157 review (round 2): a page whose ONLY gap is one surplus reports `buildComplete: true` and leaves `builderOpen` at 0 — a template-merged Feed is not a build gap, so the unit is not re-dispatched for it and cannot park at MAX_ROUNDS",
+    brTwoTabs.pages.main.buildComplete === true && brTwoTabs.pages.main.builderOpen === 0
+    && brTwoTabs.pages.main.complete === true
+    && brTwoTabs.pages.main.missing === 0 && brTwoTabs.pages.main.unverified === 0
+    && brTwoTabs.builderOpen === 0 && brTwoTabs.buildMissing === 0,
+    () => brTwoTabs.pages.main);
+  check("PR #157 review (round 2): the surplus cell does NOT say `remove it` — the evidence string reaches a write-capable build agent through its scoped `--verify --page` gate, and the template-provided case is named as one it may not remove",
+    !/or remove it/.test(brTwoTabs.markdown)
+    && /is not the builder's to remove/.test(brTwoTabs.markdown)
+    && /kind: .confirmed./.test(brTwoTabs.markdown),
     () => brTwoTabs.markdown.split("\n").filter((l) => /Tabs/.test(l)));
+  // The row is CLOSABLE, which is the half a `"verifier"` owner tag would not have given it: a `confirmed`
+  // resolution against the row's own published key takes it out of `pending` entirely.
+  const brSurplusKey = pendingRowFor(brTwoTabs, /^Tabs — 1 expected/)?.rowKey;
+  const brTwoTabsConfirmed = renderVerify(brResult(NOT_MIGRATED), { ...brOpts(), resolutions: { resolutions: [
+    { kind: "confirmed", row: brSurplusKey, answer: "the extra tab is the template's Feed (ESN) — correct as built", decidedBy: "t.moshon", date: "2026-09-08" }] } },
+    brBuilt([...oneTab, { name: "Feed", type: "crt.TabContainer" }]));
+  check("PR #157 review (round 2): a `confirmed` resolution against the surplus row's OWN published key closes the hold — that row leaves `pending`, `confirmed` counts it, and it renders CONFIRMED ON-STAND rather than as an accepted deviation",
+    !!brSurplusKey
+    && brTwoTabsConfirmed.pending === brTwoTabs.pending - 1
+    && brTwoTabsConfirmed.confirmed === 1 && brTwoTabsConfirmed.accepted === 0
+    && !pendingRowFor(brTwoTabsConfirmed, /^Tabs — 1 expected/)
+    && /Tabs — 1 expected \| ☑ confirmed \| CONFIRMED ON-STAND \(t\.moshon, 2026-09-08\)/.test(brTwoTabsConfirmed.markdown),
+    () => ({ rowKey: brSurplusKey, pendingBefore: brTwoTabs.pending, pendingAfter: brTwoTabsConfirmed.pending,
+      confirmed: brTwoTabsConfirmed.confirmed, row: rowLine(brTwoTabsConfirmed, /Tabs/) }));
   check("ENG-96458 AC2: the EQUAL case is still ✅ — the equality rule removes a false pass, it does not make the row unreachable",
     /Tabs — 1 expected \| ✅ Done \| 1 crt.TabContainer built/.test(brNotMigrated.markdown),
     () => brNotMigrated.markdown.split("\n").filter((l) => /Tabs/.test(l)));
@@ -11822,9 +11859,35 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   const brDirty = brBuilt(oneTab);
   brDirty.reachability.noOrphanScaffold = false;
   const brScaffold = renderVerify(brResult(NOT_MIGRATED), brOpts(), brDirty);
-  check("ENG-96458 AC6: the run's own scaffold left on the stand is a HARD ❌ — `create-app`'s starter page and stub entity are the run's to remove, not a customer artefact it may leave behind",
-    brScaffold.missing === 1 && /No scaffold left behind[^|]*\| ❌ MISSING/.test(brScaffold.markdown),
-    () => brScaffold.markdown.split("\n").filter((l) => /No scaffold/.test(l)));
+  // PR #157 review (round 2, Blocker on designspec.mjs:2510) — THE ROW IS STILL REPORTED, AND IT IS NO LONGER A
+  // BUILD GAP. It used to resolve `❌ MISSING` with no owner, which `verifyTally.add` charges to the builder — and
+  // NOTHING scheduled can close it: the key is verifier-only so no unit is dispatched, the app unit has already
+  // run, and `main`'s own prompt forbids deleting a page on a customer stand. `main` was re-dispatched every round
+  // with a row it may not touch and parked at MAX_ROUNDS, which is the defect this ticket exists to remove.
+  // An owner tag alone would NOT have fixed it (`isOpenPage` gates on `complete`, which `missing`/`unverified` set
+  // whatever the owner) — hence `pending`, the one outcome that leaves the page complete and holds the RUN.
+  check("ENG-96458 AC6 / PR #157 round 2: the run's own scaffold left on the stand is REPORTED and holds the run, but is NOT charged to the builder — `pending`, `buildComplete: true`, `builderOpen: 0`, so no unit is re-dispatched for a page it is forbidden to delete",
+    !!pendingRowFor(brScaffold, /^No scaffold left behind/) && brScaffold.missing === 0
+    && brScaffold.pages.main.buildComplete === true && brScaffold.pages.main.builderOpen === 0
+    && brScaffold.pages.main.complete === true
+    && brScaffold.buildMissing === 0
+    && /No scaffold left behind[^|]*\| ☐ confirm on-stand \| reported present on-stand \(built\.noOrphanScaffold = false\)/.test(brScaffold.markdown)
+    && /no build unit can close it/.test(brScaffold.markdown),
+    () => ({ page: brScaffold.pages.main, row: brScaffold.markdown.split("\n").filter((l) => /No scaffold/.test(l)) }));
+  // ...and it CLOSES. The hold an operator cannot release is the shape this whole ticket is about, so the closing
+  // action the row's own text names is driven here rather than asserted as prose.
+  const brScaffoldKey = pendingRowFor(brScaffold, /^No scaffold left behind/)?.rowKey;
+  const brScaffoldCleared = renderVerify(brResult(NOT_MIGRATED), { ...brOpts(), resolutions: { resolutions: [
+    { kind: "confirmed", row: brScaffoldKey, answer: "starter page and stub entity removed from UsrBusinessRule; list-pages is clean", decidedBy: "t.moshon", date: "2026-09-08" }] } }, brDirty);
+  check("PR #157 review (round 2): a `confirmed` resolution against the scaffold row's key releases the hold — the operator who cleaned the stand has an action that works, which an un-closable ❌ MISSING did not give them",
+    !!brScaffoldKey
+    && brScaffoldCleared.pending === brScaffold.pending - 1
+    && brScaffoldCleared.confirmed === 1
+    && !pendingRowFor(brScaffoldCleared, /^No scaffold left behind/)
+    && brScaffoldCleared.complete === true
+    && /No scaffold left behind[^|]*\| ☑ confirmed \| CONFIRMED ON-STAND/.test(brScaffoldCleared.markdown),
+    () => ({ rowKey: brScaffoldKey, pendingBefore: brScaffold.pending, pendingAfter: brScaffoldCleared.pending,
+      confirmed: brScaffoldCleared.confirmed, row: rowLine(brScaffoldCleared, /No scaffold/) }));
   const brUnchecked = brBuilt(oneTab);
   delete brUnchecked.reachability.noOrphanScaffold;
   check("ENG-96458 AC6: NOT looking is ⚠, never ✅ — the row keeps D6's tri-state, so a run that skipped the `list-pages` read cannot exit 0 on it",
@@ -11995,10 +12058,13 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("PR #157 review (Major, control): in a menu-planning mode the SAME row keeps both halves — the mode-awareness is the approved mode's doing, not a weakened gate",
     !!menuScaffoldRow && /one section per entity/.test(menuScaffoldRow.vk.what) && /menu read/.test(menuScaffoldRow.vk.what),
     () => ({ label: menuScaffoldRow?.label, what: menuScaffoldRow?.vk?.what }));
-  check("PR #157 review (Major): the `pages-only-no-menu` scaffold row still GATES — evidence `false` is a hard ❌ in that mode too, so the mode-aware wording drops the false clause and nothing else",
+  check("PR #157 review (Major): the `pages-only-no-menu` scaffold row still GATES — evidence `false` still holds the run in that mode too (as `pending` since the round-2 Blocker, never as a silent pass), so the mode-aware wording drops the false MENU clause and nothing else",
     (() => { const dirty = brBuilt(poOps); delete dirty.reachability.sectionRegistered; dirty.reachability.noOrphanScaffold = false;
       const v = renderVerify(poResult, poOpts, dirty);
-      return v.missing === 1 && /No scaffold left behind[^|]*\| ❌ MISSING/.test(v.markdown); })(),
+      return v.missing === 0 && v.pages.main.buildComplete === true
+        && !!(v.pages.main.pendingRows || []).find((r) => /^No scaffold left behind/.test(r.deliverable))
+        && /No scaffold left behind[^|]*\| ☐ confirm on-stand \| reported present on-stand/.test(v.markdown)
+        && !/the app menu shows ONE section/.test(v.markdown); })(),
     () => renderVerify(poResult, poOpts, (() => { const d = brBuilt(poOps); delete d.reachability.sectionRegistered; d.reachability.noOrphanScaffold = false; return d; })()).markdown
       .split("\n").filter((l) => /No scaffold/.test(l)));
 
@@ -12084,10 +12150,14 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   const fieldsVkRow = { label: "Fields — 2 expected", vk: { type: "fields", n: 2 } };
   const fieldsCtx = (ops) => verifyCtx({ pages: { main: { viewConfig: { items: ops } } } }, "main");
   const inputs = (n) => Array.from({ length: n }, (_, i) => ({ name: `F${i}`, type: "crt.Input" }));
-  check("PR #157 review (Major): a field-typed SURPLUS reads `2 expected, 3 built (+1 …)` with a ⚠ and NEVER a ❌ — building more than planned is a mismatch to look at, not a missing deliverable",
+  // PR #157 review (round 2, Blocker on designspec.mjs:3640) — the surplus branch is `pending`, not `unverified`:
+  // an extra component is a question for a human, never a build gap the unit's own round budget should be spent on.
+  // The `+N`, the naming and the "never ❌" half of the original finding are unchanged.
+  check("PR #157 review (Major + round-2 Blocker): a field-typed SURPLUS reads `2 expected, 3 built (+1 …)`, NEVER a ❌, and lands on the ☐ human worklist rather than on the builder — building more than planned is a mismatch to look at, not a missing deliverable and not a repair to dispatch",
     (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(3)));
-      return mark === "⚠ verify" && outcome === "unverified" && /^2 expected, 3 built \(\+1\)/.test(ev)
-        && /the surplus is NOT in the plan/.test(ev) && /identity was not checkable/.test(ev) && !/❌/.test(mark); })(),
+      return mark === "☐ confirm on-stand" && outcome === "pending" && /^2 expected, 3 built \(\+1\)/.test(ev)
+        && /the surplus is NOT in the plan/.test(ev) && /identity was not checkable/.test(ev)
+        && !/or remove it/.test(ev) && !/❌/.test(mark); })(),
     () => resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(3))));
   check("PR #157 review (Major): the EQUAL case is still ✅ and still says identity was not checkable — delegating the comparison must not change the verdict, only where the rule lives",
     (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(2)));
@@ -12102,15 +12172,15 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   // accepted type, so a component of a DIFFERENT type can never be reported as their surplus.
   const imgSurplus = resolveVk({ type: "image", n: 1 },
     fieldsCtx([{ name: "Photo", type: "crt.ImageInput" }, { name: "Logo", type: "crt.ImageInput" }, { name: "PDS_Name", type: "crt.Input" }]));
-  check("PR #157 review (Major): an IMAGE surplus reads `1 expected, 2 built (+1: Logo)` with a ⚠ — the same equality rule as the tabs row, and the surplus is named from `crt.ImageInput` alone, never from a field that happens to sit next to it",
-    imgSurplus[0] === "⚠ verify" && imgSurplus[2] === "unverified"
+  check("PR #157 review (Major): an IMAGE surplus reads `1 expected, 2 built (+1: Logo)` on the ☐ worklist — the same equality rule as the tabs row, and the surplus is named from `crt.ImageInput` alone, never from a field that happens to sit next to it",
+    imgSurplus[0] === "☐ confirm on-stand" && imgSurplus[2] === "pending"
     && /^1 expected, 2 built \(\+1: Logo\) — the surplus is NOT in the plan/.test(imgSurplus[1])
     && !/PDS_Name/.test(imgSurplus[1]),
     () => imgSurplus);
   const elemSurplus = resolveVk({ type: "element", ctype: "crt.Feed", n: 1 },
     fieldsCtx([{ name: "Feed1", type: "crt.Feed" }, { name: "Feed2", type: "crt.Feed" }, { name: "Feed3", type: "crt.Feed" }, { name: "T1", type: "crt.TabContainer" }]));
   check("PR #157 review (Major): an ELEMENT surplus names EVERY component past the expected count (`+2: Feed2, Feed3`) and only components of the row's own `ctype` — the base-declared element rows ENG-96457 added all resolve through this branch",
-    elemSurplus[0] === "⚠ verify" && elemSurplus[2] === "unverified"
+    elemSurplus[0] === "☐ confirm on-stand" && elemSurplus[2] === "pending"
     && /^1 expected, 3 built \(\+2: Feed2, Feed3\)/.test(elemSurplus[1]) && !/T1/.test(elemSurplus[1]),
     () => elemSurplus);
   // The MULTI-type row (tabs / details) is the one where the two halves of `countVerdict` could disagree: the count
@@ -12124,7 +12194,7 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   check("PR #157 review (Major, `resolveFieldsVk`/`countVerdict` thread): on a MULTI-type count row the summed `ctx.typeCount(t)` and the `ctx.ops.filter` behind `surplusNames` describe the SAME set — three tabs across both accepted spellings read `1 expected, 3 built (+2: T2, T3)`, the surplus is in build order, and the non-accepted `crt.Input` is in neither the count nor the names",
     mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab")
       === mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length
-    && mixedRow[0] === "⚠ verify"
+    && mixedRow[0] === "☐ confirm on-stand" && mixedRow[2] === "pending"
     && /^1 expected, 3 built \(\+2: T2, T3\)/.test(mixedRow[1]) && !/PDS_Name/.test(mixedRow[1]),
     () => ({ summed: mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab"),
       filtered: mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length, row: mixedRow }));
