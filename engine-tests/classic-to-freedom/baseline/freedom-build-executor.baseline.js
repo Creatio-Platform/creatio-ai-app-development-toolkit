@@ -65,13 +65,23 @@ function outcomeState(expected, returned) {
   return returned < expected ? 'partial' : 'ok'
 }
 
+const OUTCOME_RANK = { skipped: 0, ok: 1, partial: 2, none: 3 }
+
+function worseOutcome(a, b) {
+  if (!a) return b
+  if (!b) return a
+  return (OUTCOME_RANK[b.state] ?? 0) >= (OUTCOME_RANK[a.state] ?? 0) ? b : a
+}
+
 function makePhaseOutcomes() {
   const byPhase = {}
+  const seen = {}
   const order = []
   const set = (phase, entry) => {
-    if (!order.includes(phase)) order.push(phase)
-    byPhase[phase] = entry
-    return entry
+    if (!order.includes(phase)) { order.push(phase); seen[phase] = [] }
+    seen[phase].push(entry)
+    byPhase[phase] = worseOutcome(byPhase[phase], entry)
+    return byPhase[phase]
   }
   return {
     record(phase, expected, results, extra = {}) {
@@ -86,7 +96,10 @@ function makePhaseOutcomes() {
     },
     snapshot() {
       const out = {}
-      for (const p of order) out[p] = { ...byPhase[p] }
+      for (const p of order) {
+        out[p] = { ...byPhase[p] }
+        if (seen[p].length > 1) out[p].occurrences = seen[p].map((e) => ({ ...e }))
+      }
       return out
     },
   }
@@ -4589,8 +4602,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       discrepancies, unknownSchema: unknownSchemaNow(), pageSchemas,
       staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
     }
-    outcomes.skipped('Judge', 'no build claim was filed this round')
     if (appUnitIncomplete) {
+      outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
       outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
       yield* persistPending('stopping on an incomplete app unit')
       return runReturn({
@@ -4603,6 +4616,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         ...common, builtThisRound,
       })
     }
+    outcomes.skipped('Judge', 'the round dispatched no unit, so nothing filed a claim to rule on')
     outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
     outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
     log(`round ${round}: ${open.length} unit(s) were open and NONE was dispatched — no Verify and no Judge, because nothing wrote to the stand this round`)
