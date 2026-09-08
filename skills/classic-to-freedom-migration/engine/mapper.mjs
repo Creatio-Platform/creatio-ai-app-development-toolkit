@@ -1384,6 +1384,15 @@ function attributeDecisions(a, hasColumn) {
 // A kind with no arm now names itself rather than inventing two fields it does not carry.
 function triggerPhrase(t) {
   if (t.kind === "attribute-dependency") return `${t.attribute} changes (${(t.columns || []).join(", ")})`;
+  // ENG-96571 review 3 (finding 2) — the LIFECYCLE kind before the generic `from` arm, because for that kind alone
+  // `from` is NOT the answer: review 2 moved the platform hook into its own `hook` field and gave `from` to the
+  // IMMEDIATE caller (`composeUpstream`). `triggerText` in designspec.mjs was taught `hook ?? from`; this second
+  // renderer was not, so on `onSaved → mid → leaf` the `method` row's reason read "triggered by lifecycle mid" —
+  // `mid` is not a platform lifecycle method, so the sentence was false AND contradicted the same run's trigger
+  // cell. `hook ?? from` for the same reason it holds there: a one-hop chain carries no `hook`, and there the
+  // immediate caller IS the hook. This phrase is deliberately comparable with a REPORTED answer
+  // (`{ trigger: "lifecycle", from: "onSaved" }`), which names the hook — so it has to name the hook too.
+  if (t.kind === "lifecycle") return `lifecycle ${t.hook ?? t.from}`;
   // the DECLARATION-backed kinds carry the declaration path itself — that path IS the answer, and it is the same
   // string a behaviour-analysis run would have to report for the row, so the two are directly comparable
   if (t.from) return `${t.kind} ${t.from}`;

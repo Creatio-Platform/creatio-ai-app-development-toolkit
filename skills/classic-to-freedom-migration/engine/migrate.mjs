@@ -79,7 +79,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS, renderPlanNotes,
-  boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
+  boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -3770,15 +3770,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
-  // ENG-96457 (item 6) — the authoring rule reaches the AGENT here, on stderr, instead of being the last line of
-  // `plan.md`. It is generator guidance, not plan content: a delivered plan must not end by telling its reader to
-  // fill `manifest.planMeta`. Printed on every `--plan` run (complete or not) because the "do not hand-edit the
+  // ENG-96457 (item 6) — the authoring rule reaches the AGENT on stderr, never as the last line of `plan.md`: it
+  // is generator guidance, not plan content, and a delivered plan must not end by telling its reader to fill
+  // `manifest.planMeta`. It is stated on every `--plan` run (complete or not), because the "do not hand-edit the
   // generated tables" half applies to a COMPLETE plan too — that is the rule agents break.
-  // ENG-96571 review 2 (finding 5) — NOT on the `--out` path. There the same two sentences are already in the
-  // `plan.notes.md` this run wrote (`renderPlanNotes` renders them from `PLAN_AUTHORING_SENTENCES`, the one copy of
-  // the text), and stdout already points the agent at that file. Writing them again on stderr made the run state
-  // the rule twice, in two places, which is how an agent learns to read neither.
-  if (planMode && !outFile) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
+  // ENG-96571 review 3 (finding 9) — but NOT from a standalone write here, on EITHER path. Both branches already
+  // deliver the two sentences exactly once: `--out` writes them into `plan.notes.md` (and stdout points the agent
+  // at that file), and without `--out` the `plan notes` block echoed above IS `renderPlanNotes(...)`, which renders
+  // the same `PLAN_AUTHORING_SENTENCES` as its two bullets. Review 2 removed this write only from the `--out` path,
+  // which left the non-`--out` run stating the rule TWICE on ONE stream — the worse of the two shapes, and the way
+  // an agent learns to read neither. One copy of the text (`PLAN_AUTHORING_SENTENCES`), one statement of it per run.
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");

@@ -13336,9 +13336,15 @@ check("ENG-96457 (item 6): the delivered plan file carries no authoring text and
   !/Supply the plan values/.test(br1PlanOut) && !/VERBATIM/i.test(br1PlanOut)
   && !/<FILL:/.test(br1PlanOut) && !/\*Adjustments\* list/.test(br1PlanOut),
   () => br1PlanOut.split("\n").filter((l) => /FILL|VERBATIM|Adjustments|planMeta/.test(l)));
-check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` writes it to stderr on every run, complete or not, because the 'do not hand-edit the generated tables' half applies to a complete plan too",
-  /ℹ Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
-  && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || ""),
+// ENG-96571 review 3 (finding 9) — the CARRIER changed, the requirement did not. The standalone `ℹ <rule>`
+// paragraph is gone from this path (it was a second statement of the same two sentences on the same stream, next
+// to the echoed `plan notes` block); the rule reaches the agent as the notes block's own two bullets. So this
+// pins "on stderr, on every run, both halves" without pinning the removed paragraph's `ℹ ` prefix — which would
+// have been a check on the duplication rather than on the delivery.
+check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` states it on stderr on every run, complete or not, because the 'do not hand-edit the generated tables' half applies to a complete plan too",
+  /Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
+  && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || "")
+  && /ℹ plan notes \(agent-facing/.test(br1Plan.stderr || ""),
   () => (br1Plan.stderr || "").slice(0, 300));
 
 
@@ -13426,6 +13432,20 @@ check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop — the
     .changeSet.handlerStubs.find((h) => h.sourceMethod === "leaf")?.triggers || [])[0]));
 check("ENG-96571 review 2 (finding 2) ANTI-VACUITY: a lifecycle-answered row is STILL not counted as `internalCallOnly` — the rebase moved a field, it did not turn the answer back into a weak hop",
   r22Run.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(r22Run.stubIndex[0].counts));
+// ENG-96571 review 3 (finding 2) — the SECOND renderer of the same trigger. `triggerText` (designspec.mjs) was
+// taught `hook ?? from`; `triggerPhrase` (mapper.mjs) still read `t.from` for every kind, and it feeds
+// `methodReason`, which runs AFTER the composition — so the `method` needsDecision row for `leaf` said "triggered
+// by lifecycle mid". `mid` is not a platform lifecycle method, so the reason asserted the opposite of what the
+// same run's trigger cell says, and `changeSet.needsDecision` is emitted verbatim by the default CLI mode. It is
+// also the string a REPORTED answer (`{ trigger: "lifecycle", from: "onSaved" }`) is meant to be comparable with.
+const r22Reason = (m) => (r22Run.changeSet.needsDecision.find((d) => d.kind === "method" && d.item === m) || {}).reason || "";
+check("ENG-96571 review 3 (finding 2): the `method` row's REASON names the platform hook, not the immediate caller — on `onSaved → mid → leaf` it reads `triggered by lifecycle onSaved`, the same answer the trigger cell gives and the same string a reported answer would carry",
+  /triggered by lifecycle onSaved/.test(r22Reason("leaf")) && !/lifecycle mid/.test(r22Reason("leaf")),
+  () => [r22Reason("mid"), r22Reason("leaf")]);
+check("ENG-96571 review 3 (finding 2) ANTI-VACUITY: the one-hop row is unaffected (`mid` is called by the hook itself, so hook and immediate caller coincide) and the rebase did not empty the clause — both rows still state a lifecycle trigger",
+  /triggered by lifecycle onSaved/.test(r22Reason("mid"))
+  && !/trigger unresolved/.test(r22Reason("leaf")) && !/undefined/.test(r22Reason("leaf")),
+  () => [r22Reason("mid"), r22Reason("leaf")]);
 
 /* ---- finding 3: a recorded key that matches NO row is reported, not swallowed ---- */
 // A typo in the kind or the item closed nothing and appeared in none of closed/invalid/notApplicable, so the plan
@@ -13513,6 +13533,26 @@ check("ENG-96571 review 2 (finding 5): on the `--out` path the rule is NOT also 
     } finally { fs.rmSync(f, { force: true }); fs.rmSync(path.join(path.dirname(f), path.basename(f, ".md") + ".notes.md"), { force: true }); }
   })(),
   () => "see --plan --out on the BR1 fixture");
+// ENG-96571 review 3 (finding 9) — the OTHER branch, which is the one that had two copies on the SAME stream.
+// Without `--out`, migrate.mjs echoes `result.planNotes` to stderr, and `renderPlanNotes` renders
+// `PLAN_AUTHORING_SENTENCES` as its two bullets — so the standalone `PLAN_AUTHORING_NOTE` paragraph that review 2
+// left armed on this path stated the identical two sentences a second time, on stderr, in the same run. Counted
+// over stdout+stderr together (not matched), because "stated once" is the criterion and either stream carrying a
+// second copy breaks it.
+check("ENG-96571 review 3 (finding 9): on the non-`--out` `--plan` path each authoring sentence is stated EXACTLY ONCE across stdout+stderr — the echoed `plan notes` block is the single carrier, with no second standalone paragraph",
+  (() => {
+    const both = (br1Plan.stdout || "") + (br1Plan.stderr || "");
+    return br1Plan.status === 0 && PLAN_AUTHORING_SENTENCES.every((t) => both.split(t).length - 1 === 1);
+  })(),
+  () => PLAN_AUTHORING_SENTENCES.map((t) => ({
+    sentence: t.slice(0, 60),
+    inStdout: (br1Plan.stdout || "").split(t).length - 1,
+    inStderr: (br1Plan.stderr || "").split(t).length - 1,
+  })));
+check("ENG-96571 review 3 (finding 9) ANTI-VACUITY: the count is 1 because the rule IS delivered on this path, not because it vanished — the sentences are present, and they arrive on stderr (the plan on stdout stays clean of generator guidance)",
+  PLAN_AUTHORING_SENTENCES.every((t) => (br1Plan.stderr || "").includes(t))
+  && PLAN_AUTHORING_SENTENCES.every((t) => !(br1Plan.stdout || "").includes(t)),
+  () => ({ stderrTail: (br1Plan.stderr || "").slice(-400) }));
 
 /* ---- finding 6: "(0 open)", not "(0)", when the section's body is an advisory ---- */
 // The worklist renders when it has ANY of four things to say, and two of them are advisories about answers that
