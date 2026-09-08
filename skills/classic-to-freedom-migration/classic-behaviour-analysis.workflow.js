@@ -553,7 +553,6 @@ const INDEX_ENTRY = {
     note: { type: 'string' },
     behaviourEstablished: { type: 'boolean' },
   },
-  dependentRequired: { trigger: ['from'], from: ['trigger'] },
 }
 
 const DESCRIBE_SCHEMA = {

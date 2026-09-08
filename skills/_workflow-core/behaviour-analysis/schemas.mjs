@@ -5,9 +5,9 @@
 // cannot run this workflow at all, which is why `structuredOutput` is a REQUIRED
 // capability rather than a degradable one.
 //
-// The reported-trigger vocabulary lives in `helpers.mjs` (the leaf module), so the SCHEMA that advertises it and
-// the VALIDATOR that enforces it read one list. The generator inlines helpers before schemas into one scope and
-// strips every `import`, so this line ships as nothing at all.
+// The reported-trigger vocabulary lives in `helpers.mjs` (the leaf module), so the SCHEMA that advertises it via
+// `enum` and the VALIDATOR that enforces it arithmetically read one list. The generator inlines helpers before
+// schemas into one scope and strips every `import`, so this line ships as nothing at all.
 
 import { REPORTED_TRIGGERS } from './helpers.mjs'
 
@@ -76,7 +76,8 @@ export const INDEX_ENTRY = {
     // let `{"trigger":"internal","from":"init"}` through on the row named `init`, which rendered as an answered
     // trigger and cleared the row out of the plan's unresolved count. The enum is the host-side half of the
     // check; `validateReportedTrigger` is the arithmetic half, because hosts vary in how much of a JSON schema
-    // they actually enforce.
+    // they actually enforce. The Claude Code Workflow host DOES compile `enum` (freedom-build-executor ships
+    // several), so it stays; only `dependentRequired` below was the host incompatibility and is dropped.
     trigger: { type: 'string', enum: REPORTED_TRIGGERS },
     from: { type: 'string' },
     note: { type: 'string' },
@@ -84,14 +85,12 @@ export const INDEX_ENTRY = {
     // not coverage (see `behaviourEstablished` in helpers.mjs) and the engine keeps the row's `⚠ not described`.
     behaviourEstablished: { type: 'boolean' },
   },
-  // `from` is REQUIRED the moment `trigger` is present — an origin-less reported trigger answers nothing. Stated
-  // in the schema for hosts that honour `dependentRequired`, and re-checked arithmetically in the core for the
-  // ones that do not.
-  // AND THE REVERSE: `trigger` is required the moment `from` is present. An entry carrying only `from` used to be
-  // accepted, and the engine recorded `{kind:'reported', reportedKind:null}` for it — the row counted as resolved
-  // while nothing said what kind of origin was named. Both directions are re-checked in
-  // `validateReportedTrigger`, for the same reason.
-  dependentRequired: { trigger: ['from'], from: ['trigger'] },
+  // NO `dependentRequired` here: the Claude Code Workflow host's structured-output does NOT compile it and rejects
+  // the whole Describe agent when the schema carries one — which failed every Describe agent at plan step 5.1
+  // (empty agentId, null return → DEATH) on the Applicants run. `enum` above is kept because the host DOES compile
+  // it (freedom-build-executor ships several); `dependentRequired` alone is the incompatibility. The `from`↔`trigger`
+  // co-requirement (an origin-less reported trigger, or a `from` with no `trigger`, each answers nothing) is enforced
+  // ENTIRELY and in BOTH directions by `validateReportedTrigger` in helpers.mjs, which every emit path already runs.
 }
 
 export const DESCRIBE_SCHEMA = {
