@@ -393,8 +393,9 @@ function ruleTriggerCell(r, attrs) {
 }
 
 // ENG-96571 (review 1, G) — ONE condition, as the Trigger cell names it. A column-to-column comparison
-// (Classic's `rightExpression: { type: 1, attribute: "OtherStage" }`) is rendered as `Stage = OtherStage`, not the
-// bare `when Stage` that reads as "Stage is set".
+// (Classic's `rightExpression: { type: 1, attribute: "OtherStage" }`) is rendered with its real operator —
+// `Stage = OtherStage` for EQUAL, `Stage ≠ OtherStage` for NOT_EQUAL — not the bare `when Stage` that reads as
+// "Stage is set", and never a hardcoded `=` over the actual operator.
 // ENG-96327 — the Trigger states the WHOLE condition, not just the attribute: a presence check reads "<attr> is
 // filled"/"<attr> is empty"; a comparison against a constant reads "<attr> <op> <value>" (the operators the platform
 // uses). A lookup value is a raw record GUID (unreadable — the reason the removed [lookup-value] prompt existed), so
@@ -403,7 +404,9 @@ function ruleTriggerCell(r, attrs) {
 // and a raw condition (`comparisonType`/`leftExpression`/`rightExpression.value`).
 const COMPARISON_OP = { 3: "=", 4: "≠", 5: "<", 6: "≤", 7: ">", 8: "≥" };
 const condLeftName = (c) => c?.left?.attribute || c?.left?.path || c?.leftExpression?.attribute || c?.leftExpression?.attributePath || c?.attribute || null;
-const condRightAttr = (c) => c?.right?.attribute || c?.right?.attributePath || null;
+// BOTH shapes — the sanitized `right.*` AND the raw `rightExpression.*` — so a raw column-to-column condition (the
+// shape the block comment promises) names its right column instead of rendering left-only.
+const condRightAttr = (c) => c?.right?.attribute || c?.right?.attributePath || c?.rightExpression?.attribute || c?.rightExpression?.attributePath || null;
 // RAW, not escaped: `ruleTriggerCell` runs `esc` over each phrase it prints, so escaping here too would
 // double-escape a stand-derived attribute name.
 const condPhrase = (c) => {
@@ -412,9 +415,13 @@ const condPhrase = (c) => {
   const cmp = typeof c?.comparison === "number" ? c.comparison : c?.comparisonType;
   if (cmp === 12) return `${left} is filled`;   // IS_NOT_NULL
   if (cmp === 11) return `${left} is empty`;     // IS_NULL
+  const op = COMPARISON_OP[cmp];
   const right = condRightAttr(c);
-  if (right) return `${left} = ${right}`;        // column-to-column comparison
-  const op = COMPARISON_OP[cmp], v = c?.right?.value ?? c?.rightExpression?.value;
+  // A column-to-column comparison states the ACTUAL operator — `Stage ≠ OtherStage`, not a hardcoded `=` that would
+  // show a NOT_EQUAL / < / > condition to the approver as equality (inverting the gating semantics). An operator the
+  // table does not name renders neutrally (`vs`) rather than asserting an equality nobody read.
+  if (right) return `${left} ${op || "vs"} ${right}`;
+  const v = c?.right?.value ?? c?.rightExpression?.value;
   if (op && v !== null && v !== undefined) {
     const shown = typeof v === "string" && TYPED_GUID.test(v) ? "a specific value" : String(v);
     return `${left} ${op} ${shown}`;

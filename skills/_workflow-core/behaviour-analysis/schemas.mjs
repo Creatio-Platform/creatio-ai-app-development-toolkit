@@ -80,6 +80,9 @@ export const INDEX_ENTRY = {
     // below) and REJECTS the whole Describe agent when the schema carries one — so `classic-behaviour-analysis`
     // failed every Describe agent at plan step 5.1 (empty agentId, null return → DEATH). The closed-vocabulary
     // check lives ENTIRELY in `validateReportedTrigger` (the arithmetic half), which every emit path already runs.
+    // ENG-96571 (host-compat) — this `enum`/`dependentRequired` removal is a SHARED workflow-contract fix, its own
+    // logical change carried in this branch (reviewable/revertable independently of the ENG-96327 readability work):
+    // the schema is the structured-output contract every Describe agent must satisfy, not a display concern.
     trigger: { type: 'string' },
     from: { type: 'string' },
     note: { type: 'string' },

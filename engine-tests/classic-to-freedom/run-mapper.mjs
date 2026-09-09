@@ -4020,6 +4020,23 @@ check("ENG-96327: an inline-grid child reads 'Inline grid' (NOT 'Rebuild (child)
   && /No separate form page — inline-editable grid/.test(inlineGridCs.plan)
   && /build the related list as an editable \*\*crt\.DataGrid\*\*/.test(inlineGridCs.plan),
   () => inlineGridCs.plan.split("\n").filter((l) => /Ig|Inline grid|DataGrid/.test(l)).slice(0, 8));
+// ENG-96327 (self-review Minor): the OTHER arm of the `hasBehaviour ? "inline-grid" : "empty"` split — a child that
+// folds to 0 fields/tabs/details AND carries NO behaviour is a skeletal/bad-bundle fold, marked `empty`, and renders
+// the ⚠ EMPTY-page warning (not the inline-grid "build a crt.DataGrid" mapping). Only inline-grid was covered before,
+// so the distinguishing predicate (`hasBehaviour`) was unguarded — a regression could relabel every empty fold.
+const emptyChildCs = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"EmpDetail",entitySchemaName:"Emp",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "Emp", editPage: "EmpPage" } },
+  childPageSchemas: { EmpPage: { entity: "Emp",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"Emp",diff:[]};});` }] } } },
+  { baseDir: FIX });
+const empChild = emptyChildCs.childPages.find((c) => c.entity === "Emp") || {};
+check("ENG-96327 (self-review): a folded child with 0 fields/tabs/details AND no behaviour is formless:empty — the OTHER branch of the split, NOT inline-grid",
+  empChild.fieldCount === 0 && empChild.formless === "empty");
+check("ENG-96327 (self-review): the empty child renders the ⚠ EMPTY-page warning (verify the schema, do not ship a form), never the inline-grid mapping",
+  /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(emptyChildCs.plan)
+  && !/No separate form page — inline-editable grid/.test(emptyChildCs.plan),
+  () => emptyChildCs.plan.split("\n").filter((l) => /Emp|EMPTY|Inline grid/.test(l)).slice(0, 8));
 // #7b Main-scope hygiene: child rows get a clean target that REFLECTS the template rule (< 15 flat → Mini page;
 // else Grid page) — ChildA has 1 field → Mini page — no free-text FILL, and no misleading generic "record page".
 check("#7b Main scope: a small child (1 field) row shows the Mini page template target (not a generic 'record page')",
@@ -6181,6 +6198,36 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   check("⚠ Confirm: orphan attribute-dependency still does NOT fall back to Confirm once rendered as an imperative member",
     () => !/^- \*\*\[attribute-dependency\]\*\*/m.test(orphanPlan),
     () => orphanPlan.split("\n").filter((l) => /attribute-dependency/.test(l)));
+}
+
+// ENG-96534 (self-review Major): the HAPPY path — a behaviourIndex entry carrying whatItDoes / useCase renders those
+// strings in the plan's plain-language columns, NOT the `⚠ not described` fallback. Every other behaviourIndex
+// fixture omits these fields, so only the fallback was exercised: a regression in `describedInOf` (drop the field) or
+// `describedField` (wrong key) would render `⚠ not described` on every real row while staying green. Covers BOTH
+// tables (a handler stub → ⚠ Custom methods; a member → ⚠ Other declared logic) AND a MULTI-LINE useCase (the render
+// folds the newlines into one cell so the markdown table row stays intact).
+{
+  const descRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: {
+      recalcAmount: { whatItDoes: "Recomputes the line total from quantity and price.",
+        useCase: "Read Quantity.\nRead Price.\nWrite their product to Amount." },
+      "message:CalcTotal": { whatItDoes: "Broadcasts that the total changed so other widgets refresh.",
+        useCase: "After the amount is recomputed, publish CalcTotal." },
+    } }, { baseDir: FIX });
+  const descPlan = renderPlan(descRun, {});
+  const cellsOf = (needle) => (descPlan.split("\n").find((l) => l.startsWith("| " + needle + " |")) || "").split("|").map((s) => s.trim());
+  const mrow = cellsOf("recalcAmount");   // | name | source | whatItDoes | useCase | target | describedIn |
+  check("ENG-96534 (self-review): a populated whatItDoes/useCase renders in the ⚠ Custom methods row — the real strings, and the multi-line useCase folds to ONE cell, not `⚠ not described`",
+    mrow[3] === "Recomputes the line total from quantity and price."
+    && mrow[4] === "Read Quantity. Read Price. Write their product to Amount."
+    && mrow[3] !== "⚠ not described" && mrow[4] !== "⚠ not described",
+    () => mrow);
+  const brow = cellsOf("CalcTotal");      // | name | kind | whatItDoes | useCase | describedIn |
+  check("ENG-96534 (self-review): a populated whatItDoes/useCase renders in the ⚠ Other declared logic (member) row too — not the fallback",
+    brow[2] === "message" && brow[3] === "Broadcasts that the total changed so other widgets refresh."
+    && brow[4] === "After the amount is recomputed, publish CalcTotal." && brow[3] !== "⚠ not described",
+    () => brow);
 }
 
 // ---- method body EVIDENCE replaces name-guessing ----
@@ -12188,6 +12235,24 @@ check("ENG-96571 (review 1, G): a column-to-column comparison is NOT a condition
   r1gRule(r1gAttr)?.conditionsIncomplete === undefined
   && !(r1gAttr.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
   () => JSON.stringify((r1gAttr.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition")));
+// ENG-96327 (self-review Major): a column-to-column comparison states the ACTUAL operator, not a hardcoded `=`. A
+// NOT_EQUAL (comparisonType 4) must read `Stage ≠ OtherStage` — showing it as `Stage = OtherStage` would invert the
+// gating semantics the approver signs off on.
+const R1_G_RULE_OP = (cmp) => `define("R1GPageOp", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "JobVisible": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.VISIBLE,
+    "conditions": [{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": ${cmp}, "rightExpression": { "type": 1, "attribute": "OtherStage" } }] } } },
+  diff: [{ "operation": "insert", "name": "Job", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Job" } }]
+}; });`;
+const r1gOpRow = (cmp) => { const r = runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1GPageOp", body: R1_G_RULE_OP(cmp) }] });
+  return (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || ""; };
+check("ENG-96327 (self-review): a NOT_EQUAL column-to-column condition reads `when Stage ≠ OtherStage` — the real operator, never a hardcoded `=`",
+  /when Stage ≠ OtherStage/.test(r1gOpRow(4)) && !/when Stage = OtherStage/.test(r1gOpRow(4)),
+  () => r1gOpRow(4));
+check("ENG-96327 (self-review) ANTI-VACUITY: EQUAL still reads `= OtherStage` and LESS reads `< OtherStage` (esc renders it `&lt;`) — the fix states the operator, it did not drop equality nor mangle relational ops",
+  /when Stage = OtherStage/.test(r1gOpRow(3)) && /when Stage &lt; OtherStage/.test(r1gOpRow(5)),
+  () => ({ eq: r1gOpRow(3), lt: r1gOpRow(5) }));
 const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
 check("ENG-96327 (was ENG-96571 G ANTI-VACUITY): a comparison against a CONSTANT states the whole condition too — `when Stage = New`, the value the cell now prints (a readable constant is shown; a lookup GUID would read `a specific value`)",
   /when Stage = New/.test(r1gRow(r1gConst)),
