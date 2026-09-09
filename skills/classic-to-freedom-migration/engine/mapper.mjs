@@ -4,7 +4,7 @@
 import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
   widgetsByMatch, profileCardsByEntity, knownCardActions,
-  LIST_REGION, LIST_GRID_ELEMENT, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
+  LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -2576,6 +2576,98 @@ function listColumnsDecision(section, columns) {
   }
   return null;
 }
+function listColumnTypeDecisions(columns) {
+  return columns.filter((x) => x.dataValueType == null).map((c) => ({ kind: LIST_DECISION_KIND.columnType, item: c.name,
+    reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` }));
+}
+function listColumnPathDecisions(columns) {
+  return columns.filter((x) => x.isPath).map((c) => ({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
+    reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` }));
+}
+function listFilterTypeDecisions(filters) {
+  return filters.filter((x) => x.quickFilterType == null).map((f) => ({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
+    reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` }));
+}
+// The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
+// to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
+// the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
+// omitted here disables search, the folder tree or the filter builder with no error anywhere.
+function listFilterAttributesDecision(filters) {
+  if (!filters.length) return null;
+  // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
+  // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
+  return { kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
+    reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` };
+}
+// Two further ways the command bar can be short, each stated as what it is. `unresolved` = the method is defined
+// nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
+// claiming nobody defines it would be false.
+const tickName = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
+function commandBarGapClause(names, why) {
+  if (!names.length) return "";
+  const behind = names.length > 1 ? "them" : "it";
+  return `; and ${names.map(tickName).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
+}
+// ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
+// are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
+function listCommandBarDecision(section, actions) {
+  if (!section) return null;
+  const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
+  const helperGap = commandBarGapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
+    + commandBarGapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
+  return { kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
+    reason: `read from BOTH classic surfaces — the \`getSectionActions()\` menu and the buttons the section inserts through its own view \`diff\` (each row's Source cell says which)${helperGap} — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar` };
+}
+// ENG-96457 (item 4) — THE CLASSIC SIDE EFFECT THE PLAN USED TO DENY. "The Classic section stays untouched" is
+// false: which page an entity's `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, not on a page,
+// and Classic's section `Add` reads the SAME binding. So the moment this migration points that binding at the
+// Freedom form (or at the Freedom mini page), the Classic section's `Add` opens the Freedom page too — confirmed
+// on-stand in ENG-96445, where Classic `BusinessRule1Section` → `ДОБАВИТЬ` began opening
+// `UsrBusinessRule_TopAreaFormPage`. It is a DECISION, not a note: the operator either accepts it or asks for
+// Classic routing to be kept, and either answer changes what the build does. Emitted for every section
+// migration, because the binding is object-level whatever this page's layout turns out to be.
+function listAddRoutingDecision(section) {
+  if (!section) return null;
+  return { kind: LIST_DECISION_KIND.addRouting, item: "Classic `Add` will open the Freedom page",
+    reason: "which page an `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, and the Classic section reads the same binding — so pointing it at the Freedom form/mini page ALSO re-points Classic's `Add`, and the Classic section is NOT left untouched once that binding exists. Accept that (the usual answer for a switch-over), or say the Classic routing must be kept — in which case the Freedom page needs its own binding scope and the plan's approach must stop claiming the two run in isolation" };
+}
+function listRowActionDecisions(rowActions) {
+  return rowActions.map((ra) => {
+    const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
+    return { kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
+      reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` };
+  });
+}
+// ENG-94714 — one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
+// `OpportunitySectionV2` grid declares twenty such keys, and twenty rows would bury the two that carry a real
+// question (`controlColumnName`, `applyControlConfig`) under eighteen restatements of base grid wiring. The
+// element name is the stable half of the evidence id, so it is the `item`; the keys live in the reason.
+function listGridConfigDecisions(section) {
+  return (section?.sectionView?.gridConfig || []).map((g) => ({ kind: LIST_DECISION_KIND.gridConfig, item: `element config: ${g.name}`,
+    // The grid clause is appended only for the GRID, because it is about the grid: appending it to a button's
+    // `menu` key produced a reason that explained cell rendering to a reader looking at a dropdown.
+    reason: `\`${g.name}\`${g.package ? " (from `" + g.package + "`)" : ""} declares ${g.props.length} configuration key(s) this engine models on no field: ${g.props.map((k) => "`" + k + "`").join(" · ")}. They were read off the section's own \`diff\` and are carried here rather than dropped — decide per key whether the Freedom list page already provides the behaviour itself, or whether it needs an explicit equivalent.${g.region === LIST_REGION.GRID ? " On the grid, `controlColumnName` and its `applyControlConfig`/`controlCellClass` companions render a control INSIDE a cell, which has no obvious Freedom analog — resolve that one on-stand." : ""}` }));
+}
+// A section-declared element the list vocabulary cannot read. Named with its KIND, because the remedy differs:
+// an unmapped kind is a gap in this engine's table, an unresolved region usually means the section seed is
+// missing so the element's ancestry runs off the folded tree.
+function listSectionElementDecisions(section) {
+  return (section?.sectionView?.openItems || []).map((e) => {
+    const where = e.region === LIST_REGION.UNRESOLVED
+      ? "its ancestry reaches no recognised list container, which usually means the section's own template seed (`section.seed`) was not supplied"
+      : `it sits on the ${e.region} surface`;
+    const cond = e.conditions?.length
+      ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
+      : "";
+    return { kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
+      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${cond}` };
+  });
+}
+function listProcessDecision(section) {
+  if (!section?.processLaunch) return null;
+  return { kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
+    reason: "the Classic section launches it — wire it as a list-page run-process action" };
+}
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
@@ -2583,90 +2675,20 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
   const out = [];
   const columnSet = listColumnsDecision(section, columns);
   if (columnSet) out.push(columnSet);
-  for (const c of columns.filter((x) => x.dataValueType == null)) {
-    out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
-      reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
-  }
-  for (const c of columns.filter((x) => x.isPath)) {
-    out.push({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
-      reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` });
-  }
-  for (const f of filters.filter((x) => x.quickFilterType == null)) {
-    out.push({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
-      reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` });
-  }
-  // The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
-  // to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
-  // the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
-  // omitted here disables search, the folder tree or the filter builder with no error anywhere.
-  if (filters.length) {
-    // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
-    // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
-    out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
-      reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
-  }
-  // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
-  // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
-  if (section) {
-    const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
-    // Two further ways the list can be short, each stated as what it is. `unresolved` = the method is defined
-    // nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
-    // claiming nobody defines it would be false.
-    const tick = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
-    const gapClause = (names, why) => {
-      if (!names.length) return "";
-      const behind = names.length > 1 ? "them" : "it";
-      return `; and ${names.map(tick).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
-    };
-    const helperGap = gapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
-      + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
-    out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-      reason: `read from BOTH classic surfaces — the \`getSectionActions()\` menu and the buttons the section inserts through its own view \`diff\` (each row's Source cell says which)${helperGap} — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar` });
-  }
-  // ENG-96457 (item 4) — THE CLASSIC SIDE EFFECT THE PLAN USED TO DENY. "The Classic section stays untouched" is
-  // false: which page an entity's `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, not on a page,
-  // and Classic's section `Add` reads the SAME binding. So the moment this migration points that binding at the
-  // Freedom form (or at the Freedom mini page), the Classic section's `Add` opens the Freedom page too — confirmed
-  // on-stand in ENG-96445, where Classic `BusinessRule1Section` → `ДОБАВИТЬ` began opening
-  // `UsrBusinessRule_TopAreaFormPage`. It is a DECISION, not a note: the operator either accepts it or asks for
-  // Classic routing to be kept, and either answer changes what the build does. Emitted for every section
-  // migration, because the binding is object-level whatever this page's layout turns out to be.
-  if (section) {
-    out.push({ kind: LIST_DECISION_KIND.addRouting, item: "Classic `Add` will open the Freedom page",
-      reason: "which page an `Add` opens is an ADD-purpose RelatedPage binding on the OBJECT, and the Classic section reads the same binding — so pointing it at the Freedom form/mini page ALSO re-points Classic's `Add`, and the Classic section is NOT left untouched once that binding exists. Accept that (the usual answer for a switch-over), or say the Classic routing must be kept — in which case the Freedom page needs its own binding scope and the plan's approach must stop claiming the two run in isolation" });
-  }
-  for (const ra of rowActions) {
-    const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
-    out.push({ kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
-      reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` });
-  }
-  // ENG-94714 — one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
-  // `OpportunitySectionV2` grid declares twenty such keys, and twenty rows would bury the two that carry a real
-  // question (`controlColumnName`, `applyControlConfig`) under eighteen restatements of base grid wiring. The
-  // element name is the stable half of the evidence id, so it is the `item`; the keys live in the reason.
-  for (const g of section?.sectionView?.gridConfig || []) {
-    out.push({ kind: LIST_DECISION_KIND.gridConfig, item: `element config: ${g.name}`,
-      // The grid clause is appended only for the GRID, because it is about the grid: appending it to a button's
-      // `menu` key produced a reason that explained cell rendering to a reader looking at a dropdown.
-      reason: `\`${g.name}\`${g.package ? " (from `" + g.package + "`)" : ""} declares ${g.props.length} configuration key(s) this engine models on no field: ${g.props.map((k) => "`" + k + "`").join(" · ")}. They were read off the section's own \`diff\` and are carried here rather than dropped — decide per key whether the Freedom list page already provides the behaviour itself, or whether it needs an explicit equivalent.${g.region === LIST_REGION.GRID ? " On the grid, `controlColumnName` and its `applyControlConfig`/`controlCellClass` companions render a control INSIDE a cell, which has no obvious Freedom analog — resolve that one on-stand." : ""}` });
-  }
-  // A section-declared element the list vocabulary cannot read. Named with its KIND, because the remedy differs:
-  // an unmapped kind is a gap in this engine's table, an unresolved region usually means the section seed is
-  // missing so the element's ancestry runs off the folded tree.
-  for (const e of section?.sectionView?.openItems || []) {
-    const where = e.region === LIST_REGION.UNRESOLVED
-      ? "its ancestry reaches no recognised list container, which usually means the section's own template seed (`section.seed`) was not supplied"
-      : `it sits on the ${e.region} surface`;
-    const cond = e.conditions?.length
-      ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
-      : "";
-    out.push({ kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
-      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${cond}` });
-  }
-  if (section?.processLaunch) {
-    out.push({ kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
-      reason: "the Classic section launches it — wire it as a list-page run-process action" });
-  }
+  out.push(...listColumnTypeDecisions(columns));
+  out.push(...listColumnPathDecisions(columns));
+  out.push(...listFilterTypeDecisions(filters));
+  const filterAttrs = listFilterAttributesDecision(filters);
+  if (filterAttrs) out.push(filterAttrs);
+  const commandBar = listCommandBarDecision(section, actions);
+  if (commandBar) out.push(commandBar);
+  const addRouting = listAddRoutingDecision(section);
+  if (addRouting) out.push(addRouting);
+  out.push(...listRowActionDecisions(rowActions));
+  out.push(...listGridConfigDecisions(section));
+  out.push(...listSectionElementDecisions(section));
+  const process = listProcessDecision(section);
+  if (process) out.push(process);
   return out;
 }
 // ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------

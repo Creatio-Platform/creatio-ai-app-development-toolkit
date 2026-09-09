@@ -1813,6 +1813,17 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
   if (op.valuesKeys?.has("itemType")) cur.itemTypeUnresolved = !!op.itemTypeUnresolved;
 }
 
+// own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
+function applyMergeOrderVisible(op, cur) {
+  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+}
+// Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
+function applyMergeContentFields(op, cur) {
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
+  }
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg }, warnings) {
@@ -1836,14 +1847,12 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   // replace: two layers may each add their own unmodelled key to the same element, and the last one to run is not
   // the only one that took effect.
   for (const k of unmodelledValueKeys(op, seed)) cur.unmodelledProps.add(k);
-  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  applyMergeOrderVisible(op, cur);
   // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
   // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
   // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
   // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
-    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
-  }
+  applyMergeContentFields(op, cur);
   // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
   // a layer that restates `labelConfig` (the WorkInternalRequest custom-label idiom) must be able to overwrite a
   // lower layer's label, and `caption` never appears in its `values` at all.
@@ -1913,49 +1922,53 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
 const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
   "layout", "tip", "hint", "generator", "visible", "caption"]);
 const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
+// One removed key. Returns true when the key is UNMODELLED (nothing here represents its clearing), false when the
+// removal's effect is fully applied — the caller only needs that verdict, not the branching that produced it. Own
+// fn so `replayRemoveProperties` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
+function clearRemovedProperty(cur, k) {
+  if (!REMOVABLE_ITEM_PROPS.has(k)) {
+    // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
+    // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
+    // exists to prevent (ENG-94714). The fidelity warning below is unaffected: the removal's EFFECT is still
+    // unrepresented, which is a different statement from "the key is still set".
+    cur.unmodelledProps.delete(k);
+    return true;
+  }
+  // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
+  // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
+  if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; return false; }
+  // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
+  // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
+  // what the runtime renders (`getLabelCaption`).
+  if (k === "labelConfig") { cur.labelCaption = null; return false; }
+  // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
+  // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
+  // silenced the trigger but left the static value would be half-applied.
+  if (HANDLER_PROPS.has(k)) {
+    // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
+    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
+    // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
+    // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
+    // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
+    // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+    const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
+    if (wasModelled) delete cur.handlers[k];
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled;   // handler-only key: the map entry was the whole effect it could have
+  }
+  if (!TOP_LEVEL_ITEM_PROPS.has(k)) return false;   // not a handler and not a field: nothing modelled to clear
+  // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
+  // "absent vs unreadable" ambiguity this ticket removed elsewhere.
+  cur[k] = null;
+  if (k === "itemType") cur.itemTypeUnresolved = false;
+  return false;
+}
+
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
+  // provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
+  // per-key would list the same package twice on an element with several removed keys.
   for (const k of op.properties) {
-    if (!REMOVABLE_ITEM_PROPS.has(k)) {
-      unmodelled.push(k);
-      // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
-      // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
-      // exists to prevent (ENG-94714). The fidelity warning below is unaffected: the removal's EFFECT is still
-      // unrepresented, which is a different statement from "the key is still set".
-      cur.unmodelledProps.delete(k);
-      continue;
-    }
-    // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
-    // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
-    // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
-    // here as well listed the same package twice on an element whose `value` a layer cleared.)
-    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
-    // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
-    // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
-    // what the runtime renders (`getLabelCaption`).
-    if (k === "labelConfig") { cur.labelCaption = null; continue; }
-    // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
-    // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
-    // silenced the trigger but left the static value would be half-applied.
-    if (HANDLER_PROPS.has(k)) {
-      // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
-      // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
-      // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
-      // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
-      // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
-      // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
-      const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
-      if (wasModelled) delete cur.handlers[k];
-      if (!TOP_LEVEL_ITEM_PROPS.has(k)) {   // handler-only key: the map entry was the whole effect it could have
-        if (!wasModelled) unmodelled.push(k);
-        continue;
-      }
-    }
-    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // not a handler and not a field: nothing modelled to clear
-    // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
-    // "absent vs unreadable" ambiguity this ticket removed elsewhere.
-    cur[k] = null;
-    if (k === "itemType") cur.itemTypeUnresolved = false;
+    if (clearRemovedProperty(cur, k)) unmodelled.push(k);
   }
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true;
