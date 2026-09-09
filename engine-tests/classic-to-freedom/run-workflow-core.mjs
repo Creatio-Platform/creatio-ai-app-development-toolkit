@@ -37,6 +37,8 @@ import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } fr
 import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
 import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
 import { INDEX_ENTRY as SCHEMA_INDEX_ENTRY } from "../../skills/_workflow-core/behaviour-analysis/schemas.mjs";
+import * as behaviourSchemas from "../../skills/_workflow-core/behaviour-analysis/schemas.mjs";
+import * as buildSchemas from "../../skills/_workflow-core/build-executor/schemas.mjs";
 import * as bex from "../../skills/_workflow-core/build-executor/core.mjs";
 import { makeContext, makePaths } from "../../skills/_workflow-core/build-executor/context.mjs";
 import { DEFAULT_MAX_ROUNDS, parkedKeys, parkableKeys, unitStem, continuationAllowed,
@@ -79,6 +81,41 @@ const check = (name, cond, detail) => {
   fail++; console.log("  ❌ " + name + (threw ? "  (threw: " + threw.message + ")" : ""));
   if (detail !== undefined) { let d; try { d = typeof detail === "function" ? detail() : detail; } catch (e) { d = "<detail threw: " + e.message + ">"; } console.log("      ↳ " + (typeof d === "string" ? d : JSON.stringify(d))); }
 };
+
+// ENG-96571/host-compat — the reason the Describe agent DEATHED at plan step 5.1 was NOT the `enum` (the Claude
+// Code Workflow host compiles `enum` fine — freedom-build-executor ships several) but the `dependentRequired`:
+// the host validates every agent response schema with Ajv in STRICT mode, and Ajv's draft-07 vocabulary has no
+// `dependentRequired` (a draft-2019 keyword) — so it throws `strict mode: unknown keyword` and rejects the whole
+// agent (reproduced in-session: BOTH/DEP_ONLY die on that exact message, ENUM_ONLY/NEITHER live). This guard
+// mirrors that check WITHOUT Ajv (the offline suite has no deps): it walks a schema structure-aware and returns
+// every keyword-position key that is NOT in Ajv's known draft-07 set. An ALLOWLIST, not a denylist, so it fails
+// on ANY draft-2019/2020 keyword the host would reject (dependentRequired, dependentSchemas, unevaluated*,
+// prefixItems, …), at ANY depth — closing the "the spot-check only looked at the two removed sites" hole
+// (a stray keyword on a sibling property no longer ships green).
+const SCHEMA_KW_SUBSCHEMA = new Set(["items", "additionalItems", "additionalProperties", "not", "if", "then", "else", "contains", "propertyNames"]);
+const SCHEMA_KW_SUBSCHEMA_ARRAY = new Set(["allOf", "anyOf", "oneOf"]);
+const SCHEMA_KW_SCHEMA_MAP = new Set(["properties", "patternProperties", "definitions", "$defs", "dependencies"]);
+const SCHEMA_KW_LEAF = new Set([
+  "type", "enum", "const", "required", "format", "title", "description", "default", "examples",
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+  "minLength", "maxLength", "pattern", "minItems", "maxItems", "uniqueItems",
+  "minProperties", "maxProperties", "$ref", "$id", "$schema", "$comment",
+  "readOnly", "writeOnly", "nullable", "deprecated",
+]);
+const SCHEMA_KW_KNOWN = new Set([...SCHEMA_KW_SUBSCHEMA, ...SCHEMA_KW_SUBSCHEMA_ARRAY, ...SCHEMA_KW_SCHEMA_MAP, ...SCHEMA_KW_LEAF]);
+// The draft-07 keywords whose VALUE is a map of arbitrary NAME -> subschema (`dependencies` may also map to a
+// string[]); we recurse into the values but never keyword-check the names.
+function hostIncompatibleKeywords(node, path = "$", bad = []) {
+  if (node == null || typeof node !== "object" || Array.isArray(node)) return bad;
+  for (const [k, v] of Object.entries(node)) {
+    if (!SCHEMA_KW_KNOWN.has(k)) { bad.push(`${path}.${k}`); continue; }
+    if (SCHEMA_KW_SUBSCHEMA.has(k)) hostIncompatibleKeywords(v, `${path}.${k}`, bad);
+    else if (SCHEMA_KW_SUBSCHEMA_ARRAY.has(k)) (Array.isArray(v) ? v : []).forEach((s, i) => hostIncompatibleKeywords(s, `${path}.${k}[${i}]`, bad));
+    else if (SCHEMA_KW_SCHEMA_MAP.has(k)) { for (const [name, s] of Object.entries(v || {})) hostIncompatibleKeywords(s, `${path}.${k}.${name}`, bad); }
+    // leaf keywords: the value is data (a string, number, array of scalars), not a subschema — do not recurse.
+  }
+  return bad;
+}
 
 /* ---------------------------------------------------------------------------
    1. THE WORK-ITEM PROTOCOL
@@ -902,14 +939,23 @@ console.log("\n===== ENG-96571: the digest is a WORKLIST, and a reported trigger
   check("ENG-96571 A2 ANTI-VACUITY: the table really splits — the first eleven rows are REJECTED with a reason, the last nine ACCEPTED",
     wf.slice(0, 11).every((r) => typeof r === "string" && r.length > 0) && wf.slice(11).every((r) => r === null),
     () => JSON.stringify(wf));
-  check("ENG-96571 (review 1, F): a `from` with NO `trigger` is rejected on ITS OWN reason — half an answer, not 'nothing reported'",
-    /half an answer/.test(String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })))
-    && helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })
-       === engineValidateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" }),
-    () => String(helpers.validateReportedTrigger({ from: "attributes.Stage.onChange", methodName: "reload" })));
-  check("ENG-96571 (review 1, F): the JSON schema states the reverse dependency too — `from` present REQUIRES `trigger`, for hosts that honour `dependentRequired`",
-    JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired) === JSON.stringify({ trigger: ["from"], from: ["trigger"] }),
-    () => JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired));
+  // The two DIRECTIONS of the co-requirement, each on its own named reason and each pinned byte-for-byte to the
+  // engine's mirror (a substring alone would pass even if the two validators drifted to different wordings).
+  const revIn = { from: "attributes.Stage.onChange", methodName: "reload" };  // `from` present, `trigger` absent
+  const fwdIn = { trigger: "lifecycle", methodName: "reload" };               // `trigger` present, `from` absent
+  const revWf = String(helpers.validateReportedTrigger(revIn)), revEng = String(engineValidateReportedTrigger(revIn));
+  const fwdWf = String(helpers.validateReportedTrigger(fwdIn)), fwdEng = String(engineValidateReportedTrigger(fwdIn));
+  check("ENG-96571 (review 1, F): a `from` with NO `trigger` is rejected on ITS OWN reason — half an answer, not 'nothing reported' — byte-identically to the engine",
+    /half an answer/.test(revWf) && revWf === revEng,
+    () => `wf=${revWf}\n         eng=${revEng}`);
+  check("ENG-96571 (review 1, F, forward): the OTHER direction — a `trigger` with NO `from` is rejected on ITS OWN origin-less reason, byte-identically to the engine (Kravchuk: this forward direction previously had no assertion)",
+    /names no `from`/.test(fwdWf) && fwdWf === fwdEng,
+    () => `wf=${fwdWf}\n         eng=${fwdEng}`);
+  check("ENG-96571/host-compat: the JSON schema carries NO `dependentRequired` (Ajv-strict on the host rejects that draft-2019 keyword and DEATHs the Describe agent) — and BOTH directions of the `from`↔`trigger` co-requirement are enforced by `validateReportedTrigger` instead, each matching the engine",
+    SCHEMA_INDEX_ENTRY.dependentRequired === undefined
+    && /half an answer/.test(revWf) && revWf === revEng
+    && /names no `from`/.test(fwdWf) && fwdWf === fwdEng,
+    () => `dependentRequired=${JSON.stringify(SCHEMA_INDEX_ENTRY.dependentRequired)}  reverse: wf=${revWf} eng=${revEng}  forward: wf=${fwdWf} eng=${fwdEng}`);
   check("ENG-96571 A2: the measured Applicants row (`init` reporting itself as its own origin) is rejected on THAT reason, not on a generic one",
     /row itself/.test(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })),
     () => String(helpers.validateReportedTrigger({ trigger: "internal", from: "init", methodName: "init" })));
@@ -1184,10 +1230,38 @@ const SCOPED_GOOD = SCOPED_ENTRY("attribute", "attributes.Stage.onChange");
   check("ENG-96571 A2: a VALID `{trigger:'attribute', from:'attributes.Contact.onChange'}` is ACCEPTED — nothing rejected, no repair round, the run is complete",
     result.rejectedTriggers.length === 0 && result.coverage.complete === true && !asked.some((i) => i.id.startsWith("repair.")),
     () => JSON.stringify({ rejected: result.rejectedTriggers, coverage: result.coverage }));
-  check("ENG-96571 A2: the response SCHEMA advertises the same closed vocabulary and makes `from` required beside a trigger — the host-side half of the check",
+  check("ENG-96571/host-compat: the response SCHEMA KEEPS the closed-vocabulary `enum` on `trigger` (the Claude Code Workflow host compiles `enum` — freedom-build-executor ships several) but carries NO `dependentRequired` (the host rejects THAT construct and DEATHs the Describe agent); the `from`↔`trigger` co-requirement lives in validateReportedTrigger, `trigger` stays a string and behaviourEstablished a boolean",
     () => { const t = SCHEMA_INDEX_ENTRY.properties.trigger;
-      return t.enum.join(",") === helpers.REPORTED_TRIGGERS.join(",") && SCHEMA_INDEX_ENTRY.dependentRequired.trigger.join(",") === "from"
+      return Array.isArray(t.enum) && t.enum.join(",") === helpers.REPORTED_TRIGGERS.join(",")
+        && SCHEMA_INDEX_ENTRY.dependentRequired === undefined
+        && t.type === "string" && helpers.REPORTED_TRIGGERS.length > 0
         && SCHEMA_INDEX_ENTRY.properties.behaviourEstablished.type === "boolean"; });
+
+  // The spot-check above pins the TWO sites the fix touched. But the host rejects a host-incompatible keyword
+  // ANYWHERE in the schema, so a stray one on a SIBLING property (m-dymytrova: `enum` on `note` shipped green;
+  // generalised here to the real killer class) would DEATH the agent while these two asserts stayed green. So walk
+  // EVERY exported response schema of BOTH workflow cores and assert not one carries a keyword outside Ajv's
+  // draft-07 vocabulary — the same thing the host would refuse to compile.
+  const SCHEMA_MODULES = [["behaviour-analysis", behaviourSchemas], ["build-executor", buildSchemas]];
+  for (const pair of SCHEMA_MODULES) {
+    const modName = String(pair[0]), mod = pair[1];
+    for (const [name, val] of Object.entries(mod)) {
+      if (val == null || typeof val !== "object" || Array.isArray(val)) continue;
+      if (!("type" in val || "properties" in val || "enum" in val)) continue; // skip exported scalars/consts
+      const bad = hostIncompatibleKeywords(val, `${modName}.${name}`);
+      check(`ENG-96571/host-compat: every keyword in ${modName}.${name} is Ajv-draft-07-compilable — no draft-2019/2020 keyword (dependentRequired, dependentSchemas, unevaluated*, …) survives at ANY depth, so the host will not reject the agent`,
+        bad.length === 0, () => `host-incompatible keyword(s): ${bad.join(", ")}`);
+    }
+  }
+  // ANTI-VACUITY — the walk must actually FIRE. A `dependentRequired` planted DEEP on a sibling property of the
+  // real INDEX_ENTRY (exactly m-dymytrova's mutation, one level down) is caught; and a DIFFERENT draft-2019
+  // keyword (`dependentSchemas`) is caught too, proving the guard is an allowlist and not `dependentRequired`-only.
+  check("ENG-96571/host-compat ANTI-VACUITY: the walk catches a `dependentRequired` planted deep on a sibling property (the exact green-shipping mutation)",
+    hostIncompatibleKeywords({ type: "object", properties: { note: { type: "string" }, inner: { type: "object", properties: { x: { type: "string" } }, dependentRequired: { x: ["note"] } } } }).length === 1);
+  check("ENG-96571/host-compat ANTI-VACUITY: the walk is an ALLOWLIST — it also catches a different draft-2019 keyword (`dependentSchemas`), not just `dependentRequired`",
+    hostIncompatibleKeywords({ type: "object", dependentSchemas: { a: { type: "string" } } }).length === 1);
+  check("ENG-96571/host-compat ANTI-VACUITY: a plain `enum` on any property is NOT flagged (the host compiles `enum`) — the guard does not regress the fix's own thesis",
+    hostIncompatibleKeywords({ type: "object", properties: { note: { type: "string", enum: ["a", "b"] } } }).length === 0);
 }
 
 /* ---------------------------------------------------------------------------
