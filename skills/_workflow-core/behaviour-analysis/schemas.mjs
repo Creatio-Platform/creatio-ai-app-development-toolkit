@@ -5,10 +5,11 @@
 // cannot run this workflow at all, which is why `structuredOutput` is a REQUIRED
 // capability rather than a degradable one.
 //
-// The reported-trigger vocabulary lives in `helpers.mjs` (the leaf module) and is enforced ONLY by
-// `validateReportedTrigger` there — the response SCHEMA below no longer advertises it via `enum`, because the
-// Claude Code Workflow host's structured-output does not compile `enum`/`dependentRequired` and rejects the whole
-// Describe agent when the schema carries one. So this module no longer imports anything from helpers.
+// The reported-trigger vocabulary lives in `helpers.mjs` (the leaf module), so the SCHEMA that advertises it via
+// `enum` and the VALIDATOR that enforces it arithmetically read one list. The generator inlines helpers before
+// schemas into one scope and strips every `import`, so this line ships as nothing at all.
+
+import { REPORTED_TRIGGERS } from './helpers.mjs'
 
 export const SCOPE = {
   type: 'object',
@@ -75,25 +76,23 @@ export const INDEX_ENTRY = {
     bodyAc: { type: 'array', items: { type: 'string' } },
     // Only when this run resolved one the engine could not — and only from the CLOSED vocabulary. A bare string
     // let `{"trigger":"internal","from":"init"}` through on the row named `init`, which rendered as an answered
-    // trigger and cleared the row out of the plan's unresolved count. NO `enum` here on purpose: the Claude Code
-    // Workflow host's structured-output does NOT compile a JSON-Schema `enum` (nor `dependentRequired`, dropped
-    // below) and REJECTS the whole Describe agent when the schema carries one — so `classic-behaviour-analysis`
-    // failed every Describe agent at plan step 5.1 (empty agentId, null return → DEATH). The closed-vocabulary
-    // check lives ENTIRELY in `validateReportedTrigger` (the arithmetic half), which every emit path already runs.
-    // ENG-96571 (host-compat) — this `enum`/`dependentRequired` removal is a SHARED workflow-contract fix, its own
-    // logical change carried in this branch (reviewable/revertable independently of the ENG-96327 readability work):
-    // the schema is the structured-output contract every Describe agent must satisfy, not a display concern.
-    trigger: { type: 'string' },
+    // trigger and cleared the row out of the plan's unresolved count. The enum is the host-side half of the
+    // check; `validateReportedTrigger` is the arithmetic half, because hosts vary in how much of a JSON schema
+    // they actually enforce. The Claude Code Workflow host DOES compile `enum` (freedom-build-executor ships
+    // several), so it stays; only `dependentRequired` below was the host incompatibility and is dropped.
+    trigger: { type: 'string', enum: REPORTED_TRIGGERS },
     from: { type: 'string' },
     note: { type: 'string' },
     // The analysis agent's own admission that it could NOT establish the behaviour. An entry carrying `false` is
     // not coverage (see `behaviourEstablished` in helpers.mjs) and the engine keeps the row's `⚠ not described`.
     behaviourEstablished: { type: 'boolean' },
   },
-  // NO `dependentRequired` here either: like `enum` above, the Claude Code Workflow host's structured-output does
-  // not compile it and rejects the whole Describe agent. The `from`↔`trigger` co-requirement (an origin-less
-  // reported trigger, or a `from` with no `trigger`, each answers nothing) is enforced ENTIRELY and in BOTH
-  // directions by `validateReportedTrigger` in helpers.mjs, which every emit path already runs.
+  // NO `dependentRequired` here: the Claude Code Workflow host's structured-output does NOT compile it and rejects
+  // the whole Describe agent when the schema carries one — which failed every Describe agent at plan step 5.1
+  // (empty agentId, null return → DEATH) on the Applicants run. `enum` above is kept because the host DOES compile
+  // it (freedom-build-executor ships several); `dependentRequired` alone is the incompatibility. The `from`↔`trigger`
+  // co-requirement (an origin-less reported trigger, or a `from` with no `trigger`, each answers nothing) is enforced
+  // ENTIRELY and in BOTH directions by `validateReportedTrigger` in helpers.mjs, which every emit path already runs.
 }
 
 export const DESCRIBE_SCHEMA = {

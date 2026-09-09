@@ -550,7 +550,7 @@ const INDEX_ENTRY = {
     useCase: { type: 'string' },
     bodyCard: { type: 'string' },
     bodyAc: { type: 'array', items: { type: 'string' } },
-    trigger: { type: 'string' },
+    trigger: { type: 'string', enum: REPORTED_TRIGGERS },
     from: { type: 'string' },
     note: { type: 'string' },
     behaviourEstablished: { type: 'boolean' },

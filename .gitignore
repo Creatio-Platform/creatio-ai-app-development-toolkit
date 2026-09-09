@@ -29,6 +29,13 @@ output/
 # in the client's own migration-project repo — it is intentionally NOT ignored (and its names collide with the
 # toolkit's own references/*.md, so they must never be blanket-ignored here).
 scratch_*
+# Same artifact class, second backstop: a hand-run manifest dropped at the repository ROOT. `scratch_*` only
+# catches the names the skill itself writes; a manual `node migrate.mjs man6.json ...` does not use them, and
+# that is exactly how a Classic schema body reached the root once. Anchored with a leading `/` on purpose —
+# unanchored it would also swallow the tracked engine-test fixtures at
+# engine-tests/classic-to-freedom/fixtures/*/manifest.json. `.release-manifest.json` starts with a dot, so it
+# is not matched either.
+/man*.json
 
 # Classic→Freedom migration DESIGN scratch — internal self-review, POC schema bodies, design docs and the
 # architecture deck produced while building the skill. Kept on disk for reference but NOT shipped with the

@@ -30,7 +30,11 @@
 // ENG-95930's counts-plus-pointer pattern and `openRanked` left the return shape (DR-4 in the executor's decision
 // records) — and a THIRD time, still in ENG-96204, when the engine began publishing per-page severity counts the
 // stop tallies (AC 2), spent round answers became a queue-file record the gate refuses by (`consumedRoundAnswers`,
-// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. It therefore says nothing
+// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. Replaced a FOURTH time,
+// in ENG-96776: the Reconcile answer became a copied state line plus the four stand facts, so every Reconcile
+// prompt diverged on purpose and no single scripted answer can drive both copies — the old script cannot read the
+// new wire shape, and the new one refuses the old. The same replacement also carries that change's persist-prompt
+// addition (the settle-window list, which the carry held and no instruction asked for). It therefore says nothing
 // about the change that replaced it — that change's own coverage is the executed suites in `run-infra.mjs` and
 // `run-workflow-core.mjs` — and everything about the NEXT one: the whole prompt text and return shape of the
 // current behaviour is now pinned byte for byte. The value of this file is always forward-looking, which is why
@@ -68,6 +72,7 @@
 // any scenario that depends on a real filesystem — the host has none, and neither do these.
 //
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
+import { asReconcileAnswer, isReconcileStateAnswer } from "./_testkit.mjs";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -208,6 +213,82 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "`discrepancies` as `{ unit, id, kind, claim, found, round }`",
       why: "the refuted-answer dedup keys on `(unit, id)`, so `id`/`kind` must be named in the read step or the identity does not survive an agent transcription and every resume re-files the row",
     },
+    {
+      // PR #157 REVIEW (round 2, Blocker on gate.mjs:114) — the same class of change as the one above, on the same
+      // line, and for a stronger reason. `subject` moves the TERMINAL PARK verdict to the producer: the agent that
+      // hit the blocker says whether the failing artefact is the Classic source it read from or the page it just
+      // wrote, and `classifyBlocker` prefers that answer over its own prose patterns. The field has to be named
+      // HERE or it does not survive a resume — `schemas.mjs` states the rule (an agent reproduces the fields it is
+      // told about and drops the rest), so an unnamed `subject` is a declared verdict silently downgraded to a
+      // regex guess on the one axis where a wrong guess drops a deliverable for good.
+      // The baseline predates the field and has no rows carrying it, so this is a one-way intended divergence
+      // rather than baseline drift — the same standing as the `discrepancies` identity above.
+      baseline: "`blocked` as `{ unit, what, why }`",
+      shipped: "`blocked` as `{ unit, what, why, subject }`",
+      why: "`subject` carries the producer's own source-vs-builder answer for the terminal park verdict; a field the read step does not name is dropped by the transcription, and the park then falls back to the prose patterns this review found five false positives in",
+    },
+    {
+      // The other half of the same change: the BUILD prompts have to ASK for `subject`, or no agent ever supplies
+      // it and the producer channel is inert. `BLOCKER_SUBJECT_RULE` is appended to the page and reach unit prompts
+      // right after `SETTLE_RETRY_RULE`, so the divergence is a SUFFIX on that line — pinned per-substring at the
+      // JUNCTION (the shipped half carries the last words of the baseline line plus the first words of the rule),
+      // which is what stops an unrelated edit to this long line riding in on the entry.
+      // TWO additions now ride on this one line, in order: D7's `unsettled` ask (Minor 5) and the blocker-subject
+      // rule. The shipped half pins the FIRST junction and the tail of the pair, so neither can be removed and
+      // neither an unrelated edit between them nor a re-ordering would still match.
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "an unconfirmed row costs one re-run. **AND RETURN `unsettled: true` WHEN YOU END ON AN UNCONFIRMED READ**",
+      why: "the build agent is the producer of both `unsettled` (D7's per-unit settle memory) and `subject` (the terminal-park verdict), so the page and reach prompts must ask for them; appended rather than inserted because the parity runner compares line counts before consulting this list",
+    },
+    {
+      baseline: "A blocked run costs the operator the session; an unconfirmed row costs one re-run.",
+      shipped: "Omit it when your reads settled. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the second half of the same line: the blocker-subject rule follows D7's `unsettled` ask, and pinning the junction between them stops either being dropped silently",
+    },
+    {
+      // Same rule, on the APP unit prompt, appended to the line that already tells it a substitute package is a
+      // `blocked` rather than a near-enough — the app unit files the `create-app` / `create-app-section` blockers
+      // whose subject is least ambiguous to it and most ambiguous to a regex.
+      baseline: "building into a substitute passes here and fails the whole tree later.",
+      shipped: "building into a substitute passes here and fails the whole tree later. SAY WHICH ARTEFACT FAILED WHEN YOU FILE A `blocked` ROW",
+      why: "the app unit files blockers too, and it is the one unit whose `blocked` rows name tool failures a prose classifier reads worst",
+    },
+    {
+      // PR #157 REVIEW (round 2, Major on core.mjs:2584) — THE DELETE IS CORROBORATED BEFORE IT HAPPENS.
+      // `standWrites.appScaffold` decides what may be removed on a live customer stand, and every value in it was a
+      // free-form NAME asserted by the same agent, with `got === unit.package` — an equality between two strings
+      // that agent supplied — as the only guard. A page this run did not create reads exactly like its own debris
+      // from a name alone. So the step that calls `delete-app-section` now re-reads the artefact and checks BOTH its
+      // package and the UId `create-app` returned for the stub it minted, and declines rather than guessing.
+      baseline: "Say in `proposals` if the stub cannot be removed, and never leave it silently.",
+      shipped: "DELETE BY THE ID THE TOOL GAVE YOU, NOT BY THE NAME YOU REMEMBER",
+      why: "an agent-asserted name is not corroboration for a destructive call; the identity check is appended to the step that makes it, on both app arms",
+    },
+    {
+      // The record side of the same finding: the machine ids that make the check possible, and `withdraw` — the
+      // retraction channel. `null` could not be it: the prompt already assigns `null` the meaning "there is none of
+      // this", and reading that as a retraction is the inverse bug the PREVIOUS review round's defensive merge
+      // closed. Three states where there were two — a value replaces, `null`/absent leaves standing, `withdraw`
+      // clears — so a corrected report can withdraw a wrong licence without a narrower one erasing a right it.
+      // Keyed on the phrase BOTH app arms open 5b with — the no-menu arm ends "...removes what is on this list and
+      // nothing else." and the default arm "...never report a removal you did not make." — so one entry covers the
+      // pair without a substring so short it would match unrelated lines.
+      baseline: "WRITE DOWN EVERYTHING YOU MINTED (ENG-96458 / D6), removed or not",
+      shipped: "AND RECORD THE MACHINE IDS BESIDE THE NAMES",
+      why: "`stubSectionUId`/`stubEntityUId`/`sectionSchemaUId` are the only facts here a later unit can check the stand against, and `withdraw` makes a wrong licence retractable without giving `null` a second meaning",
+    },
+    {
+      // PR #157 REVIEW (round 2, Minor 5) — D7'S SETTLE WINDOW GETS A PER-UNIT MEMORY, and the memory has to
+      // survive an invocation: the rounds an operator drives are separate processes, which is the axis where
+      // re-spending a ~2-minute reload-and-wait per unit per round compounds. `unsettledUnits` therefore rides in
+      // `roundState`, and `schemas.mjs` states the rule that a field the read step does not NAME is dropped by the
+      // transcription — so naming it here is what makes the memory real rather than per-process.
+      // The baseline predates the field and has no folder carrying one, so this is a one-way intended divergence,
+      // the same standing as the two `roundState` siblings before it.
+      baseline: "plus `pendingContradiction` when the file has one.",
+      shipped: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
+      why: "`unsettledUnits` is the folder's memory of which units have already spent D7's settle window; a field the Reconcile read step does not name does not survive a resume, and the waste it prevents is per-resume",
+    },
   ],
 }
 
@@ -322,11 +403,14 @@ function buildScenarios() {
   const APPROVED = { found: true, version: "plan-abc123", date: "2026-08-01", who: "alex", recordedIn: "decisions.md", quote: "approved plan-abc123" };
   // ENG-95930 — the per-page `buildComplete` is REQUIRED by `RECONCILE_SHAPE.verify` and checked on arrival, so a
   // fixture omitting it is refused before it can be compared. Top-level `builderOpen` is NOT required (the shape's
-  // `required` is complete/missing/unverified/pages) — it is carried here because the engine's summary publishes it
-  // and a realistic fixture should look like the real answer, not because the checker demands it.
+  // `required` is complete/missing/unverified/buildMissing/pending/pages) — it is carried here because the engine's
+  // summary publishes it and a realistic fixture should look like the real answer, not because the checker demands
+  // it. `pending` joined that list in ENG-96458 and is why this fixture carries `pending: 0`: an omitted count
+  // leaves the ☐ confirmations hold inert, so the shape refuses the answer rather than defaulting it (the refusal
+  // itself is pinned in `run-infra.mjs`).
   // PR review — `buildMissing` at the TOP LEVEL as well as per page: it is `required` by `RECONCILE_SHAPE` now (the
   // close line reads exactly that field), so an answer without it is refused and the run stops at `reconcile-failed`.
-  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, builderOpen: 1, planGaps: [], pages, ...extra });
+  const verify = (pages, extra = {}) => ({ complete: false, missing: 1, unverified: 0, buildMissing: 1, pending: 0, builderOpen: 1, planGaps: [], pages, ...extra });
   const openRow = (d) => ({ n: 1, deliverable: d, status: "❌ MISSING", evidence: "missing: Amount" });
   const RECONCILE = (over = {}) => ({
     approval: APPROVED, planVersion: "plan-abc123",
@@ -334,7 +418,7 @@ function buildScenarios() {
     buildOrder: ["child:Documents", "list", "main"],
     targetPackage: "DealPkg", packageState: "exists", mainEntity: "Deal",
     sectionHost: "existing-app", applicationCode: "DealApp",
-    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolved: true, note: "" }],
+    componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "" }],
     pageSchemas: { "child:Documents": "DocsFormPage", list: "DealListPage", main: "DealFormPage" },
     parents: { "child:Documents": "main", list: "main" },
     reachability: [{ key: "sectionRegistered", appliesWhen: true, pages: ["main"], what: "the section is in the app menu", miss: "pages stay unreachable" }],
@@ -353,7 +437,7 @@ function buildScenarios() {
     ...over,
   });
   const GREEN = RECONCILE({
-    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
+    verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pending: 0, builderOpen: 0, planGaps: [], pages: { "child:Documents": { complete: true, buildComplete: true, buildMissing: 0 }, list: { complete: true, buildComplete: true, buildMissing: 0 }, main: { complete: true, buildComplete: true, buildMissing: 0 } } },
     reachabilityState: { sectionRegistered: "true" },
   });
   const BUILT = (unit) => ({
@@ -371,7 +455,7 @@ function buildScenarios() {
   const makeHost = ({ reconciles, build = BUILT, verifyRes = VERIFIED, judge = JUDGED, refs = REFS, persist = PERSISTED, preflight }) => {
     let r = 0;
     return ({ phase, label, prompt }) => {
-      if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r++; return typeof a === "function" ? a() : a }
+      if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r++; const v = typeof a === "function" ? a() : a; return isReconcileStateAnswer({ phase, label }) ? asReconcileAnswer(v) : v }
       if (phase === "Refs") return refs;
       // Preflight is now the FAN-OUT and nothing else: the dedicated `preflight:merge` writer is gone (ENG-95474) —
       // agents return structured records and the existing Judge/Reconcile sequence performs the single write.
@@ -397,9 +481,43 @@ function buildScenarios() {
     // stand one. Both sides share the fixture, so parity passed either way — the bug was invisible here by design.
     { name: "plan-level gap — hard stop 2", args: ARGS, answer: host({ reconciles: [RECONCILE({ planGaps: ["coverage INCOMPLETE (4 unaccounted member(s))"] })] }) },
     { name: "package state unknown — hard stop 3", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "unknown" })] }) },
-    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "not a component type" }] })] }) },
-    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolved: false, note: "install CrtCustomer360App" }] })] }) },
-    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolved: true }] })] }) },
+    { name: "new-app over an existing package — hard stop 3, carrying component mismatches", args: ARGS, answer: host({ reconciles: [RECONCILE({ sectionHost: "new-app", componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "unresolved component type — hard stop 3.5", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: false, note: "install CrtCustomer360App" }] })] }) },
+    // ENG-95468 (residual) — the PROVENANCE branch, driven through BOTH scripts for the reason the note below gives
+    // about the gated-composite branch: two copies of a decision that no scenario exercises can differ for a whole
+    // review round with every parity check green. A catalog-sourced answer must stop as `plan-unvalidated-against-
+    // stand` on both sides, and the un-swept scenario below is its negative twin (absence still logs, never stops).
+    { name: "a catalog-sourced component answer stops as unvalidated, not as a plan defect", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    { name: "an un-swept published type is logged, not gated", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.Label"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true }] })] }) },
+    // PR #159 review (Major 5) — the single-type catalog scenario above drives the provenance stop, but NOT the two
+    // branches the frozen mirror hand-writes into it: the `...alsoAxesClauses(...)` carry (only reached when a
+    // stand-answered defect rides beside the catalog answer) and the `falseFromCatalog` "do NOT re-plan on it" clause
+    // (only reached when the catalog answer is itself `resolved: false`). Deleting either from the mirror alone left
+    // parity green, the exact divergence class recorded on this PR. These two differential scenarios drive both.
+    { name: "PR #159 (Major 5): a MIXED round — a catalog answer beside a stand-confirmed defect — stops as unvalidated AND carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog answer that is ALSO resolved:false drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Blocker, RC-12) — the whole `reconcileShapeErrors` ARRIVAL check (and with it
+    // `componentSweepFaults`) was dropped from the frozen mirror while the shipped script kept it: a malformed
+    // Reconcile answer was refused-and-retried there and silently accepted here, and no scenario submitted one, so
+    // parity stayed green with the two copies divergent. These three drive each of `componentSweepFaults`' three
+    // faults through BOTH scripts — a well-formed answer never reaches them, so only the fault path is exercised.
+    // Each malformed answer is re-asked on all three attempts (the mock clamps to the last `reconciles` entry) and
+    // then stops `reconcile-failed`; deleting the sweep faults (or the whole check) from the mirror alone lets the
+    // baseline ACCEPT on the first attempt, so its dispatch diverges and parity fails — the drift is now mechanical.
+    { name: "PR #159 (RC-12): a BLANK resolvedFrom is REFUSED and retried on both copies (componentSweepFaults FAULT 1)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "", resolved: true, note: "" }] })] }) },
+    { name: "PR #159 (RC-12): an EMPTY sweep against published types is REFUSED and retried on both copies (componentSweepFaults FAULT 2)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [] })] }) },
+    { name: "PR #159 (RC-12): a stand claim its own note contradicts is REFUSED and retried on both copies (componentSweepFaults FAULT 3)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "probe-error" }] })] }) },
+    // PR #159 review round 2 — FAULT 4: a `resolvedFrom` naming NEITHER literal is a shape fault, not a terminal
+    // stop. Before it, `statedNotStand` read `environment` as "not a confirmation" and drove the override-less
+    // `plan-unvalidated-against-stand` stop on a healthy round; now it is refused and retried on both copies. Drive
+    // it through BOTH scripts for the RC-12 reason: two copies of a fault no scenario exercises can diverge unseen.
+    { name: "PR #159 (round 2): an unrecognised `resolvedFrom` word is REFUSED and retried on both copies (componentSweepFaults FAULT 4)", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "environment", resolved: true, note: "resolved on env" }] })] }) },
+    // PR #159 review (Major, kamil) — the MID-RUN package-precondition stop must carry the SAME three axes the
+    // baseline package stop and the plan-invalid stop carry. This drives a mid-run round with an unknown package AND
+    // a stand-confirmed component defect: the package stop fires (checked first) and must still return the component
+    // mismatch. The mirror hand-writes this return, so deleting the axis carry from the mirror alone leaves the
+    // shipped return carrying the mismatch and the mirror at the `runReturn` default `[]` — a NAMED parity failure.
+    { name: "PR #159 (Major, kamil): the mid-run package stop carries the component/template/identity axes on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ packageState: "unknown", componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "stand", resolved: true, note: "ok" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
     // Review (round 5) — the gate path had NO parity scenario, which is why the baseline's copy of the
     // pure-decision block silently kept the pre-hardening `isWellFormedGate` through a whole review round: the
     // two copies could differ on gated input and every parity check still passed. These three drive the
@@ -408,9 +526,9 @@ function buildScenarios() {
     // Each one MUST override `componentTypes` as well: `RECONCILE` defaults it to `["crt.ComboBox"]`, and
     // `componentTypeMismatches` drops any resolution the plan did not publish — so a scenario that overrides only
     // `componentResolution` never reaches the gate branch at all and passes vacuously against either predicate.
-    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
-    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
-    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolved: false, note: "fabricated" }] })] }) },
+    { name: "a gated COMPOSITE stops to install, not to re-plan", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" }] })] }) },
+    { name: "a gate whose id is not a gate name falls back to the re-plan clause", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "Crt Customer 360; rm -rf" }] })] }) },
+    { name: "a gated COMPOSITE mixed with a fabricated type carries both clauses", args: ARGS, answer: host({ reconciles: [RECONCILE({ componentTypes: ["crt.CommunicationOptions", "crt.NotAComponent"], componentResolution: [{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: false, note: "package missing", kind: "composite", id: "CrtCustomer360App" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "fabricated" }] })] }) },
     { name: "a checkpoint key that names no unit — hard stop 4", args: { ...ARGS, mode: "checkpoints", checkpointAfter: ["nope"] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "a finding that names no unit — refused", args: { ...ARGS, findings: [{ unit: "ghost", problem: "wrong" }] }, answer: host({ reconciles: [RECONCILE()] }) },
     { name: "nothing published — no-units-published", args: ARGS, answer: host({ reconciles: [RECONCILE({ unitKeys: [], buildOrder: [], reachability: [] })] }) },
@@ -432,6 +550,17 @@ function buildScenarios() {
     { name: "the app unit builds the package the plan targets", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), GREEN], build: (unit) => (unit === "app" ? { unit: "app", packageName: "DealPkg", appName: "Deals", starterFormPage: "DealFormPage", starterListPage: "DealListPage", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "the app unit produces a DIFFERENT package — it stays open", args: ARGS, answer: host({ reconciles: [RECONCILE({ packageState: "absent" }), RECONCILE({ packageState: "absent" })], build: (unit) => (unit === "app" ? { unit: "app", packageName: "OtherPkg", claimedBuilt: [], blocked: [], proposals: [] } : BUILT(unit)) }) },
     { name: "a plan gap that appears mid-run stops the run", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ planGaps: ["gate BLOCKED (1 correctness signal(s))"] })] }) },
+    // PR #159 review (Major 4) — THE MID-RUN half of the provenance stop, driven in BOTH copies. The single-Reconcile
+    // scenario above it reaches only the baseline call site, and `run-infra.mjs` executes the generated artifact and
+    // never this file's frozen mirror — so before this scenario existed, deleting the whole mid-run provenance block
+    // from the mirror alone left parity 407/0 and infra 856/0 green with the two copies behaviourally divergent.
+    // That is the failure class the gated-composite note above records, measured again.
+    { name: "a stand that goes away MID-RUN stops before the next unit", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
+    // PR #159 review (Major 5) — the MID-RUN twins of the two differential scenarios above. The mirror hand-writes the
+    // provenance stop's construction at BOTH sites, so a deletion from the mid-run copy's `alsoAxesClauses` carry or
+    // `falseFromCatalog` clause is caught only by a scenario that reaches the SECOND Reconcile.
+    { name: "PR #159 (Major 5): a MIXED round MID-RUN carries the ALSO clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox", "crt.NotAComponent"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: true, note: "probe-error" }, { type: "crt.NotAComponent", resolvedFrom: "stand", resolved: false, note: "not a component type" }] })] }) },
+    { name: "PR #159 (Major 5): a catalog resolved:false MID-RUN drives the 'do NOT re-plan on it' clause on both copies", args: ARGS, answer: host({ reconciles: [RECONCILE(), RECONCILE({ componentTypes: ["crt.ComboBox"], componentResolution: [{ type: "crt.ComboBox", resolvedFrom: "catalog", resolved: false, note: "Environment version could not be probed (resolvedFromReason=probe-error)" }] })] }) },
     { name: "a guidelines record that is not fileable is reported, not filed", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], build: (unit) => ({ ...BUILT(unit), guidelines: { evidenceId: `${unit}#quality-gates`, ran: true, referencePage: "", componentsDiffed: [] } }) }) },
     { name: "the persistence step does not confirm — warned, not fatal", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], persist: { written: false } }) },
     { name: "the refs step returns nothing — builders fetch their own", args: ARGS, answer: host({ reconciles: [RECONCILE(), GREEN], refs: null }) },

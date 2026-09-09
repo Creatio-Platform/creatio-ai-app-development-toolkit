@@ -180,10 +180,11 @@ At `stopped: 'paused-at-round'` the return carries four things, and the run writ
 points at them.** `verify.md` is the table an operator reads and `verify.json` is the same rows
 machine-readable, each stamped by the engine with `rowSeverity` (`correctness` / `fidelity`) — so
 **read the correctness rows first**, and a layout polish is never repaired above a missing field.
-That split is this boundary's existing rule, not a new one: the central verify Reconcile transcribes
-the counts-only `verify-summary.json`, its answer is capped at 16000 wire bytes, and per-row prose
+That split is this boundary's existing rule, not a new one: the counts the central verify Reconcile
+carries are the counts-only ones, its answer is capped at 16000 wire bytes, and per-row prose
 crossing this boundary is what truncated a real run's first structured answer before it built
-anything. The severity tally is REAL for pages too: the engine's counts-only `verify-summary.json`
+anything. Those counts are computed into the state line now rather than transcribed, and the cap is
+what the line is measured against. The severity tally is REAL for pages too: the engine's counts-only `verify-summary.json`
 publishes `openCorrectness` / `openFidelity` per page — each open row counted once under the
 `rowSeverity` band stamped on it — and the stop tallies those two integers, never re-deriving the
 band. `unstamped` is left only for a page whose summary predates the two fields (a folder verified by
@@ -336,11 +337,13 @@ being absent, which is the whole invalidation story: no versions, no timestamps.
 time, and rule 2 of the parent skill keeps them out of the generated tables by design — so a slice without them is a
 slice that silently drops what was agreed.
 
-**Reconcile transcribes the DIGEST.** `--verify-digest` is the same verdict shape with the open rows of already-
-complete pages dropped, because a workflow script has no filesystem: the only route from a file into its arithmetic
-is an agent retyping it into a tool call. On that run the full verdict was 102 KB and Reconcile spent 41 minutes, 19
-of its 40 shell commands slicing it and three attempts at its structured answer. `verify.json` is still written,
-unchanged, for audit and for the human table.
+**Reconcile COPIES the state; it does not transcribe it.** `--reconcile` computes the run state from the folder,
+writes `reconcile.json`, and prints it after a fixed marker as one line of JSON. The agent copies that line into
+`summary` and reports only the facts no command can read: the approval, and the four stand reads. A workflow script
+still has no filesystem, so a copy is the one route from a file into its arithmetic — but a copy is verifiable and a
+retyped value is not. The line grows with the plan and shares the answer's byte ceiling: past roughly 32 units the
+run stops at Reconcile naming the size, because a verbatim copy cannot be shortened by re-asking for it.
+`--verify-digest` and `verify.json` are still written, unchanged, for audit and for the human table.
 
 **The parent edge comes from `--units`, not from the plan.** The engine folded the tree; recovering it by parsing
 the `### Child page mappings` prose the same engine printed is how a partial parse made grandchildren read as roots
@@ -685,6 +688,60 @@ Details of the record shapes, the ids and the judge tri-state:
   a code that yields the planned package — the prompt hands it the exact `code` (`SchemaNamePrefix` + code =
   `targetPackage`, so the code is arithmetic). "Choose the code so the package comes out right" is the instruction a
   real run followed to a package the plan did not name; the read-back equality on `packageName` stays the backstop.
+- A plan that was **never validated against the stand at all** — a different stop from the one above, and it comes
+  FIRST on the same stop point. `get-component-info` does not fail when it cannot probe the environment: it answers
+  from its BUNDLED `latest` catalog and still reports `resolved: true`, recording the substitution only in free text.
+  A round that read those answers checked nothing about the stand, so each entry of Reconcile's sweep now carries
+  `resolvedFrom` — `'stand'` (this environment answered) or `'catalog'` (it did not) — and only `'stand'` is a
+  confirmation. Any catalog-sourced answer **stops the run** (`stopped: 'plan-unvalidated-against-stand'`,
+  `standUnconfirmedComponents` on every return) before the first build unit, and again at every in-run Reconcile for
+  a stand that goes away mid-run. This is **not** a re-plan: nothing about a catalog answer implicates the plan —
+  a catalog `resolved: false` is no more evidence about this stand than a catalog `resolved: true` — so the `next`
+  points at the environment (registration, DNS, credentials, `clio ping`) and asks for a re-run. There is no
+  override: a stand whose version cannot be probed while it is otherwise up produces the same catalog answer, and
+  reading that as a confirmation is the defect. `resolvedFrom` is REQUIRED on every entry, enforced by the
+  response-shape check rather than the byte-capped output schema, so it cannot be dropped to switch the gate off
+  (ENG-95468).
+  Details a reader will otherwise get wrong (all from the PR #159 review):
+  the value is matched **case-insensitively**, so a capitalisation variant cannot hard-stop a healthy round, and a
+  word that names **neither** literal is a **shape fault** — refused and retried, not read as "did not reach the
+  stand" — so a model synonym (`on-stand`, `environment`) cannot drive the terminal environment-remedy stop on a
+  healthy round either; the fail-closed arithmetic remains only as defence in depth, over a value that already
+  survived the fault;
+  a **blank** `resolvedFrom`, and a sweep that resolves **none** of the plan's published types, are both **shape
+  faults** rather than verdicts — the answer is refused and the informed retry names the field, so a transport
+  artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated round
+  (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). The absence door
+  that pairs with it — dropping **both** `componentTypes` and `componentResolution` at once, which would leave the
+  sweep nothing to gate against — is closed by construction: `componentTypes` is COMPUTED into the state line, so
+  there is no answer that can omit it. `RECONCILE_SCHEMA.required` names `summary`, `approval` and `packageState`
+  only, and the sweep runs on the merged state, where the published types and the agent's resolutions meet. `[]` stays the honest value for a plan with no gated types, so a correct run pays nothing;
+  a **`stand` claim** whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) is a
+  shape fault — a mis-classified catalog answer is caught while those tokens survive into the note. This is a
+  **best-effort** cross-check over free text clio owns, **not** a machine-verified guarantee (the earlier docs
+  overstated it): a `stand` claim with **no note at all** is NOT cross-checked and is not faulted — a healthy
+  `resolved: true` stand answer legitimately carries no note, so faulting the empty case would tax every healthy round
+  to close a bypass whose durable fix is a structured provenance field from clio (DR-8). That residual is declared,
+  not hidden: the coupling to clio's note wording is written down in `AGENTS.md`, and an in-repo token-pin test guards
+  it against a silent **in-repo** edit that loosens or drops the token list. What that pin does NOT do is detect a
+  **clio-side** rewording — no in-repo signal can, since every in-repo test feeds the tokens by construction — so a
+  clio rewording would turn the cross-check into a no-op unseen; the fixture named in DR-8 (a captured real
+  probe-failure response) is what would close that, and it is not yet in place. (`resolvedFrom` is the toolkit's own
+  two-word field, distinct from clio's like-named `resolvedFrom`.)
+  Every stop on this point **carries the other three axes** — an unresolved component type the stand DID answer, an
+  unresolvable template, the app/package identity — as `ALSO —` clauses and structured fields, exactly as the package
+  precondition stop does, and the mid-run package-precondition stop now carries them too, so a mixed round yields
+  every fix in one pass. The component axis is scoped to stand-answered entries there, which is what keeps a catalog
+  `resolved: false` out of a re-plan instruction.
+  **Resume across this change:** because `resolvedFrom` is now required, a run **journal** recorded before the field
+  existed replays `componentResolution` entries that lack it, so a mid-flight **resume** across the upgrade re-faults
+  the replayed answer and stops with `run journal drifted … Start a fresh run` — cross-version journal replay is not
+  supported (the driver's drift check already declares it). This is a fast stop, not a re-execution: nothing is
+  re-spent, and a **fresh** run off the same folder is unaffected — the arithmetic leaves a provenance-less entry
+  alone, so only an interrupted run carried across the upgrade starts over.
+  **The deliberate no-override** — why this terminal stop offers no flag, answer, or run-scoped acknowledgement to
+  proceed on a catalog answer, and the alternatives that were rejected — is recorded in
+  `./references/05-decision-records.md` (DR-8).
 
 Full policy, including how "independent" is defined when the parent edge is unknown:
 `./references/03-failure-and-park-policy.md`.
@@ -700,6 +757,7 @@ Read the file that matches what you are doing. Do not read them all up front.
 | deciding whether to repair, park, or stop | `./references/03-failure-and-park-policy.md` |
 | building one page | `./references/04-per-page-build-recipe.md` |
 | why this workflow's agent-facing contract changed, and what a caller must do about it | `./references/05-decision-records.md` |
+| understanding a deliberate refusal (why a stop offers no override) | `./references/05-decision-records.md` |
 | mapping a Classic construct to a Freedom one | `../classic-to-freedom-migration/references/classic-to-freedom-mapping.md` |
 
 ## How to run it — the three routes, in preference order

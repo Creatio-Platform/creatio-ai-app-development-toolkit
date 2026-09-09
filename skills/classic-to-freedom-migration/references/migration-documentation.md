@@ -55,6 +55,20 @@ migrations/<app-or-section-slug>/
   worklog.md           # session log and runtime read-back evidence (append-only)
 ```
 
+**"Versioned" is a requirement, and the engine now SAYS when it is not met (ENG-96011).** "Keep it versioned in
+the repo/workspace" above is the rule, and it was already written here and in `SKILL.md` when a run put its whole
+doc set in a folder that was not a git repository at all — no commit, no diff, no way to see afterwards what the
+run had touched. Prose nobody verifies is how that happens, so `migrate.mjs` checks: before its first write it
+resolves the folder each output flag points into — `--slices <dir>` at its PARENT, the migration folder, since it
+names a directory the run writes into rather than a file — and, when neither that folder nor any parent holds a `.git`
+entry, writes one `⚠ NOT UNDER VERSION CONTROL` line to stderr naming the folder. A folder that IS inside a
+working tree produces no extra output, so a correct run reads exactly as it did before.
+
+The check is deliberately **advisory only** — it never refuses to run, never initialises a repository and never
+asks for a commit, because migrating against a scratch stand is legitimate. It makes the situation visible; what
+to do about it stays the operator's call. Note the check covers what the ENGINE writes; a document you create by
+hand before the first engine call precedes it, which is why `SKILL.md` step 6 runs `--plan --out` first.
+
 **An answered ⚠ Confirm item goes in `resolutions.json`, not only in `decisions.md` prose.** `decisions.md`
 remains the human decision log and the home of the plan approval; the build reads it for the approval entry
 alone. An answer a build agent must ACT on needs a machine home, keyed to the question the engine published:
@@ -97,6 +111,17 @@ key naming one of them closes NOTHING there. Such a key is reported as `confirmD
 named in a `⚠` advisory line rather than silently ignored; its home is **`memberDispositions`**, whose key the
 coverage gate's own issue text hands you. This is stated because it used to be a silent no-op that the run
 reported as a successful close.
+
+**A key that matches NO row is NAMED, not swallowed (`confirmDispositions.unmatched`).** A typo in the kind or the
+item (`rule-condtion:Job`, `rule-condition:Jobb`, or a `<schema>::` prefix naming a page this run has not got)
+closes nothing and cannot appear in `closed` / `invalid` / `notApplicable` — each of those needs a row to attach
+to. The run reports it as `confirmDispositions.unmatched` and prints a `⚠ … matched NO ⚠ Confirm row on this
+surface` line naming every such key, so the answer is not simply absent from a plan whose question still reads as
+open. **The scope rule, so you can read the line correctly:** it is judged ONCE, for the WHOLE run, after every
+child / typed / mini page has folded. A BARE `<kind>:<item>` key matches when ANY page of the run raised that row —
+which is how one recorded answer legitimately covers the whole surface. A `<schema>::<kind>:<item>` key matches only
+on the page it names. So the ABSENCE of this line does mean every recorded key found a row somewhere; if a key you
+expected to work is listed, check the spelling against the worklist rows and against `preflight[]` in `--units`.
 
 **`decisions.md` is still the source of record.** The disposition map is how the ENGINE learns the decision; the
 decision itself is a `decisions.md` entry with a date and who made it. And note what the plan's `Adjustments` list

@@ -244,6 +244,35 @@ function resolveEnumMember(table, key, aliases = null) {
   }
   return { found: false, key: canonical, value: null };
 }
+// THE runtime property read — the ONE implementation of it, called by both the body-side terminal read
+// (`resolveEnumTerminal`, through `walkTagAutomaton`) and the drift guard's severity decision.
+//
+// ENG-96571 review 3 — it used to be two. `runtimeSpelling` was a second hand-written copy of these very two
+// `Object.hasOwn` lookups, and the only thing holding it to the real read was a comment saying it mirrored it
+// exactly; the alias-map CHOICE was duplicated as well (`tag === "t:dvt"` on one side, `enumName ===
+// "DataValueType"` on the other). Those lookups had already drifted apart once, and that drift is the whole
+// reason the guard mis-classified `STRING`. The remedy for a duplication defect cannot be another copy plus
+// prose, so the read is a primitive both sides call, and `aliasesFor` makes the `t:dvt` / `DataValueType`
+// mapping exist once. This is the pattern `resolveEnumMember` (one screen above) already sets for the
+// case-insensitive vocabulary lookup.
+//
+// `via` is WHICH lookup answered, and it is what decides drift severity: `"exact"` / `"alias"` mean the runtime
+// WOULD answer that spelling with a number (so a wrong number really is applied to every element a body declares
+// with it), `null` means it would not — a mere CASE variant reads `undefined` on a real stand, so no element of
+// the run can carry the wrong number. `Object.hasOwn` on both lookups, so a member naming `constructor` /
+// `toString` / `valueOf` cannot resolve to a native function.
+function runtimeRead(table, member, aliases = null) {
+  if (Object.hasOwn(table, member)) return { value: table[member], via: "exact" };
+  const alias = aliases && Object.hasOwn(aliases, member) ? aliases[member] : null;
+  if (alias !== null && Object.hasOwn(table, alias)) return { value: table[alias], via: "alias" };
+  return { value: null, via: null };
+}
+// The alias map for an enum, named EITHER by its automaton tag (`t:dvt`, the body-read side) or by its own name
+// (`DataValueType`, the drift-guard side). One function so the two sides cannot disagree about which enum has
+// aliases — they used to derive it independently, which is half of the duplication above.
+function aliasesFor(enumNameOrTag) {
+  return enumNameOrTag === "DataValueType" || enumNameOrTag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
+}
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
@@ -255,9 +284,13 @@ export const resourceKey = (raw) => String(raw ?? "").replace(/^\$?Resources\.St
 // Severities are deliberately unequal:
 //  • MISMATCH on a member both sides carry UNDER THE SAME NAME ⇒ blocking. The engine's number is wrong for this
 //    stand, so every element of that kind is mis-read and there is no safe partial reading.
-//  • A disagreement on a member that resolved only by ALIAS or by CASE (`Guid` against pinned `GUID`) ⇒ advisory.
-//    The engine reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has
-//    no element it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
+//  • A disagreement on a member the engine resolves through an EXACT-CASE ALIAS (`STRING`, which the runtime read
+//    really does resolve to pinned `TEXT`) ⇒ blocking, exactly like a same-name mismatch. The body CAN name
+//    `STRING`, the engine DOES answer it, and if the stand's `STRING` is not the number the engine returns then
+//    every element declared with it is mis-read.
+//  • A disagreement on a member that resolved only by CASE (`Guid` against pinned `GUID`) ⇒ advisory. The engine
+//    reads a page body by exact property name, so it never reads `Guid` at all and the wrong number has no element
+//    it can be applied to. Blocking there would stop every migration on a fact that cannot bite —
 //    see the reasoning at the comparison itself.
 //  • A member only the STAND carries ⇒ advisory. What the engine does know is still correct, and blocking would
 //    stop every migration on the day a release adds a member.
@@ -274,22 +307,26 @@ function driftIssuesForEnum(enumName, standTable, pinned, aliases, out) {
     const resolved = resolveEnumMember(pinned, member, aliases);
     if (!resolved.found) { out.newMembers.push(`${enumName}.${member} (${standValue})`); continue; }
     if (resolved.value === standValue) continue;               // same member, same number — nothing to report
-    // ENG-96571 (review 1, K) — BLOCK ONLY ON ONE SPELLING. The comment above promises blocking for "a member
-    // both sides carry", and it must mean under the SAME NAME: the engine reads a body by exact property name,
-    // so `resolved.key === member` is what makes the engine's number the number this stand will use for the
-    // member the body names. Two defects came from ignoring that:
-    //   • The message named a member the pinned table does not carry — "DataValueType.STRING: engine 1" reads
-    //     as a pinned `STRING` whose value is 1; there is no pinned `STRING`, the 1 is `TEXT`'s, and an
-    //     operator sent to `engine.mjs` to fix `STRING` finds nothing to fix.
-    //   • A stand key that resolved only by ALIAS or by CASE was made BLOCKING. `Guid: 5` blocked the whole
-    //     migration although the engine never reads `Guid` — it reads `GUID` — so there was no page the wrong
-    //     number could be applied to. Blocking on it stops every migration for a fact that cannot bite.
-    // A cross-spelling disagreement is still worth saying out loud, so it joins the ADVISORY arm, and its text
-    // names BOTH spellings: which key the stand sent, which pinned member it resolved to, and both numbers.
-    if (resolved.key === member) out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    // ENG-96571 (review 2, finding 1) — BLOCK ON EVERY SPELLING THE RUNTIME READ ANSWERS. What decides the
+    // severity is not "is the spelling identical" but "would `resolveEnumTerminal` have returned a number for
+    // THIS spelling" — that is the read a page body performs, so that is the read whose number can be wrong.
+    // `runtimeRead` IS that read — the same primitive `resolveEnumTerminal` performs, not a copy of it (review 3).
+    // Review 1 (finding K) got the case arm right and
+    // the alias arm wrong by collapsing both into `resolved.key === member`:
+    //   • `Guid: 5` must NOT block: the engine reads `GUID`, never `Guid`, so no element of this run can be
+    //     mis-read by the disagreement. Blocking stopped every migration on a fact that cannot bite.
+    //   • `STRING: 2` MUST block: `STRING` is a real member of a real stand and `resolveEnumTerminal` answers it
+    //     with pinned `TEXT`'s 1. If this stand's `STRING` is 2, every attribute declared with it is read as the
+    //     wrong data type — same damage as a same-name mismatch, so the same severity.
+    // The blocking message names BOTH spellings for the alias arm, because the old text ("DataValueType.STRING:
+    // engine 1") asserted a pinned `STRING` whose value is 1: there is no pinned `STRING`, the 1 is `TEXT`'s, and
+    // an operator sent to `engine.mjs` to fix `STRING` found nothing to fix. Flat strings, no nested templates.
+    const { via } = runtimeRead(pinned, member, aliases);
+    if (via === "exact") out.mismatches.push(`${enumName}.${member}: engine ${resolved.value}, stand ${standValue}`);
+    else if (via === "alias") out.mismatches.push(`${enumName}.${member} (alias of ${resolved.key}): engine ${resolved.value}, stand ${standValue}`);
     // Its OWN list, not `newMembers`. `newMembers` has one remedy sentence — "add the member to the pinned
-    // table" — and every clause of it is false for a cross-spelling row: the engine DOES pin the member (under
-    // the other spelling), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
+    // table" — and every clause of it is false for a case-variant row: the engine DOES pin the member (under
+    // the other case), it DOES have a numeric value, and adding `Guid: 5` beside `GUID: 0` is the wrong
     // repair. The real question is whether THIS stand's `GUID` is 5. Since an `enum-drift-advisory` row can now
     // be CLOSED by a recorded disposition, the operator reads that sentence to decide — so it has to be true,
     // which means the two categories cannot share one line.
@@ -303,7 +340,7 @@ export function enumDriftIssues(vocabulary) {
   for (const [enumName, pinned] of Object.entries(DRIFT_TABLES)) {
     const standTable = plainObj(live[enumName]);
     if (!Object.keys(standTable).length) continue;   // not echoed for this enum — nothing to compare, not a finding
-    const aliases = enumName === "DataValueType" ? DATA_VALUE_TYPE_ALIASES : null;
+    const aliases = aliasesFor(enumName);
     driftIssuesForEnum(enumName, standTable, pinned, aliases, { mismatches, newMembers, spellingDrift });
   }
   mismatches.sort(byLocale);
@@ -425,10 +462,12 @@ function spliceAliasChain(path, base, scope) {
 // The terminal enum read itself, extracted for CC (Sonar S3776) — the exact-case rule and its one alias exception
 // are documented at the call site in `walkTagAutomaton`; this is the read they describe, unchanged.
 function resolveEnumTerminal(tag, enumTable, k) {
-  const aliases = tag === "t:dvt" ? DATA_VALUE_TYPE_ALIASES : null;
-  if (Object.hasOwn(enumTable, k)) return { value: enumTable[k] };
-  const alias = aliases && Object.hasOwn(aliases, k) ? aliases[k] : null;
-  if (alias !== null && Object.hasOwn(enumTable, alias)) return { value: enumTable[alias] };
+  // ENG-96571 review 3 — the read itself is `runtimeRead`, the one primitive the drift guard's severity decision
+  // also calls, with the alias map from the one `aliasesFor`. The return SHAPE here is unchanged (`{ value }`, or
+  // `{ value: null, unknown }`): `via` is what the guard needs and this caller does not, and `walkTagAutomaton`'s
+  // result travels into the mapper, so widening it would put a field with no consumer on the body-read path.
+  const hit = runtimeRead(enumTable, k, aliasesFor(tag));
+  if (hit.via !== null) return { value: hit.value };
   return { value: null, unknown: `${TAG_ENUM_NAME[tag] || tag}.${k}` };
 }
 
@@ -1659,6 +1698,31 @@ function sanitizeConditions(conds) {
 // Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
 // the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
 // in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
+// The `values` keys an op DECLARED that this engine models on NO item field (ENG-94714). `replayRemoveProperties`
+// already had to answer exactly this question for a `remove … properties` op, and answers it against
+// `REMOVABLE_ITEM_PROPS` — so the SAME set decides it here, rather than a second hand-kept list that could drift
+// from the first. (Referencing it from a function defined above its `const` is fine: this only runs during a fold,
+// long after module init.)
+//
+// Recorded because a section's `merge DataGrid` carries `controlColumnName` / `applyControlConfig` /
+// `controlCellClass` — real configuration with no Freedom analog, which used to vanish at PARSE time: the fixed
+// field set in `normalizeDiffOp` keeps what it models and drops the rest, so nothing downstream could even name
+// what was lost. The list mapper raises each one as a named open item instead.
+// Op-level keys (`parentName`, `propertyName`, `index`) are not in `values` and so never reach this set.
+//
+// SEED OPS CONTRIBUTE NOTHING HERE, and that is the difference between a usable signal and an unusable one.
+// Measured on the real `LeadSectionV2` bundle (14 layers + 20 seed, read from a stand): counting every layer put
+// THIRTY keys on `DataGrid` — `collection`, `primaryColumnName`, `sortColumn`, `linkClick`, `enterkeypressed` and
+// the rest of `BaseDataView`'s own grid wiring — and only three of them (`controlColumnName`,
+// `applyControlConfig`, `controlCellClass`) came from the section. Base-template wiring is not an unanswered
+// question: it is what every Classic list has, and the Freedom list page provides its own. Raising thirty open
+// items to reach the three that matter would bury them, so the set records only what a CLIENT layer declared.
+function unmodelledValueKeys(op, seed) {
+  const out = new Set();
+  if (seed) return out;
+  for (const k of op.valuesKeys || []) if (!REMOVABLE_ITEM_PROPS.has(k)) out.add(k);
+  return out;
+}
 // `seed` = the defining op came from a parent-template schema (templateOwned); `pkg` = the defining schema.
 function makeItem(op, seed, pkg) {
   return {
@@ -1675,6 +1739,10 @@ function makeItem(op, seed, pkg) {
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
+    // Declared-but-unmodelled `values` keys, accumulated across every op that touches this item (see
+    // `unmodelledValueKeys`). A Set inside the fold; the projection emits a SORTED array so output stays
+    // deterministic (the plan hash is over content, and a Set's iteration order is insertion order).
+    unmodelledProps: unmodelledValueKeys(op, seed),
   };
 }
 
@@ -1765,6 +1833,17 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
   if (op.valuesKeys?.has("itemType")) cur.itemTypeUnresolved = !!op.itemTypeUnresolved;
 }
 
+// own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
+function applyMergeOrderVisible(op, cur) {
+  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+}
+// Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
+function applyMergeContentFields(op, cur) {
+  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
+    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
+  }
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg }, warnings) {
@@ -1783,14 +1862,17 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
-  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  // ENG-94714 — a MERGE is the op that most often carries configuration this engine models nowhere (a section's
+  // `merge DataGrid` sets `controlColumnName` / `applyControlConfig` / `controlCellClass`). ACCUMULATE rather than
+  // replace: two layers may each add their own unmodelled key to the same element, and the last one to run is not
+  // the only one that took effect.
+  for (const k of unmodelledValueKeys(op, seed)) cur.unmodelledProps.add(k);
+  applyMergeOrderVisible(op, cur);
   // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
   // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
   // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
   // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
-  for (const k of ["bindTo", "layout", "tip", "hint", "caption", "generator"]) {
-    if (op.valuesKeys?.has(k) && !op.aliasExcluded?.includes(k)) cur[k] = op[k];
-  }
+  applyMergeContentFields(op, cur);
   // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
   // a layer that restates `labelConfig` (the WorkInternalRequest custom-label idiom) must be able to overwrite a
   // lower layer's label, and `caption` never appears in its `values` at all.
@@ -1838,7 +1920,12 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 // not a client B6 decision — the mapper filters it out like every other template-only element.
 function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
-  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
+  // `unmodelledProps` is carried even on a TOMBSTONE, and it is not decoration: a `remove` of an item nothing
+  // defined records this stub, and a LATER layer may legitimately `merge` onto that same name (classic's
+  // remove-then-restate idiom) — which reaches `cur.unmodelledProps.add(...)` and would throw on a stub without
+  // the field. Every item record in this fold carries the same shape, exactly as `makeItem`'s own comment requires.
+  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
+    unmodelledProps: new Set() });
   warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
 }
 
@@ -1855,41 +1942,53 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
 const TOP_LEVEL_ITEM_PROPS = new Set(["bindTo", "itemType", "contentType", "dataValueType", "order",
   "layout", "tip", "hint", "generator", "visible", "caption"]);
 const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelConfig", ...HANDLER_PROPS]);
+// One removed key. Returns true when the key is UNMODELLED (nothing here represents its clearing), false when the
+// removal's effect is fully applied — the caller only needs that verdict, not the branching that produced it. Own
+// fn so `replayRemoveProperties` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
+function clearRemovedProperty(cur, k) {
+  if (!REMOVABLE_ITEM_PROPS.has(k)) {
+    // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
+    // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
+    // exists to prevent (ENG-94714). The fidelity warning below is unaffected: the removal's EFFECT is still
+    // unrepresented, which is a different statement from "the key is still set".
+    cur.unmodelledProps.delete(k);
+    return true;
+  }
+  // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
+  // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
+  if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; return false; }
+  // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
+  // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
+  // what the runtime renders (`getLabelCaption`).
+  if (k === "labelConfig") { cur.labelCaption = null; return false; }
+  // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
+  // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
+  // silenced the trigger but left the static value would be half-applied.
+  if (HANDLER_PROPS.has(k)) {
+    // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
+    // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
+    // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
+    // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
+    // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
+    // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
+    const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
+    if (wasModelled) delete cur.handlers[k];
+    if (!TOP_LEVEL_ITEM_PROPS.has(k)) return !wasModelled;   // handler-only key: the map entry was the whole effect it could have
+  }
+  if (!TOP_LEVEL_ITEM_PROPS.has(k)) return false;   // not a handler and not a field: nothing modelled to clear
+  // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
+  // "absent vs unreadable" ambiguity this ticket removed elsewhere.
+  cur[k] = null;
+  if (k === "itemType") cur.itemTypeUnresolved = false;
+  return false;
+}
+
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
+  // provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
+  // per-key would list the same package twice on an element with several removed keys.
   for (const k of op.properties) {
-    if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
-    // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
-    // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
-    // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
-    // here as well listed the same package twice on an element whose `value` a layer cleared.)
-    if (k === "value") { cur.valueBindTo = null; cur.optionValue = null; continue; }
-    // one diff key, one modelled field under a different name — same shape as `value` above. Clearing it drops the
-    // custom label so the projection falls back to `caption` and then to the column's own title, which is exactly
-    // what the runtime renders (`getLabelCaption`).
-    if (k === "labelConfig") { cur.labelCaption = null; continue; }
-    // a handler property (`click`, `change`, …) lives in the `handlers` map, not as a top-level field. `visible` is
-    // in BOTH vocabularies, so it clears the map entry AND falls through to the field clear below — a removal that
-    // silenced the trigger but left the static value would be half-applied.
-    if (HANDLER_PROPS.has(k)) {
-      // Four of this vocabulary — `enabled`, `visible`, `readonly`, `required` — are AMBIGUOUS in a classic body:
-      // `enabled: {bindTo:"m"}` is a handler and IS modelled, `enabled: false` is a static literal and
-      // `handlerBindings` skips it, so it reaches no field and no map entry. Removing the modelled form is fully
-      // represented; removing the static form changes nothing here, and saying nothing about it is the silent drop
-      // this function exists to prevent. So the map entry decides: cleared ⇒ the effect is represented, absent ⇒
-      // the key was never modelled and the removal is an unrepresented effect, exactly like an unknown key.
-      const wasModelled = !!(cur.handlers && Object.hasOwn(cur.handlers, k));
-      if (wasModelled) delete cur.handlers[k];
-      if (!TOP_LEVEL_ITEM_PROPS.has(k)) {   // handler-only key: the map entry was the whole effect it could have
-        if (!wasModelled) unmodelled.push(k);
-        continue;
-      }
-    }
-    if (!TOP_LEVEL_ITEM_PROPS.has(k)) continue;   // not a handler and not a field: nothing modelled to clear
-    // null, not `delete`: the projections read these with `?? null`, and an `undefined` here is exactly the
-    // "absent vs unreadable" ambiguity this ticket removed elsewhere.
-    cur[k] = null;
-    if (k === "itemType") cur.itemTypeUnresolved = false;
+    if (clearRemovedProperty(cur, k)) unmodelled.push(k);
   }
   cur.provenance.push(pkg);
   if (!seed) cur.schemaTouched = true;
@@ -2323,7 +2422,12 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
-      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null })),
+      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
+      // ENG-94714 — the `values` keys the body declared on this element that the engine models on no field, SORTED
+      // so two folds of the same input produce byte-identical output. Empty on almost every element; non-empty is
+      // the signal that real classic configuration exists here which no mapping can represent yet, and which the
+      // consumer must NAME rather than drop (a section's `merge DataGrid` controlColumnName is the founding case).
+      unmodelledProps: [...(i.unmodelledProps || [])].sort(byLocale) })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the

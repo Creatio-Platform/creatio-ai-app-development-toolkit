@@ -734,3 +734,97 @@ export function templateProvides(name, capability) {
   if (!caps || typeof caps[capability] !== "boolean") return null;
   return caps[capability];
 }
+
+// ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
+//
+// A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
+// element become on a Freedom FORM page"; these answer the same question for a LIST page, and for the same
+// `itemType` the two answers genuinely differ. A GRID on a record page is an editable-grid detail with no
+// confirmed Freedom target (`TIER.DECISION` above, deliberately); a GRID on a section IS the list, and
+// `buildListChangeSet` already builds it as `DataTable`. One row cannot hold both readings.
+//
+// WHY NOT MUTATE THE SHARED ROWS: flipping `byItemType(VIEW_ITEM_TYPE.GRID)` to `ROLE.MAPPED` would change
+// `mapUnmappedDrop` and the member ledger for record-page grids too — a behaviour change nobody asked for, on a
+// surface this ticket does not touch. Keeping the list reading in its own table is what lets the section gain a
+// mapping without the form losing one.
+//
+// NO FABRICATED COMPONENT TYPES. Not one row here names a `crt.*`. The list surfaces already have their builder
+// (`buildListChangeSet` owns the grid, its columns and the quick filters), and for a command-bar button or a row
+// action no built Freedom page has been measured — so the element's FACTS are published and the control is
+// resolved on-stand. A type picked out of the component registry because it happens to exist there would read
+// exactly like a measured one; the registry gate validates the types we DO name, it cannot catch an invented one.
+
+// Which list surface an element belongs to. `UNRESOLVED` is a real answer, not a failure: it means the element is
+// section-declared but sits under no recognised list anchor, and the mapper raises it as a named open item
+// instead of guessing a home for it.
+export const LIST_REGION = {
+  GRID: "grid",                 // the list itself — `buildListChangeSet` builds it as `DataTable`
+  ROW_ACTIONS: "row-actions",   // per-row commands (`activeRowActions` on the grid)
+  COMMAND_BAR: "command-bar",   // the button strip above the list
+  FILTER_BAR: "filter-bar",     // the quick-filter area
+  UNRESOLVED: "unresolved",
+};
+
+// The grid's own element name in every classic section body measured so far, and the `propertyName` its per-row
+// commands are inserted under. Named here rather than inline in the mapper so the section mapper and every later
+// reader agree on one spelling.
+export const LIST_GRID_ELEMENT = "DataGrid";
+export const LIST_ROW_ACTIONS_PROPERTY = "activeRowActions";
+
+// A container's list region, from its NAME. This is a SHAPE rule, and it is stated as one because there is no
+// enumerable list of classic container names to match exactly: `BaseDataView` [`CrtUIPlatform7x`] defines the
+// base set, a product package may add its own, and the engine has to classify a name it has never seen.
+//   * `...ActionButtons...` — measured: `CombinedModeActionButtonsCardLeftContainer` (both the Leads and the
+//     Opportunities command-bar button land there) and the `SeparateModeActionButtons*` family beside it.
+//   * `...Filter...` — the quick-filter area.
+// A name matching NEITHER returns null, which the caller turns into a named open item. The asymmetry is
+// deliberate: a wrong region silently rebuilds the element in the wrong place, an unresolved one asks.
+export function listRegionForContainer(name) {
+  const n = String(name || "");
+  if (!n) return null;
+  if (n === LIST_GRID_ELEMENT) return LIST_REGION.GRID;
+  if (n.includes("ActionButtons")) return LIST_REGION.COMMAND_BAR;
+  if (n.includes("Filter")) return LIST_REGION.FILTER_BAR;
+  return null;
+}
+
+// What the list mapper does with an element OF THIS KIND once its region is known. `ownedBy` names the producer,
+// exactly as it does above; `LIST_OWNER` is the new one — "`buildListChangeSet` emits it, from the facts this row
+// hands over". `target` is null on every row, for the reason stated at the top of this block.
+export const LIST_OWNER = "list-changeset";
+const listRow = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, target: null, ...rest });
+const LIST_ROWS = [
+  // The grid IS the list page. Absorbed by the surface `buildListChangeSet` already owns (`LIST_GRID` =
+  // `DataTable`, its `values.columns[]` merge and the `PDS_*` view-model attributes), so the element emits nothing
+  // of its own and needs no component type — but it is no longer UNMAPPED, because the engine really does build a
+  // Freedom equivalent for it.
+  listRow(VIEW_ITEM_TYPE.GRID, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "list",
+    notes: "On a SECTION this is the list itself, not an editable-grid detail: `buildListChangeSet` already emits it as `DataTable` with the section's columns and quick filters. Configuration it carries that the engine models on no field (`controlColumnName`, `applyControlConfig`, `controlCellClass`) is raised as a `list-grid-config` open item rather than folded into that merge." }),
+  // A command-bar button. Tier B for the same reason the form-page BUTTON row is: the view is derivable, the click
+  // handler is imperative and becomes a stub. No `crt.Button` here though — WHERE a list-page button goes on the
+  // Freedom command bar has not been measured, and the command-bar table already says so on every row.
+  listRow(VIEW_ITEM_TYPE.BUTTON, { role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: LIST_OWNER, uiShape: "component",
+    notes: "Reaches `listChangeSet.commandBarActions` carrying its caption, its source package and its condition WITH the property that condition binds (`visible` vs `enabled`) — porting an `enabled` condition as a visibility rule, or dropping it, is a behaviour change. The Freedom control and its place on the command bar are resolved on-stand." }),
+  // Menus fold into the owning button, exactly as on the form page — one reading of the classic menu idiom, not two.
+  listRow(VIEW_ITEM_TYPE.MENU, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: OWNER.FOLDED,
+    notes: "A wrapper: it contributes its items to the owning command-bar button and emits nothing of its own." }),
+  listRow(VIEW_ITEM_TYPE.MENU_ITEM, { role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: OWNER.FOLDED,
+    notes: "Folds into the owning button's menu; its click stays imperative, like every other classic handler." }),
+  listRow(VIEW_ITEM_TYPE.MENU_SEPARATOR, { role: ROLE.DECOR, tier: TIER.AUTO, ownedBy: OWNER.CHROME,
+    notes: "A group boundary inside a menu — it carries no migration answer of its own." }),
+  // A container is layout. Structural only when its subtree produced something; an empty one still surfaces, which
+  // is the same rule the form path applies (`ROLE.CONTAINER`).
+  listRow(VIEW_ITEM_TYPE.CONTAINER, { role: ROLE.CONTAINER, tier: TIER.AUTO, ownedBy: OWNER.CONTAINER,
+    notes: "The classic list containers (command bar, filter area) have fixed Freedom counterparts the list page already provides — the container is not rebuilt, its CHILDREN are placed." }),
+  listRow(VIEW_ITEM_TYPE.LABEL, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "component",
+    notes: "Author-written copy on the list chrome; carried with its caption so it is not lost, its placement resolved on-stand like the buttons beside it." }),
+];
+const LIST_ROW_BY_ITEM_TYPE = new Map(LIST_ROWS.map((r) => [r.match.itemType, r]));
+
+// The list reading of `itemType`, or `null` when this table has none — which is NOT the same as the `TIER.DECISION`
+// rows above. Null means "this element kind has no list reading at all", and the caller raises it as a named open
+// item naming the kind; a silent fallback to the FORM row would place a record-page element on a list.
+export function listRowForItemType(itemType) {
+  if (itemType == null) return null;
+  return LIST_ROW_BY_ITEM_TYPE.get(itemType) || null;
+}

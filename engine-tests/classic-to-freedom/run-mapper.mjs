@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, REPORTED_TRIGGERS, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, deriveApplicationCode } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, pageUnits, planGaps, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, verifyDigest, verifySummary, scopeGroups, verifyReport, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, REACHABILITY_KEYS, ONSTAND_EVIDENCE_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS, buildResolutionIndex, matchResolution, pageUnitsSlice, builtSlice, resolveVk, verifyRowKeys, reuseChildGroups, encodedAsciiBytes, PENDING_WIRE_BUDGET, PENDING_DELIVERABLE_CAP, rowSlug, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, verifyUnit, CHILD_PAGE_ANSWERS, templateNamesOf, rowSeverity, rankOpenRows, RUN_SCOPE_KIND, SHOWN_ELSEWHERE, renderPlanNotes, PLAN_AUTHORING_NOTE, PLAN_AUTHORING_SENTENCES } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 // ENG-96457 (item 3) — the BUILD-side arithmetic, imported so the plan's derivation can be pinned against the very
 // function the ENG-95468 identifiers gate compares it to. Two copies of "target package minus prefix" that are
@@ -1470,11 +1470,10 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218 / ENG-96327: the command-bar set does NOT claim complete — ONE `list-command-bar` decision per run (rides --units, names the buttons + the view-diff hedge); the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
+check("ENG-95218 / ENG-96327 / ENG-94714: the command-bar set does NOT claim complete — ONE `list-command-bar` decision per run (rides --units, names the buttons + the read-both-surfaces hedge); the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
     && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
     && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
-    && /not folded at all/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").reason)
     && /- \*\*Command-bar actions:\*\* 1 found via `getSectionActions\(\)`/.test(lpRun.designSpec)
     && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
@@ -2236,9 +2235,22 @@ check("ENG-96204 (T3): the severity rides into `verifyDigest` too — the digest
   check("ENG-96204 (AC 2): the fresh-stand fixture has BOTH bands non-zero on the page carrying the design-pass row — so the checks above are not satisfied by an all-correctness page, and `fidelity` is reachable from the engine side",
     () => pageKeys.some((k) => sevSummary.pages[k].openFidelity > 0) && pageKeys.some((k) => sevSummary.pages[k].openCorrectness > 0),
     () => Object.fromEntries(pageKeys.map((k) => [k, [sevSummary.pages[k].openCorrectness, sevSummary.pages[k].openFidelity]])));
-  check("ENG-96204 (AC 2): the summary is STILL counts-only after the addition — no `openRows`, no per-row prose, and each page entry is a fixed set of booleans and integers",
-    () => { const s = JSON.stringify(sevSummary); return !/openRows/.test(s) && !/deliverable/.test(s)
-      && pageKeys.every((k) => Object.values(sevSummary.pages[k]).every((v) => typeof v === "boolean" || Number.isInteger(v) || v === undefined)); },
+  // MERGE (ENG-96458 D4): `pendingRows` is the ONE documented exception to counts-only — a ☐ row cannot be read by
+  // any agent, so the close report has to NAME it, and it is bounded (PENDING_ROW_CAP per page, remainder counted).
+  // The invariant this check exists for is unchanged and is what is asserted: `openRows` is still absent, no row
+  // prose reaches the summary from ANY other field, and every other per-page value is still a boolean or an integer.
+  check("ENG-96204 (AC 2) × ENG-96458 (D4): the summary is STILL counts-only apart from the bounded `pendingRows` worklist — no `openRows`, no per-row prose anywhere else, and every other page value is a boolean or an integer",
+    () => { const withoutPending = Object.fromEntries(pageKeys.map((k) => {
+        const { pendingRows, ...rest } = sevSummary.pages[k];
+        return [k, rest];
+      }));
+      const s = JSON.stringify({ ...sevSummary, pages: withoutPending });
+      return !/openRows/.test(s) && !/deliverable/.test(s)
+        && pageKeys.every((k) => Object.values(withoutPending[k]).every((v) => typeof v === "boolean" || Number.isInteger(v) || v === undefined))
+        && pageKeys.every((k) => { const rows = sevSummary.pages[k].pendingRows;
+          return rows === undefined || (Array.isArray(rows) && rows.length <= 5
+            && rows.every((r) => Number.isInteger(r.n) && typeof r.deliverable === "string" && typeof r.rowKey === "string"
+              && Object.keys(r).length === 3)); }); },
     () => JSON.stringify(sevSummary).slice(0, 300));
 }
 
@@ -2733,7 +2745,10 @@ check("ENG-96457 (item 6): the plan FILE carries no generator/authoring text —
   !/present this VERBATIM/i.test(cli.plan) && !/present the plan VERBATIM/i.test(cli.plan)
   && !/Supply the plan values/.test(cli.plan) && !/\*Adjustments\* list/.test(cli.plan));
 check("ENG-96457 (item 6): the authoring rule still REACHES the agent — `PLAN_AUTHORING_NOTE` carries both halves (supply planMeta + re-run, and do not edit the generated tables)",
-  /manifest\.planMeta` and re-run/.test(PLAN_AUTHORING_NOTE) && /present the plan VERBATIM/.test(PLAN_AUTHORING_NOTE)
+  // ENG-96571 review 2 (finding 5) — the wording is now the ONE copy shared with `renderPlanNotes`
+  // (`PLAN_AUTHORING_SENTENCES`), which names `plan.md` instead of the old "above". The assertion follows the text
+  // it pins rather than keeping a second wording alive.
+  /manifest\.planMeta` and re-run/.test(PLAN_AUTHORING_NOTE) && /present `plan\.md` VERBATIM/.test(PLAN_AUTHORING_NOTE)
   && /\*Adjustments\* list/.test(PLAN_AUTHORING_NOTE) && /do NOT edit, reorder, or drop/.test(PLAN_AUTHORING_NOTE));
 check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
@@ -2995,6 +3010,76 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
+  // ENG-96458 D3 — THE ACCEPTANCE MECHANISM, THROUGH THE CLI. Both bugs these two checks pin were invisible to the
+  // `renderVerify` unit tests above and were found by running the command end-to-end on a real manifest:
+  //   (1) `--resolutions` was REFUSED alongside `--verify` ("only applies to `--units`"), so an operator could not
+  //       reach the feature at all from the one interface anybody uses;
+  //   (2) once accepted, the CLI hands `opts.resolutions` as an already-BUILT index while a direct API caller hands
+  //       the raw array — and building an index over an index yielded a silently EMPTY one, so the acceptance
+  //       matched nothing and reported no error anywhere.
+  // Hence: assert through `spawnSync`, on the exit code and the rendered row, not on the exported function.
+  const accPath = path.join(os.tmpdir(), `c2f_acc_${process.pid}.json`);
+  try {
+    // The empty built page's first MISSING row is the form page itself; accept it by its row key and the count drops.
+    const vRows = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--verify-json", accPath + ".vj"], { input: verifyManifest, encoding: "utf8" });
+    const firstMissing = Object.values(JSON.parse(fs.readFileSync(accPath + ".vj", "utf8")).pages)
+      .flatMap((p) => p.openRows || []).find((r) => r.outcome === "missing");
+    check("ENG-96458 D3: every open row published by `--verify-json` carries a `rowKey` — an acceptance cannot be addressed to a row that has no name",
+      !!firstMissing?.rowKey && vRows.status === 2, () => firstMissing);
+    fs.writeFileSync(accPath, JSON.stringify({ resolutions: [{ kind: "accepted", row: firstMissing.rowKey, answer: "out of scope by decision", decidedBy: "tester", date: "2026-09-03" }] }));
+    const vAcc = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--resolutions", accPath, "--verify-json", accPath + ".vj2"], { input: verifyManifest, encoding: "utf8" });
+    const before = JSON.parse(fs.readFileSync(accPath + ".vj", "utf8"));
+    const after = JSON.parse(fs.readFileSync(accPath + ".vj2", "utf8"));
+    check("ENG-96458 D3: `--verify --resolutions` is ACCEPTED by the CLI (not refused as units-only) and the accepted row renders ☑ accepted with the decider — reachable from the command line, which is the only interface an operator has",
+      vAcc.status !== 1 && !/only applies to `--units`/.test(vAcc.stderr || "")
+      && /☑ accepted \| ACCEPTED BY DECISION \(tester, 2026-09-03\)/.test(vAcc.stdout || ""),
+      () => ({ status: vAcc.status, stderr: (vAcc.stderr || "").slice(0, 200), row: (vAcc.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0] }));
+    check("ENG-96458 D3: the acceptance actually MOVES the arithmetic through the CLI — one fewer `missing`, one `accepted` — and does not merely print a different mark",
+      after.missing === before.missing - 1 && after.accepted === 1,
+      () => ({ before: { missing: before.missing, accepted: before.accepted }, after: { missing: after.missing, accepted: after.accepted } }));
+    /* PR #157 REVIEW (round 2, Major on migrate.mjs:3442) — THE SCOPED PATH, WHICH IS THE ONE THE EXECUTOR READS.
+       `verifyOpts()` is threaded into THREE call sites: the unscoped `renderVerify` above and the two SCOPED ones
+       (`verifyUnit(result, verifyOpts(), built, pageArg)` and `renderVerify(result, { ...verifyOpts(),
+       scopePageKey: pageArg }, built)`). The golden above never passes `--page`, so neither scoped site was ever
+       executed with a non-empty resolutions list — and the comment beside the change names exactly this risk ("let
+       the scoped and unscoped verdicts drift apart"). The failure it hides is silent: an acceptance that failed to
+       reach `verifyUnit` leaves a unit reporting `buildComplete: false` / `missing: 1` while the full sweep renders
+       the same row accepted and green, so the run and the operator read two different verdicts for one row. It is
+       the same class as the two defects that were found only by RUNNING the CLI (`--resolutions` refused under
+       `--verify`, and the index-over-index empty match), neither of which the unit tests could see. */
+    const scopedNoRes = accPath + ".scoped-none";
+    const scopedWithRes = accPath + ".scoped-acc";
+    const vScopedBefore = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main", "--verify-json", scopedNoRes], { input: verifyManifest, encoding: "utf8" });
+    // ACCEPT EVERY BUILDER-OWNED ROW ON `main`, read off the scoped verdict itself. Accepting one row would leave
+    // the page short for unrelated reasons and could not show `buildComplete` FLIPPING, which is half of what the
+    // thread asks this golden to prove — and the rows are taken from the scoped file so the keys are the ones the
+    // SCOPED path publishes, not the unscoped sweep's.
+    const scopedBuilderRows = (JSON.parse(fs.readFileSync(scopedNoRes, "utf8")).openRows || []).filter((r) => r.owner !== "verifier");
+    fs.writeFileSync(accPath, JSON.stringify({ resolutions: scopedBuilderRows.map((r) => (
+      { kind: "accepted", row: r.rowKey, answer: "out of scope by decision", decidedBy: "tester", date: "2026-09-03" })) }));
+    const vScopedAfter = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath, "--page", "main", "--resolutions", accPath, "--verify-json", scopedWithRes], { input: verifyManifest, encoding: "utf8" });
+    const sBefore = JSON.parse(fs.readFileSync(scopedNoRes, "utf8"));
+    const sAfter = JSON.parse(fs.readFileSync(scopedWithRes, "utf8"));
+    check("PR #157 review (round 2): the SCOPED `--verify --page main --resolutions` path applies the acceptances too — `accepted` counts them and `missing` drops by the number of ❌ rows accepted, measured against the same scoped run WITHOUT `--resolutions`; this is the verdict the build executor reads per unit, and it had no test at all",
+      vScopedAfter.status !== 1 && scopedBuilderRows.length > 0
+      && sAfter.accepted === scopedBuilderRows.length
+      && sAfter.missing === sBefore.missing - scopedBuilderRows.filter((r) => r.outcome === "missing").length,
+      () => ({ before: { missing: sBefore.missing, accepted: sBefore.accepted, buildComplete: sBefore.buildComplete },
+        after: { missing: sAfter.missing, accepted: sAfter.accepted, buildComplete: sAfter.buildComplete },
+        status: vScopedAfter.status, stderr: (vScopedAfter.stderr || "").slice(0, 200) }));
+    check("PR #157 review (round 2): and `buildComplete` FLIPS on the scoped verdict — the accepted row was the unit's last builder-owned gap, so the in-context gate goes from a hard exit 2 to done; a mark that changed without the gate changing would be the drift this pins",
+      sBefore.buildComplete === false && sAfter.buildComplete === true
+      && sAfter.builderOpen === 0
+      && vScopedBefore.status === 2 && vScopedAfter.status === 0,
+      () => ({ beforeComplete: sBefore.buildComplete, afterComplete: sAfter.buildComplete,
+        beforeStatus: vScopedBefore.status, afterStatus: vScopedAfter.status }));
+    check("PR #157 review (round 2): the two verdicts AGREE on the row — the scoped markdown renders the identical `☑ accepted` row the unscoped sweep does, which is the disagreement the thread describes and the reason the scoped path needed its own golden",
+      /☑ accepted \| ACCEPTED BY DECISION \(tester, 2026-09-03\)/.test(vScopedAfter.stdout || "")
+      && scopedBuilderRows.every((r) => (vScopedAfter.stdout || "").includes(r.rowKey))
+      && (vAcc.stdout || "").includes(firstMissing.rowKey),
+      () => ({ scopedRow: (vScopedAfter.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0],
+        unscopedRow: (vAcc.stdout || "").split("\n").filter((l) => /accepted/.test(l))[0] }));
+  } finally { for (const f of [accPath, accPath + ".vj", accPath + ".vj2", accPath + ".scoped-none", accPath + ".scoped-acc"]) { try { fs.unlinkSync(f); } catch { /* best effort */ } } }
   // (c-D12) ENG-94975 (contract v2 D12) — exit 2 is TWO conditions with OPPOSITE responses, and until this line
   // existed `--verify` exited 2 in silence, so an executor could not tell "my build is short" (repair on-stand and
   // re-verify) from "the PLAN is short" (stop, return to the caller — no amount of building clears it). This SU
@@ -3087,7 +3172,7 @@ try {
         main: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
         list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
       },
-      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
     }));
     const vScoped = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
     const scopedVerdict = JSON.parse(fs.readFileSync(bareUnitVerdictPath, "utf8"));
@@ -3110,7 +3195,7 @@ try {
         main: { viewConfig: { items: [] }, parentSchemaName: "PageWithTabsFreedomTemplate", schemaUId: "11111111-1111-4111-8111-111111111111", packageName: "UsrBareApp", entitySchemaName: "Bare" },
         list: { viewConfig: { items: [{ name: "Name", type: "crt.Input" }] }, parentSchemaName: "ListPageV3", schemaUId: "22222222-2222-4222-8222-222222222222", packageName: "UsrBareApp" },
       },
-      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] } },
+      reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
     }));
     try {
       const vScopedShort = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", bareBuiltShortPath, "--page", "main", "--verify-json", bareUnitVerdictPath], { input: bareManifest, encoding: "utf8" });
@@ -4178,9 +4263,9 @@ check("ENG-95021: a reuse child publishes BOTH the RelatedPage-binding row and t
 check("ENG-95021: the reconcile rows carry NO vk — visible obligation, not an unclosable gate",
   reconcileRows.every((r) => !r.vk), () => reconcileRows.map((r) => r.vk));
 const reuseOnstand = [...new Set(reuseRows.filter((r) => r.vk?.type === "onstand").map((r) => r.vk.evidence))];
-check("ENG-95021: the reuse run's own `onstand` keys are registered in REACHABILITY_KEYS",
-  reuseOnstand.length > 0 && reuseOnstand.every((k) => REACHABILITY_KEYS.includes(k)),
-  () => ({ emitted: reuseOnstand, registered: REACHABILITY_KEYS }));
+check("ENG-95021: the reuse run's own `onstand` keys are registered in ONSTAND_EVIDENCE_KEYS",
+  reuseOnstand.length > 0 && reuseOnstand.every((k) => ONSTAND_EVIDENCE_KEYS.includes(k)),
+  () => ({ emitted: reuseOnstand, registered: ONSTAND_EVIDENCE_KEYS }));
 // …and the same invariant over EVERY emission site, not just the ones this fixture happens to reach. A run-shape
 // check only ever covers the keys that run emits (reuse hits 2 of 5), so an unregistered key added on the typed or
 // mini-page path would pass unnoticed. Scanning the source covers all of them: an `onstand` row whose key is not
@@ -4228,8 +4313,8 @@ check("ENG-95861: the boundary RESOLVES the structure gate, exactly as the other
   xsBoundary.structure.complete && !xsBoundary.structure.issues.some((i) => /InternalRequest/.test(i)),
   () => xsBoundary.structure.issues);
 check("ENG-95861: the plan is APPROVABLE — no plan-level gap at all (gate + structure + coverage)",
-  verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps.length === 0,
-  () => verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pages: {} }).planGaps);
+  verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pending: 0, pages: {} }).planGaps.length === 0,
+  () => verifyReport(xsBoundary, { complete: true, missing: 0, unverified: 0, pending: 0, pages: {} }).planGaps);
 
 // (2) ZERO DELIVERABLES. The 6 MISSING rows of the measured run were all `child:InternalRequest`; under the boundary
 //     that key does not exist, so there is nothing to report MISSING — in `--units`, `--checklist` or `--verify`.
@@ -4357,13 +4442,20 @@ check("PR #128 review (round 17, architecture Minor): the engine resolution inde
   /const resolutionKey = \(kind, item\) => JSON\.stringify/.test(DESIGNSPEC_SRC)
     && !/resolutionKey = \(kind, item\) => `/.test(DESIGNSPEC_SRC),
   () => (DESIGNSPEC_SRC.match(/const resolutionKey = .*/) || ["(no resolutionKey found)"])[0]);
-check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in REACHABILITY_KEYS",
-  emittedKeys.length >= REACHABILITY_KEYS.length            // the scan really found the sites (not a silent 0-match)
-  && emittedKeys.every((k) => REACHABILITY_KEYS.includes(k)),
-  () => ({ emitted: emittedKeys, registered: REACHABILITY_KEYS }));
+// PR #157 review (Major, `noOrphanScaffold`) — the registered set is now the UNION: five WIRING keys, each of which
+// gets a scheduled build unit, plus the verifier-only cleanup key, which gets a gate row and no unit. Both halves
+// still have to be emitted, so the scan is against `ONSTAND_EVIDENCE_KEYS`.
+check("ENG-95021: EVERY `onstand` emission site in designspec.mjs uses a key registered in ONSTAND_EVIDENCE_KEYS",
+  emittedKeys.length >= ONSTAND_EVIDENCE_KEYS.length        // the scan really found the sites (not a silent 0-match)
+  && emittedKeys.every((k) => ONSTAND_EVIDENCE_KEYS.includes(k)),
+  () => ({ emitted: emittedKeys, registered: ONSTAND_EVIDENCE_KEYS }));
 check("ENG-95021: and every REGISTERED key is emitted somewhere — no key the executor can never be asked for",
-  REACHABILITY_KEYS.every((k) => emittedKeys.includes(k)),
-  () => ({ registered: REACHABILITY_KEYS, emitted: emittedKeys, unemitted: REACHABILITY_KEYS.filter((k) => !emittedKeys.includes(k)) }));
+  ONSTAND_EVIDENCE_KEYS.every((k) => emittedKeys.includes(k)),
+  () => ({ registered: ONSTAND_EVIDENCE_KEYS, emitted: emittedKeys, unemitted: ONSTAND_EVIDENCE_KEYS.filter((k) => !emittedKeys.includes(k)) }));
+check("PR #157 review (Major): `noOrphanScaffold` is VERIFIER-ONLY — it is out of REACHABILITY_KEYS, so no wiring/build unit is scheduled for it, while it stays a registered evidence key so its gate row can still be closed",
+  !REACHABILITY_KEYS.includes("noOrphanScaffold") && VERIFIER_ONLY_REACHABILITY_KEYS.includes("noOrphanScaffold")
+  && ONSTAND_EVIDENCE_KEYS.includes("noOrphanScaffold"),
+  () => ({ REACHABILITY_KEYS, VERIFIER_ONLY_REACHABILITY_KEYS }));
 
 // The scan above is single-file, so pin that designspec is the only emitter — else a key could hide in another module.
 for (const f of ["migrate.mjs", "mapper.mjs", "engine.mjs"]) {
@@ -5275,6 +5367,195 @@ check("section actions: standard getButtonMenuItem/\"Click\".bindTo shape is cau
   () => docSecParsed.sectionActions);
 
 /* ---- getSectionActions: per-item metadata, helper-built items, separators, submenu nesting ---- */
+/* --- ENG-94714: the section's OWN view `diff` is folded and mapped ------------------------------------------
+   Before this, `diff` was an unread field on a section schema: every fact the plan carried about a Classic list
+   came from method bodies, so an element the section INSERTED reached nothing at all. The shapes below are the
+   ones measured on two real bundles read from a stand (`LeadSectionV2`, 14 layers + 20 seed; `OpportunitySectionV2`,
+   11 + 20) — a command-bar button whose condition binds `enabled`, a second binding BOTH `visible` and `enabled`,
+   a `DataGridActiveRow…` row action carrying NO `itemType` at all, and a `merge DataGrid` setting the
+   `controlColumnName` family. Synthetic here so the goldens stay offline and deterministic; faithful to those
+   measurements so they test the real shapes rather than a convenient invention. --- */
+// The section's own template seed: what `BaseDataView` [`CrtUIPlatform7x`] provides. Minimal on purpose — these
+// four names are the anchors the list regions resolve against, and the point of the fixture is the SECTION's ops.
+// The methods are not decoration: `seedQuality` rejects a seed under a 5-method floor as hand-authored, and it is
+// RIGHT to — a skeletal seed means the whole reading of the section is unreliable, which is exactly what the list
+// gate below blocks on. A fixture that tripped that guard would be testing the guard, not the fold.
+const svSeedMethods = ["init", "onEntityInitialized", "getGridDataColumns", "initFixedFiltersConfig", "getSectionActions", "onCardSaved"]
+  .map((m) => `${m}:function(){return this.callParent(arguments);}`).join(",");
+const svSeed = [{ pkg: "CrtUIPlatform7x", body: `define("BaseDataView",[],function(){return{entitySchemaName:"X",`
+  + `methods:{${svSeedMethods}},diff:[`
+  + `{"operation":"insert","name":"CombinedModeActionButtonsCardLeftContainer","values":{"itemType":7}},`
+  + `{"operation":"insert","name":"DataGridContainer","values":{"itemType":7}},`
+  + `{"operation":"insert","name":"QuickFilterContainer","values":{"itemType":7}},`
+  + `{"operation":"insert","name":"DataGrid","parentName":"DataGridContainer","propertyName":"items","values":{"itemType":13,"collection":"GridData","primaryColumnName":"Id"}}`
+  + `]};});` }];
+// The section chain: one client layer that inserts a button, inserts a row action, and merges the grid.
+const svSection = [{ pkg: "OrderInSales", body: `define("XSection",[],function(){return{entitySchemaName:"X",`
+  + `methods:{},diff:[`
+  + `{"operation":"insert","name":"CreateOrderFromOpportunityButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":5,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.NewOrderCaption"},"click":{"bindTo":"onCardAction"},"enabled":{"bindTo":"canEntityBeOperated"},"style":"green"}},`
+  + `{"operation":"insert","name":"DataGridActiveRowQualifyAction","parentName":"DataGrid","propertyName":"activeRowActions",`
+  + `"values":{"caption":{"bindTo":"Resources.Strings.QualifyCaption"},"visible":{"bindTo":"getIsQualificationStageActive"},"tag":"qualify"}},`
+  + `{"operation":"merge","name":"DataGrid","values":{"controlColumnName":"QualifyStatus","applyControlConfig":"applyQualifyConfig","controlCellClass":"qualify-cell"}}`
+  + `]};});` }];
+const svManifest = (extra = {}) => ({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  planMeta: { sectionSchema: "XSection" },
+  section: { schemas: svSection, seed: svSeed, listColumns: { success: true, source: "schema-default",
+    sectionSchema: "XSection", entity: "X", columns: ["Name"] }, ...extra },
+});
+const svRun = runMigration(svManifest(), { baseDir: FIX });
+const svList = svRun.listChangeSet;
+const svView = svRun.section?.sectionView;
+
+check("ENG-94714: the section chain is folded over its OWN seed — the fold resolves every parent and reports a real seeded template, which is what makes the section-owned/inherited split possible",
+  () => !!svView && svView.counts.chrome > 0 && svView.counts.sectionDeclared > 0,
+  () => svView?.counts);
+check("ENG-94714: a command-bar button declared ONLY in the section's view `diff` now reaches the list ChangeSet — the founding defect (it used to be dropped with no trace)",
+  () => svList.commandBarActions.some((a) => a.name === "CreateOrderFromOpportunityButton" && a.source === "sectionDiff"),
+  () => svList.commandBarActions);
+check("ENG-94714: that button carries its condition WITH the property the condition binds — an `enabled` condition ported as a visibility rule, or dropped, is a behaviour change",
+  () => { const a = svList.commandBarActions.find((x) => x.name === "CreateOrderFromOpportunityButton");
+    return a?.condition === "canEntityBeOperated" && a?.conditionProperty === "enabled"; },
+  () => svList.commandBarActions.find((x) => x.name === "CreateOrderFromOpportunityButton"));
+check("ENG-94714: the button keeps its caption, its source package and its container — a name alone cannot build a button",
+  () => { const a = svList.commandBarActions.find((x) => x.name === "CreateOrderFromOpportunityButton");
+    return a?.caption === "NewOrderCaption" && a?.package === "OrderInSales"
+      && a?.parent === "CombinedModeActionButtonsCardLeftContainer"; },
+  () => svList.commandBarActions.find((x) => x.name === "CreateOrderFromOpportunityButton"));
+check("ENG-94714: a `DataGridActiveRow…` item reaches `rowActions` even though it declares NO `itemType` — all four on the real Opportunity section declare none, so keying this surface on the kind would find none of them",
+  () => { const ra = svList.rowActions.find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return !!ra && ra.condition === "getIsQualificationStageActive"; },
+  () => svList.rowActions);
+check("ENG-94714: the grid's declared-but-unmodelled config (`controlColumnName` and its companions) is raised as ONE named `list-grid-config` item per element, not dropped and not one row per key",
+  () => { const d = svList.needsDecision.filter((x) => x.kind === "list-grid-config");
+    const grid = d.find((x) => /DataGrid/.test(x.item));
+    return d.length >= 1 && !!grid && /controlColumnName/.test(grid.reason)
+      && /applyControlConfig/.test(grid.reason) && /controlCellClass/.test(grid.reason); },
+  () => svList.needsDecision.filter((x) => x.kind === "list-grid-config"));
+check("ENG-94714: presentation-only keys (`style`, `tag`) are NOT raised as questions — they are CSS hooks with no behaviour, and asking about them next to `controlColumnName` teaches the reader to skim past both",
+  () => !svList.needsDecision.some((x) => x.kind === "list-grid-config" && /`style`|`tag`/.test(x.reason)),
+  () => svList.needsDecision.filter((x) => x.kind === "list-grid-config").map((x) => x.reason));
+check("ENG-94714: base-template chrome is NOT reported as section-declared — the containers and the grid come from the seed and only what the section declared or touched is its business",
+  () => svView.counts.sectionDeclared === 3 && svView.commandBarActions.length === 1,
+  () => ({ counts: svView.counts, actions: svView.commandBarActions.map((a) => a.name) }));
+// The SAME section chain with NO seed: the anchors do not exist, so the fold cannot tell chrome from declaration.
+// This is the case the manifest key exists to prevent, and it must degrade LOUDLY rather than silently mis-report.
+const svNoSeedRun = runMigration({ ...svManifest(), section: { schemas: svSection, seed: [],
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("ENG-94714: without `section.seed` the button is STILL folded and still reaches the ChangeSet — a manifest authored before the key existed keeps producing a plan",
+  () => (svNoSeedRun.listChangeSet?.commandBarActions || []).some((a) => a.name === "CreateOrderFromOpportunityButton"),
+  () => svNoSeedRun.listChangeSet?.commandBarActions);
+check("ENG-94714: `section.seed` reaches the plan VERSION — a changed seed body must invalidate a cached plan, or an operator re-runs against a stale one (the miss this class of key has had before)",
+  () => { const a = runMigration(svManifest(), { baseDir: FIX }).planVersion;
+    const other = runMigration({ ...svManifest(), section: { ...svManifest().section,
+      seed: [{ pkg: "CrtUIPlatform7x", body: svSeed[0].body.replace("QuickFilterContainer", "OtherFilterContainer") }] } },
+      { baseDir: FIX }).planVersion;
+    return !!a && !!other && a !== other; },
+  () => ({ a: runMigration(svManifest(), { baseDir: FIX }).planVersion }));
+
+/* --- ENG-94714: the list gate is SCOPED — a section-side gap stops the list deliverable, never the form one.
+   The form-page block this replaces was a real defect once (a section body that would not parse blocked a plan
+   that never consumed its `diff`), so the guard has to prove BOTH halves: the list says it is not approvable, and
+   `gate.blocked` stays exactly as it was. --- */
+const svBadSection = [{ pkg: "OrderInSales",
+  body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:[ this is not javascript ]};});` }];
+const svBadRun = runMigration({ ...svManifest(), section: { schemas: svBadSection, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("ENG-94714: a section body that will not parse BLOCKS the list page — its `diff` is unreadable, so the list ChangeSet is a partial reading and must not be approved as complete",
+  () => svBadRun.listGate?.blocked === true && /failed to parse/.test((svBadRun.listGate.reasons || []).join(" ")),
+  () => svBadRun.listGate);
+check("ENG-94714: …and the RECORD page's gate is untouched by it — this is the spurious form-page block that was already fixed once, and scoping the list gate must not bring it back",
+  // Asserted as a DIFFERENCE against the same manifest with a healthy section, not as `blocked === false`: this
+  // fixture's record page carries no `seed` of its own and is legitimately blocked for that unrelated reason, so a
+  // flat false would be testing the fixture. What must hold is that the broken SECTION adds nothing to that list.
+  () => JSON.stringify(svBadRun.gate?.reasons) === JSON.stringify(svRun.gate?.reasons),
+  () => ({ withBadSection: svBadRun.gate?.reasons, withHealthySection: svRun.gate?.reasons }));
+check("ENG-94714: the blocked list page still RENDERS its partial reading, with the verdict stated in the List page block rather than as a plan-wide banner",
+  () => { const spec = renderPlan(svBadRun, {});
+    return /⛔ \*\*The list page is NOT approvable/.test(spec) && /### List page/.test(spec); },
+  () => renderPlan(svBadRun, {}).split(String.fromCharCode(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
+check("ENG-94714: a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
+  () => svRun.listGate?.blocked === false, () => svRun.listGate);
+
+/* --- ENG-94714 (review 1): the row action's condition PROPERTY, and the `openItems` safety net --------------
+   Two arms the fixture above could not reach. A separate section chain rather than more items on `svSection`,
+   because the counts and the one-command-bar-action assertions above are pins on THAT chain's shape. --- */
+// Same seed, a section chain carrying three extra elements:
+//   * an `enabled`-bound row action  — the `visible`/`enabled` property distinction, on the row-action surface
+//   * a HYPERLINK in the filter area — a kind the list table has no row for, on a RESOLVED region
+//   * a button under a container the fold never sees — the UNRESOLVED-ancestry arm, with a condition on it
+// That last container is deliberately NOT inserted: not inserting it is what makes the button's ancestry run
+// off the folded tree, which is the case the missing-`section.seed` remedy text is written for.
+const svOpenSection = [{ pkg: "OrderInSales", body: `define("XSection",[],function(){return{entitySchemaName:"X",`
+  + `methods:{},diff:[`
+  + `{"operation":"insert","name":"DataGridActiveRowQualifyAction","parentName":"DataGrid","propertyName":"activeRowActions",`
+  + `"values":{"caption":{"bindTo":"Resources.Strings.QualifyCaption"},"enabled":{"bindTo":"IsQualifyEnabled"},"tag":"qualify"}},`
+  + `{"operation":"insert","name":"SectionSearchHyperlink","parentName":"QuickFilterContainer","propertyName":"items","index":0,`
+  + `"values":{"itemType":20,"caption":{"bindTo":"Resources.Strings.AdvancedSearchCaption"},"visible":{"bindTo":"getIsSearchVisible"}}},`
+  + `{"operation":"insert","name":"OrphanExportButton","parentName":"SectionCustomZoneContainer","propertyName":"items","index":0,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.ExportCaption"},"click":{"bindTo":"onExport"},"enabled":{"bindTo":"canExport"}}}`
+  + `]};});` }];
+const svOpenRun = runMigration({ ...svManifest(), section: { schemas: svOpenSection, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+const svOpenList = svOpenRun.listChangeSet;
+const svOpenSpec = renderPlan(svOpenRun, {});
+
+check("ENG-94714 review 1: a row action bound to `enabled` reaches the ChangeSet WITH that property — `listRowActionSpec` dropped `conditionProperty` on the way out of the fold, so every row action arrived property-less",
+  () => { const ra = (svOpenList?.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return ra?.condition === "IsQualifyEnabled" && ra?.conditionProperty === "enabled"; },
+  () => svOpenList?.rowActions);
+check("ENG-94714 review 1: …and the full `conditions` set rides along with it, the same way the command-bar projection carries it — the singular pair is the FIRST condition, not the only one there can be",
+  () => { const ra = (svOpenList?.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return Array.isArray(ra?.conditions) && ra.conditions.length === 1
+      && ra.conditions[0].property === "enabled" && ra.conditions[0].method === "IsQualifyEnabled"; },
+  () => (svOpenList?.rowActions || []).map((x) => x.conditions));
+check("ENG-94714 review 1: the Row actions TABLE renders that property — while it was being dropped the cell read \"on `visible`\" for every action, which instructs a builder to hide the control instead of greying it",
+  () => /`IsQualifyEnabled` on `enabled`/.test(svOpenSpec) && !/`IsQualifyEnabled` on `visible`/.test(svOpenSpec),
+  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /IsQualifyEnabled/.test(l)));
+check("ENG-94714 review 1 ANTI-VACUITY: a `visible`-bound row action still renders \"on `visible`\" — the fix carried the real property through, it did not relabel the cell",
+  () => { const ra = (svList.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return ra?.conditionProperty === "visible"
+      && /`getIsQualificationStageActive` on `visible`/.test(renderPlan(svRun, {})); },
+  () => (svList.rowActions || []).map((x) => ({ name: x.name, property: x.conditionProperty })));
+
+check("ENG-94714 review 1: a section-declared element the list table has NO row for becomes a named `openItems` entry rather than being dropped — the \"nothing is silently dropped\" safety net, which no fixture reached before",
+  () => { const oi = (svOpenRun.section?.sectionView?.openItems || []).find((x) => x.name === "SectionSearchHyperlink");
+    return !!oi && oi.kind === "HYPERLINK" && oi.region === "filter-bar" && oi.package === "OrderInSales"; },
+  () => svOpenRun.section?.sectionView?.openItems);
+check("ENG-94714 review 1: it reaches the worklist as a `list-section-element` decision naming its kind, and the reason states the RESOLVED surface it sits on",
+  () => { const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /SectionSearchHyperlink/.test(x.item));
+    return !!d && /kind: HYPERLINK/.test(d.reason) && /sits on the filter-bar surface/.test(d.reason)
+      && /from `OrderInSales`/.test(d.reason); },
+  () => (svOpenList?.needsDecision || []).filter((x) => x.kind === "list-section-element"));
+check("ENG-94714 review 1: its condition is carried into that reason — an element published without the condition it binds is an incomplete question",
+  () => { const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /SectionSearchHyperlink/.test(x.item));
+    return !!d && /`getIsSearchVisible` on `visible`/.test(d.reason) && /must survive the port/.test(d.reason); },
+  () => (svOpenList?.needsDecision || []).find((x) => /SectionSearchHyperlink/.test(x.item))?.reason);
+check("ENG-94714 review 1: the OTHER arm — an element whose ancestry runs off the folded tree — reports `unresolved` and names the missing `section.seed` as the likely cause, which is a different remedy from an unmapped kind",
+  () => { const oi = (svOpenRun.section?.sectionView?.openItems || []).find((x) => x.name === "OrphanExportButton");
+    const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /OrphanExportButton/.test(x.item));
+    return oi?.region === "unresolved" && !!d && /no recognised list container/.test(d.reason)
+      && /`section.seed`/.test(d.reason) && /`canExport` on `enabled`/.test(d.reason); },
+  () => ({ openItems: svOpenRun.section?.sectionView?.openItems,
+    reason: (svOpenList?.needsDecision || []).find((x) => /OrphanExportButton/.test(x.item))?.reason }));
+check("ENG-94714 review 1: both open items reach the PLAN through the shared ⚠ Confirm section under the `[list-section-element]` label, not as a prose aside a reader can skip",
+  () => /#### ⚠ Confirm before I build/.test(svOpenSpec)
+    && /\*\*\[list-section-element\]\*\* section element: SectionSearchHyperlink/.test(svOpenSpec)
+    && /\*\*\[list-section-element\]\*\* section element: OrphanExportButton/.test(svOpenSpec),
+  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /list-section-element/.test(l)));
+check("ENG-94714 review 1 ANTI-VACUITY: the elements the list vocabulary DOES read are not swept into `openItems` — the healthy fixture's button, row action and grid resolve to their regions and raise no section-element question at all",
+  () => (svRun.section?.sectionView?.openItems || []).length === 0
+    && !(svList.needsDecision || []).some((x) => x.kind === "list-section-element"),
+  () => ({ openItems: svRun.section?.sectionView?.openItems,
+    nd: (svList.needsDecision || []).filter((x) => x.kind === "list-section-element") }));
+
 const secActMk = (methods) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{${methods}},diff:[]};});`;
 // Unquoted `Click`, value spanning lines, handler name matching no navigate hint.
 const secActA = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
@@ -5503,9 +5784,9 @@ const secActGap = runMigration({ entity: "X",
   section: [{ pkg: "Exchange", body: secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
     + `this.setSyncSectionActions(a);a.addItem(this.getButtonMenuItem({Click:{bindTo:"doThing"}}));return a;}`) }],
 }, { baseDir: FIX });
-check("ENG-95254: a helper NO layer defines is named in the command-bar completeness reason, alongside the `diff` gap",
+check("ENG-95254: a helper NO layer defines is named in the command-bar completeness reason, alongside the surfaces the set was read from",
   (() => { const d = (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar");
-    return !!d && /setSyncSectionActions/.test(d.reason) && /not folded at all/.test(d.reason)
+    return !!d && /setSyncSectionActions/.test(d.reason) && /BOTH classic surfaces/.test(d.reason)
       && /no layer in this chain defines/.test(d.reason) && /NOT in the list above/.test(d.reason); })(),
   () => (secActGap.listChangeSet?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
 check("ENG-95254: the resolvable item on that same section is still extracted — an unresolved helper does not poison the layer",
@@ -6930,13 +7211,17 @@ const vOk = renderVerify(vResult, {}, {
     // ENG-95859: Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
     // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
     // longer testing what its name says.
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" },
+    // ENG-96458 D1: the card-action row closes on IDENTITY now, so "all deliverables present" means a button
+    // NAMED for the planned `SecurityCheckProcess` action — a generically-named `Btn` was only ever ✅ because the
+    // resolver passed on any `crt.Button`, which is the false positive this ticket removes.
+    { name: "SecurityCheckProcessButton", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
   // (ENG-94975: `reachabilityValue` still reads these root-level booleans when `reachability` says nothing about
   // the key, so the existing literal stays valid; `reachability.<k> === false` would override them, `true` never does.)
-  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] },
+  miniPageWired: true, sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true,
   ...QG_EVIDENCE, // D7: the page-DESIGN pass is an evidence row now — record + independent judge, or NOT complete
 });
 check("verify: a built page with all deliverables present AND on-stand wiring evidence supplied → complete",
@@ -6999,7 +7284,11 @@ const vTypes = renderVerify(
   { ops: [
       { name: "DueDate", type: "crt.DateTimePicker" }, { name: "Name", type: "crt.Input" },
       // BUILT side deliberately reports the LEGACY spelling — `BUILT_TYPES.tabs` accepts it on purpose.
-      { name: "TabsCtr", type: "crt.TabContainer" }, { name: "T1", type: "crt.Tab" }, { name: "T2", type: "crt.Tab" },
+      // The enclosing PANEL is `crt.TabPanel`, which is what a real page reports and what it must be here: typed
+      // `crt.TabContainer` it was counted as a THIRD tab, and the row only read ✅ because the old rule passed on
+      // `built >= expected`. Under the ENG-96458 equality rule that fixture would report a +1 surplus that no page
+      // actually has, so the legacy-spelling case is now exercised on a coherent built side: 2 tabs, 2 expected.
+      { name: "TabsCtr", type: "crt.TabPanel" }, { name: "T1", type: "crt.Tab" }, { name: "T2", type: "crt.Tab" },
     ], parentSchemaName: "FormPageTemplate", miniPageBuilt: null, ...QG_EVIDENCE });
 check("verify: correctly-built page with a date field (crt.DateTimePicker) + 2 tabs → complete — incl. a built page still reporting the LEGACY crt.Tab spelling against crt.TabContainer expectations (no false 'fewer than expected' / tab miss)",
   vTypes.complete === true && vTypes.missing === 0 && vTypes.unverified === 0,
@@ -7623,7 +7912,11 @@ const lifeRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
   behaviourIndex: { answered: { trigger: "attribute", from: "attributes.Stage.onChange", card: "C1", ac: ["AC-1"] } } });
 const lifeTrig = (m) => (lifeRun.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
 check("chain roots: the SETUP holds — the caller carries `lifecycle` while the row under test is still weak",
-  lifeTrig("hHelper")?.kind === "lifecycle" && lifeTrig("hHelper")?.from === "onSaved"
+  // ENG-96571 review 2 (finding 2) — `from` is the IMMEDIATE caller (`cHelper`) and the platform hook rides in
+  // `hook`. This assertion used to read `from === "onSaved"`, which pinned the defect: a composed lifecycle answer
+  // overwrote nothing, so the immediate caller was lost and the row folded under the platform hook.
+  lifeTrig("hHelper")?.kind === "lifecycle" && lifeTrig("hHelper")?.from === "cHelper"
+  && lifeTrig("hHelper")?.hook === "onSaved"
   // "still weak" = its OWN trigger is not the lifecycle answer. Under the B1 shape `kind === "internal"` IS that
   // statement (a lifecycle-answered row carries kind `lifecycle`), so no second field check is needed — and none is
   // possible: `propagateChainRoots` has already given this row its inherited root by the time it is read here.
@@ -7631,7 +7924,8 @@ check("chain roots: the SETUP holds — the caller carries `lifecycle` while the
   () => JSON.stringify([lifeTrig("hHelper"), lifeTrig("cHelper")]));
 check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
   lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.kind === "lifecycle"
-  && lifeTrig("cHelper")?.rootTrigger?.from === "onSaved",
+  // finding 2: the hook the inherited root carries lives in `hook`; `from` there is the immediate caller.
+  && lifeTrig("cHelper")?.rootTrigger?.hook === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
 check("chain roots: the header stops counting that row as knowing only its calling method",
   !/know only their calling method/.test(renderPlan(lifeRun, {})),
@@ -8285,14 +8579,82 @@ try {
         broken: { st: broken.status, err: (broken.stderr || "").slice(0, 160) },
         noAnswer: { st: noAnswer.status, err: (noAnswer.stderr || "").slice(0, 160) } }));
     const wrongMode = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), unitsManifestPath, "--checklist", RES_FLAG, resPath], { encoding: "utf8" });
-    check("ENG-95503 × ENG-96457: `--resolutions` outside `--units`/`--plan` is refused rather than ignored — in a mode with neither a queue item nor a ⚠ row to attach an answer to, silently accepting it would leave a caller believing answers had been applied",
-      wrongMode.status === 1 && /applies to `--units` and `--plan`/.test(wrongMode.stderr || ""),
+    // ENG-96458 D3 widened the accepting modes from one to two — `--units` (answers attach to queue items) and
+    // `--verify` (`kind: "accepted"` decisions close verify rows). The REFUSAL is unchanged for everything else,
+    // which is what this check is about: `--checklist` has neither a queue item nor a verify row to attach to, so
+    // accepting the flag there would still leave a caller believing answers had been applied. The message now
+    // names both valid modes, so the assertion reads them rather than the old single-mode phrase.
+    // ENG-96457 added `--plan` to the accepting set at the same time, so the message now names three modes and the
+    // assertion reads all three rather than any single-mode phrase.
+    check("ENG-95503 / ENG-96457 / ENG-96458: `--resolutions` outside `--units`, `--plan` and `--verify` is refused rather than ignored — `--checklist` has neither a queue item, a ⚠ row nor a verify row to attach an answer to, and the error names every mode that does",
+      wrongMode.status === 1 && /applies to `--units`/.test(wrongMode.stderr || "") && /`--plan`/.test(wrongMode.stderr || "") && /and to `--verify`/.test(wrongMode.stderr || ""),
       () => ({ status: wrongMode.status, err: (wrongMode.stderr || "").slice(0, 200) }));
   } finally {
     fs.rmSync(resPath, { force: true });
   }
 } finally {
   fs.rmSync(unitsManifestPath, { force: true });
+}
+
+/* ---- ENG-96571 review 3 (finding 8): `resolutionsClosed` and its ℹ note, END TO END through the CLI ----
+   Every golden for review 3 called `pageUnits(...)` in-process, so nothing exercised the CLI wiring at the
+   `--units` site, the new field's presence in the `--units` machine artifact a downstream consumer reads, or the
+   `.slice(0, 5)` / "and N more" branch of the note. If the guarded field never populated on the CLI path the
+   operator-facing half of review 3 would be dead and the suite would stay green — the same reason ENG-95503 pins
+   its sibling note (`/matched NO/` on `withRes.stderr`) rather than trusting the in-process match. ---- */
+const R8_RULE = (c) => `"${c}": { "${c}Required": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER, "property": BusinessRuleModule.enums.Property.REQUIRED, "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } }`;
+const R8_COLS = ["Job", "Job2", "Job3", "Job4"];
+const R8_MANIFEST = (dispositions) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", rules: { ${R8_COLS.map(R8_RULE).join(", ")} }, diff: [${R8_COLS.map((c) => `{ "operation": "insert", "name": "${c}", "parentName": "ProfileContainer", "propertyName": "items", "values": { "bindTo": "${c}" } }`).join(", ")}], details: { D1: { schemaName: "D1", entitySchemaName: "Shared" } } }; });` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r8ManPath = path.join(os.tmpdir(), `c2f_r8_man_${process.pid}.json`);
+const r8ResPath = path.join(os.tmpdir(), `c2f_r8_res_${process.pid}.json`);
+try {
+  const disp = (keys) => Object.fromEntries(keys.map((k) => [k, { resolved: true, disposition: "accepted", note: "closed by the manifest" }]));
+  const answers = (keys) => ({ resolutions: keys.map(([kind, item]) => ({ kind, item, answer: "also answered through resolutions.json" })) });
+  const r8Cli = () => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), r8ManPath, "--units", RES_FLAG, r8ResPath], { encoding: "utf8" });
+  // ONE closed answer: the field is present in the artifact with the right kind/item/answer, the ℹ note is on
+  // stderr, and — the assertion that actually matters — the ⚠ "matched NO" note is NOT, because a closed question
+  // was asked. Those two notes claiming the same entry is both asked and unasked is the defect review 3 removed.
+  fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(disp(["rule-condition:Job"]))));
+  fs.writeFileSync(r8ResPath, JSON.stringify(answers([["rule-condition", "Job"]])));
+  const one = r8Cli();
+  const oneOut = (() => { try { return JSON.parse(one.stdout); } catch { return null; } })();
+  check("ENG-96571 review 3 (finding 8): `--units --resolutions` publishes `resolutionsClosed` in the CLI's machine artifact and states the ℹ note on stderr — and does NOT also report the entry as an answer nobody asked for",
+    !!oneOut && Array.isArray(oneOut.resolutionsClosed) && oneOut.resolutionsClosed.length === 1
+    && oneOut.resolutionsClosed[0].kind === "rule-condition" && oneOut.resolutionsClosed[0].item === "Job"
+    && /also answered through resolutions\.json/.test(oneOut.resolutionsClosed[0].answer || "")
+    && /already CLOSED by a disposition/.test(one.stderr || "")
+    && !/matched NO/.test(one.stderr || "") && (oneOut.resolutionsUnmatched || []).length === 0
+    && !/not valid JSON|cannot read/.test(one.stderr || ""),
+    () => ({ status: one.status, closed: oneOut?.resolutionsClosed, unmatched: oneOut?.resolutionsUnmatched,
+      err: (one.stderr || "").slice(0, 400) }));
+  check("ENG-96571 review 3 (finding 8) ANTI-VACUITY: with the SAME answers file and NO disposition recorded, the same run reports the answer as MATCHED and prints neither note — so the check above is about the disposition, not about the file",
+    (() => {
+      fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(null)));
+      const r = r8Cli();
+      const o = (() => { try { return JSON.parse(r.stdout); } catch { return null; } })();
+      return !!o && (o.resolutionsClosed || []).length === 0 && o.resolutionsMatched >= 1
+        && !/already CLOSED by a disposition/.test(r.stderr || "") && !/matched NO/.test(r.stderr || "");
+    })(),
+    () => "see --units --resolutions on R8 with no confirmDispositions");
+  // SIX closed answers → the truncation branch: five named, "and 1 more". Six is the smallest count that takes it.
+  const sixKeys = [["field-control", "(4 fields)"], ["field-labels", "(all fields)"], ["rule-condition", "Job"],
+    ["rule-condition", "Job2"], ["rule-condition", "Job3"], ["rule-condition", "Job4"]];
+  fs.writeFileSync(r8ManPath, JSON.stringify(R8_MANIFEST(disp(sixKeys.map(([k, i]) => `${k}:${i}`)))));
+  fs.writeFileSync(r8ResPath, JSON.stringify(answers(sixKeys)));
+  const six = r8Cli();
+  const sixOut = (() => { try { return JSON.parse(six.stdout); } catch { return null; } })();
+  check("ENG-96571 review 3 (finding 8): the note's `.slice(0, 5)` branch — six closed answers state the count, name five, and end `…and 1 more`, with all six carried in the artifact rather than truncated there too",
+    !!sixOut && sixOut.resolutionsClosed.length === 6
+    && /ℹ 6 --resolutions answer\(s\) target questions already CLOSED by a disposition/.test(six.stderr || "")
+    && /…and 1 more/.test(six.stderr || "")
+    && (six.stderr || "").split("already CLOSED by a disposition:")[1].split("…and 1 more")[0].split("|").map((x) => x.trim()).filter(Boolean).length === 5,
+    () => ({ closed: sixOut?.resolutionsClosed?.length, err: (six.stderr || "").slice(0, 600) }));
+} finally {
+  fs.rmSync(r8ManPath, { force: true });
+  fs.rmSync(r8ResPath, { force: true });
 }
 
 /* ---- Y1 — THE PLAN VERSION. The approval gate hard-stops unless the recorded approval names a plan version
@@ -8601,7 +8963,7 @@ check("ENG-94975 F6b: a SUB-page that folds its OWN mini page emits NO `List pag
 // `| n | label | mark | evidence |`; the mark is one of four fixed tokens and is the FIRST of them on the line
 // (neither the labels used here nor the escaped evidence text contains one), so this reads the real cell without
 // depending on how many `|` a label happens to carry.
-const MARK_RE = /(✅ Done|⚠ verify|❌ MISSING|☐ confirm on-stand)/;
+const MARK_RE = /(✅ Done|⚠ verify|❌ MISSING|☐ confirm on-stand|N\/A — [^|]*?)\s*\|/;
 const marksFor = (md, re) => md.split("\n").filter((l) => /^\| \d+ \|/.test(l) && re.test(l)).map((l) => (MARK_RE.exec(l) || [])[1] || "?");
 const allEq = (arr, v) => arr.length > 0 && arr.every((x) => x === v);
 
@@ -8648,7 +9010,7 @@ const rcPages = { main: { viewConfig: { items: [] }, parentSchemaName: "T" } };
 const SECTION_RE = /Navigable section registered/;
 const WIRED_RE = /Mini page wired to/;
 const rcNothing = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: {} });
-const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } } });
+const rcSection = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true } });
 check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row — the canonical home is read, not just the legacy root-level booleans (control: the same payload with an empty `reachability` leaves it ⚠)",
   allEq(marksFor(rcSection.markdown, SECTION_RE), "✅ Done") && /bound to exactly 1 workplace/.test(rcSection.markdown)
   && allEq(marksFor(rcNothing.markdown, SECTION_RE), "⚠ verify"),
@@ -8660,12 +9022,17 @@ check("ENG-94975 P2 reachability: a key in `built.reachability` CLOSES its row �
 // while the SAME manifest under a menu-planning mode must still report it open.
 const rcPagesOnly = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "pages-only-no-menu" }, { pages: rcPages, reachability: {}, miniPageWired: true });
 const rcNewApp = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "new-app" }, { pages: rcPages, reachability: {}, miniPageWired: true });
-// The row stays VISIBLE (nothing silently drops off the control table) but loses its `vk`, so it resolves to
-// `☐ confirm on-stand` — outcome `skip`, which is tallied into neither `missing` nor `unverified`. That is what
-// makes the mode usable: the executor loops on `--verify` until green, and a machine-gated row for a deliverable
-// the plan deliberately dropped would never close.
-check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but un-gated — it adds nothing to missing/unverified, so `--verify` can still reach green",
-  allEq(marksFor(rcPagesOnly.markdown, SECTION_RE), "☐ confirm on-stand") && /deliberately NOT built/.test(rcPagesOnly.markdown)
+// The row stays VISIBLE (nothing silently drops off the control table) but carries `na` instead of a `vk`, so it
+// resolves `N/A — not registered by decision …` — outcome `skip`, tallied into neither `missing` nor `unverified`
+// nor `pending`. That is what makes the mode usable: the executor loops on `--verify` until green, and a
+// machine-gated row for a deliverable the plan deliberately dropped would never close.
+// PR #157 review (Blocker 2) — it is `na`, NOT a bare vk-less row, and that distinction is the fix: while the
+// vk-less default was `pending` this row held a correctly executed plan open forever. `na` says the same thing its
+// boundary sibling says — there is nothing to build and nobody to ask.
+check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but marked N/A by decision — it adds nothing to missing/unverified/pending, so `--verify` can still reach green",
+  marksFor(rcPagesOnly.markdown, SECTION_RE).length === 1
+  && marksFor(rcPagesOnly.markdown, SECTION_RE).every((m) => /^N\/A — not registered by decision/.test(m))
+  && /deliberately NOT built/.test(rcPagesOnly.markdown) && rcPagesOnly.pending === 0
   && rcPagesOnly.missing === rcNewApp.missing && rcPagesOnly.unverified === rcNewApp.unverified - 1,
   () => ({ marks: marksFor(rcPagesOnly.markdown, SECTION_RE), pagesOnly: { missing: rcPagesOnly.missing, unverified: rcPagesOnly.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
 check("placement verify (control): the SAME payload under 'new-app' still leaves the section row OPEN — the drop is the approved mode's doing, not a hole in the gate",
@@ -8736,7 +9103,7 @@ check("ENG-95850 (B2): the OTHER wiring keys are untouched — `miniPageWired: t
 // …and the fallback is still a fallback: a NON-EMPTY `reachability` that simply says nothing about a key leaves
 // the root-level boolean in charge (this is the leg that the opposite mutation — reading only `reachability` —
 // would break, and the legacy payloads in the suite would not notice because they carry no `reachability` at all).
-const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, miniPageWired: true });
+const rcFallback = renderVerify(rcRes, rcOpts, { pages: rcPages, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true }, miniPageWired: true });
 check("ENG-94975 P2 reachability: a key ABSENT from a non-empty `reachability` object still resolves from the payload root — the canonical map takes precedence over the legacy shape without abolishing it",
   allEq(marksFor(rcFallback.markdown, WIRED_RE), "✅ Done") && allEq(marksFor(rcFallback.markdown, SECTION_RE), "✅ Done"),
   () => ({ wired: marksFor(rcFallback.markdown, WIRED_RE), section: marksFor(rcFallback.markdown, SECTION_RE) }));
@@ -8917,7 +9284,7 @@ for (const e of pageUnits(m12Run, m12Opts).evidenceRows) {
   m12Evidence[e.id] = { referencePage: "SomeExistingFreedomPage", components: ["crt.Input"] };
   m12Judge[e.id] = { convincing: true, why: "the record names the page and the components built on it" };
 }
-const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } }, evidence: m12Evidence, judge: m12Judge });
+const m12Built = (mainEntry) => ({ pages: mainEntry === undefined ? {} : { main: mainEntry }, reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true }, evidence: m12Evidence, judge: m12Judge });
 // `entitySchemaName` matches this fixture's own entity (`X`): the migration invariant is that the Freedom page
 // sits on the SAME object the Classic page did, so a fixture that means "correctly built" has to say so.
 const m12Page = (items, entity = "X") => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: entity, viewConfig: { items } });
@@ -9138,7 +9505,10 @@ const e1Payload = (over = {}, extra = {}) => {
   // registration only ADDS, so a flag cannot tell one binding from two and the row asks for the number instead.
   // This helper writes what a real verifier writes, so E1's subject (the keyed mini-page payload) is not masked
   // by an unrelated open row.
-  for (const r of e1Units.reachability) if (r.appliesWhen) reachability[r.key] = r.key === "sectionRegistered" ? { workplaces: 1, names: ["Recruiting"] } : true;
+  // `appliesWhen` OR `verifierOnly && emitted` (PR #157 review, Major): a verifier-only key such as
+  // `noOrphanScaffold` schedules no build unit, so `appliesWhen` is false — but its gate row IS emitted and still
+  // has to be answered by the verifier, or the run cannot reach complete.
+  for (const r of e1Units.reachability) if (r.appliesWhen || (r.verifierOnly && r.emitted)) reachability[r.key] = r.key === "sectionRegistered" ? { workplaces: 1, names: ["Recruiting"] } : true;
   for (const [k, v] of Object.entries(over)) { if (v === undefined) delete pages[k]; else pages[k] = v; }
   return { pages, reachability, evidence, judge, ...extra };
 };
@@ -10767,7 +11137,7 @@ const N2_NO_SUCH_KEY = "child:NotAPage";
   const listIds = lpUnits.evidenceRows.filter((r) => r.pageKey === "list").map((r) => r.id);
   const builtAll = {
     pages: { main: { viewConfig: { items: ["main-body"] }, schemaUId: "u-main" }, list: false },
-    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] } },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["Recruiting"] }, noOrphanScaffold: true },
     evidence: Object.fromEntries([...mainIds.map((id) => [id, { referencePage: "AccountPage", components: ["crt.Input"] }]),
       ...listIds.map((id) => [id, { referencePage: "ContactPage", components: ["crt.DataGrid"] }])]),
     judge: Object.fromEntries(listIds.map((id) => [id, { convincing: false, why: "no prop diff" }])),
@@ -11080,22 +11450,50 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
   const wholeBytes = Buffer.byteLength(r.stdout || "", "utf8");
   const sliceBytes = sliceFiles.filter((f) => fs.existsSync(f)).map((f) => fs.statSync(f).size);
   const sumSlices = sliceBytes.reduce((t, b) => t + b, 0);
+  // MEASURE THE PARTITION AGAINST THE SLICEABLE PAYLOAD, NOT THE WHOLE DOCUMENT. The band below used to compare
+  // `sumSlices` with `wholeBytes`, which quietly made every new RUN-LEVEL field a step towards a red check: a key
+  // that appears in no slice inflates the denominator and nothing else. That is how it actually broke — the
+  // measured ratio walked 0.83 → 0.77 → 0.75 as `resolutionsUnmatched`, then `planGaps` (ENG-95857), then this
+  // ticket's own run-level counters were added, and the third step crossed the floor on a slicer nobody had
+  // touched (the three slice files were byte-identical at 1667/820/824 across all three heads). Re-calibrating the
+  // band would only postpone the next one, so the denominator is now the part that IS sliced.
+  // DERIVED, never a hard-coded key list: the sliceable keys are the union of the keys the slice files actually
+  // carry, so a field added to the queue and to the slice is counted on both sides and a run-level-only field is
+  // counted on neither. Serialised with the same `JSON.stringify(x, null, 2)` the CLI writes both sides with, at
+  // the same top-level depth, so the two byte counts are comparable.
+  const sliceDocs = sliceFiles.filter((f) => fs.existsSync(f))
+    .map((f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } })
+    .filter(Boolean);
+  const slicedKeys = new Set(sliceDocs.flatMap((doc) => Object.keys(doc)));
+  // `pageUnitsSlice` renames exactly two queue keys as it narrows them — the `pages` array becomes the one `page`
+  // it kept and the `parents` map becomes that page's own `parent` edge. Both ARE sliced, so both belong in the
+  // denominator; only these two are listed because a rename is the only thing key identity cannot see. Everything
+  // else is either carried under its own name (`entity`, `planVersion`, `sectionHost`, `reachability`, …) or is
+  // run-level only (`buildOrder`, `templateNames`, the `resolutions*` set, `planGaps`) — and a run-level field
+  // added tomorrow falls into the second group on its own, which is the whole point of deriving this.
+  const SLICE_RENAMES = { pages: "page", parents: "parent" };
+  const isSliceable = (k) => slicedKeys.has(k) || slicedKeys.has(SLICE_RENAMES[k]);
+  const sliceablePayload = parsed
+    ? Object.fromEntries(Object.entries(parsed).filter(([k]) => isSliceable(k)))
+    : {};
+  const partitionBytes = Buffer.byteLength(`${JSON.stringify(sliceablePayload, null, 2)}\n`, "utf8");
   // What the run cost BEFORE: every agent opened the whole queue. AFTER: each opens its own row.
   const runBefore = wholeBytes * keys.length, runAfter = sumSlices;
   // BOTH THRESHOLDS BELOW MEAN SOMETHING; neither is fitted to this fixture's byte counts.
-  // `PARTITION_BAND` is how far the sum may sit from the whole file. It cannot be 1.0: each slice repeats the
-  // run-level fields (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the sum, while the
-  // whole-run collections (`buildOrder`, `resolutionsUnmatched`) appear in no slice, which deflates it. Neither
-  // side is a defect. Measured sums land at 0.87–0.92 of the whole across the 1-, 2- and 3-page fixtures, so
-  // ±0.25 holds every one of them and still fails the regressions: a slicer that skips one of three files reads
-  // 0.65, and one that writes the whole payload into each reads 3.0. A wider band passed the missing-file case.
+  // `PARTITION_BAND` is how far the sum may sit from the SLICEABLE payload. It cannot be 1.0: each slice repeats
+  // the run-level fields it does carry (`planVersion`, `sectionHost`, `applicationCode`, …), which inflates the
+  // sum, while `pages` is split across the slices rather than repeated. Neither side is a defect. Against the
+  // sliceable denominator this fixture measures 0.89, and ±0.25 still fails the regressions it was chosen for:
+  // a slicer that skips one of three files reads 0.44 — outside the band because the denominator no longer
+  // shrinks with it — and one that writes the whole payload into each reads well over 1.25.
   // `ORDER_OF_MAGNITUDE` is the claim itself — bullet 2 promised a 10x per-agent drop and this asserts it does
   // NOT happen, so the 10 is the wording, not a calibration. Slices here sit at 2.3-4.6x, well inside it.
   const PARTITION_BAND = 0.25, ORDER_OF_MAGNITUDE = 10;
   check("ENG-95472: the slices PARTITION the queue — together they are about the whole file, not a fraction of it",
     () => keys.length === 3 && sliceBytes.length === keys.length
-      && sumSlices > wholeBytes * (1 - PARTITION_BAND) && sumSlices < wholeBytes * (1 + PARTITION_BAND),
-    () => ({ wholeBytes, sliceBytes, sumSlices, ratio: +(sumSlices / wholeBytes).toFixed(2) }));
+      && sumSlices > partitionBytes * (1 - PARTITION_BAND) && sumSlices < partitionBytes * (1 + PARTITION_BAND),
+    () => ({ wholeBytes, partitionBytes, runLevelOnly: Object.keys(parsed || {}).filter((k) => !isSliceable(k)),
+      sliceBytes, sumSlices, ratio: +(sumSlices / partitionBytes).toFixed(2) }));
   check("ENG-95472: so the saving is the RUN TOTAL and it scales with the page count — not an order of magnitude off any single agent's read",
     () => sliceBytes.length === keys.length && keys.length > 0
       && runBefore / runAfter > keys.length * 0.5 && sliceBytes.every((b) => b > wholeBytes / ORDER_OF_MAGNITUDE),
@@ -11179,8 +11577,17 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     const [mark, , outcome] = resolveVk({ type: "rule", n: 2, names: ["Contact", "Owner"] }, ruleCtx);
     check("T4 (R3): resolveVk routes a `rule` vk to resolveRuleVk (same ✅/ok verdict as calling it directly)",
       mark === "✅ Done" && outcome === "ok");
-    check("T4 (R3): resolveVk still returns `skip` for a vk-LESS row — the dispatch change did not disturb the ☐ default",
-      resolveVk(undefined, ruleCtx)[2] === "skip");
+    // ENG-96458 D4 — the ☐ default is now `pending`, not `skip`. The row still renders exactly as before and is
+    // still not machine-gated; what changed is that it is COUNTED, so five Layout rows handed to a human can no
+    // longer print and then vanish from the verdict. `skip` survives for a row that is not a deliverable at all
+    // (`naRow`), which is the state it was always meant to name.
+    // PR #157 review (Blocker 2) — the vk-LESS DEFAULT IS A NOTE, and that is the fix: `pending` briefly WAS the
+    // fallback for every vk-less row, which swept in the per-handler notes, the native card-action row, the child
+    // identity rows and the `pages-only-no-menu` "deliberately NOT built" row — so a correct plan could never
+    // report complete and `pending` scaled with handler count. It is opt-in via `human: true` now; the row still
+    // renders `☐ confirm on-stand`, it just does not hold the run open.
+    check("PR #157 review (Blocker 2): resolveVk returns `skip` for a vk-LESS row — the ☐ default is a visible NOTE that tallies in nothing, never a run-level hold",
+      resolveVk(undefined, ruleCtx)[2] === "skip" && resolveVk(undefined, ruleCtx)[0] === "☐ confirm on-stand");
     const rr = { changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
       pageBusinessRules: [{ action: "show", element: "Contact", inverseAction: "hide" }],
       entityBusinessRules: [{ action: "apply-static-filter", targetAttribute: "Owner" }] }, signals: {} };
@@ -11636,6 +12043,671 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     refused.gate.blocked === true && (refused.effective.warnings || [])[0].dispositionRefused
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
+}
+
+// ============================================================================================================
+// ENG-96458 — the `BusinessRule1Section` acceptance criteria, one check per bullet of the ticket.
+//
+// PROVENANCE, and it matters for how much these prove: the two runs' own `verify.md` tables are committed at
+// `references/businessrule/` and every assertion below cites the row it comes from. They live under `references/`,
+// NOT under `fixtures/`, deliberately: nothing loads them, and a file under `fixtures/` reads as a regression input
+// some test feeds in. The migration folders are gone, so the `--built` payloads and manifests of those runs are NOT
+// recoverable and this fixture is RECONSTRUCTED to reproduce those rows — it is not a replay. Read
+// `references/businessrule/README.md` before extending it.
+//
+// The page: 21 fields, one tab, Print and Process both **Not migrated** (`ProcessInModules` → 0,
+// `SysModuleReport` → 0, both checked on-stand), section registered in one workplace.
+{
+  const brFields = ["PDS_Name", "PDS_STRING", "PDS_FLOAT", "PDS_BOOLEAN", "PDS_INTEGER", "PDS_DATE1"];
+  const brDiff = brFields.map((n) => ({ name: n, parentName: "T1", values: { control: `$${n}`, type: "crt.Input" } }));
+  brDiff.push({ name: "T1", values: { type: "crt.TabContainer", caption: "#ResourceString(Tab733e368eTabLabel)#" } });
+  // `cardActions` names both buttons exactly as the Classic page carries them; the SIGNALS are what say whether
+  // either is a deliverable — the same two `result.signals` the plan renders its **Not migrated** note from.
+  const brResult = (signals) => ({
+    entity: "BusinessRule",
+    changeSet: { viewConfigDiff: brDiff, images: [], standardFeatures: [], details: [],
+      cardActions: ["PrintButton", "ProcessButton"], pageBusinessRules: [], entityBusinessRules: [], needsDecision: [] },
+    signals,
+  });
+  const NOT_MIGRATED = { processes: { resolved: true, present: false }, printables: { resolved: true, present: false } };
+  // The section-level rows (`Navigable section registered`, `No scaffold left behind`) exist only for a SECTION
+  // migration, which is what this one is: `BusinessRule1Section` → the Freedom section.
+  const brOpts = (extra = {}) => ({ planMeta: { sectionSchema: "BusinessRule1Section", formTemplate: "PageWithTopAreaAndTabsFreedomTemplate" }, ...extra });
+  const brBuilt = (ops, extra = {}) => ({
+    pages: { main: { viewConfig: { items: ops }, parentSchemaName: "PageWithTopAreaAndTabsFreedomTemplate",
+      entitySchemaName: "BusinessRule", packageName: "UsrBusinessRuleFreedom" } },
+    reachability: { sectionRegistered: { workplaces: 1, names: ["My applications"] }, noOrphanScaffold: true },
+    // The UI-guidelines rows are their own deliverable and are not what these checks are about; supplying the
+    // record + verdict keeps them out of the tally, so a ⚠ here would be about the row under test and nothing else.
+    ...QG_EVIDENCE,
+    ...extra,
+  });
+  // The seven template-supplied buttons the ENG-96445 page actually carried. NOT one of them is a Print or a
+  // Process action, which is exactly why rows 18/19 reading ✅ was a false positive.
+  const TEMPLATE_BUTTONS = ["BackButton", "SaveButton", "CancelButton", "CloseButton", "SetRecordRightsButton", "RequeueQueueItemButton", "PostponeQueueItemButton"]
+    .map((n) => ({ name: n, type: "crt.Button" }));
+  const oneTab = [...brFields.map((n) => ({ name: n, type: "crt.Input" })), { name: "T1", type: "crt.TabContainer" }, ...TEMPLATE_BUTTONS];
+
+  // ── AC1 — rows 18/19 are ABSENT, not ✅ ────────────────────────────────────────────────────────────────────
+  const brNotMigrated = renderVerify(brResult(NOT_MIGRATED), brOpts(), brBuilt(oneTab));
+  check("ENG-96458 AC1: the plan says Print/Process are NOT migrated → NO card-action row is emitted at all (ENG-96445 rows 18/19 read `✅ Done · a crt.Button is present` on a page whose only buttons were the template's)",
+    !/Card action — Print/.test(brNotMigrated.markdown) && !/Card action — Process/.test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // The other half of AC1: an action the plan DOES expect is ✅ only when a component is bound to it.
+  const MIGRATED = { processes: { resolved: true, present: true, names: ["Approval routing"] }, printables: { resolved: true, present: true, names: ["Invoice"] } };
+  const brUnbound = renderVerify(brResult(MIGRATED), brOpts(), brBuilt(oneTab));
+  check("ENG-96458 AC1: a MIGRATED card action on a page carrying only template buttons is ⚠ naming the action — never ✅ on `a crt.Button is present`",
+    /Card action — Print \| ⚠ verify/.test(brUnbound.markdown) && /no built component names the Print action/.test(brUnbound.markdown)
+    && !/a crt\.Button is present/.test(brUnbound.markdown),
+    () => brUnbound.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // A FIELD whose name merely CONTAINS the action word must not close the row. `ProcessListeners` is a real
+  // read-only field on the very ENG-96445 page this defect came from — `"processlisteners".includes("process")` is
+  // true — so a name-only match would have replaced one false ✅ with another. Only a clickable component counts.
+  const brFieldLookAlike = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "ProcessListeners", type: "crt.Input" }]));
+  check("ENG-96458 AC1: a FIELD whose name contains the action word (`ProcessListeners`, a real field on that page) does NOT close the Process row — a card action is something a user clicks, never an input",
+    /Card action — Process \| ⚠ verify/.test(brFieldLookAlike.markdown),
+    () => brFieldLookAlike.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  // A ⋮ MENU ITEM does count — ENG-95470 measured `crt.MenuItem MenuItem_RunSecurityCheck` performing exactly the
+  // role a record had claimed for a `crt.Button`, and rejecting it would be literal-type matching all over again.
+  const brMenuItem = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "MenuItem_PrintInvoice", type: "crt.MenuItem" }]));
+  check("ENG-96458 AC1: a `crt.MenuItem` bound to the action DOES close the row — the gate matches the role, not one literal component type",
+    /Card action — Print \| ✅ Done \| ˋMenuItem_PrintInvoiceˋ on the built page is bound to the Print action/.test(brMenuItem.markdown),
+    () => brMenuItem.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  const brBound = renderVerify(brResult(MIGRATED), brOpts(), brBuilt([...oneTab, { name: "PrintInvoiceButton", type: "crt.Button" }, { name: "RunProcessButton_Approval routing", type: "crt.Button" }]));
+  check("ENG-96458 AC1: a button whose NAME carries the planned action (or the reported printable/process) closes the row, and the evidence says which component did it",
+    /Card action — Print \| ✅ Done \| ˋPrintInvoiceButtonˋ on the built page is bound to the Print action/.test(brBound.markdown),
+    () => brBound.markdown.split("\n").filter((l) => /Card action/.test(l)));
+
+  // PR #157 review (round 2) — the ☐ helpers these Blocker checks share. Per ROW, never on the run total: this
+  // fixture already holds one layout-group `human: true` row, so a `pending === 1` assertion would either fail for
+  // the wrong reason or, worse, keep passing while the row under test stopped being pending at all.
+  const pendingRowFor = (v, rx, page = "main") => (v.pages[page]?.pendingRows || []).find((r) => rx.test(r.deliverable));
+  const rowLine = (v, rx) => v.markdown.split("\n").filter((l) => rx.test(l));
+
+  // ── AC2 — row 17 reports the surplus ──────────────────────────────────────────────────────────────────────
+  // ENG-96444's row 17 verbatim: "Tabs — 1 expected | ✅ Done | 2 crt.TabContainer built".
+  const brTwoTabs = renderVerify(brResult(NOT_MIGRATED), brOpts(), brBuilt([...oneTab, { name: "Feed", type: "crt.TabContainer" }]));
+  check("ENG-96458 AC2: 1 tab expected and 2 built is NOT the ✅ ENG-96444 printed — it reads `1 expected, 2 built (+1: Feed)`, the surplus is NAMED, and the run does not call itself done",
+    /Tabs — 1 expected \| ☐ confirm on-stand \| 1 expected, 2 built \(\+1: Feed\)/.test(brTwoTabs.markdown)
+    && !!pendingRowFor(brTwoTabs, /^Tabs — 1 expected/),
+    () => ({ pendingRows: brTwoTabs.pages.main.pendingRows, row: rowLine(brTwoTabs, /Tabs/) }));
+  // PR #157 review (round 2, Blocker on designspec.mjs:3640) — AND IT IS NOT CHARGED TO THE BUILDER. AC2 asked for
+  // a warn instead of a green; it did not ask for the surplus to spend the builder's round budget. The three
+  // assertions are the three consequences the Blocker named: the page's BUILD is complete, `builderOpen` is
+  // untouched (so nothing schedules a repair dispatch for it — `openNow()` reads `complete`, which `pending` does
+  // not clear either), and the cell no longer tells a delete-capable agent on a live stand to remove a component
+  // the template supplied.
+  check("PR #157 review (round 2): a page whose ONLY gap is one surplus reports `buildComplete: true` and leaves `builderOpen` at 0 — a template-merged Feed is not a build gap, so the unit is not re-dispatched for it and cannot park at MAX_ROUNDS",
+    brTwoTabs.pages.main.buildComplete === true && brTwoTabs.pages.main.builderOpen === 0
+    && brTwoTabs.pages.main.complete === true
+    && brTwoTabs.pages.main.missing === 0 && brTwoTabs.pages.main.unverified === 0
+    && brTwoTabs.builderOpen === 0 && brTwoTabs.buildMissing === 0,
+    () => brTwoTabs.pages.main);
+  check("PR #157 review (round 2): the surplus cell does NOT say `remove it` — the evidence string reaches a write-capable build agent through its scoped `--verify --page` gate, and the template-provided case is named as one it may not remove",
+    !/or remove it/.test(brTwoTabs.markdown)
+    && /is not the builder's to remove/.test(brTwoTabs.markdown)
+    && /kind: .confirmed./.test(brTwoTabs.markdown),
+    () => brTwoTabs.markdown.split("\n").filter((l) => /Tabs/.test(l)));
+  // The row is CLOSABLE, which is the half a `"verifier"` owner tag would not have given it: a `confirmed`
+  // resolution against the row's own published key takes it out of `pending` entirely.
+  const brSurplusKey = pendingRowFor(brTwoTabs, /^Tabs — 1 expected/)?.rowKey;
+  const brTwoTabsConfirmed = renderVerify(brResult(NOT_MIGRATED), { ...brOpts(), resolutions: { resolutions: [
+    { kind: "confirmed", row: brSurplusKey, answer: "the extra tab is the template's Feed (ESN) — correct as built", decidedBy: "t.moshon", date: "2026-09-08" }] } },
+    brBuilt([...oneTab, { name: "Feed", type: "crt.TabContainer" }]));
+  check("PR #157 review (round 2): a `confirmed` resolution against the surplus row's OWN published key closes the hold — that row leaves `pending`, `confirmed` counts it, and it renders CONFIRMED ON-STAND rather than as an accepted deviation",
+    !!brSurplusKey
+    && brTwoTabsConfirmed.pending === brTwoTabs.pending - 1
+    && brTwoTabsConfirmed.confirmed === 1 && brTwoTabsConfirmed.accepted === 0
+    && !pendingRowFor(brTwoTabsConfirmed, /^Tabs — 1 expected/)
+    && /Tabs — 1 expected \| ☑ confirmed \| CONFIRMED ON-STAND \(t\.moshon, 2026-09-08\)/.test(brTwoTabsConfirmed.markdown),
+    () => ({ rowKey: brSurplusKey, pendingBefore: brTwoTabs.pending, pendingAfter: brTwoTabsConfirmed.pending,
+      confirmed: brTwoTabsConfirmed.confirmed, row: rowLine(brTwoTabsConfirmed, /Tabs/) }));
+  check("ENG-96458 AC2: the EQUAL case is still ✅ — the equality rule removes a false pass, it does not make the row unreachable",
+    /Tabs — 1 expected \| ✅ Done \| 1 crt.TabContainer built/.test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Tabs/.test(l)));
+
+  // ── AC3 — an `accepted` resolution turns the ENG-96444 verdict green ───────────────────────────────────────
+  // ENG-96444's single ❌: the section sits in `UCworkplace` AND `My applications`, because `create-app` always
+  // registers into the latter, and the operator chose to keep both (D6).
+  const brTwoWorkplaces = brBuilt(oneTab);
+  brTwoWorkplaces.reachability.sectionRegistered = { workplaces: 2, names: ["UCworkplace", "My applications"], source: "verified" };
+  const brRed = renderVerify(brResult(NOT_MIGRATED), brOpts(), brTwoWorkplaces);
+  check("ENG-96458 AC3: without a recorded decision the two-workplace row stays ❌ — an acceptance is an operator's answer, never the gate's own leniency",
+    brRed.missing === 1 && /Navigable section registered[^|]*\| ❌ MISSING/.test(brRed.markdown),
+    () => ({ missing: brRed.missing, row: brRed.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  const BR_SECTION_ROW = "main#onstand:sectionRegistered";   // PR #157 review (Blocker 1): the key is page-scoped now
+  const D6 = { resolutions: [{ kind: "accepted", row: BR_SECTION_ROW,
+    answer: "both workplaces are kept on purpose: `create-app` always registers into `My applications` and the section is also wanted in `UCworkplace`",
+    decidedBy: "Alex Kravchuk", date: "2026-09-02" }] };
+  const brAccepted = renderVerify(brResult(NOT_MIGRATED), brOpts(D6), brTwoWorkplaces);
+  check("ENG-96458 AC3: recording `{ kind: \"accepted\", row: \"main#onstand:sectionRegistered\", answer, decidedBy, date }` turns the ENG-96444 verdict green — the row renders ☑ accepted, names who decided, and leaves `missing`",
+    brAccepted.missing === 0 && brAccepted.accepted === 1 && brAccepted.complete === true
+    && /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-02\)/.test(brAccepted.markdown),
+    () => ({ missing: brAccepted.missing, accepted: brAccepted.accepted, row: brAccepted.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  // `item` is the same key written the ordinary way — the `row` alias is a convenience, not a second dialect.
+  const brItemForm = renderVerify(brResult(NOT_MIGRATED), brOpts({ resolutions: [{ kind: "accepted", item: BR_SECTION_ROW, answer: "kept by D6", decidedBy: "Alex Kravchuk", date: "2026-09-02" }] }), brTwoWorkplaces);
+  check("ENG-96458 AC3: `item` and `row` are the SAME key — an acceptance written either way matches, and neither creates a second index",
+    brItemForm.missing === 0 && brItemForm.accepted === 1);
+  // An acceptance is not a blanket pass: it can only ever override an OPEN row.
+  const brStaleAccept = renderVerify(brResult(NOT_MIGRATED), brOpts(D6), brBuilt(oneTab));
+  check("ENG-96458 AC3: an acceptance on a row that is already ✅ changes nothing — a stale entry cannot mask a later regression on that row",
+    brStaleAccept.accepted === 0 && /Navigable section registered[^|]*\| ✅ Done/.test(brStaleAccept.markdown),
+    () => brStaleAccept.markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+
+  // ── AC4 — the ☐ rows become a counted worklist ─────────────────────────────────────────────────────────────
+  // ENG-96445 rows 1, 12, 13, 14, 20 were `☐ confirm on-stand`; row 13 (`Header … Feed (ESN)`) is the one that
+  // actually failed a human check, on a page whose every machine row was green.
+  check("ENG-96458 AC4: the ☐ rows are COUNTED and carried as a worklist — each with the row key an answer is recorded against — instead of being printed and dropped",
+    brNotMigrated.pending > 0
+    && brNotMigrated.pages.main.pendingRows.length === brNotMigrated.pages.main.pending
+    && brNotMigrated.pages.main.pendingRows.every((r) => typeof r.rowKey === "string" && r.rowKey && typeof r.deliverable === "string"),
+    () => ({ pending: brNotMigrated.pending, rows: brNotMigrated.pages.main.pendingRows }));
+  check("ENG-96458 AC4: the verdict SAYS how many confirmations are open — `complete pending N` rather than a ✅ with a footnote",
+    new RegExp(`COMPLETE PENDING ${brNotMigrated.pending} CONFIRMATION\\(S\\)`).test(brNotMigrated.markdown),
+    () => brNotMigrated.markdown.split("\n").filter((l) => /Verdict/.test(l)));
+  check("ENG-96458 AC4: a ☐ row is NOT a build gap — it leaves `missing`/`unverified`/`builderOpen` alone, so the builder's own gate is never asked to repair something only a human can answer",
+    brNotMigrated.missing === 0 && brNotMigrated.unverified === 0
+    && brNotMigrated.pages.main.builderOpen === 0 && brNotMigrated.pages.main.buildComplete === true,
+    () => brNotMigrated.pages.main);
+  // The counts-only summary is where the close report reads the worklist from, so it must survive the projection.
+  const brSummary = verifySummary(brResult(NOT_MIGRATED), brNotMigrated);
+  check("ENG-96458 AC4: the counts-only `--verify-summary` carries the count AND up to five named rows per page — the close report cannot name a worklist it never receives",
+    brSummary.pending === brNotMigrated.pending && brSummary.pages.main.pendingRows.length > 0
+    && brSummary.pages.main.pendingRows.every((r) => r.rowKey && r.deliverable && !("status" in r)),
+    () => brSummary.pages.main);
+  // The top level is the OPPOSITE rule to the per-page one, and the difference is load-bearing: `pending` is a
+  // REQUIRED key of the reconcile answer, so a clean run whose summary omitted it would have its answer rejected
+  // and retried three times before the run died. Per-page zeros are omitted for size; the top-level count never is.
+  check("ENG-96458 AC4: the top-level `pending` is ALWAYS present, `0` included — the reconcile schema requires it, so a clean run must not be the one that omits it",
+    (() => { const z = verifySummary({}, { complete: true, missing: 0, unverified: 0, pending: 0, accepted: 0, pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } });
+      return "pending" in z && z.pending === 0 && "accepted" in z; })(),
+    () => verifySummary({}, { complete: true, missing: 0, unverified: 0, pending: 0, accepted: 0, pages: {} }));
+  check("ENG-96458 AC4: a page with NOTHING pending carries none of the four fields — they are omitted, not zero-filled, because this summary is linear in page count against a 16000-byte wire ceiling",
+    !("pending" in (verifySummary(brResult(NOT_MIGRATED), { pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } }).pages.main)),
+    () => verifySummary(brResult(NOT_MIGRATED), { pages: { main: { complete: true, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pendingRows: [] } } }).pages.main);
+
+  // ── AC6 — the scaffold row ────────────────────────────────────────────────────────────────────────────────
+  // ENG-96445 shipped an orphan `UsrBusinessRule_FormPage`, a stub entity `UsrBusinessRuleFreedom` and an unused
+  // `UsrBusinessRule_Detail`; ENG-96444 also left a look-alike section one bracket from the real one.
+  const brDirty = brBuilt(oneTab);
+  brDirty.reachability.noOrphanScaffold = false;
+  const brScaffold = renderVerify(brResult(NOT_MIGRATED), brOpts(), brDirty);
+  // PR #157 review (round 2, Blocker on designspec.mjs:2510) — THE ROW IS STILL REPORTED, AND IT IS NO LONGER A
+  // BUILD GAP. It used to resolve `❌ MISSING` with no owner, which `verifyTally.add` charges to the builder — and
+  // NOTHING scheduled can close it: the key is verifier-only so no unit is dispatched, the app unit has already
+  // run, and `main`'s own prompt forbids deleting a page on a customer stand. `main` was re-dispatched every round
+  // with a row it may not touch and parked at MAX_ROUNDS, which is the defect this ticket exists to remove.
+  // An owner tag alone would NOT have fixed it (`isOpenPage` gates on `complete`, which `missing`/`unverified` set
+  // whatever the owner) — hence `pending`, the one outcome that leaves the page complete and holds the RUN.
+  check("ENG-96458 AC6 / PR #157 round 2: the run's own scaffold left on the stand is REPORTED and holds the run, but is NOT charged to the builder — `pending`, `buildComplete: true`, `builderOpen: 0`, so no unit is re-dispatched for a page it is forbidden to delete",
+    !!pendingRowFor(brScaffold, /^No scaffold left behind/) && brScaffold.missing === 0
+    && brScaffold.pages.main.buildComplete === true && brScaffold.pages.main.builderOpen === 0
+    && brScaffold.pages.main.complete === true
+    && brScaffold.buildMissing === 0
+    && /No scaffold left behind[^|]*\| ☐ confirm on-stand \| reported present on-stand \(built\.noOrphanScaffold = false\)/.test(brScaffold.markdown)
+    && /no build unit can close it/.test(brScaffold.markdown),
+    () => ({ page: brScaffold.pages.main, row: brScaffold.markdown.split("\n").filter((l) => /No scaffold/.test(l)) }));
+  // ...and it CLOSES. The hold an operator cannot release is the shape this whole ticket is about, so the closing
+  // action the row's own text names is driven here rather than asserted as prose.
+  const brScaffoldKey = pendingRowFor(brScaffold, /^No scaffold left behind/)?.rowKey;
+  const brScaffoldCleared = renderVerify(brResult(NOT_MIGRATED), { ...brOpts(), resolutions: { resolutions: [
+    { kind: "confirmed", row: brScaffoldKey, answer: "starter page and stub entity removed from UsrBusinessRule; list-pages is clean", decidedBy: "t.moshon", date: "2026-09-08" }] } }, brDirty);
+  check("PR #157 review (round 2): a `confirmed` resolution against the scaffold row's key releases the hold — the operator who cleaned the stand has an action that works, which an un-closable ❌ MISSING did not give them",
+    !!brScaffoldKey
+    && brScaffoldCleared.pending === brScaffold.pending - 1
+    && brScaffoldCleared.confirmed === 1
+    && !pendingRowFor(brScaffoldCleared, /^No scaffold left behind/)
+    && brScaffoldCleared.complete === true
+    && /No scaffold left behind[^|]*\| ☑ confirmed \| CONFIRMED ON-STAND/.test(brScaffoldCleared.markdown),
+    () => ({ rowKey: brScaffoldKey, pendingBefore: brScaffold.pending, pendingAfter: brScaffoldCleared.pending,
+      confirmed: brScaffoldCleared.confirmed, row: rowLine(brScaffoldCleared, /No scaffold/) }));
+  const brUnchecked = brBuilt(oneTab);
+  delete brUnchecked.reachability.noOrphanScaffold;
+  check("ENG-96458 AC6: NOT looking is ⚠, never ✅ — the row keeps D6's tri-state, so a run that skipped the `list-pages` read cannot exit 0 on it",
+    renderVerify(brResult(NOT_MIGRATED), brOpts(), brUnchecked).unverified === 1);
+
+  /* ==== PR #157 REVIEW — the two Blockers and the Majors the reviewers raised against this ticket's own work.
+     Each check names the finding it closes; the reasoning lives beside the code it pins. ==== */
+
+  // ── Blocker 1 — THE ROW KEY IS INJECTIVE ────────────────────────────────────────────────────────────────────
+  // The tree that produced the collisions: TWO typed forms (both rows read the ONE `typedFormsBuilt` boolean), TWO
+  // reused children (`reuseBindings` emitted as a summary row on `main` AND once per child on its own key), and
+  // THREE ported handlers (`Handler — \`<method>\``, whose backticked method name `rowSlug` used to delete).
+  const injChild = (entity, via, page) => {
+    const c = { entity, via, reuseFreedomPage: page, pageKey: `child:${entity}` };
+    c.pageRows = reuseChildGroups(c.pageKey, c);
+    return c;
+  };
+  const injResult = {
+    entity: "BusinessRule",
+    changeSet: { viewConfigDiff: brDiff, images: [], standardFeatures: [], details: [], cardActions: [],
+      pageBusinessRules: [], entityBusinessRules: [], needsDecision: [],
+      handlerStubs: [{ sourceMethod: "onSaveClick" }, { sourceMethod: "onCancelClick" }, { sourceMethod: "onLoad" }] },
+    signals: NOT_MIGRATED,
+    typedPages: [{ schema: "UsrTypedA", type: "A" }, { schema: "UsrTypedB", type: "B" }],
+    childPages: [injChild("Child1", "Detail1", "UsrChild1FormPage"), injChild("Child2", "Detail2", "UsrChild2FormPage")],
+  };
+  const injKeys = verifyRowKeys(injResult, brOpts());
+  // The Set-size half of this alone is VACUOUS and the review said so: `verifyRowKeys` returns the keys AFTER
+  // `dedupeRowKey`, which makes them unique by appending `~2` — so uniqueness cannot fail. The assertion that has
+  // teeth is that NO key needed that suffix: every row shape must carry its own stable identity, and a `~N` here
+  // means one of them derives its key from something a sibling shares.
+  check("PR #157 review (Blocker 1): NO TWO ROWS of one rendered verify table share a `rowKey` — and NOT ONE key needed the `~N` dedupe suffix, which is the assertion with teeth (`verifyRowKeys` runs after `dedupeRowKey`, so uniqueness alone cannot fail)",
+    injKeys.length >= 20 && new Set(injKeys).size === injKeys.length
+    && injKeys.every((k) => !/~\d+$/.test(k)),
+    () => { const dupes = injKeys.filter((k, i) => injKeys.indexOf(k) !== i); return { total: injKeys.length, unique: new Set(injKeys).size, dupes, suffixed: injKeys.filter((k) => /~\d+$/.test(k)) }; });
+  /* PR #157 REVIEW (round 2, Minor 2) — THE SLUG IS NOT ASCII-ONLY ANY MORE.
+     `[^a-z0-9]+` deleted every non-ASCII character, so a fully Cyrillic caption slugged to the EMPTY string: every
+     such row on a page shared `<pageKey>#confirm:` and fell back to `dedupeRowKey`'s POSITIONAL `~2`/`~3` suffix,
+     which is not a stable address — inserting a deliverable above renumbers it and a recorded resolution silently
+     stops matching. Cyrillic captions are ordinary on a Creatio stand, and D3/D4 rest on this key.
+     `resolveRow` is the shortest path to `rowSlug` for a vk-less row, so the keys are read through `verifyRowKeys`
+     on rows built the way `buildLayoutGroupRows` emits them. */
+  const cyr = ["Регіон 1", "Регіон 2", "Вкладка · Загальна інформація"];
+  const cyrKeys = cyr.map((l) => rowSlug(l));
+  check("PR #157 review (round 2, Minor 2): a fully localized label no longer slugs to the EMPTY string — each Cyrillic caption yields its own non-empty slug, so localized rows stop sharing one key and stop depending on the positional `~N` suffix",
+    cyrKeys.every((k) => k && k.length > 0) && new Set(cyrKeys).size === cyr.length,
+    () => JSON.stringify({ labels: cyr, slugs: cyrKeys }));
+  check("PR #157 review (round 2, Minor 2): the fallback is DETERMINISTIC — the same label slugs to the same key on every call, which is the property a positional suffix could never promise and the reason a recorded resolution keeps matching across runs",
+    cyr.every((l) => rowSlug(l) === rowSlug(l)) && rowSlug("Регіон 1") === cyrKeys[0]
+    // The digest rides on whatever ASCII survived, so `Регіон 1` keys as `1-x<digest>` rather than the bare `1`
+    // an emptiness-only fallback would have accepted — and `Вкладка 1` would have shared.
+    && /-x[0-9a-z]+$/.test(cyrKeys[0]) && cyrKeys[0] !== "1"
+    && rowSlug("Вкладка 1") !== rowSlug("Регіон 1"),
+    () => JSON.stringify({ first: cyrKeys[0], again: rowSlug("Регіон 1"), otherLabelSameDigit: rowSlug("Вкладка 1") }));
+  check("PR #157 review (round 2, Minor 2): ACCENTED LATIN folds to ASCII rather than falling back to a digest — `Régions générales` reads as words in a resolutions file, and NFKD is what an ASCII filter alone could not do",
+    rowSlug("Régions générales") === "regions-generales",
+    () => rowSlug("Régions générales"));
+  check("PR #157 review (round 2, Minor 2): plain ASCII labels are UNCHANGED — the fix must not move a key that already worked, or every resolution recorded before it stops matching",
+    rowSlug("Tab · New Tab — 3 fields") === "tab-new-tab-3-fields"
+    && rowSlug("Header — 16 fields · Feed (ESN)") === "header-16-fields-feed-esn",
+    () => JSON.stringify([rowSlug("Tab · New Tab — 3 fields"), rowSlug("Header — 16 fields · Feed (ESN)")]));
+  check("PR #157 review (round 2, Minor 2): non-ASCII PUNCTUATION does not trigger the digest — `·` and `—` are in almost every label this engine emits and carry no identity, so a byte-level test would have appended a digest to every existing key and invalidated every resolution already recorded; the trigger is a lost LETTER or DIGIT",
+    !/-x[0-9a-z]+$/.test(rowSlug("Tab · New Tab — 3 fields"))
+    && !/-x[0-9a-z]+$/.test(rowSlug("Header — 16 fields · Feed (ESN)"))
+    && /-x[0-9a-z]+$/.test(rowSlug("Вкладка · Загальна — 3 поля")),
+    () => JSON.stringify({ punctuationOnly: rowSlug("Tab · New Tab — 3 fields"), cyrillic: rowSlug("Вкладка · Загальна — 3 поля") }));
+  check("PR #157 review (round 2, Minor 2): and a localized verify table needs NO `~N` suffix at all — the whole point is that `dedupeRowKey` goes back to being a backstop for a genuine same-label collision instead of absorbing every localized row on the page",
+    (() => { const cyrRes = { ...injResult, tabs: undefined };
+      const keys = verifyRowKeys(cyrRes, brOpts());
+      return keys.length > 0 && keys.filter((k) => /~\d+$/.test(k)).length === 0; })(),
+    () => verifyRowKeys({ ...injResult, tabs: undefined }, brOpts()).filter((k) => /~\d+$/.test(k)));
+
+  check("PR #157 review (Blocker 1): the two typed-form rows read ONE evidence boolean and still get their OWN keys — the discriminator is the form's schema AND its Type, a stable identity, not the row's ordinal",
+    injKeys.includes("main#onstand:typedFormsBuilt:usrtypeda-a") && injKeys.includes("main#onstand:typedFormsBuilt:usrtypedb-b"),
+    () => injKeys.filter((k) => k.includes("typedFormsBuilt")));
+  // PR #157 review — `normalizeTypedPages` does NOT dedupe by schema, and a bind-only plan is exactly where two
+  // Types legitimately share ONE form schema. With `about: t.schema` those two rows derived one key, so accepting
+  // Type A silently accepted Type B: the collision the Blocker is about, on the one input that produces it.
+  const injOneSchema = { ...injResult, typedPages: [{ schema: "UsrOneForm", type: "Incident", bindOnly: true }, { schema: "UsrOneForm", type: "Request", bindOnly: true }] };
+  const oneSchemaKeys = verifyRowKeys(injOneSchema, brOpts()).filter((k) => k.includes("typedFormsBuilt"));
+  check("PR #157 review (Blocker 1): TWO Types bound to ONE form schema get TWO keys — `about` is `<schema>|<type>`, so a bind-only plan's shared schema no longer collapses both rows onto one address (and no `~N` fallback is involved)",
+    oneSchemaKeys.length === 2 && new Set(oneSchemaKeys).size === 2
+    && oneSchemaKeys.includes("main#onstand:typedFormsBuilt:usroneform-incident")
+    && oneSchemaKeys.includes("main#onstand:typedFormsBuilt:usroneform-request")
+    && oneSchemaKeys.every((k) => !/~\d+$/.test(k)),
+    () => oneSchemaKeys);
+  check("PR #157 review (Blocker 1): the `reuseBindings` summary row and the per-child rows are separated by the PAGE PREFIX — the same evidence key on three pages is three keys",
+    injKeys.filter((k) => k.endsWith("#onstand:reuseBindings")).length === 3
+    && new Set(injKeys.filter((k) => k.includes("reuseBindings"))).size === 3,
+    () => injKeys.filter((k) => k.includes("reuseBindings")));
+  check("PR #157 review (Blocker 1): each ported handler keeps its own key — `rowSlug` KEEPS the backticked method name instead of deleting it, so `Handler — \`onLoad\`` no longer collapses onto its siblings",
+    ["onsaveclick", "oncancelclick", "onload"].every((m) => injKeys.includes(`main#confirm:handler-${m}`)),
+    () => injKeys.filter((k) => k.startsWith("main#confirm:handler")));
+  // PR #157 (S8786) — `rowSlug`'s EDGE TRIM, on a label and an `about` that are punctuation at both ends and carry
+  // internal runs of it. It was the one half of the slug with no direct test, and the trim was rewritten from
+  // `/^-+|-+$/g` (whose unanchored `-+$` alternative is quadratic read on its own) to two single-character
+  // replaces, which is only equivalent because the `[^a-z0-9]+` collapse above it leaves no adjacent dashes. This
+  // pins the RESULT — no leading or trailing dash in any key segment, and the runs collapsed to one `-` each — so
+  // the equivalence is asserted rather than argued.
+  const edgeSlugResult = { ...injResult,
+    changeSet: { ...injResult.changeSet, handlerStubs: [{ sourceMethod: "on Save --- Click!" }] },
+    typedPages: [{ schema: "!!UsrEdge", type: "Edge!!" }], childPages: [] };
+  const edgeSlugKeys = verifyRowKeys(edgeSlugResult, brOpts());
+  check("PR #157 (S8786): `rowSlug` still trims BOTH edges and collapses internal punctuation runs — an `about` of `!!UsrEdge|Edge!!` and a `Handler — \\`on Save --- Click!\\`` label yield dash-free edges and single dashes inside, so the linear rewrite of the edge trim is behaviour-identical",
+    edgeSlugKeys.includes("main#onstand:typedFormsBuilt:usredge-edge")
+    && edgeSlugKeys.includes("main#confirm:handler-on-save-click")
+    && edgeSlugKeys.every((k) => !/(^|[#:])-|-($|[#:])|--/.test(k)),
+    () => edgeSlugKeys.filter((k) => /typedFormsBuilt|handler|-{2}/.test(k)));
+  check("PR #157 review (Blocker 1): the quality-gate deliverable's TWO rows share one evidence id and are still distinct — the `part` (filed / judged) is the row's identity inside the id",
+    injKeys.includes("main#quality-gates:filed") && injKeys.includes("main#quality-gates:judged"),
+    () => injKeys.filter((k) => k.includes("quality-gates")));
+  // The consequence the Blocker was about: ONE acceptance closes ONE row. Accepting the FIRST typed form must
+  // leave the second exactly as it was — otherwise `decidedBy`/`date` in the table assert a ruling nobody made.
+  const injBuilt = brBuilt(oneTab);
+  delete injBuilt.reachability.noOrphanScaffold;      // leave a second open row so "one closed" is measurable
+  const injOpen = renderVerify(injResult, brOpts(), injBuilt);
+  const injOneAccepted = renderVerify(injResult, brOpts({ resolutions: [{ kind: "accepted",
+    row: "main#onstand:typedFormsBuilt:usrtypeda-a", answer: "the A form is deliberately not built this round",
+    decidedBy: "Alex Kravchuk", date: "2026-09-04" }] }), injBuilt);
+  check("PR #157 review (Blocker 1): ONE `accepted` entry closes EXACTLY ONE row — the sibling typed form stays open, and the accepted count is 1, not 2",
+    injOneAccepted.accepted === 1
+    && injOneAccepted.unverified === injOpen.unverified - 1
+    && /Typed form `UsrTypedA`[^|]*\| ☑ accepted/.test(injOneAccepted.markdown)
+    && /Typed form `UsrTypedB`[^|]*\| ⚠ verify/.test(injOneAccepted.markdown),
+    () => ({ accepted: injOneAccepted.accepted, before: injOpen.unverified, after: injOneAccepted.unverified,
+      rows: injOneAccepted.markdown.split("\n").filter((l) => /Typed form/.test(l)) }));
+  // PR #157 review — AND WHEN A COLLISION DOES HAPPEN, IT IS VISIBLE. A `~N` key is injective and therefore
+  // invisible to the check above: no test fails, while the operator holds an address that is positional (inserting
+  // a deliverable above renumbers it) and will silently stop matching. The real path: two `handlerStubs` naming the
+  // SAME method — nothing folds duplicate stubs, so both rows render `Handler — \`onLoad\`` and slug identically.
+  const dupResult = { ...injResult, changeSet: { ...injResult.changeSet, handlerStubs: [{ sourceMethod: "onLoad" }, { sourceMethod: "onLoad" }] } };
+  const dupVerify = renderVerify(dupResult, brOpts(), brBuilt(oneTab));
+  check("PR #157 review: a REAL row-key collision (two handler stubs naming one method) is SURFACED — the `~N` key is published in `rowKeyCollisions` and printed as a ⚠ note in verify.md, so a future collision reaches a test and an operator instead of being silently unique",
+    verifyRowKeys(dupResult, brOpts()).includes("main#confirm:handler-onload~2")
+    && dupVerify.rowKeyCollisions.length === 1 && dupVerify.rowKeyCollisions[0] === "main#confirm:handler-onload~2"
+    && /⚠ \*\*ROW-KEY COLLISION \(1\)/.test(dupVerify.markdown)
+    && /NOT a stable address/.test(dupVerify.markdown),
+    () => ({ collisions: dupVerify.rowKeyCollisions, note: dupVerify.markdown.split("\n").filter((l) => /COLLISION/.test(l)).slice(0, 1) }));
+  check("PR #157 review: the note describes the ENGINE, not the build — a collision leaves the verdict and every count exactly as they were, and the clean tree publishes an EMPTY `rowKeyCollisions` (so the field is an assertable invariant, not a decoration)",
+    injOpen.rowKeyCollisions.length === 0 && !/ROW-KEY COLLISION/.test(injOpen.markdown)
+    && dupVerify.missing === injOpen.missing && dupVerify.complete === injOpen.complete,
+    () => ({ clean: injOpen.rowKeyCollisions, dupMissing: dupVerify.missing, cleanMissing: injOpen.missing }));
+
+  // ── Blocker 2 — `pending` IS OPT-IN ─────────────────────────────────────────────────────────────────────────
+  // A form-heavy page: THREE handler rows, a native card-action row and two child identity rows, against ONE
+  // Layout region. Only the Layout row is a deliberate human check, so that is the only thing `pending` counts.
+  const heavy = renderVerify(injResult, brOpts(), brBuilt(oneTab));
+  const heavyLayout = checklistGroups(injResult, brOpts())
+    .filter((g) => g.title === "Form — Layout (by tab/region)").flatMap((g) => g.rows);
+  check("PR #157 review (Blocker 2): `pending` equals the page's LAYOUT confirm rows and nothing else — three handler notes, the child identity rows and the native card-action row add ZERO, so the worklist does not scale with handler count",
+    heavyLayout.length >= 1 && heavyLayout.every((r) => r.human === true)
+    && heavy.pages.main.pending === heavyLayout.length
+    && heavy.pages.main.pendingRows.length === heavyLayout.length,
+    () => ({ layout: heavyLayout.map((r) => r.label), pending: heavy.pages.main.pending, rows: heavy.pages.main.pendingRows }));
+  check("PR #157 review (Blocker 2): the Layout rows STILL tally — the fix narrows the default, it does not switch D4 off (the one row that failed a human check on ENG-96445 was a Layout row), and the worklist names those rows and only those",
+    heavy.pending >= 1
+    && heavy.pages.main.pendingRows.map((r) => r.deliverable).join("|") === heavyLayout.map((r) => r.label).join("|"),
+    () => ({ pending: heavy.pending, rows: heavy.pages.main.pendingRows.map((r) => r.deliverable), layout: heavyLayout.map((r) => r.label) }));
+  // ENG-96458 D3 × D4 — the two mechanisms MEET on the Layout row: it is `pending` (only a human can close it) and
+  // an acceptance is exactly how a human closes one without going to the stand. The row must leave the worklist,
+  // not merely stop being counted, or the close report keeps asking for an answer that was already recorded.
+  const layoutKey = heavy.pages.main.pendingRows[0].rowKey;
+  const layoutAccepted = renderVerify(injResult, brOpts({ resolutions: [{ kind: "accepted", row: layoutKey,
+    answer: "the Header region is confirmed as planned — the Feed tab was checked on the stand on 2026-09-04",
+    decidedBy: "Alex Kravchuk", date: "2026-09-04" }] }), brBuilt(oneTab));
+  check("ENG-96458 D3 × D4: an `accepted` resolution addressing a `human: true` Layout row renders ☑ accepted, drops that page's `pending` by EXACTLY ONE, and removes the row from `pendingRows` — a confirmation the operator already recorded must not stay on the worklist",
+    layoutAccepted.accepted === 1
+    && layoutAccepted.pending === heavy.pending - 1
+    && layoutAccepted.pages.main.pending === heavy.pages.main.pending - 1
+    && layoutAccepted.pages.main.pendingRows.length === heavy.pages.main.pendingRows.length - 1
+    && !layoutAccepted.pages.main.pendingRows.some((r) => r.rowKey === layoutKey)
+    && /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-04\)/.test(layoutAccepted.markdown),
+    () => ({ key: layoutKey, before: heavy.pages.main.pending, after: layoutAccepted.pages.main.pending,
+      accepted: layoutAccepted.accepted, rows: layoutAccepted.pages.main.pendingRows.map((r) => r.rowKey) }));
+  // A correctly executed `pages-only-no-menu` plan: no Layout rows at all (no fields, no details, no widgets), so
+  // there is nothing for a human to confirm — and the "deliberately NOT built" row is `na`, not a hold. Before the
+  // fix this run could never report complete, on a state that is not a gap.
+  const poResult = { entity: "BusinessRule", signals: NOT_MIGRATED,
+    changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+      pageBusinessRules: [], entityBusinessRules: [], needsDecision: [] } };
+  const poOpts = { ...brOpts(), sectionHostMode: "pages-only-no-menu" };
+  // ONE built component, so the `formpage` row (which asks only "did get-page return components") is closed: this
+  // check is about `pending`, and a page nobody built would fail it for an unrelated reason.
+  const poOps = [{ name: "PDS_Name", type: "crt.Input" }];
+  const poBuilt = brBuilt(poOps);
+  delete poBuilt.reachability.sectionRegistered;      // this mode registers nothing, so nothing reports it
+  const poVerify = renderVerify(poResult, poOpts, poBuilt);
+  check("PR #157 review (Blocker 2): a CORRECTLY EXECUTED `pages-only-no-menu` plan reaches `complete: true` with `pending: 0` — the deliberately-dropped section row is N/A by decision and the informational rows are notes, so nothing holds a finished run open",
+    poVerify.complete === true && poVerify.pending === 0 && poVerify.missing === 0 && poVerify.unverified === 0
+    && /All machine-checkable deliverables present on the built page\*\*$/m.test(poVerify.markdown.split("\n").filter((l) => /^\*\*Verdict/.test(l))[0] || ""),
+    () => ({ complete: poVerify.complete, pending: poVerify.pending, missing: poVerify.missing, unverified: poVerify.unverified,
+      open: poVerify.pages.main?.openRows?.map((r) => r.deliverable.slice(0, 60)) }));
+
+  // ── Major — `noOrphanScaffold` is MODE-AWARE ─────────────────────────────────────────────────────────────────
+  // The row demanded "the app menu shows ONE section for the entity" in a mode that registers NO section, so the
+  // verifier's literal condition was false on a correct plan and the key was written `false` forever.
+  const poScaffoldRow = checklistGroups(poResult, poOpts).flatMap((g) => g.rows)
+    .find((r) => r.vk?.evidence === "noOrphanScaffold");
+  const menuScaffoldRow = checklistGroups(brResult(NOT_MIGRATED), brOpts()).flatMap((g) => g.rows)
+    .find((r) => r.vk?.evidence === "noOrphanScaffold");
+  check("PR #157 review (Major): in `pages-only-no-menu` the `noOrphanScaffold` row asks ONLY for the removal — the 'one section in the menu' clause is gone from both the label and the `what`, so a correct plan is not a permanent false red",
+    !!poScaffoldRow && !/one section/i.test(poScaffoldRow.label) && !/menu read/.test(poScaffoldRow.vk.what)
+    && /no starter page bound to nothing/.test(poScaffoldRow.vk.what),
+    () => ({ label: poScaffoldRow?.label, what: poScaffoldRow?.vk?.what }));
+  check("PR #157 review (Major, control): in a menu-planning mode the SAME row keeps both halves — the mode-awareness is the approved mode's doing, not a weakened gate",
+    !!menuScaffoldRow && /one section per entity/.test(menuScaffoldRow.vk.what) && /menu read/.test(menuScaffoldRow.vk.what),
+    () => ({ label: menuScaffoldRow?.label, what: menuScaffoldRow?.vk?.what }));
+  check("PR #157 review (Major): the `pages-only-no-menu` scaffold row still GATES — evidence `false` still holds the run in that mode too (as `pending` since the round-2 Blocker, never as a silent pass), so the mode-aware wording drops the false MENU clause and nothing else",
+    (() => { const dirty = brBuilt(poOps); delete dirty.reachability.sectionRegistered; dirty.reachability.noOrphanScaffold = false;
+      const v = renderVerify(poResult, poOpts, dirty);
+      return v.missing === 0 && v.pages.main.buildComplete === true
+        && !!(v.pages.main.pendingRows || []).find((r) => /^No scaffold left behind/.test(r.deliverable))
+        && /No scaffold left behind[^|]*\| ☐ confirm on-stand \| reported present on-stand/.test(v.markdown)
+        && !/the app menu shows ONE section/.test(v.markdown); })(),
+    () => renderVerify(poResult, poOpts, (() => { const d = brBuilt(poOps); delete d.reachability.sectionRegistered; d.reachability.noOrphanScaffold = false; return d; })()).markdown
+      .split("\n").filter((l) => /No scaffold/.test(l)));
+
+  // ── Major — `noOrphanScaffold` schedules NO build unit ──────────────────────────────────────────────────────
+  const brUnits = pageUnits(brResult(NOT_MIGRATED), brOpts());
+  const brOrphanUnit = (brUnits.reachability || []).find((r) => r.key === "noOrphanScaffold");
+  check("PR #157 review (Major): `--units` publishes `noOrphanScaffold` with `appliesWhen: false` and `verifierOnly: true` — no reach unit is scheduled for a CLEANUP deliverable, so no agent is handed 'do the wiring' plus a delete-capable CLI with no removal scope",
+    !!brOrphanUnit && brOrphanUnit.appliesWhen === false && brOrphanUnit.verifierOnly === true && brOrphanUnit.emitted === true
+    && (brUnits.reachability || []).filter((r) => r.appliesWhen).every((r) => r.key !== "noOrphanScaffold"),
+    () => brUnits.reachability);
+  check("PR #157 review (Major): the five WIRING keys are unchanged — dropping the cleanup key from the unit set must not drop an obligation the executor is still meant to do",
+    ["typedFormsBuilt", "typedRouting", "miniPageWired", "reuseBindings", "sectionRegistered"].every((k) => REACHABILITY_KEYS.includes(k))
+    && REACHABILITY_KEYS.length === 5,
+    () => REACHABILITY_KEYS);
+
+  // ── Major — an `accepted` entry MUST name its decider ───────────────────────────────────────────────────────
+  const accBad = (over) => buildResolutionIndex({ resolutions: [{ kind: "accepted", item: BR_SECTION_ROW, answer: "kept by D6", decidedBy: "Alex Kravchuk", date: "2026-09-02", ...over }] });
+  check("PR #157 review (Major): an `accepted` entry with NO `decidedBy` is REJECTED at the same boundary that rejects a blank `answer` — exit 1 with the entry named, never a silently unattributed ✅",
+    accBad({ decidedBy: undefined }).bad.length === 1 && /decidedBy/.test(accBad({ decidedBy: undefined }).bad[0])
+    && accBad({ decidedBy: "   " }).bad.length === 1,
+    () => accBad({ decidedBy: undefined }).bad);
+  check("PR #157 review (Major): an `accepted` entry with no `date`, or with a date that does not PARSE, is rejected too — a free-text 'last week' is not a record",
+    accBad({ date: undefined }).bad.length === 1 && /`date`/.test(accBad({ date: undefined }).bad[0])
+    && accBad({ date: "last week" }).bad.length === 1 && /parseable ISO date/.test(accBad({ date: "last week" }).bad[0])
+    && accBad({ date: "2026-13-45" }).bad.length === 1,
+    () => [accBad({ date: undefined }).bad, accBad({ date: "last week" }).bad, accBad({ date: "2026-13-45" }).bad]);
+  check("PR #157 review (Major): a WELL-FORMED acceptance is still applied, and the rule is scoped to this kind — an ordinary resolution with no decider is untouched",
+    accBad({}).bad.length === 0 && accBad({}).count === 1
+    && buildResolutionIndex({ resolutions: [{ kind: "list-columns", item: "cols", answer: "Name, Status" }] }).bad.length === 0,
+    () => ({ accepted: accBad({}).bad, ordinary: buildResolutionIndex({ resolutions: [{ kind: "list-columns", item: "cols", answer: "Name, Status" }] }).bad }));
+  check("PR #157 review (Major): the rendered acceptance ALWAYS names the decider and the date — the table can no longer read `ACCEPTED BY DECISION — <answer>` with nobody on record",
+    /☑ accepted \| ACCEPTED BY DECISION \(Alex Kravchuk, 2026-09-02\) — /.test(brAccepted.markdown),
+    () => brAccepted.markdown.split("\n").filter((l) => /accepted/.test(l)));
+  // The OTHER door into `renderVerify`, and it is the one `acceptedProblem` does not stand in. That guard runs
+  // inside `buildResolutionIndex`, so BOTH validated paths — the CLI's file and a raw array handed to
+  // `opts.resolutions` — drop an unattributed entry before it can match. What passes through untouched is an
+  // ALREADY-BUILT index (`asResolutionIndex` returns it as-is, by design, so the CLI's one index is not rebuilt),
+  // and there the row rendered `ACCEPTED BY DECISION (NOT RECORDED, NOT RECORDED)`: a completeness gate overridden
+  // by nobody, in the document an audit reads. So the render boundary now applies the same rule itself.
+  const brRawAccept = (over) => renderVerify(brResult(NOT_MIGRATED),
+    brOpts({ resolutions: [{ kind: "accepted", row: BR_SECTION_ROW, answer: "kept by D6", ...over }] }), brTwoWorkplaces);
+  const brNoDecider = brRawAccept({ date: "2026-09-02" });
+  check("PR #157 review (Major): an acceptance handed to `renderVerify` as a RAW ARRAY with no `decidedBy` closes NOTHING — `buildResolutionIndex` never indexes it, so the row keeps its ❌ and its `missing` count, `accepted` stays 0, and no row anywhere reads `NOT RECORDED`",
+    brNoDecider.accepted === 0 && brNoDecider.missing === 1 && brNoDecider.complete === false
+    && /Navigable section registered[^|]*\| ❌ MISSING/.test(brNoDecider.markdown)
+    && !/NOT RECORDED/.test(brNoDecider.markdown) && !/ACCEPTED BY DECISION/.test(brNoDecider.markdown),
+    () => ({ accepted: brNoDecider.accepted, missing: brNoDecider.missing,
+      row: brNoDecider.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  check("PR #157 review (Major): the same holds for a date that does not PARSE — `last week` is not attribution on the raw-array path either",
+    brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).accepted === 0
+    && brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).missing === 1,
+    () => brRawAccept({ decidedBy: "Alex Kravchuk", date: "last week" }).markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+  // The door itself: an index a caller assembled on its own. `asResolutionIndex` passes it through unvalidated —
+  // that is what the CLI relies on — so the LAST place that can refuse an unattributed acceptance is the row.
+  const brHandIx = (over) => { const ix = buildResolutionIndex({ resolutions: [{ kind: "accepted", row: BR_SECTION_ROW,
+      answer: "kept by D6", decidedBy: "Alex Kravchuk", date: "2026-09-02" }] });
+    for (const [k, e] of ix.byKindItem) ix.byKindItem.set(k, { ...e, ...over });
+    return renderVerify(brResult(NOT_MIGRATED), brOpts({ resolutions: ix }), brTwoWorkplaces); };
+  const brHandNoWho = brHandIx({ decidedBy: "" });
+  check("PR #157 review (Major): an unattributed acceptance inside an index a caller BUILT ITSELF is refused at the render boundary — the row keeps its own ❌ verdict and its `missing` count, `accepted` stays 0, and the evidence cell names the missing `decidedBy` instead of printing `ACCEPTED BY DECISION (NOT RECORDED, NOT RECORDED)`",
+    brHandNoWho.accepted === 0 && brHandNoWho.missing === 1 && brHandNoWho.complete === false
+    && /Navigable section registered[^|]*\| ❌ MISSING/.test(brHandNoWho.markdown)
+    && /was IGNORED: no ˋdecidedByˋ/.test(brHandNoWho.markdown)
+    && !/NOT RECORDED/.test(brHandNoWho.markdown),
+    () => ({ accepted: brHandNoWho.accepted, missing: brHandNoWho.missing,
+      row: brHandNoWho.markdown.split("\n").filter((l) => /Navigable section/.test(l)) }));
+  const brHandBadDate = brHandIx({ date: "last week" });
+  check("PR #157 review (Major): a date that does not PARSE is refused the same way, and the note names `date` — the render boundary applies the SAME rule as `acceptedProblem`, so neither door lets an unauditable acceptance through",
+    brHandBadDate.accepted === 0 && brHandBadDate.missing === 1
+    && /was IGNORED: no ˋdateˋ/.test(brHandBadDate.markdown),
+    () => brHandBadDate.markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+  check("PR #157 review (Major): a raw-array acceptance that IS attributed still works — the guard rejects the unattributed entry, it does not close the direct API path",
+    brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).accepted === 1
+    && brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).missing === 0,
+    () => brRawAccept({ decidedBy: "Alex Kravchuk", date: "2026-09-02" }).markdown.split("\n").filter((l) => /Navigable section/.test(l)));
+
+  // ── Major — `resolveFieldsVk` delegates to `countVerdict`, and the SURPLUS branch is pinned ──────────────────
+  // The fields row fires on EVERY migrated page, so its surplus branch is the one most likely to turn a
+  // previously-green row ⚠ in the field — and it was the one branch nothing tested.
+  const brNoNames = { entity: "BusinessRule", signals: NOT_MIGRATED,
+    changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+      pageBusinessRules: [], entityBusinessRules: [], needsDecision: [] } };
+  const fieldsVkRow = { label: "Fields — 2 expected", vk: { type: "fields", n: 2 } };
+  const fieldsCtx = (ops) => verifyCtx({ pages: { main: { viewConfig: { items: ops } } } }, "main");
+  const inputs = (n) => Array.from({ length: n }, (_, i) => ({ name: `F${i}`, type: "crt.Input" }));
+  // PR #157 review (round 2, Blocker on designspec.mjs:3640) — the surplus branch is `pending`, not `unverified`:
+  // an extra component is a question for a human, never a build gap the unit's own round budget should be spent on.
+  // The `+N`, the naming and the "never ❌" half of the original finding are unchanged.
+  check("PR #157 review (Major + round-2 Blocker): a field-typed SURPLUS reads `2 expected, 3 built (+1 …)`, NEVER a ❌, and lands on the ☐ human worklist rather than on the builder — building more than planned is a mismatch to look at, not a missing deliverable and not a repair to dispatch",
+    (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(3)));
+      return mark === "☐ confirm on-stand" && outcome === "pending" && /^2 expected, 3 built \(\+1\)/.test(ev)
+        && /the surplus is NOT in the plan/.test(ev) && /identity was not checkable/.test(ev)
+        && !/or remove it/.test(ev) && !/❌/.test(mark); })(),
+    () => resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(3))));
+  check("PR #157 review (Major): the EQUAL case is still ✅ and still says identity was not checkable — delegating the comparison must not change the verdict, only where the rule lives",
+    (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(2)));
+      return mark === "✅ Done" && outcome === "ok" && /identity was not checkable/.test(ev); })(),
+    () => resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(2))));
+  check("PR #157 review (Major): the SHORTFALL branch is untouched — a partial count is still the caller's own ⚠ wording, which `countVerdict` deliberately does not own",
+    (() => { const [mark, ev, outcome] = resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(1)));
+      return mark === "⚠ verify" && outcome === "unverified" && /^1\/2 components of a field type present/.test(ev); })(),
+    () => resolveVk(fieldsVkRow.vk, fieldsCtx(inputs(1))));
+  // The thread asked for the OTHER two single-type callers too: `image` and `element` route through the same
+  // `countVerdict`, and their surplus branch was equally untested. Both name the surplus from their own one
+  // accepted type, so a component of a DIFFERENT type can never be reported as their surplus.
+  const imgSurplus = resolveVk({ type: "image", n: 1 },
+    fieldsCtx([{ name: "Photo", type: "crt.ImageInput" }, { name: "Logo", type: "crt.ImageInput" }, { name: "PDS_Name", type: "crt.Input" }]));
+  check("PR #157 review (Major): an IMAGE surplus reads `1 expected, 2 built (+1: Logo)` on the ☐ worklist — the same equality rule as the tabs row, and the surplus is named from `crt.ImageInput` alone, never from a field that happens to sit next to it",
+    imgSurplus[0] === "☐ confirm on-stand" && imgSurplus[2] === "pending"
+    && /^1 expected, 2 built \(\+1: Logo\) — the surplus is NOT in the plan/.test(imgSurplus[1])
+    && !/PDS_Name/.test(imgSurplus[1]),
+    () => imgSurplus);
+  const elemSurplus = resolveVk({ type: "element", ctype: "crt.Feed", n: 1 },
+    fieldsCtx([{ name: "Feed1", type: "crt.Feed" }, { name: "Feed2", type: "crt.Feed" }, { name: "Feed3", type: "crt.Feed" }, { name: "T1", type: "crt.TabContainer" }]));
+  check("PR #157 review (Major): an ELEMENT surplus names EVERY component past the expected count (`+2: Feed2, Feed3`) and only components of the row's own `ctype` — the base-declared element rows ENG-96457 added all resolve through this branch",
+    elemSurplus[0] === "☐ confirm on-stand" && elemSurplus[2] === "pending"
+    && /^1 expected, 3 built \(\+2: Feed2, Feed3\)/.test(elemSurplus[1]) && !/T1/.test(elemSurplus[1]),
+    () => elemSurplus);
+  // The MULTI-type row (tabs / details) is the one where the two halves of `countVerdict` could disagree: the count
+  // `b` sums `ctx.typeCount(t)` over the accepted types, while `surplusNames` re-derives the same set with ONE
+  // `ctx.ops.filter`. If those ever diverge, the `+N` and the names it lists describe different sets — and the
+  // legacy `crt.Tab` spelling is exactly the input that would expose it, since it is accepted but not the noun.
+  const mixedTabs = [{ name: "T1", type: "crt.TabContainer" }, { name: "T2", type: "crt.Tab" },
+    { name: "T3", type: "crt.TabContainer" }, { name: "PDS_Name", type: "crt.Input" }];
+  const mixedCtx = fieldsCtx(mixedTabs);
+  const mixedRow = resolveVk({ type: "tabs", n: 1 }, mixedCtx);
+  check("PR #157 review (Major, `resolveFieldsVk`/`countVerdict` thread): on a MULTI-type count row the summed `ctx.typeCount(t)` and the `ctx.ops.filter` behind `surplusNames` describe the SAME set — three tabs across both accepted spellings read `1 expected, 3 built (+2: T2, T3)`, the surplus is in build order, and the non-accepted `crt.Input` is in neither the count nor the names",
+    mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab")
+      === mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length
+    && mixedRow[0] === "☐ confirm on-stand" && mixedRow[2] === "pending"
+    && /^1 expected, 3 built \(\+2: T2, T3\)/.test(mixedRow[1]) && !/PDS_Name/.test(mixedRow[1]),
+    () => ({ summed: mixedCtx.typeCount("crt.TabContainer") + mixedCtx.typeCount("crt.Tab"),
+      filtered: mixedCtx.ops.filter((o) => ["crt.TabContainer", "crt.Tab"].includes(o.type)).length, row: mixedRow }));
+  check("PR #157 review (Major): the EQUAL case of the multi-type row counts both spellings too — a page built with the legacy `crt.Tab` is not reported short, and `+N` names nothing when nothing is surplus",
+    (() => { const [mark, ev, outcome] = resolveVk({ type: "tabs", n: 3 }, mixedCtx);
+      return mark === "✅ Done" && outcome === "ok" && ev === "3 crt.TabContainer built"; })(),
+    () => resolveVk({ type: "tabs", n: 3 }, mixedCtx));
+
+  // ── Major — the pending worklist is BOUNDED at the summary boundary ──────────────────────────────────────────
+  // `verifySummary` is the run's FIRST structured answer and is documented against a ~16000-byte wire ceiling; an
+  // oversized transcription already truncated at the host tool-input cap and failed a whole run.
+  const sixRows = Array.from({ length: 6 }, (_, i) => ({ n: i + 1, deliverable: `Region ${i + 1} — 3 fields`, rowKey: `main#confirm:region-${i + 1}` }));
+  check("PR #157 review (Major): a page with SIX ☐ rows names five and counts the rest — `pendingRows.length === 5` and `pendingMore === total - 5`, so the operator is never told a number the worklist cannot account for",
+    (() => { const z = verifySummary({}, { complete: false, missing: 0, unverified: 0, pending: 6, accepted: 0,
+        pages: { main: { complete: false, buildComplete: true, missing: 0, unverified: 0, builderOpen: 0, pending: 6, pendingRows: sixRows } } }).pages.main;
+      return z.pending === 6 && z.pendingRows.length === 5 && z.pendingMore === 1; })(),
+    () => verifySummary({}, { pages: { main: { pending: 6, pendingRows: sixRows } } }).pages.main);
+  check("PR #157 review (Major): the `deliverable` on the wire is clipped to 40 characters — the label is recognisable next to `n` and `rowKey`, and a localized one cannot cost 600 bytes per row under `encodedAsciiBytes`",
+    (() => { const long = [{ n: 1, deliverable: "Ж".repeat(300), rowKey: "main#confirm:x" }];
+      const z = verifySummary({}, { pages: { main: { pending: 1, pendingRows: long } } }).pages.main;
+      return z.pendingRows[0].deliverable.length === PENDING_DELIVERABLE_CAP && encodedAsciiBytes(z.pendingRows[0].deliverable) === PENDING_DELIVERABLE_CAP * 6; })(),
+    () => verifySummary({}, { pages: { main: { pending: 1, pendingRows: [{ n: 1, deliverable: "Ж".repeat(300), rowKey: "x" }] } } }).pages.main);
+  // PR #157 review (round 2) — THE BUDGET NOW BOUNDS SOMETHING. It used to keep "at least one named row per
+  // pending page", and that floor outranked the budget, so the worklist cost was per-PAGE again: measured 46392
+  // bytes on a 160-page ASCII plan (84274 with localized labels) against a 16100-byte counts-only baseline.
+  // The assertion is therefore the one that matters at this boundary: the BYTES the worklist ADDS over the same
+  // plan carrying no named rows, measured with `encodedAsciiBytes` — the summary's own wire unit — must not exceed
+  // `PENDING_WIRE_BUDGET` (6000). The baseline is deliberately the same plan with every `pendingRows` EMPTIED, not
+  // a plan with nothing pending: `pending` and `pendingMore` are the published contract on every pending page and
+  // are not the worklist's cost.
+  // PR #157 review (Minor 3) — IMPORTED, NOT RE-TYPED. A local `const WIRE_BUDGET = 6000` (and a literal `40`
+  // for the label clip) let the assertion pass against an engine whose budget had drifted, which is the exact
+  // failure mode `run-infra.mjs` states the opposite rule for (`PENDING_CONTRADICTION_STOP_AT` is read off the
+  // shipped block for this reason). Both are now exported by designspec.mjs and read from there.
+  const WIRE_BUDGET = PENDING_WIRE_BUDGET;
+  const wlRows = (label) => Array.from({ length: 5 }, (_, i) => ({ n: i + 1,
+    deliverable: `${label} ${i + 1} — 3 fields · Feed (ESN)`, rowKey: `main#confirm:${label.toLowerCase()}-${i + 1}` }));
+  const wlPlan = (n, rowsFor) => { const pages = {};
+    for (let i = 0; i < n; i += 1) pages[`child:Entity${i}`] = { complete: false, buildComplete: true, missing: 0, buildMissing: 0,
+      unverified: 0, builderOpen: 0, openCorrectness: 0, openFidelity: 0, pending: 5, pendingRows: rowsFor() };
+    return { complete: false, missing: 0, unverified: 0, buildMissing: 0, rejected: 0, unfiled: 0, pending: n * 5, accepted: 0, pages }; };
+  const wlBytes = (n, rowsFor) => encodedAsciiBytes(JSON.stringify(verifySummary({}, wlPlan(n, rowsFor))));
+  const wlBase160 = wlBytes(160, () => []);
+  const wlAscii160 = wlBytes(160, () => wlRows("Region"));
+  const wlCyr160 = wlBytes(160, () => wlRows("Регіон"));
+  check("PR #157 review (round 2): on a 160-page plan the worklist adds AT MOST `PENDING_WIRE_BUDGET` (6000) bytes over the same plan naming no rows — measured in `encodedAsciiBytes`, for an ASCII deliverable AND for a localized one, whose every character costs six bytes on the wire",
+    wlAscii160 - wlBase160 <= WIRE_BUDGET && wlAscii160 > wlBase160
+    && wlCyr160 - wlBase160 <= WIRE_BUDGET,
+    () => ({ baseline: wlBase160, ascii: wlAscii160, asciiAdds: wlAscii160 - wlBase160,
+      cyrillic: wlCyr160, cyrillicAdds: wlCyr160 - wlBase160, budget: WIRE_BUDGET }));
+  const wl160 = verifySummary({}, wlPlan(160, () => wlRows("Region")));
+  // PR #157 review (round 2, Major on designspec.mjs:5025) — THE SHAPE CHANGED, AND THE INVARIANT IS THE SAME
+  // ONE STATED DIFFERENTLY. `pendingRows` and `pendingMore` are no longer emitted where the reader can derive
+  // them: a page the budget let name nothing carries `pending: N` and neither field. So the assertion is written
+  // on the DERIVATION that holds on all three shapes — unnamed = `pending - (pendingRows?.length ?? 0)` — rather
+  // than on two fields being present. `pendingMore`, when published, must agree with it.
+  const namedOn = (p) => p.pendingRows?.length ?? 0;
+  const unnamedOn = (p) => p.pending - namedOn(p);
+  check("PR #157 review (round 2): the budget is the OUTER bound — past it a page names NOTHING and collapses to a bare `pending: N` (no empty array, no restated `pendingMore`), while `pending` stays exact on every page and `unnamed === pending - (pendingRows?.length ?? 0)` holds on all 160 of them",
+    Object.values(wl160.pages).every((p) => p.pending === 5 && unnamedOn(p) >= 0 && (p.pendingMore === undefined || p.pendingMore === unnamedOn(p)))
+    && Object.values(wl160.pages).some((p) => p.pendingRows === undefined && p.pendingMore === undefined && p.pending === 5)
+    && Object.values(wl160.pages).some((p) => namedOn(p) === 5)
+    && wl160.pending === 800,
+    () => ({ named: Object.values(wl160.pages).map(namedOn).slice(0, 20),
+      namedTotal: Object.values(wl160.pages).reduce((n, p) => n + namedOn(p), 0),
+      unnamedPages: Object.values(wl160.pages).filter((p) => namedOn(p) === 0).length, pending: wl160.pending }));
+  // The saving the shape change buys, asserted so it cannot be given back silently. The OLD shape is reconstructed
+  // here rather than remembered as a number: every all-pending page re-gains `"pendingRows":[]` and a `pendingMore`
+  // equal to its whole `pending`, which is exactly what the previous emit produced on a page that named nothing.
+  const oldShapeBytes = (summary) => encodedAsciiBytes(JSON.stringify({ ...summary,
+    pages: Object.fromEntries(Object.entries(summary.pages).map(([k, p]) => [k,
+      { ...p, pendingRows: p.pendingRows ?? [], ...(p.pending ? { pendingMore: p.pendingMore ?? p.pending } : {}) }])) }));
+  const wlBase160Old = oldShapeBytes(verifySummary({}, wlPlan(160, () => [])));
+  check("PR #157 review (round 2): omitting the two derivable fields is a REAL saving on the boundary that measures — a 160-page all-pending plan naming no rows is at least 4000 bytes smaller than the same summary carrying `pendingRows: []` and a restated `pendingMore` on every page",
+    wlBase160Old - wlBase160 >= 4000,
+    () => ({ newShape: wlBase160, oldShape: wlBase160Old, saved: wlBase160Old - wlBase160 }));
+  // THE CEILING CLAUSE, asserted at the size where it is checkable — and it is checkable only below ~50 all-pending
+  // pages. A page whose ☐ rows are counted costs ~200 wire bytes (the counts, plus `pending`/`pendingRows`/
+  // `pendingMore`), so the COUNTS-ONLY baseline of an all-pending 80-page plan is already 16048 bytes and a
+  // 160-page one is 32028: the page count meets the ~16000-byte ceiling before a single row is named, which no
+  // worklist budget can change. That is the documented state of this boundary (`verifySummary`: pages are never
+  // dropped to fit; the close at scale is the answer-slimming follow-up). What the budget guarantees is that the
+  // worklist is not what breaks it — on a 40-page plan the FULL summary, named rows and all, still fits.
+  check("PR #157 review (round 2): with the budget in force the FULL ASCII summary of a 40-page all-pending plan — named worklist included — stays under the documented 16000-byte wire ceiling, and its counts-only baseline plus the budget is what bounds it",
+    wlBytes(40, () => wlRows("Region")) < 16000
+    && wlBytes(40, () => []) + WIRE_BUDGET >= wlBytes(40, () => wlRows("Region"))
+    && wlBase160 > 16000,
+    () => ({ full40: wlBytes(40, () => wlRows("Region")), base40: wlBytes(40, () => []),
+      base160: wlBase160, note: "the 160-page counts-only baseline breaches the ceiling on its own" }));
+
+  // ── Minor — the card-action name match is not inert any more ─────────────────────────────────────────────────
+  // A stand-reported printable is a human caption ("Business rule report"); a built element name is
+  // identifier-shaped (`BusinessRuleReportButton`). Unnormalized, `.includes` could never match the two.
+  const BR_PRINTABLE = { processes: { resolved: true, present: false }, printables: { resolved: true, present: true, names: ["Business rule report"] } };
+  const brCaption = renderVerify(brResult(BR_PRINTABLE), brOpts(), brBuilt([...oneTab, { name: "BusinessRuleReportButton", type: "crt.Button" }]));
+  check("PR #157 review (Minor): the stand's CAPTION now matches the built identifier — `BusinessRuleReportButton` closes a Print row whose reported printable is 'Business rule report', because both sides are stripped of non-alphanumerics and lowercased first",
+    /Card action — Print \| ✅ Done \| ˋBusinessRuleReportButtonˋ on the built page is bound to the Print action/.test(brCaption.markdown),
+    () => brCaption.markdown.split("\n").filter((l) => /Card action/.test(l)));
+  const brBareWord = renderVerify(brResult(BR_PRINTABLE), brOpts(), brBuilt([...oneTab, { name: "PrintFormButton", type: "crt.Button" }]));
+  check("PR #157 review (Minor): the bare action WORD is a WEAKER signal — a `PrintFormButton` that carries none of the reported identity is ⚠ WITH THE CANDIDATE NAMED, not ✅, the same class of false positive the type gate was added for",
+    /Card action — Print \| ⚠ verify \| ˋPrintFormButtonˋ on the built page names the Print action but NOT the reported identity/.test(brBareWord.markdown)
+    && brBareWord.unverified >= 1,
+    () => brBareWord.markdown.split("\n").filter((l) => /Card action/.test(l)));
 }
 
 
@@ -12147,6 +13219,19 @@ check("ENG-96571 (review 1, K): a CROSS-SPELLING drift row is REASONED as one �
 check("ENG-96571 (review 1, K): and it does NOT carry the stand-only-member remedy — 'has no numeric value, so add the member(s) to the pinned table' is false in every clause for this row, and the operator reads this text to pick a disposition",
   !/has no numeric value/.test(r1kSpelling) && !/add the member\(s\) to the pinned table/.test(r1kSpelling),
   () => r1kSpelling);
+/* ---- review 2, finding 1: an EXACT-CASE ALIAS disagreement BLOCKS THE GATE, it is not an advisory row ---- */
+// The engine-level classification is pinned in run.mjs; this is the consequence the finding is actually about —
+// `computeGate` must read an alias row out of `mismatches` and STOP the run, and the alias row must not appear
+// as an `enum-drift-advisory` the operator can simply close with a disposition.
+const r21aRun = runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R1KPage", body: R1_K_BODY }], enumVocabulary: { DataValueType: { STRING: 2 } } });
+check("ENG-96571 review 2 (finding 1): an EXACT-CASE ALIAS disagreement BLOCKS the gate — `STRING: 2` against pinned `TEXT: 1` is a number the runtime read really returns, so every attribute declared with it is mis-typed",
+  r21aRun.gate.blocked === true
+  && r21aRun.gate.reasons.some((r) => /DataValueType\.STRING \(alias of TEXT\): engine 1, stand 2/.test(r)),
+  () => ({ blocked: r21aRun.gate.blocked, reasons: r21aRun.gate.reasons }));
+check("ENG-96571 review 2 (finding 1): and it raises NO `enum-drift-advisory` row — a blocking fact must not also arrive as a row a recorded disposition can close",
+  !r21aRun.changeSet.needsDecision.some((d) => d.kind === "enum-drift-advisory"),
+  () => r21aRun.changeSet.needsDecision.filter((d) => d.kind === "enum-drift-advisory"));
 const r1kNew = r1kReason({ DataValueType: { SOME_FUTURE_MEMBER: 99 } });
 check("ENG-96571 (review 1, K) ANTI-VACUITY: a genuinely stand-only member still gets the ADD-IT remedy — the split gave each category its own sentence, it did not delete one",
   /does not pin: DataValueType\.SOME_FUTURE_MEMBER \(99\)/.test(r1kNew)
@@ -12643,10 +13728,514 @@ check("ENG-96457 (item 6): the delivered plan file carries no authoring text and
   !/Supply the plan values/.test(br1PlanOut) && !/VERBATIM/i.test(br1PlanOut)
   && !/<FILL:/.test(br1PlanOut) && !/\*Adjustments\* list/.test(br1PlanOut),
   () => br1PlanOut.split("\n").filter((l) => /FILL|VERBATIM|Adjustments|planMeta/.test(l)));
-check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` writes it to stderr on every run, complete or not, because the 'do not hand-edit the generated tables' half applies to a complete plan too",
-  /ℹ Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
-  && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || ""),
+// ENG-96571 review 3 (finding 9) — the CARRIER changed, the requirement did not. The standalone `ℹ <rule>`
+// paragraph is gone from this path (it was a second statement of the same two sentences on the same stream, next
+// to the echoed `plan notes` block); the rule reaches the agent as the notes block's own two bullets. So this
+// pins "on stderr, on every run, both halves" without pinning the removed paragraph's `ℹ ` prefix — which would
+// have been a check on the duplication rather than on the delivery.
+check("ENG-96457 (item 6): the rule still reaches the AGENT — `--plan` states it on stderr on every run, complete or not, because the 'do not hand-edit the generated tables' half applies to a complete plan too",
+  /Supply the plan values via `manifest\.planMeta`/.test(br1Plan.stderr || "")
+  && /do NOT edit, reorder, or drop/.test(br1Plan.stderr || "")
+  && /ℹ plan notes \(agent-facing/.test(br1Plan.stderr || ""),
   () => (br1Plan.stderr || "").slice(0, 300));
+
+
+/* ================================================================================================
+   ENG-96571 review 2 — the plan-stage findings (1 · 2 · 3 · 4 · 5 · 6)
+   ================================================================================================ */
+
+/* ---- finding 1 (BLOCKER): a CLOSED ⚠ Confirm row is not an open evidence row ---- */
+// `confirmWorklistRows` filtered `SHOWN_ELSEWHERE` only, so a row an operator had ANSWERED through
+// `manifest.confirmDispositions` still came out of `--units`/`--checklist` as an OPEN evidence id. The plan said
+// "(N open, 1 closed)" while the machine artifact the executor reads carried the closed question as work.
+const R2_1_BODY = `define("R21Page",[],function(){return{entitySchemaName:"HRRequest",
+  diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const R2_1_KEY = "enum-drift-advisory:enumVocabulary";
+const r21Run = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R21Page", body: R2_1_BODY }],
+  enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r21Ids = (r) => pageUnits(r, {}).preflight.map((u) => u.id);
+const r21Open = r21Run(null);
+const r21Closed = r21Run({ [R2_1_KEY]: { resolved: true, disposition: "accepted", note: "checked" } });
+check("ENG-96571 review 2 (finding 1) SETUP: with no disposition the `enum-drift-advisory` row IS an open evidence row in `--units.preflight` and a row in the control table",
+  r21Ids(r21Open).includes(`main#confirm:${R2_1_KEY}`)
+  && /\[enum-drift-advisory\] enumVocabulary/.test(renderChecklist(r21Open, {})),
+  () => r21Ids(r21Open));
+check("ENG-96571 review 2 (finding 1) BLOCKER: once the row is CLOSED by a recorded disposition it is NOT published as an open evidence id any more — the plan and the machine artifact stated different amounts of work, and the extra unit could be closed by nothing",
+  r21Closed.confirmDispositions.closed.includes(R2_1_KEY)
+  && !r21Ids(r21Closed).includes(`main#confirm:${R2_1_KEY}`),
+  () => ({ closed: r21Closed.confirmDispositions, ids: r21Ids(r21Closed) }));
+check("ENG-96571 review 2 (finding 1): …and it is gone from the ⚠ Confirm worklist GROUP of the control table too — a `vk`-less row there would still render as `☐ confirm on-stand`, the same open item under another marker",
+  !/\[enum-drift-advisory\] enumVocabulary/.test(renderChecklist(r21Closed, {})),
+  () => renderChecklist(r21Closed, {}).split("\n").filter((l) => /enum-drift-advisory|Confirm worklist/.test(l)));
+check("ENG-96571 review 2 (finding 1): the ANSWER is not lost — the plan still prints the closed row with its note, which is the channel that carries it",
+  /CLOSED by a recorded disposition/.test(r21Closed.designSpec)
+  && /\*\*\[enum-drift-advisory\]\*\* enumVocabulary → \*\*accepted\*\*/.test(r21Closed.designSpec)
+  && /checked/.test(r21Closed.designSpec),
+  () => r21Closed.designSpec.split("\n").filter((l) => /CLOSED|enum-drift/.test(l)));
+
+/* ---- finding 2: a composed LIFECYCLE trigger keeps its immediate caller ---- */
+// `composeUpstream` returned the upstream lifecycle answer UNCHANGED, so on `onSaved → mid → leaf` the row for
+// `leaf` carried `from: "onSaved"`. `from` is what `foldParentLinks` folds by, so `leaf` folded under the platform
+// hook instead of under `mid`, `via` vanished, and the Freedom target read "port with `onSaved`".
+const r22Run = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+  `define("R22Page", [], function() { return { entitySchemaName: "Deal", methods: {
+    onSaved: function() { this.callParent(arguments); this.mid(); },
+    mid: function() { this.leaf(); },
+    leaf: function() { return 1; } },
+    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] });
+const r22Trig = (m) => (r22Run.changeSet.handlerStubs.find((h) => h.sourceMethod === m)?.triggers || [])[0];
+const r22Plan = renderPlan(r22Run, {});
+const r22Row = (m) => (r22Plan.split("\n").find((l) => l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "");
+check("ENG-96571 review 2 (finding 2): a composed `lifecycle` trigger carries the IMMEDIATE caller in `from` and the platform hook in `hook` — `from: onSaved` on a two-hop chain lost `mid` entirely",
+  r22Trig("leaf")?.kind === "lifecycle" && r22Trig("leaf")?.from === "mid" && r22Trig("leaf")?.hook === "onSaved",
+  () => JSON.stringify([r22Trig("mid"), r22Trig("leaf")]));
+check("ENG-96571 review 2 (finding 2): the ONE-hop answer is unchanged — `mid` is called by the hook itself, so its `from` IS the hook and `foldParentLinks`' `byName.has(from)` guard still keeps a filtered-out platform hook from folding",
+  r22Trig("mid")?.kind === "lifecycle" && r22Trig("mid")?.from === "onSaved",
+  () => JSON.stringify(r22Trig("mid")));
+check("ENG-96571 review 2 (finding 2): `leaf` folds under `mid` and its Freedom target says `port with \\`mid\\`` — it used to fold under the platform hook and name it as the thing to port with",
+  /↳/.test(r22Row("leaf")) && /port with `mid`/.test(r22Row("leaf"))
+  && !/port with `onSaved`/.test(r22Row("leaf")),
+  () => [r22Row("mid"), r22Row("leaf")]);
+// ENG-96534 (merge) — the Trigger CELL render (`triggerText`) is GONE: the ⚠ Custom methods table now shows
+// What-it-does / Use-case columns instead of Trigger. The trigger TRACING data (`handlerStubs[].triggers`) and the
+// call-graph FOLD (`port with <caller>`) both survive and stay pinned below; only the assertions on the removed cell
+// text are dropped.
+check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop in the DATA — the hook, the immediate caller in `from`, the middle hops in `via` (the cell that once rendered them is replaced by the What-it-does/Use-case columns)",
+  (() => {
+    const r = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+      `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
+        onSaved: function() { this.callParent(arguments); this.top(); },
+        top: function() { this.mid(); },
+        mid: function() { this.leaf(); },
+        leaf: function() { return 1; } },
+        diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] });
+    const t = (r.changeSet.handlerStubs.find((h) => h.sourceMethod === "leaf")?.triggers || [])[0];
+    const plan = renderPlan(r, {});
+    const row = plan.split("\n").find((l) => l.split("|")[1]?.replaceAll("↳", "").trim() === "leaf") || "";
+    return t?.from === "mid" && t?.hook === "onSaved" && (t?.via || []).join(",") === "top"
+      && /port with `mid`/.test(row);
+  })(),
+  () => JSON.stringify((runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
+    `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
+      onSaved: function() { this.callParent(arguments); this.top(); },
+      top: function() { this.mid(); }, mid: function() { this.leaf(); }, leaf: function() { return 1; } },
+      diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] })
+    .changeSet.handlerStubs.find((h) => h.sourceMethod === "leaf")?.triggers || [])[0]));
+check("ENG-96571 review 2 (finding 2) ANTI-VACUITY: a lifecycle-answered row is STILL not counted as `internalCallOnly` — the rebase moved a field, it did not turn the answer back into a weak hop",
+  r22Run.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(r22Run.stubIndex[0].counts));
+// ENG-96571 review 3 (finding 2) — the SECOND renderer of the same trigger. `triggerText` (designspec.mjs) was
+// taught `hook ?? from`; `triggerPhrase` (mapper.mjs) still read `t.from` for every kind, and it feeds
+// `methodReason`, which runs AFTER the composition — so the `method` needsDecision row for `leaf` said "triggered
+// by lifecycle mid". `mid` is not a platform lifecycle method, so the reason asserted the opposite of what the
+// same run's trigger cell says, and `changeSet.needsDecision` is emitted verbatim by the default CLI mode. It is
+// also the string a REPORTED answer (`{ trigger: "lifecycle", from: "onSaved" }`) is meant to be comparable with.
+const r22Reason = (m) => (r22Run.changeSet.needsDecision.find((d) => d.kind === "method" && d.item === m) || {}).reason || "";
+check("ENG-96571 review 3 (finding 2): the `method` row's REASON names the platform hook, not the immediate caller — on `onSaved → mid → leaf` it reads `triggered by lifecycle onSaved`, the same answer the trigger cell gives and the same string a reported answer would carry",
+  /triggered by lifecycle onSaved/.test(r22Reason("leaf")) && !/lifecycle mid/.test(r22Reason("leaf")),
+  () => [r22Reason("mid"), r22Reason("leaf")]);
+check("ENG-96571 review 3 (finding 2) ANTI-VACUITY: the one-hop row is unaffected (`mid` is called by the hook itself, so hook and immediate caller coincide) and the rebase did not empty the clause — both rows still state a lifecycle trigger",
+  /triggered by lifecycle onSaved/.test(r22Reason("mid"))
+  && !/trigger unresolved/.test(r22Reason("leaf")) && !/undefined/.test(r22Reason("leaf")),
+  () => [r22Reason("mid"), r22Reason("leaf")]);
+
+/* ---- finding 3: a recorded key that matches NO row is reported, not swallowed ---- */
+// A typo in the kind or the item closed nothing and appeared in none of closed/invalid/notApplicable, so the plan
+// neither showed the answer nor said it was not applied — the operator regenerated forever against a typo.
+const r23Run = (dispositions) => runMigration({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R21Page", body: R2_1_BODY }],
+  enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r23Typo = r23Run({ "enum-drift-advisory:enumVocabularyy": { resolved: true, disposition: "accepted", note: "typo" } });
+check("ENG-96571 review 2 (finding 3): a recorded key matching NO row on this surface is reported as `unmatched` and NAMED in a ⚠ line — it used to vanish from every channel",
+  r23Typo.confirmDispositions.unmatched.join("|") === "enum-drift-advisory:enumVocabularyy"
+  && r23Typo.confirmDispositions.closed.length === 0
+  && /recorded `confirmDispositions` key\(s\) matched NO ⚠ Confirm row on this surface/.test(r23Typo.designSpec)
+  && r23Typo.designSpec.includes("enum-drift-advisory:enumVocabularyy"),
+  () => ({ reported: r23Typo.confirmDispositions, lines: r23Typo.designSpec.split("\n").filter((l) => /matched NO/.test(l)) }));
+check("ENG-96571 review 2 (finding 3) ANTI-VACUITY: the CORRECT key is not reported unmatched — the report flags a miss, not every key",
+  r21Closed.confirmDispositions.unmatched.length === 0
+  && !/matched NO ⚠ Confirm row/.test(r21Closed.designSpec),
+  () => JSON.stringify(r21Closed.confirmDispositions));
+check("ENG-96571 review 2 (finding 3): a key with no `resolved: true` is NOT unmatched — an unfinished entry is not a wrong one, the same rule `invalid` follows",
+  r23Run({ "enum-drift-advisory:nope": { disposition: "accepted" } }).confirmDispositions.unmatched.length === 0);
+// SCOPE — ENG-96571 review 3 (BLOCKER) rewrote this rule. It used to be "only the scope the key names", with a
+// `hasNested` suppression standing in for "a fold has not run yet"; that suppression fired on any page with a
+// custom detail, so a bare typo was reported by no scope at all. The report is now judged ONCE AT THE ROOT over the
+// union of every folded scope's rows, so: a bare key matches if ANY page raised the row, a scoped key matches only
+// on the page it names, and a nested run reports nothing (`opts.scopeSchema` → `[]`), exactly as
+// `behaviourIndex.unmatched` already did.
+check("ENG-96571 review 3 (BLOCKER): a key whose `<schema>` prefix names NO page of this run IS reported — the root looked at every scope, so 'not addressed to me' is no longer an answer it can give",
+  r23Run({ "OtherPage::enum-drift-advisory:enumVocabulary": { resolved: true, disposition: "accepted" } })
+    .confirmDispositions.unmatched.join("|") === "OtherPage::enum-drift-advisory:enumVocabulary");
+check("ENG-96571 review 3 (BLOCKER): a scoped key naming the ROOT's own scope is judged too — it used to be `mine` in no scope at all (undefined `scopeSchema` at the root, and not that schema in any fold), so it closed nothing and was reported nowhere",
+  runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } },
+    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.length === 0
+  && runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "R21Page::enum-drift-advisory:typo": { resolved: true, disposition: "accepted" } } })
+    .confirmDispositions.unmatched.join("|") === "R21Page::enum-drift-advisory:typo");
+// ENG-96571 review 3 (re-review constraint) — a SCOPED key whose SCHEMA PREFIX is itself misspelled
+// (`C1Chidl::` for `C1Child::`) was reported by no scope before either: `scope === scopeSchema` never held for it
+// in any fold, with or without `hasNested`. The re-review's warning about the root aggregate is the reason the
+// union carries `<scope>::<key>` forms and not just bare ones — a bare-key union would let this key match a bare
+// `rule-condition:Job` seen on some other page and stay swallowed exactly as before.
+check("ENG-96571 review 3 (BLOCKER): a scoped key whose SCHEMA PREFIX is misspelled is reported — the union carries `<scope>::<key>` forms, so it cannot be absorbed by the same bare pair legitimately seen on another page",
+  (() => { const r = runMigration(C1_NESTED({ "C1Chidl::rule-condition:Job": { resolved: true, disposition: "accepted", note: "typo in the SCHEMA, not the pair" } }));
+    return (r.confirmDispositions.unmatched || []).join("|") === "C1Chidl::rule-condition:Job"; })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "C1Chidl::rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: the correctly spelled prefix on the same surface is NOT reported and DOES close the child's row — so the check above is about the prefix, not about scoped keys in general",
+  (() => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted", note: "correct prefix" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+check("ENG-96571 review 3 (BLOCKER): a NESTED run publishes no unmatched report at all — a fold sees one page's rows, so every answer aimed at a sibling would read as unmatched there (the rule `behaviourIndex.unmatched` already follows)",
+  runMigration({ entity: "HRRequest", noParentTemplate: true,
+    schemas: [{ pkg: "R21Page", body: R2_1_BODY }], enumVocabulary: { ViewItemType: { BRANDNEW: 999 } },
+    confirmDispositions: { "enum-drift-advisory:enumVocabularyy": { resolved: true, disposition: "accepted" } } },
+    { scopeSchema: "R21Page" }).confirmDispositions.unmatched.length === 0);
+check("ENG-96571 review 3 (BLOCKER): a bare key that legitimately closes a row on a CHILD page is still NOT reported: a BARE key that legitimately closes a row on a CHILD page is NOT reported unmatched at the root — the child fold runs after this pass, so a root-level report would be a ⚠ about an answer that worked",
+  (() => { const r = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => JSON.stringify(runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+
+// ENG-96571 review 3 (BLOCKER) — THE CASE THE `hasNested` SUPPRESSION SWALLOWED. `enumerateChildPages` yields one
+// entry per custom detail that has an entity, whether or not a child schema was supplied and whether or not the
+// child ever folds. So `hasNested` was true here — a page with a custom detail and NO `childPageSchemas`, the
+// normal shape — and the bare typo was reported by no scope at all: not at the root (suppressed), and not in any
+// fold (there is none, and a bare key is never a fold's anyway). This is the silent swallow, driven directly.
+const C1_DETAIL_NO_CHILD = (dispositions) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const c1DetailTypo = runMigration(C1_DETAIL_NO_CHILD({ "detail-placementt:D1": { resolved: true, disposition: "accepted", note: "typo in the kind" } }));
+check("ENG-96571 review 3 (BLOCKER): a custom detail with NO `childPageSchemas` supplied — nothing folds — and a BARE typo IS reported; `hasNested` used to be true on exactly this shape and suppressed the report on virtually every real run",
+  c1DetailTypo.confirmDispositions.unmatched.join("|") === "detail-placementt:D1"
+  && /matched NO ⚠ Confirm row on this surface/.test(c1DetailTypo.designSpec)
+  && c1DetailTypo.designSpec.includes("detail-placementt:D1"),
+  () => ({ childPages: (c1DetailTypo.childPages || []).map((c) => ({ key: c.schema, folded: !!c.spec })),
+    reported: c1DetailTypo.confirmDispositions }));
+check("ENG-96571 review 3 (BLOCKER) SETUP: that run really does have a childPages ENTRY and really does fold nothing — otherwise the check above would pass for the wrong reason (no `hasNested` to defeat)",
+  (c1DetailTypo.childPages || []).length > 0 && !(c1DetailTypo.childPages || []).some((c) => c.spec),
+  () => JSON.stringify((c1DetailTypo.childPages || []).map((c) => ({ key: c.schema, folded: !!c.spec }))));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: the CORRECT bare key on the same shape is NOT reported — the report flags a miss, not every key on a page that has a detail",
+  runMigration(C1_DETAIL_NO_CHILD({ "detail-placement:D1": { resolved: true, disposition: "accepted" } }))
+    .confirmDispositions.unmatched.length === 0,
+  () => JSON.stringify(runMigration(C1_DETAIL_NO_CHILD({ "detail-placement:D1": { resolved: true, disposition: "accepted" } })).confirmDispositions));
+// …and the other half: a bare typo on a run that DOES fold a child page. The union has the child's rows in it, so
+// the typo still matches nothing and is still named — the fold is no longer a reason to say nothing.
+const c1NestTypo = runMigration(C1_NESTED({ "rule-condition:Jobb": { resolved: true, disposition: "accepted", note: "item typo" } }));
+check("ENG-96571 review 3 (BLOCKER): a BARE typo on a run that really DOES fold a child page is reported too — the union carries the child's rows, so 'a fold might still close it' is answered by fact instead of by suppression",
+  c1NestTypo.confirmDispositions.unmatched.join("|") === "rule-condition:Jobb"
+  && /matched NO ⚠ Confirm row on this surface/.test(c1NestTypo.designSpec),
+  () => JSON.stringify(c1NestTypo.confirmDispositions));
+check("ENG-96571 review 3 (BLOCKER) ANTI-VACUITY: on that same folding run the CORRECT bare key (the one the child's row answers) is still silent AND still closed the child's row — the union matched it where it actually landed",
+  (() => { const r = runMigration(C1_NESTED({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+    return (r.confirmDispositions.unmatched || []).length === 0
+      && /\*\*\[rule-condition\]\*\* Job → \*\*accepted\*\*/.test(c1NestSpecOf(r)); })(),
+  () => "see C1_NESTED with the correct bare key");
+
+/* ---- finding 4: the LIST page's rows are closed by the same answer map ---- */
+// `applyConfirmDispositions` ran over the form page's ChangeSet only, while `renderListPage` renders
+// `renderConfirmWorklist(result.listChangeSet)` — so a `list-*` answer closed nothing AND was reported in none of
+// the three arrays: the operator's answer landed nowhere and no line said so.
+const R2_4_MAN = (dispositions) => ({ entity: "HRRequest", noParentTemplate: true,
+  schemas: [{ pkg: "R24Page", body: `define("R24Page",[],function(){return{entitySchemaName:"HRRequest",
+    diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  section: [{ pkg: "R24Section", body: `define("HRRequestSection",[],function(){return{entitySchemaName:"HRRequest",diff:[]};});` }],
+  ...(dispositions ? { confirmDispositions: dispositions } : {}) });
+const r24Open = runMigration(R2_4_MAN(null));
+const r24Key = (r24Open.listChangeSet?.needsDecision || []).map((n) => `${n.kind}:${n.item}`)[0];
+check("ENG-96571 review 2 (finding 4) SETUP: the fixture's LIST page really raises a ⚠ Confirm row of its own, and with no disposition it renders as open",
+  typeof r24Key === "string" && r24Key.length > 0
+  && !/CLOSED by a recorded disposition/.test(r24Open.designSpec),
+  () => (r24Open.listChangeSet?.needsDecision || []).map((n) => `${n.kind}:${n.item}`));
+const r24Closed = runMigration(R2_4_MAN({ [r24Key]: { resolved: true, disposition: "accepted", note: "the list answer" } }));
+check("ENG-96571 review 2 (finding 4): a LIST-page disposition now CLOSES its row and is reported on the result — the pass never touched `listChangeSet`, so the answer neither closed nor reported",
+  r24Closed.confirmDispositions.closed.includes(r24Key)
+  && (r24Closed.listChangeSet.needsDecision.find((n) => `${n.kind}:${n.item}` === r24Key) || {}).closed === true
+  && /the list answer/.test(r24Closed.designSpec),
+  () => JSON.stringify({ reported: r24Closed.confirmDispositions, want: r24Key }));
+check("ENG-96571 review 2 (finding 4): the list page publishes its OWN `confirmNotApplicable`, so its worklist names the keys aimed at rows IT prints",
+  Array.isArray(r24Closed.listChangeSet.confirmNotApplicable),
+  () => JSON.stringify(r24Closed.listChangeSet.confirmNotApplicable));
+check("ENG-96571 review 2 (finding 4): the unmatched report is computed over BOTH pages' rows — a valid list key is not reported unmatched by the form page's pass, and vice versa",
+  (r24Closed.confirmDispositions.unmatched || []).length === 0,
+  () => JSON.stringify(r24Closed.confirmDispositions));
+
+/* ---- ENG-96571 review 3 (finding 7): the `confirmClosed` publication at the TYPED-PAGE and MINI-PAGE fold sites ----
+   Review 3 added the same one-line publication at three fold sites and `closedConfirmQuestions` consumes it for
+   every node from `subPageNodes(result)`, but only the child-page site was exercised. A typed-page or mini-page
+   node that published nothing, or published from the wrong ChangeSet, would silently reproduce the very defect
+   review 3 fixed — a false `resolutionsUnmatched` warning on those pages — and the suite would stay green. The
+   `hasNested` half of this finding is gone rather than tested: the BLOCKER fix removed that predicate, so its
+   `typedPages.length > 0` / `!!manifest.addRecordMiniPage` arms no longer exist to be vacuous.
+   Each page gets a row of its OWN (`TypedOnly` / `MiniOnly`) that `main` does not raise, because a pair still open
+   on `main` is excluded from `resolutionsClosed` by design — sharing `Job` would make the check pass or fail for
+   that reason instead of for the publication. ---- */
+const R7_RULE = (c) => `"${c}": { "${c}Required": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER, "property": BusinessRuleModule.enums.Property.REQUIRED, "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } }`;
+const R7_BODY = (name, cols) => `define("${name}", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", rules: { ${cols.map(R7_RULE).join(", ")} }, diff: [${cols.map((c) => `{ operation: "insert", name: "${c}", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "${c}" } }`).join(", ")}] }; });`;
+const R7_MANIFEST = (disp) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: R7_BODY("PPage", ["Job"]) }],
+  typedPages: [{ schema: "TP", type: "T1" }],
+  typedPageSchemas: { TP: { entity: "PE", noParentTemplate: true, schemas: [{ pkg: "TPP", body: R7_BODY("TP", ["Job", "TypedOnly"]) }] } },
+  addRecordMiniPage: { schema: "MP" },
+  miniPageSchemas: { MP: { entity: "PE", noParentTemplate: true, schemas: [{ pkg: "MPP", body: R7_BODY("MP", ["Job", "MiniOnly"]) }] } },
+  ...(disp ? { confirmDispositions: disp } : {}) });
+const R7_DISP = { "TP::rule-condition:TypedOnly": { resolved: true, disposition: "accepted", note: "closed on the typed page" },
+  "MP::rule-condition:MiniOnly": { resolved: true, disposition: "accepted", note: "closed on the mini page" } };
+const R7_ANSWERS = { resolutions: [{ kind: "rule-condition", item: "TypedOnly", answer: "answered for the typed page" },
+  { kind: "rule-condition", item: "MiniOnly", answer: "answered for the mini page" }] };
+const r7Closed = runMigration(R7_MANIFEST(R7_DISP));
+check("ENG-96571 review 3 (finding 7) SETUP: the typed page and the mini page each raise a `rule-condition` row of their own that `main` does not, and a SCOPED disposition closes each — so the two publications below have something to publish",
+  (r7Closed.typedPages || []).some((t) => (t.confirmClosed || []).some((n) => n.kind === "rule-condition" && n.item === "TypedOnly"))
+  && (r7Closed.miniPage?.confirmClosed || []).some((n) => n.kind === "rule-condition" && n.item === "MiniOnly"),
+  () => JSON.stringify({ typed: (r7Closed.typedPages || []).map((t) => t.confirmClosed), mini: r7Closed.miniPage?.confirmClosed }));
+const r7Units = (r) => pageUnits(r, { resolutions: R7_ANSWERS });
+check("ENG-96571 review 3 (finding 7): the answer to a question closed on the TYPED page and the one closed on the MINI page both reach `resolutionsClosed`, and NEITHER is reported as an answer nobody asked for",
+  (() => { const u = r7Units(r7Closed);
+    const has = (item) => u.resolutionsClosed.some((c) => c.kind === "rule-condition" && c.item === item);
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 2 && has("TypedOnly") && has("MiniOnly"); })(),
+  () => JSON.stringify({ closed: r7Units(r7Closed).resolutionsClosed, unmatched: r7Units(r7Closed).resolutionsUnmatched }));
+check("ENG-96571 review 3 (finding 7) ANTI-VACUITY — the check above is about the PUBLICATION: strip `confirmClosed` off the typed node and off the mini node (a folded node exposes no `changeSet`, so the `closedOf` fallback contributes nothing) and both answers become false `resolutionsUnmatched` entries, which is the defect this line guards",
+  (() => {
+    const r = runMigration(R7_MANIFEST(R7_DISP));
+    for (const t of r.typedPages || []) delete t.confirmClosed;
+    if (r.miniPage) delete r.miniPage.confirmClosed;
+    const u = r7Units(r);
+    return u.resolutionsClosed.length === 0 && u.resolutionsUnmatched.length === 2
+      && u.resolutionsUnmatched.every((x) => /TypedOnly|MiniOnly/.test(x.item || ""));
+  })(),
+  () => "see R7 with confirmClosed removed from the typed/mini nodes");
+check("ENG-96571 review 3 (finding 7) ANTI-VACUITY: with NO disposition recorded the same answers are MATCHED instead — `resolutionsClosed` is empty and nothing is unmatched, so the check is about the disposition and not about the answers file",
+  (() => { const u = r7Units(runMigration(R7_MANIFEST(null)));
+    return u.resolutionsClosed.length === 0 && u.resolutionsUnmatched.length === 0 && u.resolutionsMatched >= 2; })(),
+  () => JSON.stringify(r7Units(runMigration(R7_MANIFEST(null)))?.resolutionsClosed));
+
+/* ---- ENG-96571 review 3 (finding 5): a pair closed on MORE THAN ONE page keeps every page's id ---- */
+// `closedConfirmQuestions` de-duped by `resolutionKey(kind, item)` while the id it emits is page-scoped, so when ONE
+// bare disposition key closed the identical row on `main` AND on a folded sub-page — the normal effect of an
+// inherited bare key, the documented "one answer for the whole surface" pattern — only `main#confirm:<pair>` reached
+// `askedKeys`. An operator answering by the sub-page's published id (an id `--units.preflight` prints) landed in
+// `resolutionsUnmatched` via the `byId` loop, since `pairMatched` needs a kind/item an id-only entry does not carry.
+// The closed-on-BOTH case is exactly the one the dedupe hit and the one the earlier goldens did not cover.
+const R5_RULES = `rules: { "Job": { "JobRequired": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.REQUIRED,
+    "conditions": [{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }] } } },`;
+const R5_BOTH = (disp) => ({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "PE", ${R5_RULES}
+    diff: [{ operation: "insert", name: "Job", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Job" } }],
+    details: { D1: { schemaName: "D1", entitySchemaName: "Shared" } } }; });` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: `define("C1Child", ["BusinessRuleModule"], function(BusinessRuleModule) { return { entitySchemaName: "Shared", ${R5_RULES}
+    diff: [{ operation: "insert", name: "Job", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "Job" } }] }; });` }] } },
+  ...(disp ? { confirmDispositions: disp } : {}) });
+const r5Open = runMigration(R5_BOTH(null));
+const r5OpenIds = pageUnits(r5Open, {}).preflight.map((u) => u.id);
+check("ENG-96571 review 3 (finding 5) SETUP: the SAME `rule-condition:Job` row is raised on `main` AND on the folded child page, and BOTH ids are published in `preflight[]` — otherwise the dedupe below has nothing to hit",
+  r5OpenIds.includes("main#confirm:rule-condition:Job") && r5OpenIds.includes("child:Shared#confirm:rule-condition:Job"),
+  () => JSON.stringify(r5OpenIds));
+const r5Closed = runMigration(R5_BOTH({ "rule-condition:Job": { resolved: true, disposition: "accepted", note: "one answer for the whole surface" } }));
+const r5Units = (answerId) => pageUnits(r5Closed, { resolutions: { resolutions: [{ id: answerId, answer: "checked on the stand" }] } });
+check("ENG-96571 review 3 (finding 5): an answer addressed to the SUB-PAGE's published id is exempt too — `resolutionsUnmatched` is empty and `resolutionsClosed` names the pair exactly ONCE, not once per page",
+  (() => { const u = r5Units("child:Shared#confirm:rule-condition:Job");
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 1
+      && u.resolutionsClosed[0].kind === "rule-condition" && u.resolutionsClosed[0].item === "Job"; })(),
+  () => JSON.stringify({ closed: r5Units("child:Shared#confirm:rule-condition:Job").resolutionsClosed,
+    unmatched: r5Units("child:Shared#confirm:rule-condition:Job").resolutionsUnmatched }));
+check("ENG-96571 review 3 (finding 5): the `main` id — the one form that already worked — still works, and still yields exactly one `resolutionsClosed` row",
+  (() => { const u = r5Units("main#confirm:rule-condition:Job");
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsClosed.length === 1; })(),
+  () => JSON.stringify(r5Units("main#confirm:rule-condition:Job")));
+check("ENG-96571 review 3 (finding 5) ANTI-VACUITY: the exemption is not blanket — an id naming a page of this run that never raised that row is STILL reported unmatched",
+  (() => { const u = r5Units("child:Shared#confirm:rule-condition:Nope");
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].id === "child:Shared#confirm:rule-condition:Nope"; })(),
+  () => JSON.stringify(r5Units("child:Shared#confirm:rule-condition:Nope").resolutionsUnmatched));
+
+/* ---- finding 5: ONE copy of the authoring rule ---- */
+// `renderPlanNotes` hand-wrote the same two sentences `PLAN_AUTHORING_NOTE` carries, in its own wording, so the
+// rule existed twice and an edit to either left the other stating the old version of it.
+check("ENG-96571 review 2 (finding 5): `renderPlanNotes` renders the authoring rule FROM `PLAN_AUTHORING_SENTENCES` — the notes document and the stderr paragraph are one text, so neither can drift",
+  PLAN_AUTHORING_SENTENCES.length === 2
+  && PLAN_AUTHORING_SENTENCES.every((s) => renderPlanNotes({}).includes(s))
+  && PLAN_AUTHORING_SENTENCES.every((s) => PLAN_AUTHORING_NOTE.includes(s)),
+  () => renderPlanNotes({}));
+check("ENG-96571 review 2 (finding 5): on the `--out` path the rule is NOT also written to stderr — it is already in the `plan.notes.md` that run wrote, and stdout points the agent at that file",
+  (() => {
+    const f = path.join(os.tmpdir(), `r25-plan-${process.pid}.md`);
+    try {
+      const r = br1(["--plan", "--out", f]);
+      // BOTH sentences, verbatim: with the stderr line gone from this path the notes file is the ONLY carrier of
+      // the rule here, so a check that reads one half would let the other disappear unnoticed.
+      const notes = fs.readFileSync(path.join(path.dirname(f), path.basename(f, ".md") + ".notes.md"), "utf8");
+      return r.status === 0 && !/ℹ Supply the plan values/.test(r.stderr || "")
+        && PLAN_AUTHORING_SENTENCES.every((s) => notes.includes(s));
+    } finally { fs.rmSync(f, { force: true }); fs.rmSync(path.join(path.dirname(f), path.basename(f, ".md") + ".notes.md"), { force: true }); }
+  })(),
+  () => "see --plan --out on the BR1 fixture");
+// ENG-96571 review 3 (finding 9) — the OTHER branch, which is the one that had two copies on the SAME stream.
+// Without `--out`, migrate.mjs echoes `result.planNotes` to stderr, and `renderPlanNotes` renders
+// `PLAN_AUTHORING_SENTENCES` as its two bullets — so the standalone `PLAN_AUTHORING_NOTE` paragraph that review 2
+// left armed on this path stated the identical two sentences a second time, on stderr, in the same run. Counted
+// over stdout+stderr together (not matched), because "stated once" is the criterion and either stream carrying a
+// second copy breaks it.
+check("ENG-96571 review 3 (finding 9): on the non-`--out` `--plan` path each authoring sentence is stated EXACTLY ONCE across stdout+stderr — the echoed `plan notes` block is the single carrier, with no second standalone paragraph",
+  (() => {
+    const both = (br1Plan.stdout || "") + (br1Plan.stderr || "");
+    return br1Plan.status === 0 && PLAN_AUTHORING_SENTENCES.every((t) => both.split(t).length - 1 === 1);
+  })(),
+  () => PLAN_AUTHORING_SENTENCES.map((t) => ({
+    sentence: t.slice(0, 60),
+    inStdout: (br1Plan.stdout || "").split(t).length - 1,
+    inStderr: (br1Plan.stderr || "").split(t).length - 1,
+  })));
+check("ENG-96571 review 3 (finding 9) ANTI-VACUITY: the count is 1 because the rule IS delivered on this path, not because it vanished — the sentences are present, and they arrive on stderr (the plan on stdout stays clean of generator guidance)",
+  PLAN_AUTHORING_SENTENCES.every((t) => (br1Plan.stderr || "").includes(t))
+  && PLAN_AUTHORING_SENTENCES.every((t) => !(br1Plan.stdout || "").includes(t)),
+  () => ({ stderrTail: (br1Plan.stderr || "").slice(-400) }));
+
+/* ---- finding 6: "(0 open)", not "(0)", when the section's body is an advisory ---- */
+// The worklist renders when it has ANY of four things to say, and two of them are advisories about answers that
+// landed nowhere. With no open row the header read a bare `(0)`, which summarizes such a section as "zero
+// questions, nothing to see" — the opposite of what its body says. Driven off a hand-built ChangeSet because the
+// case is "no open rows AT ALL", which no real fixture of this suite reaches.
+const r26Spec = (cs) => renderDesignSpec({ entity: "HRRequest", changeSet: { viewConfigDiff: [], needsDecision: [], ...cs } }, {});
+check("ENG-96571 review 2 (finding 6): a worklist whose only content is a NOT-APPLICABLE advisory heads `(0 open)` — a bare `(0)` reads as 'nothing to see' above a ⚠ line about an answer that landed nowhere",
+  /#### ⚠ Confirm before I build \(0 open\)/.test(r26Spec({ confirmNotApplicable: ["method:onSaved"] })),
+  () => r26Spec({ confirmNotApplicable: ["method:onSaved"] }).split("\n").filter((l) => /Confirm before I build|does not print/.test(l)));
+check("ENG-96571 review 2 (finding 6): the same for an UNMATCHED-key advisory",
+  /#### ⚠ Confirm before I build \(0 open\)/.test(r26Spec({ confirmUnmatched: ["rule-condition:Nope"] })),
+  () => r26Spec({ confirmUnmatched: ["rule-condition:Nope"] }).split("\n").filter((l) => /Confirm before I build|matched NO/.test(l)));
+check("ENG-96571 review 2 (finding 6) ANTI-VACUITY: with NOTHING to say the worklist is still absent entirely, and with open rows the count is still the plain `(N)` the other goldens pin",
+  // ENG-96327: use a kind the human plan actually SHOWS (`detail-placement`) — `rule-condition` is now denylisted
+  // from the human ⚠ Confirm (SHOWN_IN_TABLE), so it would render `(0 open)`, not the `(1)` this anti-vacuity pins.
+  !/⚠ Confirm before I build/.test(r26Spec({}))
+  && /#### ⚠ Confirm before I build \(1\)/.test(r26Spec({ needsDecision: [{ kind: "detail-placement", item: "Doc", reason: "unresolved parent" }] })),
+  () => [r26Spec({}), r26Spec({ needsDecision: [{ kind: "detail-placement", item: "Doc", reason: "unresolved parent" }] })]);
+
+/* ================================================================================================
+   ENG-96571 review 3 — a question CLOSED by a disposition is still a question this run ASKED
+   ================================================================================================
+   Review 2's finding 1 stopped publishing a closed ⚠ Confirm row as an open evidence id — correct, and pinned
+   above. But `unmatchedResolutions` judges `resolutions.json` against `preflight[]`, so the removal turned an
+   ANSWER to that same question into "an answer nobody asked for": with the disposition recorded, the entry
+   landed in `resolutionsUnmatched` and `resolutionsMatched` fell to 0. That is the DOCUMENTED path —
+   `references/migration-documentation.md` tells the operator to fill BOTH channels for one question — so
+   following the documentation produced a ⚠ accusing the operator of answering nothing.
+
+   Same repro as finding 1 (`r21Run`), with an answers file added. Reproduced verbatim before the fix:
+     without a disposition → resolutionsUnmatched [] / resolutionsMatched 1
+     with    a disposition → resolutionsUnmatched [{kind:"enum-drift-advisory",item:"enumVocabulary",…}] / matched 0
+   ---- */
+const R3_RES = { resolutions: [{ kind: R2_1_KEY.split(":")[0], item: "enumVocabulary", answer: "checked on stand" }] };
+const r31Units = (r, resolutions) => pageUnits(r, resolutions ? { resolutions } : {});
+check("ENG-96571 review 3 SETUP: with NO disposition the answer matches the open question — `resolutionsUnmatched` is empty and `resolutionsMatched` counts it, which is the baseline the closed case must not fall below",
+  (() => { const u = r31Units(r21Open, R3_RES);
+    return u.resolutionsUnmatched.length === 0 && u.resolutionsMatched === 1
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => { const u = r31Units(r21Open, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, matched: u.resolutionsMatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3 MAJOR: once a disposition CLOSES the row, an answer to that same question is NOT reported as an answer nobody asked for — the row left `preflight[]` and took the reconciliation's memory of the question with it, on the one path the documentation tells the operator to take",
+  (() => { const u = r31Units(r21Closed, R3_RES);
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = r31Units(r21Closed, R3_RES);
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed, preflight: u.preflight.map((p) => p.id) }; });
+check("ENG-96571 review 3 MAJOR: the answer is REPORTED, not merely exempted — `resolutionsClosed` names the question it targets and its answer, so the operator's second-channel entry is auditable instead of silently dropped",
+  (() => { const c = r31Units(r21Closed, R3_RES).resolutionsClosed || [];
+    return c.length === 1 && c[0].kind === "enum-drift-advisory" && c[0].item === "enumVocabulary"
+      && c[0].answer === "checked on stand"; })(),
+  () => r31Units(r21Closed, R3_RES).resolutionsClosed);
+check("ENG-96571 review 3: and it is NOT counted in `resolutionsMatched` — that count means 'an OPEN question got an answer' and is the diagnostic that tells an answers-file-arrived-late run from a run with no answers, so an entry that closes nothing must not inflate it",
+  r31Units(r21Closed, R3_RES).resolutionsMatched === 0,
+  () => ({ matched: r31Units(r21Closed, R3_RES).resolutionsMatched, closed: r31Units(r21Closed, R3_RES).resolutionsClosed }));
+check("ENG-96571 review 3: the closed question is still NOT an open unit — the exemption is in the reconciliation only, so review 2's finding 1 is untouched: no `preflight[]` row, no `--verify` evidence id",
+  !r31Units(r21Closed, R3_RES).preflight.map((p) => p.id).includes(`main#confirm:${R2_1_KEY}`)
+  && !r31Units(r21Closed, R3_RES).evidenceRows.map((e) => e.id).includes(`main#confirm:${R2_1_KEY}`),
+  () => r31Units(r21Closed, R3_RES).preflight.map((p) => p.id));
+check("ENG-96571 review 3 ANTI-VACUITY: an answer to a genuinely UNASKED key is STILL unmatched — the exemption is scoped to questions this run asked and closed, and did not turn the report off",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3 ANTI-VACUITY: an orphan answer alongside a closed-question answer is reported on its own — one entry exempt, the other named, in the same run",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return u.resolutionsUnmatched.length === 1 && u.resolutionsUnmatched[0].item === "nobodyAskedThis"
+      && (u.resolutionsClosed || []).length === 1 && u.resolutionsClosed[0].item === "enumVocabulary"; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "checked on stand" },
+      { kind: "enum-drift-advisory", item: "nobodyAskedThis", answer: "orphan" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: the exemption covers BOTH key forms — an operator who answered the closed question by its PUBLISHED id is exempt too, which a pair-only guard left reporting through the `byId` loop (the asymmetry `unmatchedResolutions` warns about in its own comment)",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } });
+    return u.resolutionsUnmatched.length === 0; })(),
+  () => pageUnits(r21Closed, { resolutions: { resolutions: [{ id: `main#confirm:${R2_1_KEY}`, answer: "by id" }] } }).resolutionsUnmatched);
+check("ENG-96571 review 3: a row closed inside a CHILD fold is covered too — `pageUnits` splices every sub-page's confirm rows, so reading only the root scope's own report would have left the same defect one level down",
+  (() => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted", note: "child" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return u.resolutionsUnmatched.length === 0 && (u.resolutionsClosed || []).length === 1
+      && u.resolutionsClosed[0].item === "Job"; })(),
+  () => { const r = runMigration(C1_NESTED({ "C1Child::rule-condition:Job": { resolved: true, disposition: "accepted" } }));
+    const u = pageUnits(r, { resolutions: { resolutions: [{ kind: "rule-condition", item: "Job", answer: "child answer" }] } });
+    return { unmatched: u.resolutionsUnmatched, closed: u.resolutionsClosed }; });
+check("ENG-96571 review 3: with no answers file at all `resolutionsClosed` is an EMPTY ARRAY, not absent — the same 'a consumer must not tell no-answers from an engine that publishes none' rule `runResolutions` and `resolution: null` already follow",
+  Array.isArray(pageUnits(r21Closed, {}).resolutionsClosed) && pageUnits(r21Closed, {}).resolutionsClosed.length === 0,
+  () => pageUnits(r21Closed, {}).resolutionsClosed);
+
+check("ENG-96571 review 3: a CLOSED question answered TWICE through the two key forms is reported in `resolutionsConflicts` too — `matchResolution` prefers the pair and discards the `id`-keyed answer there exactly as it does on an open question, so judging conflicts against `preflight` alone left that discard silent",
+  (() => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return u.resolutionsConflicts.length === 1 && u.resolutionsConflicts[0].used === "pair wins"
+      && u.resolutionsConflicts[0].discarded === "id discarded" && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r21Closed, { resolutions: { resolutions: [
+      { kind: "enum-drift-advisory", item: "enumVocabulary", answer: "pair wins" },
+      { id: `main#confirm:${R2_1_KEY}`, answer: "id discarded" }] } });
+    return { conflicts: u.resolutionsConflicts, unmatched: u.resolutionsUnmatched }; });
+/* A pair closed on ONE page while the identical row stays OPEN on another. Pair matching is page-agnostic, so the
+   same `kind`+`item` can be both — a SCOPED disposition closes the child's row and leaves `main`'s standing. The
+   answer then DID reach an open question, so `resolutionsClosed` must stay empty: its stderr line says the answer
+   targets a question already CLOSED and is NOT counted in `resolutionsMatched`, and both are false in this run. */
+const R3_CROSS_CHILD = `define("C1Child",[],function(){return{entitySchemaName:"Shared",
+  diff:[{operation:"insert",name:"Job",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Job"}}]};});`;
+const r3Cross = runMigration({ entity: "PE", noParentTemplate: true,
+  schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
+  detailSchemas: { D1: { entity: "Shared", editPage: "C1Child" } },
+  childPageSchemas: { C1Child: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "CP", body: R3_CROSS_CHILD }] } },
+  confirmDispositions: { "C1Child::field-labels:(all fields)": { resolved: true, disposition: "accepted" } } });
+const r3CrossRes = { resolutions: [{ kind: "field-labels", item: "(all fields)", answer: "A" }] };
+check("ENG-96571 review 3 SETUP: the cross-page fixture really has the SAME `kind`+`item` closed on the child and still OPEN on `main` — without this the claim below is about a case no fixture reaches",
+  (() => { const p = pageUnits(r3Cross, {}).preflight;
+    return p.some((x) => x.pageKey === "main" && x.kind === "field-labels" && x.item === "(all fields)")
+      && (r3Cross.childPages[0].confirmClosed || []).some((n) => n.kind === "field-labels"); })(),
+  () => ({ preflight: pageUnits(r3Cross, {}).preflight.map((p) => `${p.pageKey} ${p.kind}:${p.item}`),
+    childClosed: r3Cross.childPages[0].confirmClosed }));
+check("ENG-96571 review 3: a pair closed on ONE page but still OPEN on another is NOT in `resolutionsClosed` — the answer reached an open question and IS counted in `resolutionsMatched`, so listing it would make this field's own ℹ line state two things that are false of that run",
+  (() => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return u.resolutionsMatched === 1 && (u.resolutionsClosed || []).length === 0
+      && u.resolutionsUnmatched.length === 0; })(),
+  () => { const u = pageUnits(r3Cross, { resolutions: r3CrossRes });
+    return { matched: u.resolutionsMatched, closed: u.resolutionsClosed, unmatched: u.resolutionsUnmatched }; });
+check("ENG-96571 review 3 ANTI-VACUITY: ONE answer to a closed question raises NO conflict — the report flags two entries fighting over one question, not every closed-question answer",
+  r31Units(r21Closed, R3_RES).resolutionsConflicts.length === 0,
+  () => r31Units(r21Closed, R3_RES).resolutionsConflicts);
+
+/* ---- the MINOR: the three-hop render comment now describes what actually renders ---- */
+// The comment above the `lifecycle` branch of `triggerText` claimed `onSaved → mid → leaf` reads
+// `onSaved (platform lifecycle) → internal call via mid`. It does not: `composeUpstream` peels the immediate
+// caller off the chain, so `via` is EMPTY at that depth and `mid` reaches the reader through the FOLD. Pinned as
+// behaviour so the corrected comment cannot drift back.
+check("ENG-96571 review 3 (MINOR) / ENG-96534: on `onSaved → mid → leaf` the trigger DATA carries NO `via` — `mid` is the immediate caller, so it reaches the reader through the fold (``port with `mid` ``); the Trigger cell that once rendered this is replaced by the What-it-does/Use-case columns",
+  (r22Trig("leaf")?.via || []).length === 0
+  && /port with `mid`/.test(r22Row("leaf")),
+  () => ({ trigger: r22Trig("leaf"), row: r22Row("leaf") }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
