@@ -687,7 +687,7 @@ function renderListPageBlock(result, section, opts = {}) {
   // reading is evidence, and hiding it would leave the operator with a blocked page and no idea what was found.
   if (result.listGate?.blocked) {
     L.push("", "> ⛔ **The list page is NOT approvable from this run.** The section's own evidence is incomplete, so what follows is a PARTIAL reading of the Classic list — an element it shows may be missing below with nothing naming it. The record page above is unaffected and is judged on its own gate.");
-    for (const r of result.listGate.reasons) L.push(`> - ${r}`);
+    for (const r of result.listGate.reasons) L.push(`> - ${esc(r)}`);
     L.push("");
   }
   // The plan is the document an operator APPROVES, so it must not present a full build spec for a page the run

@@ -2503,6 +2503,13 @@ function listRowActionSpec(ra) {
     name: ra?.name || null,
     caption: ra?.caption || null,
     condition: ra?.condition || null,
+    // THE PROPERTY TRAVELS WITH THE METHOD. `sectionDiffRowAction` reads both off the folded item, and this
+    // projection is the only thing between it and the design-spec table — dropping them here made every row
+    // action render "on `visible`", so an `enabled`-bound action ported as a visibility rule and hid the control
+    // instead of greying it. `conditions` rides alongside for the same reason the command bar carries it: the
+    // singular pair is the first condition, not the only one.
+    conditionProperty: ra?.conditionProperty || null,
+    conditions: ra?.conditions || [],
     sourcePackage: ra?.package || null,
     grid: LIST_GRID,
     freedomControl: null,     // unresolved by design — see above

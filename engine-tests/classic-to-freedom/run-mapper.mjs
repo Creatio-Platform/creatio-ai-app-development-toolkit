@@ -5397,6 +5397,82 @@ check("ENG-94714: the blocked list page still RENDERS its partial reading, with 
 check("ENG-94714: a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
 
+/* --- ENG-94714 (review 1): the row action's condition PROPERTY, and the `openItems` safety net --------------
+   Two arms the fixture above could not reach. A separate section chain rather than more items on `svSection`,
+   because the counts and the one-command-bar-action assertions above are pins on THAT chain's shape. --- */
+// Same seed, a section chain carrying three extra elements:
+//   * an `enabled`-bound row action  — the `visible`/`enabled` property distinction, on the row-action surface
+//   * a HYPERLINK in the filter area — a kind the list table has no row for, on a RESOLVED region
+//   * a button under a container the fold never sees — the UNRESOLVED-ancestry arm, with a condition on it
+// That last container is deliberately NOT inserted: not inserting it is what makes the button's ancestry run
+// off the folded tree, which is the case the missing-`section.seed` remedy text is written for.
+const svOpenSection = [{ pkg: "OrderInSales", body: `define("XSection",[],function(){return{entitySchemaName:"X",`
+  + `methods:{},diff:[`
+  + `{"operation":"insert","name":"DataGridActiveRowQualifyAction","parentName":"DataGrid","propertyName":"activeRowActions",`
+  + `"values":{"caption":{"bindTo":"Resources.Strings.QualifyCaption"},"enabled":{"bindTo":"IsQualifyEnabled"},"tag":"qualify"}},`
+  + `{"operation":"insert","name":"SectionSearchHyperlink","parentName":"QuickFilterContainer","propertyName":"items","index":0,`
+  + `"values":{"itemType":20,"caption":{"bindTo":"Resources.Strings.AdvancedSearchCaption"},"visible":{"bindTo":"getIsSearchVisible"}}},`
+  + `{"operation":"insert","name":"OrphanExportButton","parentName":"SectionCustomZoneContainer","propertyName":"items","index":0,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.ExportCaption"},"click":{"bindTo":"onExport"},"enabled":{"bindTo":"canExport"}}}`
+  + `]};});` }];
+const svOpenRun = runMigration({ ...svManifest(), section: { schemas: svOpenSection, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+const svOpenList = svOpenRun.listChangeSet;
+const svOpenSpec = renderPlan(svOpenRun, {});
+
+check("ENG-94714 review 1: a row action bound to `enabled` reaches the ChangeSet WITH that property — `listRowActionSpec` dropped `conditionProperty` on the way out of the fold, so every row action arrived property-less",
+  () => { const ra = (svOpenList?.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return ra?.condition === "IsQualifyEnabled" && ra?.conditionProperty === "enabled"; },
+  () => svOpenList?.rowActions);
+check("ENG-94714 review 1: …and the full `conditions` set rides along with it, the same way the command-bar projection carries it — the singular pair is the FIRST condition, not the only one there can be",
+  () => { const ra = (svOpenList?.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return Array.isArray(ra?.conditions) && ra.conditions.length === 1
+      && ra.conditions[0].property === "enabled" && ra.conditions[0].method === "IsQualifyEnabled"; },
+  () => (svOpenList?.rowActions || []).map((x) => x.conditions));
+check("ENG-94714 review 1: the Row actions TABLE renders that property — while it was being dropped the cell read \"on `visible`\" for every action, which instructs a builder to hide the control instead of greying it",
+  () => /`IsQualifyEnabled` on `enabled`/.test(svOpenSpec) && !/`IsQualifyEnabled` on `visible`/.test(svOpenSpec),
+  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /IsQualifyEnabled/.test(l)));
+check("ENG-94714 review 1 ANTI-VACUITY: a `visible`-bound row action still renders \"on `visible`\" — the fix carried the real property through, it did not relabel the cell",
+  () => { const ra = (svList.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
+    return ra?.conditionProperty === "visible"
+      && /`getIsQualificationStageActive` on `visible`/.test(renderPlan(svRun, {})); },
+  () => (svList.rowActions || []).map((x) => ({ name: x.name, property: x.conditionProperty })));
+
+check("ENG-94714 review 1: a section-declared element the list table has NO row for becomes a named `openItems` entry rather than being dropped — the \"nothing is silently dropped\" safety net, which no fixture reached before",
+  () => { const oi = (svOpenRun.section?.sectionView?.openItems || []).find((x) => x.name === "SectionSearchHyperlink");
+    return !!oi && oi.kind === "HYPERLINK" && oi.region === "filter-bar" && oi.package === "OrderInSales"; },
+  () => svOpenRun.section?.sectionView?.openItems);
+check("ENG-94714 review 1: it reaches the worklist as a `list-section-element` decision naming its kind, and the reason states the RESOLVED surface it sits on",
+  () => { const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /SectionSearchHyperlink/.test(x.item));
+    return !!d && /kind: HYPERLINK/.test(d.reason) && /sits on the filter-bar surface/.test(d.reason)
+      && /from `OrderInSales`/.test(d.reason); },
+  () => (svOpenList?.needsDecision || []).filter((x) => x.kind === "list-section-element"));
+check("ENG-94714 review 1: its condition is carried into that reason — an element published without the condition it binds is an incomplete question",
+  () => { const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /SectionSearchHyperlink/.test(x.item));
+    return !!d && /`getIsSearchVisible` on `visible`/.test(d.reason) && /must survive the port/.test(d.reason); },
+  () => (svOpenList?.needsDecision || []).find((x) => /SectionSearchHyperlink/.test(x.item))?.reason);
+check("ENG-94714 review 1: the OTHER arm — an element whose ancestry runs off the folded tree — reports `unresolved` and names the missing `section.seed` as the likely cause, which is a different remedy from an unmapped kind",
+  () => { const oi = (svOpenRun.section?.sectionView?.openItems || []).find((x) => x.name === "OrphanExportButton");
+    const d = (svOpenList?.needsDecision || []).find((x) => x.kind === "list-section-element"
+      && /OrphanExportButton/.test(x.item));
+    return oi?.region === "unresolved" && !!d && /no recognised list container/.test(d.reason)
+      && /`section.seed`/.test(d.reason) && /`canExport` on `enabled`/.test(d.reason); },
+  () => ({ openItems: svOpenRun.section?.sectionView?.openItems,
+    reason: (svOpenList?.needsDecision || []).find((x) => /OrphanExportButton/.test(x.item))?.reason }));
+check("ENG-94714 review 1: both open items reach the PLAN through the shared ⚠ Confirm section under the `[list-section-element]` label, not as a prose aside a reader can skip",
+  () => /#### ⚠ Confirm before I build/.test(svOpenSpec)
+    && /\*\*\[list-section-element\]\*\* section element: SectionSearchHyperlink/.test(svOpenSpec)
+    && /\*\*\[list-section-element\]\*\* section element: OrphanExportButton/.test(svOpenSpec),
+  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /list-section-element/.test(l)));
+check("ENG-94714 review 1 ANTI-VACUITY: the elements the list vocabulary DOES read are not swept into `openItems` — the healthy fixture's button, row action and grid resolve to their regions and raise no section-element question at all",
+  () => (svRun.section?.sectionView?.openItems || []).length === 0
+    && !(svList.needsDecision || []).some((x) => x.kind === "list-section-element"),
+  () => ({ openItems: svRun.section?.sectionView?.openItems,
+    nd: (svList.needsDecision || []).filter((x) => x.kind === "list-section-element") }));
+
 const secActMk = (methods) => `define("XSection",[],function(){return{entitySchemaName:"X",methods:{${methods}},diff:[]};});`;
 // Unquoted `Click`, value spanning lines, handler name matching no navigate hint.
 const secActA = parseSchema(secActMk(`getSectionActions:function(){var a=this.callParent(arguments);`
