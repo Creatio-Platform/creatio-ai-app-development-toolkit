@@ -630,7 +630,11 @@ function renderListPageBlock(result, section, opts = {}) {
   if (section) {
     L.push(answeredListColumnLine(section, opts.resolutions || null,
       (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
-    if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
+    // ENG-96327 — an EXPLICIT found/not signal for the section's Run-process launch (binary, so it is stated here,
+    // not raised as a ⚠ Confirm). Same treatment as `- **Command-bar actions:**`.
+    L.push(section.processLaunch
+      ? `- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`
+      : "- **Section process:** none found");
     // ENG-96327 — an EXPLICIT found/not signal for the section's command-bar actions. The `#### Command-bar actions`
     // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
     // only place the "none found" fact is stated (the `list-command-bar` ⚠ Confirm that used to carry it is now
@@ -920,7 +924,10 @@ const BUILDER_ONLY_CONFIRM_KINDS = new Set([
 // (a lookup's display value — a builder detail), `list-command-bar` (the found/not is the explicit `- **Command-bar
 // actions:**` bullet + the table below), and `list-add-routing` (the add page is stated in Main scope / `- **Add
 // record:**`). All ride `--units.preflight` unchanged; only the human ⚠ Confirm list drops them.
-const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing"]);
+const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing",
+  // `list-row-action` / `list-process` are BINARY (there either is one or there is not) — not an approver decision.
+  // The Row-actions table shows any row actions; the `- **Section process:**` bullet states found/not for the process.
+  "list-row-action", "list-process"]);
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves

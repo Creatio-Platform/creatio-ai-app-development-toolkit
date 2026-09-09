@@ -2297,15 +2297,15 @@ check("ENG-95218: a row action emits NO op and says so — every other op here r
       && /carries no op in this ChangeSet/.test(lpRowActionRun.designSpec)
       && /control and placement NOT resolved here/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.designSpec.slice(lpRowActionRun.designSpec.indexOf("#### Row actions"), lpRowActionRun.designSpec.indexOf("#### Row actions") + 700));
-check("ENG-95218: each row action raises a ⚠ Confirm decision — a declared condition must become Freedom state, and an action with none asks whether Classic gated it, because an always-enabled port is a behaviour change",
+check("ENG-95218 / ENG-96327: each row action is a `list-row-action` DECISION (rides --units, with its condition→Freedom-state / always-enabled reason) surfaced in the Row-actions TABLE — NOT a ⚠ Confirm row (binary: there is a row action or there is not)",
   () => { const nd = lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action");
     const withCond = nd.find((d) => /QualificationProcess/.test(d.item));
     const without = nd.find((d) => /PlainAction/.test(d.item));
     return nd.length === 2
       && /must become Freedom state/.test(withCond.reason) && /canQualify/.test(withCond.reason)
       && /always-enabled port is a behaviour change/.test(without.reason)
-      && /#### ⚠ Confirm before I build/.test(lpRowActionRun.designSpec)
-      && /\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
+      && /#### Row actions/.test(lpRowActionRun.designSpec)
+      && !/\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action"));
 // A SUB-BUNDLE MAY CARRY ITS OWN `section` — the engine accepts it silently, and the self-referential typed fixture
 // above shows the shape occurs. Its list-page questions must stay in the main scope: a per-type form page has no grid,
@@ -5579,12 +5579,14 @@ const typedSecRun = runMigration({
   typedPageSchemas: { XICPage: typedSecBundle("XICPage", "SenderField"), XOCPage: typedSecBundle("XOCPage", "RecipientField") },
   addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS });
 const typedFormsBlock = (typedSecRun.plan.split("### Typed page mappings")[1] || "");
-check("ENG-96327: a typed per-type form whose bundle carries SECTION layers renders NEITHER its own List page NOR a Member ledger — the base fold owns the ONE list page, and the ledger is out of the human plan",
+check("ENG-96327: a typed per-type form whose bundle carries SECTION layers renders NONE of: its own List page, a ⚠ Confirm block, the `Design spec (generated)` preamble, or a Member ledger — the base fold owns the ONE list page, and the rest are out of the embedded per-type spec",
   /^### List page/m.test(typedSecRun.plan)                              // non-vacuous: the base fold DOES render one list page
   && /#### Typed form:/.test(typedFormsBlock) && typedFormsBlock.includes("SenderField") // the per-type form rendered its fields
   && !/#{4,6} List page/.test(typedFormsBlock)                          // …but NO nested List page inside the typed forms
-  && !/Member ledger/.test(typedFormsBlock),                            // …and NO Member ledger inside the typed forms
-  () => typedFormsBlock.split("\n").filter((l) => /List page|Member ledger|Typed form/.test(l)).slice(0, 8));
+  && !/Confirm before I build/.test(typedFormsBlock)                    // …NO ⚠ Confirm block inside the typed forms
+  && !/Design spec — .* \(generated\)/.test(typedFormsBlock)           // …NO standalone spec preamble
+  && !/Member ledger/.test(typedFormsBlock),                           // …and NO Member ledger inside the typed forms
+  () => typedFormsBlock.split("\n").filter((l) => /List page|Member ledger|Typed form|Confirm/.test(l)).slice(0, 8));
 // ENG-96327 (point 8) — the agent no longer supplies `listTemplate` (SKILL.md dropped it); the engine DEFAULTS it to
 // ListPageV3Template, so the Main-scope list-page row shows the real template, never a `<FILL:>` and never an agent's
 // wrong guess (a real TsService run once rendered `list` there because the agent filled it). An explicit override
@@ -5600,6 +5602,13 @@ check("ENG-96327 (point 8): with NO planMeta.listTemplate the Main-scope list-pa
   && !/<FILL: Freedom list template>/.test(noListTplRun.plan)
   && (noListTplRun.planMetaMissing || []).indexOf("listTemplate") === -1,
   () => noListTplRun.plan.split("\n").filter((l) => /\(list page\)/.test(l)));
+// ENG-96327 — `list-process` / `list-row-action` are BINARY, not ⚠ Confirm rows; the Section process is stated as an
+// explicit found/not bullet (like Command-bar actions). A section with no process launch shows "none found".
+check("ENG-96327: a section with no Run-process launch shows an explicit `- **Section process:** none found` bullet — not a `list-process` ⚠ Confirm; `list-row-action` is likewise not a ⚠ row",
+  /- \*\*Section process:\*\* none found/.test(noListTplRun.plan)
+  && !/\*\*\[list-process\]\*\*/.test(noListTplRun.plan)
+  && !/\*\*\[list-row-action\]\*\*/.test(noListTplRun.plan),
+  () => noListTplRun.plan.split("\n").filter((l) => /Section process|list-process|list-row-action/.test(l)));
 // ENG-96327/ENG-96553 — the Type suffix on each `#### Typed form:` heading: a resolved `typeName` shows the NAME;
 // `typeColumnDisplayValue` (the `list-entity-client-schemas` field) is accepted verbatim too; an unresolved raw
 // Type GUID shows the GUID + a ⚠ to resolve it on-stand (a bare GUID names no Type to the approver).
