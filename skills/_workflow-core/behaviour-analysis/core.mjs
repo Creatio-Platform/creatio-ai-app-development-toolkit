@@ -227,6 +227,32 @@ function recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, rep
   log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
 }
 
+// THE CLOSING VERDICT AND THE THREE LINES THAT REPORT IT, hoisted out of `run` (PR #171 review — the extractions
+// above took Sonar S3776 from 22 to 16, and 15 is the limit). Every decision in here is arithmetic over values the
+// caller already holds, and none of it is about the phase sequence `run` exists to express.
+//
+// THE VERDICT IS ARITHMETIC, not an agent's closing sentence — see `isComplete`. Computed after the repair round,
+// so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
+// DELIVERABLES, and a Merge item that returned nothing wrote neither.
+//
+// AND THE TWO NUMBERS GO SIDE BY SIDE, with the sentence that says why they differ. The verdict counts DIGEST
+// rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one of
+// them as "N of M" read as a surface census it never was.
+function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
+  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
+  if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
+  const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
+  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
+  const verdictLine = complete
+    ? `complete: ${covered.size}/${allKeys.size} rows described`
+    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
+  log(verdictLine)
+  const ledger = ledgerOf(totals)
+  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
+  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
+  return complete
+}
+
 export function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -545,20 +571,7 @@ export function* run(rawInput, io = {}) {
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
-  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
-  if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
-  const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
-  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
-  const verdictLine = complete
-    ? `complete: ${covered.size}/${allKeys.size} rows described`
-    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
-  log(verdictLine)
-  // THE TWO NUMBERS, SIDE BY SIDE — and the sentence that says why they differ. The verdict above counts DIGEST
-  // rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one
-  // of them as "N of M" read as a surface census it never was.
-  const ledger = ledgerOf(input.totals)
-  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
-  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
+  const complete = reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
 
   return {
     surface: SURFACE,

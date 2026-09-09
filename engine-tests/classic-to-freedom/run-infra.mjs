@@ -7702,11 +7702,23 @@ check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prom
 // block — a pure move, no text changed — would leave all of them green while `complete` ruled on the ROUND-1
 // counts and reported a run finished that the repair round had not finished. That is the one mutation source-level
 // pinning cannot see unless position is asserted outright.
+//
+// THE ANCHOR MOVED, THE RULE DID NOT (PR #171 review — Sonar S3776 measured `run` over the limit and the closing
+// verdict block came out of it). The arithmetic now lives in `reportVerdict()`, hoisted above `run` so `run` reads
+// as the phase sequence it is. Where that DEFINITION sits says nothing about the rule; what decides which counts
+// the verdict reads is where the CALL sits, so the call is what this pin measures now. The second check binds the
+// arithmetic to that helper, so the call cannot quietly become a call to something that decides completion another
+// way — the two together say what the single anchor used to say alone.
 const cbaRepairAt = cbaSrc.indexOf("if (toRepair.length) {");
-const cbaVerdictAt = cbaSrc.indexOf("const complete = mergeOk && isComplete(");
-check("cba workflow: the verdict is computed AFTER the repair round — hoisting it above would read the stale round-1 counts and pass every pin above",
+const cbaVerdictAt = cbaSrc.indexOf("const complete = reportVerdict(log, {");
+check("cba workflow: the verdict is computed AFTER the repair round — hoisting the CALL above it would read the stale round-1 counts and pass every pin above",
   cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
-  () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
+  () => `repair block at ${cbaRepairAt}, verdict call at ${cbaVerdictAt}`);
+check("cba workflow: and the arithmetic behind that call is `mergeOk && isComplete(...)` inside `reportVerdict` — coverage alone is not completion, the report and the index are the deliverables",
+  /function reportVerdict\(log, \{/.test(cbaSrc)
+    && /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc)
+    && /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(cbaSrc),
+  () => `reportVerdict:${/function reportVerdict\(log, \{/.test(cbaSrc)} complete:${/const complete = mergeOk && isComplete\(/.test(cbaSrc)} mergeOk:${/const mergeOk = !!\(merged\?\.reportPath/.test(cbaSrc)}`);
 
 
 // ---------------------------------------------------------------------------

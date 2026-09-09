@@ -21,10 +21,11 @@ const RESUME_CLAUSE =
 
 function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0, resumeClause = true }) {
   if (!stopped) throw new Error('a gate stop must name its `stopped` code')
+  const withClause = next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE
   return {
     stopped,
     reason,
-    next: resumeClause ? (next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE) : next,
+    next: resumeClause ? withClause : next,
     agentsExpected,
     agentsReturned,
   }
@@ -967,6 +968,21 @@ function recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, rep
   log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
 }
 
+function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
+  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
+  if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
+  const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
+  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
+  const verdictLine = complete
+    ? `complete: ${covered.size}/${allKeys.size} rows described`
+    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
+  log(verdictLine)
+  const ledger = ledgerOf(totals)
+  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
+  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
+  return complete
+}
+
 function* run(rawInput, io = {}) {
   const log = io.log || noop
   const phase = io.phase || noop
@@ -1193,17 +1209,7 @@ function* run(rawInput, io = {}) {
     fix: `The cards the Describe round wrote are already in ${input.outDir}, so a fresh run re-merges them instead of re-describing the surface.`,
   })
 
-  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
-  if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
-  const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
-  const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
-  const verdictLine = complete
-    ? `complete: ${covered.size}/${allKeys.size} rows described`
-    : `INCOMPLETE: ${uncoveredKeys.length} of ${allKeys.size} rows still carry no card${wiringNote}`
-  log(verdictLine)
-  const ledger = ledgerOf(input.totals)
-  log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
-  if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
+  const complete = reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
 
   return {
     surface: SURFACE,

@@ -58,10 +58,13 @@ export const RESUME_CLAUSE =
 // passes `resumeClause: false` and keeps the one it already writes.
 export function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0, resumeClause = true }) {
   if (!stopped) throw new Error('a gate stop must name its `stopped` code')
+  // Named rather than nested in the return (Sonar S3358): `resumeClause ? (next ? … : …) : next` reads as one
+  // decision and is two.
+  const withClause = next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE
   return {
     stopped,
     reason,
-    next: resumeClause ? (next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE) : next,
+    next: resumeClause ? withClause : next,
     agentsExpected,
     agentsReturned,
   }
