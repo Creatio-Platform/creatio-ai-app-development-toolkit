@@ -1120,8 +1120,7 @@ export function renderDesignSpec(result, opts = {}) {
       "#### Layout",
       "| Region | Element | Type | Source | Rule | Additional |",
       "| --- | --- | --- | --- | --- | --- |",
-    );
-    L.push(...renderLayoutRows(order, byRegion, cs));
+      ...renderLayoutRows(order, byRegion, cs));
   }
 
   L.push(...renderLogicSection(cs));

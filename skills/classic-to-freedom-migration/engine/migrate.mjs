@@ -2637,6 +2637,20 @@ function readSchemaBody(e, baseDir) {
   return fs.readFileSync(resolved, "utf8");
 }
 
+// The behaviour-index cross-scope key sets (unmatched / section-only / wiring-only) — computed only for the ROOT run
+// (a scoped sub-run leaves them empty). Own function so `runMigration` sheds these three branches (Sonar S3776).
+function populateCrossScopeKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
+  behaviourIndex.unmatched = scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.sectionOnly = scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.wiringOnly = scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
+}
+// needsDecision → { kind: count }. Own function so `runMigration` keeps the loop out of its own complexity budget.
+function summarizeDecisionKinds(needsDecision) {
+  const summary = {};
+  for (const d of needsDecision) summary[d.kind] = (summary[d.kind] || 0) + 1;
+  return summary;
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => readSchemaBody(e, baseDir);
@@ -2855,11 +2869,8 @@ export function runMigration(manifest, opts = {}) {
   ];
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
-  behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
-  const decisionSummary = {};
-  for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
+  populateCrossScopeKeys(behaviourIndex, opts.scopeSchema, behaviourIndexInput, stubIndex);
+  const decisionSummary = summarizeDecisionKinds(changeSet.needsDecision);
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
