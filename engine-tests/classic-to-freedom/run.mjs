@@ -1097,5 +1097,29 @@ const a3None = a3Rule(`[]`);
 check("ENG-96571 A3: a rule that declares NO conditions is 0 declared — the only shape a renderer may call `always`",
   a3None.conditionsDeclared === 0 && a3None.conditions.length === 0, () => JSON.stringify(a3None));
 
+/* --- ENG-94714: `unmodelledProps` — the declared `values` keys the engine models on no field, so a section's
+   `merge DataGrid` (`controlColumnName` and its family) can be NAMED instead of vanishing at parse time. --- */
+const upMk = (pkg, diff) => parseSchema(`define("S",[],function(){return{entitySchemaName:"X",diff:${diff}};});`, pkg);
+const upEff = mergeHierarchy([
+  upMk("CoreLead", `[{"operation":"merge","name":"DataGrid","values":{"controlColumnName":"QualifyStatus","controlCellClass":"c","caption":"x"}}]`),
+], { seedTemplate: [upMk("Base", `[{"operation":"insert","name":"DataGrid","values":{"itemType":13,"collection":"GridData"}}]`)] });
+const upGrid = upEff.items.find((i) => i.name === "DataGrid");
+check("ENG-94714: an unmodelled `values` key survives the fold as a NAMED key instead of being dropped by the parser's fixed field set",
+  upGrid.unmodelledProps.includes("controlColumnName") && upGrid.unmodelledProps.includes("controlCellClass"),
+  () => upGrid.unmodelledProps);
+check("ENG-94714: a key the engine DOES model (`caption`) is not reported as unmodelled — the set is the difference, not every key",
+  !upGrid.unmodelledProps.includes("caption"), () => upGrid.unmodelledProps);
+check("ENG-94714: a SEED layer's keys are excluded — measured on the real LeadSectionV2 bundle, counting them put 30 keys on the grid where only 3 came from the section, and 30 open items would bury the 3",
+  !upGrid.unmodelledProps.includes("collection"), () => upGrid.unmodelledProps);
+// A `remove` of an item nothing defined records a TOMBSTONE, and classic's remove-then-restate idiom then merges
+// onto that same name. The tombstone is built from its own object literal, not by `makeItem`, so it needs the
+// field too — without it this fold throws `cur.unmodelledProps.add is not a function` on a real body.
+check("ENG-94714: a merge onto a TOMBSTONE does not throw — every item record in the fold carries the same shape, stub or not",
+  () => { const eff = mergeHierarchy([
+      upMk("A", `[{"operation":"remove","name":"Ghost"}]`),
+      upMk("B", `[{"operation":"merge","name":"Ghost","values":{"controlColumnName":"Q"}}]`)]);
+    return Array.isArray(eff.items); },
+  () => "threw");
+
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1678,6 +1678,31 @@ function sanitizeConditions(conds) {
 // Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
 // the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
 // in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
+// The `values` keys an op DECLARED that this engine models on NO item field (ENG-94714). `replayRemoveProperties`
+// already had to answer exactly this question for a `remove … properties` op, and answers it against
+// `REMOVABLE_ITEM_PROPS` — so the SAME set decides it here, rather than a second hand-kept list that could drift
+// from the first. (Referencing it from a function defined above its `const` is fine: this only runs during a fold,
+// long after module init.)
+//
+// Recorded because a section's `merge DataGrid` carries `controlColumnName` / `applyControlConfig` /
+// `controlCellClass` — real configuration with no Freedom analog, which used to vanish at PARSE time: the fixed
+// field set in `normalizeDiffOp` keeps what it models and drops the rest, so nothing downstream could even name
+// what was lost. The list mapper raises each one as a named open item instead.
+// Op-level keys (`parentName`, `propertyName`, `index`) are not in `values` and so never reach this set.
+//
+// SEED OPS CONTRIBUTE NOTHING HERE, and that is the difference between a usable signal and an unusable one.
+// Measured on the real `LeadSectionV2` bundle (14 layers + 20 seed, read from a stand): counting every layer put
+// THIRTY keys on `DataGrid` — `collection`, `primaryColumnName`, `sortColumn`, `linkClick`, `enterkeypressed` and
+// the rest of `BaseDataView`'s own grid wiring — and only three of them (`controlColumnName`,
+// `applyControlConfig`, `controlCellClass`) came from the section. Base-template wiring is not an unanswered
+// question: it is what every Classic list has, and the Freedom list page provides its own. Raising thirty open
+// items to reach the three that matter would bury them, so the set records only what a CLIENT layer declared.
+function unmodelledValueKeys(op, seed) {
+  const out = new Set();
+  if (seed) return out;
+  for (const k of op.valuesKeys || []) if (!REMOVABLE_ITEM_PROPS.has(k)) out.add(k);
+  return out;
+}
 // `seed` = the defining op came from a parent-template schema (templateOwned); `pkg` = the defining schema.
 function makeItem(op, seed, pkg) {
   return {
@@ -1694,6 +1719,10 @@ function makeItem(op, seed, pkg) {
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
+    // Declared-but-unmodelled `values` keys, accumulated across every op that touches this item (see
+    // `unmodelledValueKeys`). A Set inside the fold; the projection emits a SORTED array so output stays
+    // deterministic (the plan hash is over content, and a Set's iteration order is insertion order).
+    unmodelledProps: unmodelledValueKeys(op, seed),
   };
 }
 
@@ -1802,6 +1831,11 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
+  // ENG-94714 — a MERGE is the op that most often carries configuration this engine models nowhere (a section's
+  // `merge DataGrid` sets `controlColumnName` / `applyControlConfig` / `controlCellClass`). ACCUMULATE rather than
+  // replace: two layers may each add their own unmodelled key to the same element, and the last one to run is not
+  // the only one that took effect.
+  for (const k of unmodelledValueKeys(op, seed)) cur.unmodelledProps.add(k);
   for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
   // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
   // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
@@ -1857,7 +1891,12 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 // not a client B6 decision — the mapper filters it out like every other template-only element.
 function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
-  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg] });
+  // `unmodelledProps` is carried even on a TOMBSTONE, and it is not decoration: a `remove` of an item nothing
+  // defined records this stub, and a LATER layer may legitimately `merge` onto that same name (classic's
+  // remove-then-restate idiom) — which reaches `cur.unmodelledProps.add(...)` and would throw on a stub without
+  // the field. Every item record in this fold carries the same shape, exactly as `makeItem`'s own comment requires.
+  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
+    unmodelledProps: new Set() });
   warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
 }
 
@@ -1877,7 +1916,15 @@ const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelCo
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = [];
   for (const k of op.properties) {
-    if (!REMOVABLE_ITEM_PROPS.has(k)) { unmodelled.push(k); continue; }
+    if (!REMOVABLE_ITEM_PROPS.has(k)) {
+      unmodelled.push(k);
+      // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
+      // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
+      // exists to prevent (ENG-94714). The fidelity warning below is unaffected: the removal's EFFECT is still
+      // unrepresented, which is a different statement from "the key is still set".
+      cur.unmodelledProps.delete(k);
+      continue;
+    }
     // `value` is one diff key modelled as TWO fields (a nested binding and a literal option value); clearing the
     // key must clear both, or a removed binding leaves the literal behind as the element's apparent value.
     // (provenance / schemaTouched are recorded ONCE after the loop, for every removed key alike — pushing them
@@ -2342,7 +2389,12 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
-      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null })),
+      handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
+      // ENG-94714 — the `values` keys the body declared on this element that the engine models on no field, SORTED
+      // so two folds of the same input produce byte-identical output. Empty on almost every element; non-empty is
+      // the signal that real classic configuration exists here which no mapping can represent yet, and which the
+      // consumer must NAME rather than drop (a section's `merge DataGrid` controlColumnName is the founding case).
+      unmodelledProps: [...(i.unmodelledProps || [])].sort(byLocale) })),
     fields: alive.filter(i => i.bindTo).map(i => ({ name: i.name, bindTo: i.bindTo, parent: i.parent, contentType: i.contentType, dataValueType: i.dataValueType ?? null, order: i.order ?? null, layout: i.layout || null, tip: i.tip || null, hint: i.hint || null, visible: i.visible ?? null, provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched })),
     tabs: alive.filter(i => i.isTab).map(i => ({ name: i.name, order: i.order, caption: i.caption || null, provenance: i.provenance, templateOwned: !!i.templateOwned })),
     // each detail carries its PLACEMENT (parent container + order) from the matching diff-item, so the
