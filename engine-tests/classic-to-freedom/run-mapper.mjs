@@ -12435,9 +12435,28 @@ check("ENG-96457/ENG-96327: a template MEASURED to ship Feed renders the third v
       && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
   () => ({ feedRows: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
     checklist: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
+// ENG-96327 — the recommended templates are now measured, so the plan gives a DEFINITE verdict for the templates a
+// migration is actually told to choose. The DEFAULT `PageWithTabsFreedomTemplate` ships Feed (measured) → re-bind;
+// the side/right-area template ships NONE → an explicit build with its own `crt.Feed` count. Both are real stand
+// measurements (get-page kravchuk_0922), so the common case stops hedging.
+check("ENG-96327: the DEFAULT template `PageWithTabsFreedomTemplate` is MEASURED to ship Feed — the Feed row reads template context / re-bind, no extra build count",
+  () => { const out = br1WithTemplate("PageWithTabsFreedomTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithTabsFreedomTemplate", "--checklist").stdout || "").split("\n");
+    return /template context — `PageWithTabsFreedomTemplate` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
+      && !/ships NO Feed/.test(out)
+      && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
+  () => (br1WithTemplate("PageWithTabsFreedomTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)));
+check("ENG-96327: the side-area template `PageWithRightAreaAndTabsFreedomTemplate` is MEASURED to ship NO Feed — the Feed row is an explicit ADD with its own `crt.Feed` expected count",
+  () => { const out = br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--checklist").stdout || "").split("\n");
+    return /⚠ ADD — `PageWithRightAreaAndTabsFreedomTemplate` ships NO Feed \(ESN\) \(measured\)/.test(out)
+      && rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
+  () => (br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)));
 check("ENG-96457 (item 2): an UNMEASURED template is 'confirm on-stand', never a claim in either direction — the capability table's third state is what keeps it honest",
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
-    m.planMeta = { ...m.planMeta, formTemplate: "PageWithTabsFreedomTemplate" };
+    // A template NOT in FREEDOM_TEMPLATE_CAPABILITIES (the recommended ones are all measured now) — the honest
+    // third state must still hold for anything the table has never read.
+    m.planMeta = { ...m.planMeta, formTemplate: "BlankPageTemplate" };
     const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(m), encoding: "utf8" });
     const out = r.stdout || "";
     return /capabilities are NOT measured/.test(out) && !/ships NO Feed/.test(out)

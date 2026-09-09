@@ -662,12 +662,13 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
    the Feed was simply lost. A template's contents are a FACT about the template, so they belong in a table that is
    either measured or admits it is not.
 
-   WHAT AN ENTRY MEANS. `measuredIn` names where the capability was READ — a migration run against a stand, whose
-   evidence is on the ticket. An entry is a measurement, never a guess, which is why this table starts with the one
-   template the paired ENG-96444/ENG-96445 runs actually measured. Every other template resolves to `null`
-   (UNKNOWN), and the plan then says the capabilities are unconfirmed and to check on-stand — the honest state, and
-   a far better one than the assertion it replaces. Add a row when a run measures one; do NOT populate it from the
-   template's name, from documentation prose, or from what a similar template ships.
+   WHAT AN ENTRY MEANS. `measuredIn` names where the capability was READ — a migration run or a `get-page` against a
+   stand, whose evidence is cited. An entry is a measurement, never a guess. The table holds the templates this skill
+   RECOMMENDS (mapping doc: default tabbed, side/right-area, top-area, grid, and the DCM case template), each read off
+   a real stand, so the plan does not hedge on the templates a migration is actually told to choose. Every OTHER
+   template still resolves to `null` (UNKNOWN) → the plan says capabilities are unconfirmed, check on-stand — the
+   honest state. Add a row when a run or a `get-page` measures one; do NOT populate it from the template's name, from
+   documentation prose, or from what a similar template ships.
 
    FIELDS. `tabs` — the template ships a tab container. `feed` / `attachments` — it ships THAT tab/component
    (so a classic page's Feed is genuinely template context). `topAreaColumns` — how many columns its top area has
@@ -691,6 +692,29 @@ export const FREEDOM_TEMPLATE_CAPABILITIES = Object.freeze({
   PageWithTabsAndProgressBarTemplate: Object.freeze({
     tabs: true, feed: true, attachments: true, nextSteps: true, topAreaColumns: null, profileIsland: true,
     measuredIn: "get-page on kravchuk_0922 (2026-09-09): own body EntityStageProgressBar + NextSteps; merged bundle crt.Feed + crt.FileList + crt.NextSteps + SideAreaProfileContainer",
+  }),
+  // The DEFAULT record-page template (mapping doc: "Default choice for Classic cards with tabbed detail areas") —
+  // the one most migrations land on. MEASURED via get-page on kravchuk_0922 (2026-09-09): its OWN body inserts
+  // `crt.Feed` (FeedTabContainer) AND `crt.FileList` (AttachmentsTabContainer) plus a `SideAreaProfileContainer`
+  // (left profile island); no top area. So a classic page's Feed / Attachments are genuine template CONTEXT on the
+  // default template — the common case now reads "re-bind", not the old "capabilities NOT measured" hedge.
+  PageWithTabsFreedomTemplate: Object.freeze({
+    tabs: true, feed: true, attachments: true, topAreaColumns: null, profileIsland: true,
+    measuredIn: "get-page on kravchuk_0922 (2026-09-09): own body inserts crt.Feed (FeedTabContainer) + crt.FileList (AttachmentsTabContainer) + SideAreaProfileContainer",
+  }),
+  // Side/right-area record template (mapping doc: use when the side/right area is functional). MEASURED via get-page
+  // on kravchuk_0922 (2026-09-09): merged bundle ships tabs (crt.TabPanel) + a RightAreaProfileContainer but NEITHER
+  // Feed NOR Attachments — a classic page's Feed/Attachments here are an explicit build step, not template context.
+  PageWithRightAreaAndTabsFreedomTemplate: Object.freeze({
+    tabs: true, feed: false, attachments: false, topAreaColumns: null, profileIsland: true,
+    measuredIn: "get-page on kravchuk_0922 (2026-09-09): merged bundle crt.TabPanel + RightAreaProfileContainer, no crt.Feed / crt.FileList",
+  }),
+  // "Grid page" template (mapping doc: wide detail/child forms — >=15 inputs, or tabs/related lists). MEASURED via
+  // get-page on kravchuk_0922 (2026-09-09): a 10-column `TopAreaProfileContainer` and NO default tab container, Feed
+  // or Attachments — so a multi-column Classic Header up to 10 columns survives here, and Feed/Attachments are builds.
+  PageWithAreaFreedomTemplate: Object.freeze({
+    tabs: false, feed: false, attachments: false, topAreaColumns: 10, profileIsland: false,
+    measuredIn: "get-page on kravchuk_0922 (2026-09-09): merged bundle TopAreaProfileContainer (10 columns), no crt.TabPanel / crt.Feed / crt.FileList",
   }),
 });
 
