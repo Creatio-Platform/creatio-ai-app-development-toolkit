@@ -2250,6 +2250,36 @@ export function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_
   const bytes = encodedAsciiBytes(JSON.stringify(floor))
   return bytes > maxBytes ? bytes : 0
 }
+// THE INVERSE OF THE ENGINE'S CONFIRM ID. An item's id is `<pageKey>#confirm:<kind>:<item>`, so the three fields
+// are read back out of it rather than sent beside it. Split at the FIRST `#confirm:` and take `item` as everything
+// after the kind's colon: a page key can contain `:` (`child:SpecInContract`) and so can an item text (a Classic
+// caption like `Схема детали: "…"`), while a kind never does.
+//
+// Returns null for an id that is not a confirm id (a `#quality-gates` row, say), and the caller then leaves the
+// item as it arrived.
+export function confirmIdParts(id) {
+  if (typeof id !== 'string') return null
+  const at = id.indexOf('#confirm:')
+  // A PAGE KEY IS PART OF THE SHAPE: the engine composes `<pageKey>#confirm:…` and never leaves the page empty, so
+  // an id that starts with the separator is not one of its ids and nothing is parsed out of it.
+  if (at < 1) return null
+  const rest = id.slice(at + '#confirm:'.length)
+  const colon = rest.indexOf(':')
+  if (colon < 0) return null
+  return { pageKey: id.slice(0, at), kind: rest.slice(0, colon), item: rest.slice(colon + 1) }
+}
+// Restores the fields the wire form left out, so every consumer keeps reading `p.pageKey` / `p.kind` / `p.item`
+// as before. An item that already carries them is passed through untouched — a caller on the older wire shape,
+// and the fields it sent win over anything parsed here.
+function rehydratePreflightItems(items) {
+  if (!Array.isArray(items)) return items
+  return items.map((p) => {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return p
+    const parts = confirmIdParts(p.id)
+    if (!parts) return p
+    return { pageKey: parts.pageKey, kind: parts.kind, item: parts.item, ...p }
+  })
+}
 export function stateFromAnswer(answer) {
   const line = typeof answer?.summary === 'string' ? answer.summary.trim() : ''
   if (!line) return { fault: 'summary: the state line is missing — the state command printed none, or it was not copied. Nothing is scheduled off a state nobody produced' }
@@ -2264,6 +2294,8 @@ export function stateFromAnswer(answer) {
   return {
     state: {
       ...parsed,
+      // The three restated fields come back out of each item's own id (`RECONCILE_WIRE_OMIT`).
+      preflightItems: rehydratePreflightItems(parsed.preflightItems),
       approval: answer.approval,
       packageState: answer.packageState,
       componentResolution: answer.componentResolution,

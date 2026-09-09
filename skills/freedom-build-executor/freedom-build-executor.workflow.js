@@ -1760,6 +1760,24 @@ function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) 
   const bytes = encodedAsciiBytes(JSON.stringify(floor))
   return bytes > maxBytes ? bytes : 0
 }
+function confirmIdParts(id) {
+  if (typeof id !== 'string') return null
+  const at = id.indexOf('#confirm:')
+  if (at < 1) return null
+  const rest = id.slice(at + '#confirm:'.length)
+  const colon = rest.indexOf(':')
+  if (colon < 0) return null
+  return { pageKey: id.slice(0, at), kind: rest.slice(0, colon), item: rest.slice(colon + 1) }
+}
+function rehydratePreflightItems(items) {
+  if (!Array.isArray(items)) return items
+  return items.map((p) => {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return p
+    const parts = confirmIdParts(p.id)
+    if (!parts) return p
+    return { pageKey: parts.pageKey, kind: parts.kind, item: parts.item, ...p }
+  })
+}
 function stateFromAnswer(answer) {
   const line = typeof answer?.summary === 'string' ? answer.summary.trim() : ''
   if (!line) return { fault: 'summary: the state line is missing — the state command printed none, or it was not copied. Nothing is scheduled off a state nobody produced' }
@@ -1774,6 +1792,7 @@ function stateFromAnswer(answer) {
   return {
     state: {
       ...parsed,
+      preflightItems: rehydratePreflightItems(parsed.preflightItems),
       approval: answer.approval,
       packageState: answer.packageState,
       componentResolution: answer.componentResolution,

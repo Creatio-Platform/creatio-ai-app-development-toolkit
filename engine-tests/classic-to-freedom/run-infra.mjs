@@ -228,7 +228,7 @@ const SHAPE_EXPORTS = declaredConsts(wfSrc.slice(from, to), /^const ([A-Z][A-Z0-
 // ENG-95930 — THE RESPONSE-SHAPE WALKER. Its own group: this is the check that took over what the response
 // schema stopped enforcing when it had to shrink under the host's 4096-byte classifier cap, which is a
 // different concern from what a build agent is handed. Asserted through the SHIPPED functions.
-const H_RESPONSE_SHAPE = ["reconcileShapeErrors", "stateFromAnswer", "oversizeStateLine", "componentSweepFaults", "shapeVocabularyErrors", "shapeFieldNames", "encodedAsciiBytes"];
+const H_RESPONSE_SHAPE = ["reconcileShapeErrors", "stateFromAnswer", "oversizeStateLine", "unshrinkableAnswerBytes", "confirmIdParts", "componentSweepFaults", "shapeVocabularyErrors", "shapeFieldNames", "encodedAsciiBytes"];
 const HELPER_GROUPS = { H_SCHEDULING, H_CONTROL_MODE, H_PRECONDITIONS, H_BUILD_PROMPT, H_ANSWERS_CHANNEL, H_SELF_CHECK, H_VERIFY_SCOPE, H_REPORTING, H_RESPONSE_SHAPE };
 const HELPERS = Object.values(HELPER_GROUPS).flat();
 // A name filed under two concerns is a grouping that has stopped describing the code, and it would also emit a
@@ -9087,21 +9087,43 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
     // text is the QUESTION an answered Confirm answers, and the caller renders it into the builder's prompt and
     // into its claim and unconsumed rows. Dropping it hands a fresh-context builder an operator answer above a
     // bare id, so both halves are pinned here — one present, one gone — rather than "the per-item fields".
-    check("ENG-96776: the line keeps the Confirm item TEXT, which the caller renders into build prompts, and drops only `requires`, which nothing on the caller's side reads",
+    // THE ITEM TEXT STILL REACHES THE CALLER — inside the id, which is built from it. `pageKey`, `kind` and `item`
+    // leave the wire because the id already spells all three; the caller parses them back with `confirmIdParts`,
+    // so every consumer keeps reading `p.item`. Measured on a real run this took the line from 15327 B to 11647 B.
+    check("ENG-96776: the line carries each Confirm item ONCE — as its id — and not as three more fields the id is composed from; `requires` stays off it too, and the file keeps everything",
       st.preflightItems.length === stFile.preflightItems.length
-        && st.preflightItems.every((p) => "item" in p && !("requires" in p) && "id" in p && "pageKey" in p && "kind" in p)
-        && stFile.preflightItems.every((p) => "requires" in p),
+        && st.preflightItems.every((p) => "id" in p && !("pageKey" in p) && !("kind" in p) && !("item" in p) && !("requires" in p))
+        && stFile.preflightItems.every((p) => "requires" in p && "item" in p),
       () => describe(st.preflightItems?.[0]));
+
+    check("ENG-96776: and the caller parses all three back EXACTLY — including a page key that contains `:` and an item text that contains `:`, which a naive split would tear apart",
+      (() => {
+        const back = wf.stateFromAnswer?.({ summary: line1, approval: { found: true }, packageState: "exists" })?.state?.preflightItems || [];
+        const shape = (list) => JSON.stringify(list.map((p) => [p.id, p.pageKey, p.kind, p.item]));
+        return back.length === stFile.preflightItems.length && shape(back) === shape(stFile.preflightItems);
+      })(),
+      () => describe((wf.stateFromAnswer?.({ summary: line1, approval: {}, packageState: "exists" })?.state?.preflightItems || []).slice(0, 2)));
+
+    check("ENG-96776: `confirmIdParts` refuses an id that is not a confirm id, so a `#quality-gates` row keeps whatever it arrived with instead of being given parsed fields",
+      wf.confirmIdParts?.("main#quality-gates") === null && wf.confirmIdParts?.("main") === null
+        && wf.confirmIdParts?.("child:Spec#confirm:rule-condition:A:B")?.item === "A:B"
+        && wf.confirmIdParts?.("child:Spec#confirm:rule-condition:A:B")?.pageKey === "child:Spec",
+      () => describe(wf.confirmIdParts?.("child:Spec#confirm:rule-condition:A:B")));
 
     // THE PROOF THAT IT IS RENDERED, not merely carried: the caller's own renderer is run on a wire-shaped item,
     // and the question has to come out as the text. This is the check that a future omission has to break.
     check("ENG-96776: and the caller's builder block renders that text as the question — an answered Confirm arriving without it renders a bare id above the operator's answer, which tells a fresh-context builder nothing about what was answered",
       (() => {
-        const answered = { id: "preflight.1", pageKey: "main", kind: "confirm", item: "Which list columns does the Applicant section show?",
+        // THE WHOLE PATH: the engine composes the id from the text, the wire form drops the separate `item`, the
+        // caller parses it back, and only then renders. A break anywhere along it shows up as a bare id here.
+        const item = 'Which list columns does the Applicant section show?';
+        const answered = { id: `main#confirm:list-columns:${item}`, pageKey: "main", kind: "list-columns", item,
           resolution: { answer: "Name, Status, Owner", who: "op", when: "2026-09-01" } };
         const wired = engineWireState({ preflightItems: [answered] }).preflightItems[0];
-        const text = wf.resolutionsBlockText?.([wired]) || "";
-        return /Which list columns does the Applicant section show\?/.test(text) && !/`preflight\.1`/.test(text);
+        if ("item" in wired) return false;
+        const back = wf.stateFromAnswer?.({ summary: JSON.stringify({ planVersion: "v", planGaps: [], unitKeys: [], buildOrder: [], verify: {}, roundOf: {}, targetPackage: null, preflightItems: [wired] }) })?.state?.preflightItems || [];
+        const text = wf.resolutionsBlockText?.(back) || "";
+        return /Which list columns does the Applicant section show\?/.test(text) && !/`main#confirm:/.test(text);
       })(),
       () => describe(wf.resolutionsBlockText?.([engineWireState({ preflightItems: [{ id: "preflight.1", kind: "confirm", item: "Q?", resolution: { answer: "A" } }] }).preflightItems[0]])));
 
@@ -9112,7 +9134,8 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
 
     check("ENG-96776: nothing ELSE is dropped — the wire form is a deny list of named paths, so a field added to the state travels by default and no new arithmetic can go dark by omission",
       JSON.stringify(Object.keys(st).sort()) === JSON.stringify(Object.keys(stFile).sort())
-        && JSON.stringify(ENGINE_WIRE_OMIT) === JSON.stringify(["preflightItems[].requires", "verify.planGaps"]),
+        && JSON.stringify(ENGINE_WIRE_OMIT) === JSON.stringify(["preflightItems[].requires", "preflightItems[].pageKey",
+          "preflightItems[].kind", "preflightItems[].item", "verify.planGaps"]),
       () => describe({ omit: ENGINE_WIRE_OMIT, fileOnly: Object.keys(stFile).filter((k) => !(k in st)) }));
 
     // The list is the mechanism, not a label beside one: the omissions are applied FROM it, so a path added there

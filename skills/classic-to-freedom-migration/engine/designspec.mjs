@@ -5547,7 +5547,12 @@ export function reconcileState(units, verify, queue, built) {
 // the claim and unconsumed rows). Dropped, a builder reads `question: \`preflight.1\`` above an operator answer
 // and has lost what the answer is about. `requires` is the engine's own evidence rule, and `verify.planGaps`
 // duplicates the root field every caller-side reader already takes.
-export const RECONCILE_WIRE_OMIT = ["preflightItems[].requires", "verify.planGaps"];
+// `pageKey`, `kind` and `item` are the three pieces an item's own `id` is BUILT from
+// (`<pageKey>#confirm:<kind>:<item>`), so sending them beside it states the same thing twice. The caller parses
+// them back out of the id on arrival — `confirmIdParts` there is the inverse of this composition, and a test pins
+// the two against every id this engine emits.
+export const RECONCILE_WIRE_OMIT = ["preflightItems[].requires", "preflightItems[].pageKey",
+  "preflightItems[].kind", "preflightItems[].item", "verify.planGaps"];
 const withoutKey = (o, key) => {
   if (!isRecordObject(o) || !(key in o)) return o;
   const copy = { ...o };
