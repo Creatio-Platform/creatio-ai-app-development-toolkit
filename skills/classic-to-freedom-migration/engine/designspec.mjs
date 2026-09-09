@@ -191,7 +191,9 @@ function rowsForDetails(details, tabRegion) {
     let editNote = "";
     if (d.editable) {
       const editCols = (d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : "";
-      editNote = `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${editCols}`;
+      // The human fact only: inline-editable + which columns. HOW to enable it on a crt.DataGrid is builder mechanics
+      // (the freedom-build-executor resolves the component property via get-component-info), not plan content.
+      editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
     const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };

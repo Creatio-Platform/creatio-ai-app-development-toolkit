@@ -7105,15 +7105,18 @@ const dcmOne = renderPlan(dcmEmpty, { signals: { dcm: { resolved: true, present:
 check("#13 DCM: a single case version → NO multi-version note",
   !/multiple case versions/.test(dcmOne));
 // ENG-93929 EMISSION: an editable-grid detail is emitted as an EDITABLE list (not a read-only Expanded list),
-// carrying the editable columns + the concept-level enable directive (`features.editable.enable`, resolved via
-// get-component-info at build). A lookup+service detail WITHOUT an editable grid stays a read-only list.
-check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns + features.editable.enable directive",
+// carrying the editable columns. ENG-96327: the `crt.DataGrid features.editable.enable` build recipe is NOT in the
+// human plan — HOW to enable inline editing is builder mechanics the freedom-build-executor owns; the plan states
+// only the human fact (inline-editable + which columns). A lookup+service detail without a grid stays read-only.
+check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns, and NO agent enable-recipe",
   clDetail?.composite === "Editable list"
   && (clDetail.editable?.columns || []).join(",") === "Correspondence,Quantity,Comment"
-  && /features\.editable\.enable/.test(clDetail.editable?.enableVia || ""),
+  && clDetail.editable?.enableVia === undefined,
   () => ({ composite: clDetail?.composite, editable: clDetail?.editable }));
-check("editable-grid emission: the plan Layout renders 'Editable list' + the features.editable.enable directive (not read-only)",
-  /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan) && /features\.editable\.enable/.test(dmRun.plan));
+check("editable-grid emission: the plan Layout renders 'Editable list' + `⚠ INLINE-EDITABLE` with the editable columns, and does NOT carry the crt.DataGrid enable recipe",
+  /\| Editable list \|/.test(dmRun.plan)
+  && /INLINE-EDITABLE — editable: Correspondence · Quantity · Comment/.test(dmRun.plan)
+  && !/features\.editable\.enable/.test(dmRun.plan) && !/get-component-info/.test(dmRun.plan));
 check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
   regDetail?.composite === "Expanded list" && !regDetail?.editable);
 
