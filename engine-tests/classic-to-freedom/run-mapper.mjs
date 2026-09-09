@@ -3932,6 +3932,15 @@ const chromeChildOwn = mapToFreedom(chromeEff, { signals: { dcm: { resolved: tru
 check("ENG-96327: a child whose OWN bundle records dcm still emits the case bar + Next steps (its entity is case-managed)",
   wNames(chromeChildOwn).has("Case progress bar") && wNames(chromeChildOwn).has("Next steps")
   && chromeChildOwn.dcmActive === true);
+// ENG-96327 REGRESSION GUARD: the scoping is gated ONLY on `isChildPage`. A TYPED fold (`formOnly:true`) and a MINI
+// fold (`isMiniPage:true`) are the SAME entity as the root, carry NO own signals, and must keep inheriting the
+// root's DCM exactly as before this change — the fix must not touch the main / typed / mini record pages.
+const chromeTyped = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, formOnly: true, ownSignals: {} });
+const chromeMini = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isMiniPage: true, ownSignals: {} });
+check("ENG-96327 guard: a TYPED page (formOnly) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeTyped).has("Case progress bar") && wNames(chromeTyped).has("Next steps") && chromeTyped.dcmActive === true);
+check("ENG-96327 guard: a MINI page (isMiniPage) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeMini).has("Case progress bar") && wNames(chromeMini).has("Next steps") && chromeMini.dcmActive === true);
 
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
