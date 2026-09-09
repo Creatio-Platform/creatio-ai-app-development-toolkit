@@ -1830,9 +1830,15 @@ function conditionGap(r) {
   // "when Stage" and reads as "Stage is set", which is not what the classic page evaluated.
   const rightSaysNothing = (c) => (c?.right?.value === null || c?.right?.value === undefined)
     && !c?.right?.attribute && !c?.right?.attributePath;
+  // A presence check (IS_NULL / IS_NOT_NULL) is COMPLETE with no right operand — "when Account is filled" compares
+  // the attribute against nothing by design. Now that the symbolic `Terrasoft.ComparisonType.IS_NOT_NULL` resolves
+  // (engine.mjs `AST_COMPARISON_TYPE`), such a rule reaches here with a real comparison and an empty right side, and
+  // the `rightSaysNothing` test alone would have called it degenerate — flagging a fully-read presence rule as a
+  // parse gap. The codes mirror `designspec.mjs` `condPhrase` (11=IS_NULL, 12=IS_NOT_NULL).
+  const PRESENCE_CHECK = new Set([11, 12]);
   const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
     || (!c?.left?.attribute && !c?.left?.path)
-    || rightSaysNothing(c);
+    || (!PRESENCE_CHECK.has(c?.comparison) && rightSaysNothing(c));
   // `every` missed every PARTIAL gap: two declared conditions of which one sanitized away, or three declared and
   // two readable, left `sane` non-empty with at least one readable entry and reported the rule as fully read. The
   // rendered cell then stated a condition that is only half of what the classic page evaluated — the same class of

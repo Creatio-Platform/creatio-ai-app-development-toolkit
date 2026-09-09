@@ -319,6 +319,18 @@ export function enumDriftIssues(vocabulary) {
 const MAX_AST_DEPTH = 500;
 const AST_RULE_TYPE = { BINDPARAMETER: 0, FILTRATION: 1 };
 const AST_PROPERTY = { VISIBLE: 0, ENABLED: 1, REQUIRED: 2, READONLY: 3 };
+// A rule condition's `comparisonType` is written symbolically in hand-authored classic bodies
+// (`Terrasoft.ComparisonType.EQUAL`, not the number `3`), so the static reader saw a member expression and left it
+// null — and a rule whose ONLY unread part was the operator then reported as a full `⚠ condition unread — parse
+// gap`, throwing away the attribute and value it HAD read. This table resolves the symbolic form to the SAME
+// numeric comparison codes the renderer already interprets (`designspec.mjs` `COMPARISON_OP` = {3:"=",…,8:"≥"} and
+// its presence-check cases 11=IS_NULL / 12=IS_NOT_NULL) — the symbolic→number→text loop is closed inside this
+// engine, so what matters is that the member maps onto the code the renderer reads, not the platform's own wire
+// value. Deliberately PARTIAL and SOFT (see `TAG_SOFT_ENUMS`): only the operators the renderer can express are
+// listed; an exotic member (CONTAIN/START_WITH/BETWEEN/…) resolves to null and stays an honest gap rather than a
+// number the renderer would silently drop the operator from.
+const AST_COMPARISON_TYPE = { EQUAL: 3, NOT_EQUAL: 4, LESS: 5, LESS_OR_EQUAL: 6, GREATER: 7, GREATER_OR_EQUAL: 8,
+  IS_NULL: 11, IS_NOT_NULL: 12 };
 const AST_FN = Symbol("fn"); // placeholder for a function value with a NON-empty body (methods/attributes) — only its KEY matters downstream
 const AST_FN_EMPTY = Symbol("fn-empty"); // a function whose body is an EMPTY block `(){}` — a stub. Distinguished so the
 // seed-skeletal gate can tell a real fetched method (has a body) from a broken-fetch/hand stub (empty body), independent of count.
@@ -335,12 +347,12 @@ const TAG_TRANSITIONS = {
   this: { BusinessRuleModule: "brm", Terrasoft: "terrasoft" },
   brm: { enums: "brm.enums" },
   "brm.enums": { RuleType: "t:rule", Property: "t:prop" },
-  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+  terrasoft: { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt", ComparisonType: "t:cmp",
     controls: "terrasoft.controls", core: "terrasoft.core",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
   "terrasoft.controls": { ViewItemType: "t:vit" },
   "terrasoft.core": { enums: "terrasoft.core.enums" },
-  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt",
+  "terrasoft.core.enums": { ViewItemType: "t:vit", ContentType: "t:ct", DataValueType: "t:dvt", ComparisonType: "t:cmp",
     MessageMode: "t:sym", MessageDirectionType: "t:sym" },
 };
 // "t:sym" is a SYMBOLIC terminal: the next key resolves to its own NAME as a string, not to a number. Used for
@@ -353,6 +365,12 @@ const TAG_SYMBOLIC = "t:sym";
 // is a vocabulary gap in this engine and is reported BY NAME (`unknown-enum-member`), never as a silent null.
 const TAG_ENUMS = { "t:vit": AST_VIEW_ITEM_TYPE, "t:rule": AST_RULE_TYPE, "t:prop": AST_PROPERTY,
   "t:ct": CONTENT_TYPE, "t:dvt": DATA_VALUE_TYPE };
+// SOFT terminals: a member IN the table resolves to its number; a member NOT in it is a plain null, NOT an
+// `unknown-enum-member` report. Used where the table is intentionally partial — `ComparisonType` lists only the
+// operators the renderer can express, so an unlisted member (a real platform operator this engine does not render)
+// must stay the same honest null it is today, never a false vocabulary-gap diagnostic. Kept separate from
+// `TAG_ENUMS` so the "complete against sysenums, miss ⇒ report by name" contract of the pinned tables is untouched.
+const TAG_SOFT_ENUMS = { "t:cmp": AST_COMPARISON_TYPE };
 // The enum a terminal state indexes, by NAME — the miss-report cites `ViewItemType.RADIO_GROUP`, not the tag.
 const TAG_ENUM_NAME = { "t:vit": "ViewItemType", "t:rule": "RuleType", "t:prop": "Property",
   "t:ct": "ContentType", "t:dvt": "DataValueType" };
@@ -417,6 +435,8 @@ function resolveEnumTerminal(tag, enumTable, k) {
 function walkTagAutomaton(tag, path) {
   for (const k of path) {
     if (tag === TAG_SYMBOLIC) return { value: k };                // symbolic terminal: the key IS the value (PUBLISH/PTP/…)
+    const softTable = TAG_SOFT_ENUMS[tag];
+    if (softTable) return Object.hasOwn(softTable, k) ? { value: softTable[k] } : { value: null }; // partial table: a miss is a plain null, never `unknown`
     const enumTable = TAG_ENUMS[tag];
     if (enumTable) {                                             // terminal: the next key indexes the enum table
       // EXACT CASE. This is not a vocabulary comparison — it MODELS a JavaScript property read the browser will

@@ -1027,15 +1027,31 @@ check("ENG-96571 A3: a readable condition is recorded as 1 declared / 1 sanitize
   a3Complete.conditionsDeclared === 1 && a3Complete.conditions.length === 1
   && a3Complete.conditions[0].left.attribute === "Stage" && a3Complete.conditions[0].comparison === 3,
   () => JSON.stringify(a3Complete));
-// (ii) the REAL Job.JobRequired shape — declared, and sanitizes to a degenerate entry (symbolic comparison, a
-// CONSTANT left expression). The count says a condition WAS declared even though nothing readable came out of it.
+// (ii) the REAL Job.JobRequired shape — declared, and sanitizes to a degenerate entry. The symbolic
+// `Terrasoft.ComparisonType.EQUAL` now RESOLVES (engine.mjs `AST_COMPARISON_TYPE`), so `comparison` is a real 3 —
+// but the entry is still degenerate through its CONSTANT left expression (no attribute, no path): the rule compares
+// `true` to `true` and says nothing about WHEN it fires, so `conditionGap` still catches it. The count says a
+// condition WAS declared even though nothing gating came out of it.
 const a3Degenerate = a3Rule(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
-check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and sanitizes to a degenerate entry (no comparison, no left attribute)",
+check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and sanitizes to a degenerate entry (resolved comparison, but a CONSTANT left with no attribute)",
   a3Degenerate.conditionsDeclared === 1 && a3Degenerate.conditions.length === 1
-  && a3Degenerate.conditions[0].comparison === null
+  && a3Degenerate.conditions[0].comparison === 3
   && a3Degenerate.conditions[0].left.attribute === null && a3Degenerate.conditions[0].left.path === null
   && a3Degenerate.conditions[0].right.value === true,
   () => JSON.stringify(a3Degenerate.conditions));
+// (ii-b) the symbolic operators the classic bodies actually write RESOLVE to the renderer's comparison codes
+// (engine.mjs `AST_COMPARISON_TYPE`): `EQUAL`→3 against a real attribute reads fully, and a presence check
+// `IS_NOT_NULL`→12 keeps its empty right side. An operator the table does NOT list (`CONTAIN`) stays a soft null —
+// never a false resolve — so the renderer keeps flagging it rather than dropping the operator.
+const a3Sym = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0, "value": "New" } }]`);
+const a3Pres = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Account" }, "comparisonType": Terrasoft.ComparisonType.IS_NOT_NULL }]`);
+const a3Contain = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Name" }, "comparisonType": Terrasoft.ComparisonType.CONTAIN, "rightExpression": { "type": 0, "value": "x" } }]`);
+check("ENG-96327: symbolic `Terrasoft.ComparisonType.EQUAL`→3 and `IS_NOT_NULL`→12 resolve; an unlisted `CONTAIN` stays a soft null",
+  a3Sym.conditions[0].comparison === 3 && a3Sym.conditions[0].left.attribute === "Stage"
+  && a3Pres.conditions[0].comparison === 12 && a3Pres.conditions[0].left.attribute === "Account"
+  && a3Pres.conditions[0].right.value === null
+  && a3Contain.conditions[0].comparison === null,
+  () => JSON.stringify({ eq: a3Sym.conditions[0], pres: a3Pres.conditions[0], contain: a3Contain.conditions[0] }));
 // (iii) the object-MAP form — a non-array `conditions`. It is READ, through the same `safeKeys` the declared count
 // uses, so the two halves agree: 2 declared / 2 sanitized. Before the ENG-96571 review `sanitizeConditions`
 // returned `[]` for it while `declaredConditionCount` counted its keys, so `conditionGap` saw `declared > 0` with

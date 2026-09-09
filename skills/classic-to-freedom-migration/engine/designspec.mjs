@@ -369,7 +369,14 @@ function rowsForProfileCards(profileCards, regionOf) {
 // a claim nobody verified — and `conditional` hides that the condition itself is missing from the ChangeSet.
 // Naming the gap in the cell is what sends the reader to the ⚠ Confirm row that carries the remedy.
 function ruleTriggerCell(r, attrs) {
-  if (r.conditionsIncomplete) return "⚠ condition unread — parse gap";
+  if (r.conditionsIncomplete) {
+    // Even an unread condition usually has a READABLE left attribute (the operator or the value was the unread
+    // part) — naming it beats a blank "parse gap": "⚠ when Type — condition unread" tells the approver WHICH field
+    // gates the rule and still flags that the exact WHEN is on the ⚠ Confirm row. Only when nothing at all is
+    // readable (e.g. a constant-vs-constant override) does the bare gap stand.
+    const known = [...new Set((r.conditions || []).map(condLeftName).filter(Boolean))];
+    return known.length ? `⚠ when ${known.map(esc).join(" / ")} — condition unread` : "⚠ condition unread — parse gap";
+  }
   if (attrs.length) return `when ${attrs.map(esc).join(" / ")}`;
   return (r.conditions || []).length ? "conditional" : "always";
 }

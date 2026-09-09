@@ -348,11 +348,16 @@ stand can answer it; the mapping is what is short — closable only by `memberDi
 the `<kind>:<name>` form the ledger already uses, so no second disposition map is invented.
 
 **A declared-but-unreadable rule condition (`conditionGap` → `rule-condition`).** A business rule whose
-`conditionsDeclared` count is above zero while every sanitized condition is degenerate (no `comparison`, or no
-`left.attribute` and no `left.path`) is a PARSE GAP, not an unconditional rule. The action itself is mapped and in
-the ChangeSet; what is missing is WHEN it fires. Rendering `always` for that case told the builder to make a field
-unconditionally required where the classic page did not, so the row is raised as a `rule-condition` decision
-carrying `CONDITION_GAP_REASON`. A rule that declared NOTHING is not a gap — it is genuinely unconditional and
+`conditionsDeclared` count is above zero while a sanitized condition is degenerate — no `comparison`, or no
+`left.attribute` and no `left.path`, or (for a comparison that is NOT a presence check) no readable right operand —
+is a PARSE GAP, not an unconditional rule. Symbolic operators (`Terrasoft.ComparisonType.EQUAL`, the form
+hand-authored classic bodies use) resolve to the renderer's comparison codes (`AST_COMPARISON_TYPE`), so a rule whose
+only unread part was the operator is no longer a gap; a presence check (`IS_NULL`/`IS_NOT_NULL`) is complete with no
+right operand at all. When a gap remains but the left attribute IS readable, the Trigger names it (`⚠ when Type —
+condition unread`) rather than showing a blank gap. The action itself is mapped and in the ChangeSet; what is missing
+is WHEN it fires. Rendering `always` for that case told the builder to make a field unconditionally required where
+the classic page did not, so the row is raised as a `rule-condition` decision carrying `CONDITION_GAP_REASON`. A rule
+that declared NOTHING is not a gap — it is genuinely unconditional and
 stays `always`.
 
 **One ⚠ row, many digest members (`memberEntries`, `rowKey`).** A kind in `AGGREGATED_DECISION_KINDS` carries a

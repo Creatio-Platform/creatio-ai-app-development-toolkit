@@ -11668,7 +11668,9 @@ check("ENG-96571/ENG-96327 A3: a rule with a READABLE condition renders the WHOL
   && !a3Ruleset(a3Ok).conditionsIncomplete && a3Gap(a3Ok).length === 0,
   () => ({ row: a3Row(a3Ok), rule: a3Ruleset(a3Ok) }));
 
-// (ii) the REAL Job.JobRequired shape — DEGENERATE sanitized condition (comparison null, no left attribute).
+// (ii) the REAL Job.JobRequired shape — DEGENERATE sanitized condition. The symbolic `Terrasoft.ComparisonType.EQUAL`
+// now RESOLVES (to 3), so what makes this a gap is the CONSTANT left expression: no attribute name to gate on, so
+// `condLeftName` is null and the cell has nothing readable to show — it stays the bare parse gap.
 const a3Deg = a3Run(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
 check("ENG-96571 A3: the REAL Job.JobRequired rule renders `⚠ condition unread — parse gap` — never `conditional`, never `always`",
   a3Cell(a3Deg) === "⚠ condition unread — parse gap"
@@ -11698,6 +11700,35 @@ const a3Always = a3Run(`[]`);
 check("ENG-96571 A3: a rule declaring NO conditions still renders `always` and raises no gap — the parse-gap cell did not swallow the unconditional case",
   a3Cell(a3Always) === "always" && !a3Ruleset(a3Always).conditionsIncomplete && a3Gap(a3Always).length === 0,
   () => ({ row: a3Row(a3Always), rule: a3Ruleset(a3Always) }));
+
+/* ===== ENG-96327 — SYMBOLIC Terrasoft.ComparisonType.* resolves, so hand-authored legacy rules stop gapping ===== */
+// Classic bodies write the operator symbolically (`Terrasoft.ComparisonType.EQUAL`, not `3`). Before this the static
+// reader left `comparisonType` null and a rule whose ONLY unread part was the operator reported a full parse gap,
+// throwing away the attribute and value it HAD read. Now the operator resolves and these render in full.
+// (a) symbolic EQUAL against a real attribute + value → the whole condition reads, no gap.
+const a3SymEq = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0, "value": "New" } }]`);
+check("ENG-96327: a SYMBOLIC `Terrasoft.ComparisonType.EQUAL` resolves — the rule reads `when Stage = New`, no parse gap",
+  a3Cell(a3SymEq) === "when Stage = New" && !a3Ruleset(a3SymEq).conditionsIncomplete && a3Gap(a3SymEq).length === 0,
+  () => ({ row: a3Row(a3SymEq), rule: a3Ruleset(a3SymEq) }));
+// (b) a PRESENCE check (`IS_NOT_NULL`, no right operand) is COMPLETE — "when Account is filled", not a gap. The
+// symbolic operator resolves to 12 AND `conditionGap` exempts a presence check from its right-side degeneracy test.
+const a3Presence = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Account" }, "comparisonType": Terrasoft.ComparisonType.IS_NOT_NULL }]`);
+check("ENG-96327: a symbolic `IS_NOT_NULL` presence check reads `when Account is filled` and is NOT a gap (no right operand is correct for a presence check)",
+  a3Cell(a3Presence) === "when Account is filled" && !a3Ruleset(a3Presence).conditionsIncomplete && a3Gap(a3Presence).length === 0,
+  () => ({ row: a3Row(a3Presence), rule: a3Ruleset(a3Presence) }));
+// (c) operator resolves but the VALUE does not (a module constant / system setting the reader cannot execute): still
+// a gap — but the readable LEFT attribute is surfaced, `⚠ when Type — condition unread`, not a blank parse gap.
+const a3ValGap = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Type" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0 } }]`);
+check("ENG-96327: when the operator reads but the value does not, the Trigger names the readable field — `⚠ when Type — condition unread` — and still raises the gap decision",
+  a3Cell(a3ValGap) === "⚠ when Type — condition unread"
+  && a3Ruleset(a3ValGap).conditionsIncomplete === true && a3Gap(a3ValGap).length === 1,
+  () => ({ row: a3Row(a3ValGap), rule: a3Ruleset(a3ValGap), decisions: a3Gap(a3ValGap) }));
+// (d) guard: an operator the RENDERER cannot express (`CONTAIN`) stays null (soft-miss, no false resolve) → still an
+// honest gap, never a number the cell would silently drop the operator from. The readable left is still surfaced.
+const a3Exotic = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Name" }, "comparisonType": Terrasoft.ComparisonType.CONTAIN, "rightExpression": { "type": 0, "value": "x" } }]`);
+check("ENG-96327 guard: an unlisted operator (`CONTAIN`) is NOT resolved — the rule stays a gap (`⚠ when Name — condition unread`), so the partial table never invents a rendering it cannot express",
+  a3Cell(a3Exotic) === "⚠ when Name — condition unread" && a3Ruleset(a3Exotic).conditionsIncomplete === true,
+  () => ({ row: a3Row(a3Exotic), rule: a3Ruleset(a3Exotic) }));
 
 /* ================= ENG-96571 C1 — manifest.confirmDispositions closes a ⚠ Confirm row ================= */
 // The `rule-condition` row above is the subject: a real question, raised by the engine, with a key an answer can
