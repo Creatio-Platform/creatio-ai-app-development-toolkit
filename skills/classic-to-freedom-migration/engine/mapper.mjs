@@ -2672,24 +2672,24 @@ function listProcessDecision(section) {
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
-  const out = [];
   const columnSet = listColumnsDecision(section, columns);
-  if (columnSet) out.push(columnSet);
-  out.push(...listColumnTypeDecisions(columns));
-  out.push(...listColumnPathDecisions(columns));
-  out.push(...listFilterTypeDecisions(filters));
   const filterAttrs = listFilterAttributesDecision(filters);
-  if (filterAttrs) out.push(filterAttrs);
   const commandBar = listCommandBarDecision(section, actions);
-  if (commandBar) out.push(commandBar);
   const addRouting = listAddRoutingDecision(section);
-  if (addRouting) out.push(addRouting);
-  out.push(...listRowActionDecisions(rowActions));
-  out.push(...listGridConfigDecisions(section));
-  out.push(...listSectionElementDecisions(section));
   const process = listProcessDecision(section);
-  if (process) out.push(process);
-  return out;
+  return [
+    ...(columnSet ? [columnSet] : []),
+    ...listColumnTypeDecisions(columns),
+    ...listColumnPathDecisions(columns),
+    ...listFilterTypeDecisions(filters),
+    ...(filterAttrs ? [filterAttrs] : []),
+    ...(commandBar ? [commandBar] : []),
+    ...(addRouting ? [addRouting] : []),
+    ...listRowActionDecisions(rowActions),
+    ...listGridConfigDecisions(section),
+    ...listSectionElementDecisions(section),
+    ...(process ? [process] : []),
+  ];
 }
 // ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
 //
