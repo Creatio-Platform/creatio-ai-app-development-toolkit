@@ -1177,10 +1177,11 @@ check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the
   () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
     && /read from the saved grid PROFILE/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
-check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
-  () => /profile-sourced list column set/.test(profileRun.designSpec)
-    && /confirm this is the set every user should get/.test(profileRun.designSpec),
-  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
+check("ENG-95850 (D) / ENG-96327: a profile-sourced set raises ONE `list-columns` DECISION (rides --units) and the `- **List columns:**` line carries the 'confirm this is the set every user should get' caveat — NOT duplicated in the human ⚠ Confirm",
+  () => (profileRun.listChangeSet?.needsDecision || []).some((d) => d.kind === "list-columns" && /profile-sourced/.test(d.item))
+    && /confirm this is the set every user should get/.test(profileRun.designSpec)
+    && !/\*\*\[list-columns\]\*\*/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile|list-columns/i.test(l)).join("\n"));
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
@@ -1469,13 +1470,13 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218: the command-bar set does NOT claim to be complete — ONE decision per run (never per action, so a section whose buttons live only in its view `diff` still raises it) names the buttons found and reaches the plan through the shared ⚠ Confirm section, not a prose aside",
+check("ENG-95218 / ENG-96327: the command-bar set does NOT claim complete — ONE `list-command-bar` decision per run (rides --units, names the buttons + the view-diff hedge); the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
     && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
     && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
     && /not folded at all/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").reason)
-    && /#### ⚠ Confirm before I build/.test(lpRun.designSpec)
-    && /\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
+    && /- \*\*Command-bar actions:\*\* 1 found via `getSectionActions\(\)`/.test(lpRun.designSpec)
+    && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
 check("ENG-95218 / ENG-96327: the list page renders POSITIONED tables for filters + actions (not prose bullets); columns travel via the ChangeSet + the plain `- **List columns:**` line — the detailed columns table was dropped as a table-of-a-table",
   () => /#### Quick filters/.test(lpRun.designSpec)
@@ -12422,10 +12423,10 @@ check("ENG-96457 (item 3): an UNREAD prefix BLOCKS the plan like every other on-
   () => "prefix signal removed from the fixture manifest");
 
 // ---- item 4: the Classic side effect is stated ----------------------------------------------------------------
-check("ENG-96457 (item 4): the plan carries a ⚠ Confirm row for the Classic `Add` routing side effect — 'the Classic section stays untouched' is false, and confirmed false on the stand (Classic `ДОБАВИТЬ` began opening the Freedom page)",
-  /\*\*\[list-add-routing\]\*\*/.test(br1PlanOut) && /Classic section is NOT left untouched/.test(br1PlanOut)
-  && /ADD-purpose RelatedPage binding on the OBJECT/.test(br1PlanOut),
-  () => br1PlanOut.split("\n").filter((l) => /list-add-routing/.test(l)));
+check("ENG-96457 (item 4) / ENG-96327: the Classic `Add` routing side-effect DECISION exists and rides --units, but is DROPPED from the human ⚠ Confirm (the add page is already stated in Main scope / the `- **Add record:**` line)",
+  !/\*\*\[list-add-routing\]\*\*/.test(br1PlanOut)
+  && (br1Units.preflight || []).some((p) => p.kind === "list-add-routing"),
+  () => br1PlanOut.split("\n").filter((l) => /add-routing|Add record/i.test(l)));
 check("ENG-96457 (item 4): it is a QUESTION with a published id, not a note — `--units.preflight` carries it, so the answer has somewhere to be recorded and the row cannot be read past",
   (br1Units.preflight || []).some((p) => p.kind === "list-add-routing")
   && (br1Units.evidenceRows || []).some((e) => /#confirm:list-add-routing:/.test(e.id || "")),
@@ -12463,12 +12464,11 @@ check("ENG-96327 (item 5): `--plan --resolutions` REMOVES each answered ⚠ Conf
       const r = br1(["--plan", "--resolutions", f]);
       const out = r.stdout || "";
       return r.status === 0
-        // the answered items are gone from the worklists — both pages shrink to a single open row (the header shows
-        // only the OPEN count; cosmetic/agent-only kinds are not in the human list either, per the ENG-96327 shrink)
-        && (out.match(/⚠ Confirm before I build \(1\)/g) || []).length === 2
-        // no header carries an "answered" count any more, and no ⚠ row is echoed back as its answer
+        // no header carries an "answered" count any more, and no ⚠ row is echoed back as its answer (the worklist just
+        // gets shorter). The exact remaining count is not asserted — ENG-96327 also drops list-* noise + bucket kinds
+        // from the human list, so the inventory is not fixed; the MECHANISM (answered → removed) is what this pins.
         && !/⚠ Confirm before I build \([^)]*answered/.test(out)
-        && !/\*\*\[list-add-routing\]\*\*[^\n]*✅ answered/.test(out)
+        && !/^- \*\*\[[a-z-]+\]\*\*[^\n]*✅ answered/m.test(out)   // no ⚠ Confirm ROW echoes its answer (the List-columns LINE showing ✅ answered is fine — different mechanism)
         // the answered Header layout-type is gone AND its Template recommendation is suppressed (settled, not re-argued)
         && !/\*\*\[layout-type\]\*\*/.test(out)
         && !/Template recommendation — header/.test(out);

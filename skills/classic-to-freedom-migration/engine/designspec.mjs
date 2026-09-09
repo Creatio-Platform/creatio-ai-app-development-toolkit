@@ -631,6 +631,14 @@ function renderListPageBlock(result, section, opts = {}) {
     L.push(answeredListColumnLine(section, opts.resolutions || null,
       (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
+    // ENG-96327 — an EXPLICIT found/not signal for the section's command-bar actions. The `#### Command-bar actions`
+    // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
+    // only place the "none found" fact is stated (the `list-command-bar` ⚠ Confirm that used to carry it is now
+    // dropped from the human plan as noise). Always shown, so the approver sees found-or-not at a glance.
+    const cbaCount = (result.listChangeSet?.commandBarActions || []).length;
+    L.push(cbaCount
+      ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
+      : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
   // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
@@ -907,6 +915,12 @@ const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter",
 const BUILDER_ONLY_CONFIRM_KINDS = new Set([
   "visibility-rule", "ancestor-visibility", "rule-target-missing", "unmapped-component", "parse-gap", "registry-composite-only",
 ]);
+// ENG-96327 (product decision) — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in
+// the List-page block: `list-columns` (the profile caveat is on the `- **List columns:**` line), `list-column-path`
+// (a lookup's display value — a builder detail), `list-command-bar` (the found/not is the explicit `- **Command-bar
+// actions:**` bullet + the table below), and `list-add-routing` (the add page is stated in Main scope / `- **Add
+// record:**`). All ride `--units.preflight` unchanged; only the human ⚠ Confirm list drops them.
+const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing"]);
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -934,7 +948,7 @@ function renderConfirmWorklist(cs, opts = {}) {
   // ENG-96327 — the RENDERED open list is the HUMAN shrink: cosmetic/agent-only kinds (see COSMETIC_CONFIRM_KINDS)
   // are dropped from the plan (they still ride the machine channel). The disposition machinery above
   // (closed / invalid / notApplicable) is left on the broader set — a disposition the operator wrote is still reported.
-  const confirm = open.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind) && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !isAnswered(d)).map((d) =>
+  const confirm = open.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind) && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind) && !isAnswered(d)).map((d) =>
     `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
     (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — the lookup-GUID prompt used to be appended HERE, computed off `cs.pageBusinessRules` at render time. It is
