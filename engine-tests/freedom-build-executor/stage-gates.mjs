@@ -204,14 +204,32 @@ const deadBuilders = driveRun("builders-dead", {
   Close: () => ({ written: true }),
 }, 24);
 const verifiesIn = (run) => run.dispatched.filter((d) => d.phase === "Verify");
-check("AC 11: a round whose builders all returned nothing still runs VERIFY, exactly once — a builder can write to the stand and then die, so skipping the read-back would leave the verdict on file stale",
-  () => verifiesIn(deadBuilders).length >= 1,
+// THE ROUND WINDOW — the slice from the round's first Verify to the Reconcile that closes it, computed
+// DEFENSIVELY (PR #171 review, Alexandr-Kravchuk). It used to be written inline as
+// `slice(firstVerify, phases.indexOf("Reconcile", firstVerify) + 1)`, and when that Reconcile is NOT in the
+// sequence `indexOf` returns -1, the end argument is 0, and the slice is EMPTY — so `!window.includes("Judge")`
+// passed because the window held nothing, not because Judge had been skipped. The one assertion covering AC 11's
+// "Judge does not run in that round" was measuring the evidence being absent: it would have stayed green if the
+// run never reached a second round, and green if the core stopped dispatching everything the window names.
+// Returning `null` when the window cannot be located turns that class of regression into a RED check, and it is
+// what lets the window carry a second assertion (the "exactly once" count below) at all.
+const roundWindow = (run) => {
+  const phases = phasesOf(run);
+  const firstVerify = phases.indexOf("Verify");
+  const roundEnd = phases.indexOf("Reconcile", firstVerify);
+  if (firstVerify < 0 || roundEnd < 0) return null;
+  return phases.slice(firstVerify, roundEnd + 1);
+};
+const countIn = (window, phase) => (window || []).filter((p) => p === phase).length;
+check("AC 11 (precondition): the round window is LOCATABLE — both the first Verify and the Reconcile that closes its round are in the dispatch sequence. Asserted on its own, first, because every check below reads this window and an unlocatable one used to pass them silently",
+  () => roundWindow(deadBuilders) !== null,
   () => phasesOf(deadBuilders).join(" -> "));
+check("AC 11: a round whose builders all returned nothing still runs VERIFY, and EXACTLY ONCE inside that round — a builder can write to the stand and then die, so skipping the read-back would leave the verdict on file stale, while a second read-back in the same round is the extra agent and extra `--verify` stand read the AC 10/11 split exists to avoid. Counted in the round window, not across the run: with every Build dead the run spends several rounds, so a run-wide count can only ever say `>= 1`",
+  () => roundWindow(deadBuilders) !== null && countIn(roundWindow(deadBuilders), "Verify") === 1,
+  () => JSON.stringify({ window: roundWindow(deadBuilders), verifiesAcrossRun: verifiesIn(deadBuilders).length }));
 check("AC 11: and it does NOT run Judge in that round, even though an unjudged evidence record was waiting — Judge rules on claims, and no claim was filed",
-  () => { const firstVerify = phasesOf(deadBuilders).indexOf("Verify");
-    const afterFirstRound = phasesOf(deadBuilders).slice(firstVerify, phasesOf(deadBuilders).indexOf("Reconcile", firstVerify) + 1);
-    return !afterFirstRound.includes("Judge"); },
-  () => phasesOf(deadBuilders).join(" -> "));
+  () => roundWindow(deadBuilders) !== null && !roundWindow(deadBuilders).includes("Judge"),
+  () => JSON.stringify({ window: roundWindow(deadBuilders), phases: phasesOf(deadBuilders) }));
 check("AC 11: the result NAMES the units whose builders returned nothing — 'nothing built' and 'nothing open' are the same empty list and opposite repairs",
   () => (resultOf(deadBuilders)?.buildersReturnedNothing || []).includes("main"),
   () => JSON.stringify(resultOf(deadBuilders)?.buildersReturnedNothing));
@@ -270,8 +288,19 @@ check("AC 12: what the app unit DID write is persisted before the stop — this 
   () => appDead.dispatched.some((d) => d.phase === "Close" && /stopping on an incomplete app unit/.test(d.prompt)),
   () => appDead.dispatched.filter((d) => d.phase === "Close").map((d) => d.prompt.slice(0, 160)).join(" | ") || phasesOf(appDead).join(" -> "));
 check("AC 2: the stop carries the same five keys as every other gate stop",
-  () => { const r = resultOf(appDead); return !!r && /did not complete/.test(r.reason || "") && /resumeFromRunId/.test(r.next || "") && typeof r.agentsExpected === "number"; },
+  () => { const r = resultOf(appDead); return !!r && /did not complete/.test(r.reason || "") && (r.next || "").length > 0
+    && typeof r.agentsExpected === "number" && typeof r.agentsReturned === "number"; },
   () => JSON.stringify({ reason: resultOf(appDead)?.reason, next: resultOf(appDead)?.next }));
+check("AC 2: and its `next` is the one THIS failure family owns (PR #171 review) — it sends the operator to the stand and does NOT carry the agent-death resume clause, which asserted 'nothing it would have written exists' on a path that had just run `persistPending('stopping on an incomplete app unit')`. One string used to hold both instructions",
+  () => { const n = resultOf(appDead)?.next || "";
+    return /check on the stand/.test(n) && !/nothing it would have written exists/.test(n) && !/resumeFromRunId/.test(n); },
+  () => resultOf(appDead)?.next);
+check("AC 2: the stop's two numbers report the DEFERRAL rather than the round's dispatch tally (PR #171 review, m-dymytrova) — `agentsExpected` counts the units the round had OPEN, the same denominator `nothing-built` uses, so a stop that deferred a unit can never read as healthy arithmetic",
+  () => resultOf(appDead)?.agentsExpected === 2 && resultOf(appDead)?.agentsReturned === 0,
+  () => JSON.stringify({ agentsExpected: resultOf(appDead)?.agentsExpected, agentsReturned: resultOf(appDead)?.agentsReturned }));
+check("AC 3: the app-unit stop RECORDS the two phases it skipped — both `outcomes.skipped` calls on this branch were unpinned, so deleting either left the whole suite green (PR #171 review, finding 2)",
+  () => resultOf(appDead)?.phaseOutcomes?.Verify?.state === "skipped" && resultOf(appDead)?.phaseOutcomes?.Judge?.state === "skipped",
+  () => JSON.stringify(resultOf(appDead)?.phaseOutcomes));
 
 const appMismatch = driveRun("app-mismatch", {
   Reconcile: () => reconcileNewApp(),
@@ -284,6 +313,21 @@ check("AC 12: a PACKAGE MISMATCH is the same blocker — the application exists 
   () => resultOf(appMismatch)?.stopped === "app-unit-incomplete" && (resultOf(appMismatch)?.deferred || []).includes("main")
     && buildIds(appMismatch).length === 1,
   () => JSON.stringify({ stopped: resultOf(appMismatch)?.stopped, deferred: resultOf(appMismatch)?.deferred, builds: buildIds(appMismatch) }));
+// THE MISMATCH LEG IS THE ONE THE REVIEW WAS ABOUT (PR #171). Nothing died here: the app builder ANSWERED, created
+// an application and a package on a live stand, and `recordForeignScaffold` wrote that down — which is why the two
+// checks below exist and why the resume clause had to stop riding on this stop unconditionally.
+check("AC 2 (mismatch): the stop reports 2 open / 1 answered, not a healthy 1-of-1 — on this leg the app builder DID answer and `builtThisRound` is not empty, so the old dispatch tally attached perfect arithmetic to a stop whose own contract says those numbers name the shape of the failure",
+  () => resultOf(appMismatch)?.agentsExpected === 2 && resultOf(appMismatch)?.agentsReturned === 1,
+  () => JSON.stringify({ agentsExpected: resultOf(appMismatch)?.agentsExpected, agentsReturned: resultOf(appMismatch)?.agentsReturned }));
+check("AC 2 (mismatch): and the `next` does not tell the operator to inspect what the app unit created and then that nothing it would have written exists — following the second half discards recoverable stand state this path deliberately persisted",
+  () => { const n = resultOf(appMismatch)?.next || "";
+    return /check on the stand/.test(n) && !/nothing it would have written exists/.test(n) && !/Fix what killed the agents/.test(n); },
+  () => resultOf(appMismatch)?.next);
+check("AC 3 (mismatch): Verify and Judge are recorded as skipped on this leg too, and Judge's reason is this branch's own rather than the shared 'nothing filed' one that is false here",
+  () => resultOf(appMismatch)?.phaseOutcomes?.Verify?.state === "skipped"
+    && resultOf(appMismatch)?.phaseOutcomes?.Judge?.state === "skipped"
+    && /stopped on an incomplete app unit/.test(resultOf(appMismatch)?.phaseOutcomes?.Judge?.why || ""),
+  () => JSON.stringify(resultOf(appMismatch)?.phaseOutcomes));
 
 // THE CONTROL that makes the two legs above a measurement of the RULE. A partial app unit — planned package,
 // short deliverable — leaves the unit open exactly as it always did and does NOT defer anything.

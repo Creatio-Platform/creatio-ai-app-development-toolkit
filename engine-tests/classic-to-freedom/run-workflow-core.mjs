@@ -170,9 +170,16 @@ check("countReturned: a bare (non-array) value counts as one result, and nullish
 }
 check("stageGate: a gate with no `phase` THROWS — an unnamed stop code is a stop nobody can act on",
   () => { try { stageGate({ expected: 1, results: [] }); return false } catch (e) { return /name the `phase`/.test(e.message) } });
-check("gateStop: the two stops that are NOT `<phase>-produced-nothing` (`nothing-built`, `app-unit-incomplete`) get the identical five keys and the identical resume clause",
+check("gateStop: the two stops that are NOT `<phase>-produced-nothing` (`nothing-built`, `app-unit-incomplete`) get the identical five keys, and the resume clause rides BY DEFAULT",
   () => { const s = gateStop({ stopped: "nothing-built", reason: "r", next: "n", agentsExpected: 2, agentsReturned: 0 });
     return s.stopped === "nothing-built" && s.agentsExpected === 2 && s.agentsReturned === 0 && s.next === `n ${RESUME_CLAUSE}` });
+check("gateStop: `resumeClause: false` keeps the caller's OWN `next` and appends nothing (PR #171 review) — the clause narrates a host failure (`nothing it would have written exists`), and it used to be unconditional, so it also rode on `app-unit-incomplete`, whose package-mismatch leg persists real stand state immediately before composing the stop",
+  () => { const s = gateStop({ stopped: "app-unit-incomplete", reason: "r", next: "n", agentsExpected: 2, agentsReturned: 1, resumeClause: false });
+    return s.next === "n" && s.stopped === "app-unit-incomplete" && s.agentsExpected === 2 && s.agentsReturned === 1 },
+  () => JSON.stringify(gateStop({ stopped: "app-unit-incomplete", reason: "r", next: "n", resumeClause: false })));
+check("gateStop: and `resumeClause: false` with no `next` yields an EMPTY next rather than falling back to the clause — the switch is the switch, so a caller that opts out cannot get the narrative back by omission",
+  () => gateStop({ stopped: "app-unit-incomplete", reason: "r", resumeClause: false }).next === "",
+  () => JSON.stringify(gateStop({ stopped: "app-unit-incomplete", reason: "r", resumeClause: false })));
 check("gateStop: a stop with no code THROWS",
   () => { try { gateStop({ reason: "r" }); return false } catch (e) { return /name its `stopped` code/.test(e.message) } });
 
@@ -722,7 +729,7 @@ console.log("\n===== analysis stage gates (ENG-96778) =====");
 const WIDE = { ...INPUT, rowsPerAgent: 1 };
 // Which describe item this is, by id — the ids are stable and deterministic, and
 // the suite already pins that, so keying a scripted death on one is safe.
-const isBatch2 = (item) => /^describe\.2\./.test(item.id);
+const isBatch2 = (item) => item.id.startsWith("describe.2.");
 // What batch 1 alone can honestly cover: its own three rows. `initMini` belongs to batch 2.
 const MAIN_ONLY = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.filter((e) => e.key !== "initMini") };
 

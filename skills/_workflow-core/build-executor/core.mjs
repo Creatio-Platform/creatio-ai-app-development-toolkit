@@ -4053,8 +4053,19 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         ...gateStop({
           stopped: 'app-unit-incomplete',
           reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
-          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them.`,
-          agentsExpected: dispatched.length, agentsReturned: builtThisRound.length,
+          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
+          // NO RESUME CLAUSE HERE (PR #171 review). `gateStop` appends a host-failure narrative by default —
+          // "nothing it would have written exists" — and on the package-MISMATCH leg that is simply false: the app
+          // builder answered and created an application on a live stand, which is why `persistPending` above runs
+          // BEFORE this composition. The `next` written here is the one this failure family owns.
+          resumeClause: false,
+          // THE DEFERRAL ARITHMETIC, not the dispatch tally (PR #171 review, m-dymytrova). `dispatched.length` /
+          // `builtThisRound.length` reported `1 expected / 1 returned` on the mismatch leg — perfectly healthy
+          // numbers attached to a stop, on a stop whose two numbers `gateStop`'s own contract says are there to let
+          // a caller "learn the shape of the failure". Counted over the round's OPEN units instead, the pair says
+          // what actually happened: N units were open, only the app unit answered, the rest were never dispatched —
+          // the same denominator the `nothing-built` stop below already uses.
+          agentsExpected: open.length, agentsReturned: builtThisRound.length,
         }),
         ...common, builtThisRound,
       })
@@ -4075,6 +4086,24 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     })
   }
 
+  // THE ROUND'S JUDGE DECISION, lifted out of `oneRound` (PR #171 review — Sonar S3776 measured `oneRound` at 17
+  // against the 15 allowed, and this branch is the whole of the difference) for exactly the reason
+  // `buildRoundEndedEarly`, `checkpointPauseReturn` and `roundPauseReturn` were lifted out before it: `oneRound`
+  // carries the round's PHASE SEQUENCE, not the payload of each decision inside it.
+  //
+  // AC 11 — UNITS DISPATCHED, EVERY BUILDER DEAD. Verify has already run by the time this is reached, once, and
+  // that is deliberate: a builder can write to the stand and then die, so skipping the read-back would leave a
+  // stand change unrecorded and the verdict on file stale. Judge is what is skipped — it rules on claims, and no
+  // claim was filed.
+  function* judgeOrSkipAfterBuild(buildersAllNull, dispatched, noAnswer) {
+    if (!buildersAllNull) {
+      yield* judgeIfWaiting()
+      return
+    }
+    log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
+    outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
+  }
+
   function* oneRound(open) {
       // ENG-96204 — CAPTURED AT THE TOP, before anything can flip it: `layoutPassDone` is set at the bottom of
       // this round (that is what makes the NEXT invocation the logic pass), and every consumer below has to know
@@ -4090,9 +4119,8 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       const preVerifyStop = yield* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open })
       if (preVerifyStop) return preVerifyStop
 
-      // AC 11 — UNITS DISPATCHED, EVERY BUILDER DEAD. Verify STILL RUNS, once, and that is deliberate: a builder
-      // can write to the stand and then die, so skipping the read-back would leave a stand change unrecorded and
-      // the verdict on file stale. Judge is what is skipped — it rules on claims, and no claim was filed.
+      // AC 11 — UNITS DISPATCHED, EVERY BUILDER DEAD. Read HERE, before Verify, because `builtThisRound` is what
+      // Verify is handed; acted on below by `judgeOrSkipAfterBuild`, which owns the decision and says why.
       const buildersAllNull = builtThisRound.length === 0
       // Open because it stopped mid-unit, NOT because a repair failed — said at the orchestrator level so the run log
       // distinguishes the two. No repair round was charged for these.
@@ -4171,10 +4199,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       // round decided nothing new.
       yield* persistPending(`closing round ${round}`)
 
-      if (buildersAllNull) {
-        log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
-        outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
-      } else yield* judgeIfWaiting()
+      yield* judgeOrSkipAfterBuild(buildersAllNull, dispatched, noAnswer)
 
       phase('Reconcile')
       const next = yield* reconcileAgent(round, `reconcile.round-${round + 1}`, `reconcile:round-${round + 1}`,

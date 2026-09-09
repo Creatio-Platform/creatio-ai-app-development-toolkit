@@ -24,12 +24,12 @@ export const meta = {
 const RESUME_CLAUSE =
   'Nothing after this phase ran, and nothing it would have written exists. Fix what killed the agents (host quota, an expired token, a role the host cannot bind), then start a FRESH run — resuming this one (`node cli.mjs resume <run.json>` on the CLI host, `resumeFromRunId` on the Claude Workflow host) replays the recorded deaths and stops here again.'
 
-function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0 }) {
+function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0, resumeClause = true }) {
   if (!stopped) throw new Error('a gate stop must name its `stopped` code')
   return {
     stopped,
     reason,
-    next: next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE,
+    next: resumeClause ? (next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE) : next,
     agentsExpected,
     agentsReturned,
   }
@@ -4615,8 +4615,9 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
         ...gateStop({
           stopped: 'app-unit-incomplete',
           reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
-          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them.`,
-          agentsExpected: dispatched.length, agentsReturned: builtThisRound.length,
+          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
+          resumeClause: false,
+          agentsExpected: open.length, agentsReturned: builtThisRound.length,
         }),
         ...common, builtThisRound,
       })
@@ -4635,6 +4636,15 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }),
       ...common, builtThisRound: [],
     })
+  }
+
+  function* judgeOrSkipAfterBuild(buildersAllNull, dispatched, noAnswer) {
+    if (!buildersAllNull) {
+      yield* judgeIfWaiting()
+      return
+    }
+    log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
+    outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
   }
 
   function* oneRound(open) {
@@ -4684,10 +4694,7 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
 
       yield* persistPending(`closing round ${round}`)
 
-      if (buildersAllNull) {
-        log(`round ${round}: all ${dispatched.length} dispatched builder(s) returned NOTHING (${noAnswer.join(', ')}) — Verify still runs once (a builder can write and then die, so the stand must be read back), but Judge is skipped: no claim was filed for it to rule on`)
-        outcomes.skipped('Judge', `every builder dispatched in round ${round} returned nothing, so no claim was filed`)
-      } else yield* judgeIfWaiting()
+      yield* judgeOrSkipAfterBuild(buildersAllNull, dispatched, noAnswer)
 
       phase('Reconcile')
       const next = yield* reconcileAgent(round, `reconcile.round-${round + 1}`, `reconcile:round-${round + 1}`,

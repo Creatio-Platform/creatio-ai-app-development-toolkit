@@ -113,6 +113,37 @@
 // NOTHING ELSE MOVED: no phase sequence, no agent dispatch, no prompt byte, and no other return field. The generated
 // artifacts' whole diff for this replacement is the recorder plus those two reason strings.
 //
+// AND REPLACED A THIRD TIME WITHIN ENG-96778, by the SECOND PR review round (PR #171: m-dymytrova and
+// Alexandr-Kravchuk, both `CHANGES_REQUESTED`). Same rule, same reason it is written down: a reviewed, deliberate
+// act rather than a refresh from the working tree.
+//
+// WHAT CHANGED IN THE PRODUCT. `gateStop` appended `RESUME_CLAUSE` UNCONDITIONALLY, and that clause narrates a host
+// failure — "nothing after this phase ran, and nothing it would have written exists". It is true of the
+// `<phase>-produced-nothing` family and of `nothing-built`. It is FALSE of `app-unit-incomplete` on its
+// package-MISMATCH leg, where the app builder answered, created an application and a package on a live stand, and
+// `persistPending('stopping on an incomplete app unit')` ran immediately before the stop was composed precisely so
+// that state would survive. The composed `next` therefore told the operator to go and inspect what the unit created
+// and then that nothing it would have written exists — two mutually exclusive instructions in one string, and
+// following the second discards recoverable stand state. The clause is now a `resumeClause` switch that rides by
+// DEFAULT and is opted out of at that one site, which keeps the accurate recovery sentence the phase already owns.
+// The same stop also reported `agentsExpected: dispatched.length` — a healthy `1 expected / 1 returned` attached to
+// a stop — and now counts the round's OPEN units, the same denominator `nothing-built` beside it already used.
+//
+// WHAT DIVERGED, measured: ONE scenario and TWO top-level return fields, enumerated rather than sampled.
+//   · `the app unit produces a DIFFERENT package — it stays open` — `result.next` (the resume clause no longer
+//     appended, plus a sentence saying what the app unit itself wrote WAS persisted) and `result.agentsExpected`
+//     (1 -> 2, the deferral denominator). The parity run was 521/1.
+// NOTHING ELSE MOVED anywhere: no phase sequence, no agent dispatch, no prompt byte, no log line and no other return
+// field, on any of the 31 scenarios. The other work in this round — extracting `describeStopReturn`,
+// `reportDeadBatches`, `recordRepairOutcome`, `skipPhasesFrom` and `judgeOrSkipAfterBuild` to bring Sonar S3776 back
+// under 15, and `...mergeStop` for S7744 — is behaviour-preserving by construction and measured to be so here.
+//
+// ONE MORE THING THIS COPY FOLDS IN, stated so a reviewer diffing the baselines is not surprised by it: the source
+// of `judgeIfWaiting` now carries the F4 change from commit 4cc1a42 (`unfiledEvidenceFor`, the carried evidence
+// block, the `evidenceWritten` receipt). That commit deliberately did NOT replace these baselines, because an empty
+// carry renders the identical prompt and the parity run stayed 522/0 through it. The behaviour it adds is therefore
+// already pinned as unchanged; only the frozen SOURCE was lagging, and this replacement catches it up.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";

@@ -171,6 +171,61 @@ const positiveOr = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
 const roundKind = (repair) => (repair ? 'repair' : 'describe')
 const critiqueIdSuffix = (attempt) => (attempt > 1 ? `retry${attempt}` : '')
 const critiqueLabel = (attempt) => (attempt > 1 ? 'critique:coverage-retry' : 'critique:coverage')
+// AC 7's two ternaries, hoisted for the same reason as the four above (PR #171 review — Sonar S3776 measured
+// `run` at 22 against the 15 allowed, and the gates this task added are the whole of the difference).
+const okOrNone = (ran) => (ran ? 'ok' : 'none')
+const answeredCount = (v) => (v ? 1 : 0)
+
+// THE FOUR PHASES IN THE ORDER THEY RUN, and the one call an early exit makes to say the rest never happened.
+// A path that ends early says so in ONE call rather than listing the remaining phases at each exit — which is how
+// a return loses its report by forgetting one of them. Module level (PR #171 review): the order is a fact about
+// this workflow, not about any single run.
+const PHASE_ORDER = ['Context', 'Describe', 'Critique', 'Merge']
+function skipPhasesFrom(outcomes, first, why) {
+  for (const p of PHASE_ORDER.slice(PHASE_ORDER.indexOf(first))) outcomes.skipped(p, why)
+}
+
+// THE DESCRIBE STOP'S WHOLE RETURN, hoisted out of `run` (PR #171 review, m-dymytrova) exactly as the build core
+// hoists `buildRoundEndedEarly` out of `oneRound`: `run` reads as the phase sequence it is, and the payload of a
+// stop lives beside the stop. Nothing here decides anything — every value is settled by the caller.
+function describeStopReturn({ surface, describeStop, allKeys, totals, scopes, describeAgents, ctx, phaseOutcomes }) {
+  return {
+    surface,
+    skipped: false,
+    ...describeStop,
+    coverage: { described: 0, digestRows: allKeys.size, total: allKeys.size, ledgerMembers: ledgerOf(totals), complete: false, uncovered: [...allKeys], wiringOnly: [] },
+    scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: s.rows })),
+    describeAgents,
+    conflicts: [], settledElsewhere: [], gaps: [],
+    refusals: ctx.refusals || [],
+    censusNote: ctx.censusNote || null,
+    phaseOutcomes,
+  }
+}
+
+// AC 6 — A PARTIAL DESCRIBE CARRIES ON, and says which batches did not. The rows a dead batch owned already reach
+// the repair round for free: they carry no card, so the coverage arithmetic puts them in `uncoveredKeys` and
+// `repairKeys` picks them up. What was missing is the SENTENCE — a batch that never answered and a batch that
+// answered without covering its rows produce the identical number, and only one of them is a host failure.
+function reportDeadBatches(log, batches, describeReturned) {
+  const deadBatches = batches.filter((b, i) => !describeReturned[i])
+  if (!deadBatches.length) return
+  log(`⚠ ${deadBatches.length} of ${batches.length} Describe batch(es) returned NOTHING — Describe is PARTIAL. The rows owned by ${deadBatches.map((b) => b.scopes.map((s) => s.label).join('+')).join(' | ')} carry no card and go into the repair round; they are unattempted, not unanswerable.`)
+}
+
+// TRANSITION 4 — A REPAIR ROUND THAT PRODUCED NOTHING IS NOT A ROUND THAT FOUND NOTHING. Recorded rather than
+// stopped: the run still has round 1's cards and its Merge deliverable is still worth writing. But the rows it was
+// given come back uncovered either way, and reporting them as "the agents could not describe these" is a verdict
+// about the SURFACE that this round did not earn — no agent looked at them. `repair-produced-nothing` is the
+// difference, and it is the reason a re-run is worth the operator's time.
+function recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, repaired, toRepair }) {
+  if (repaired.length) {
+    outcomes.record('Repair', repairBatches.length, repairReturned)
+    return
+  }
+  outcomes.note('Repair', 'none', { agentsExpected: repairBatches.length, agentsReturned: 0, stopped: 'repair-produced-nothing' })
+  log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
+}
 
 export function* run(rawInput, io = {}) {
   const log = io.log || noop
@@ -181,10 +236,8 @@ export function* run(rawInput, io = {}) {
   // coverage number and have had its adversarial pass die, and the only record of that used to be a log line the
   // caller never sees.
   const outcomes = makePhaseOutcomes()
-  // The four phases in the order they run. A path that ends early says so in ONE call rather than listing the
-  // remaining phases at each exit — which is how a return loses its report by forgetting one of them.
-  const PHASE_ORDER = ['Context', 'Describe', 'Critique', 'Merge']
-  const skipFrom = (first, why) => { for (const p of PHASE_ORDER.slice(PHASE_ORDER.indexOf(first))) outcomes.skipped(p, why) }
+  // …and the one call an early exit makes to say the phases after it never ran — see `skipPhasesFrom`.
+  const skipFrom = (first, why) => skipPhasesFrom(outcomes, first, why)
 
   const input = normalizeInput(rawInput)
   assertInput(input)
@@ -335,27 +388,11 @@ export function* run(rawInput, io = {}) {
   if (describeStop) {
     log(`the Describe phase returned nothing from any of its ${batches.length} agent(s) — stopping rather than letting Critique and Merge run over an empty card set`)
     skipFrom('Critique', 'Describe produced nothing, so there was nothing to check and nothing to merge')
-    return {
-      surface: SURFACE,
-      skipped: false,
-      ...describeStop,
-      coverage: { described: 0, digestRows: allKeys.size, total: allKeys.size, ledgerMembers: ledgerOf(input.totals), complete: false, uncovered: [...allKeys], wiringOnly: [] },
-      scopes: scopes.map((s) => ({ role: s.role, schema: s.schema, rows: s.rows })),
-      describeAgents: batches.length,
-      conflicts: [], settledElsewhere: [], gaps: [],
-      refusals: ctx.refusals || [],
-      censusNote: ctx.censusNote || null,
-      phaseOutcomes: outcomes.snapshot(),
-    }
+    return describeStopReturn({ surface: SURFACE, describeStop, allKeys, totals: input.totals, scopes,
+      describeAgents: batches.length, ctx, phaseOutcomes: outcomes.snapshot() })
   }
-  // AC 6 — A PARTIAL DESCRIBE CARRIES ON, and says which batches did not. The rows a dead batch owned already
-  // reach the repair round for free: they carry no card, so the arithmetic below puts them in `uncoveredKeys` and
-  // `repairKeys` picks them up. What was missing is the SENTENCE — a batch that never answered and a batch that
-  // answered without covering its rows produce the identical number, and only one of them is a host failure.
-  const deadBatches = batches.filter((b, i) => !describeReturned[i])
-  if (deadBatches.length) {
-    log(`⚠ ${deadBatches.length} of ${batches.length} Describe batch(es) returned NOTHING — Describe is PARTIAL. The rows owned by ${deadBatches.map((b) => b.scopes.map((s) => s.label).join('+')).join(' | ')} carry no card and go into the repair round; they are unattempted, not unanswerable.`)
-  }
+  // AC 6 — the partial Describe carries on and says which batches did not; see `reportDeadBatches`.
+  reportDeadBatches(log, batches, describeReturned)
 
   // --- Coverage is COMPUTED, never asserted ----------------------------------
   const rejectedTriggers = rejectTriggers(described, allKeys, log)
@@ -423,7 +460,7 @@ export function* run(rawInput, io = {}) {
   // cards exist, the coverage arithmetic stands and Merge still has something to merge. `critiqueRan` already told
   // the caller; this tells it apart from the OTHER failure — a host that answered with an unusable shape returned
   // something (`agentsReturned: 1`) and still did not run the pass.
-  outcomes.note('Critique', critiqueRan ? 'ok' : 'none', { agentsExpected: 1, agentsReturned: critiqueReturned ? 1 : 0, critiqueRan })
+  outcomes.note('Critique', okOrNone(critiqueRan), { agentsExpected: 1, agentsReturned: answeredCount(critiqueReturned), critiqueRan })
 
   // --- One repair round, and only when there is something to repair ----------
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
@@ -444,16 +481,9 @@ export function* run(rawInput, io = {}) {
       note: 'repair round: the rows the arithmetic says are not described yet',
     })
     const repaired = repairReturned.filter(Boolean)
-    // TRANSITION 4 — A REPAIR ROUND THAT PRODUCED NOTHING IS NOT A ROUND THAT FOUND NOTHING. Recorded rather than
-    // stopped: the run still has round 1's cards and its Merge deliverable is still worth writing. But the rows it
-    // was given come back uncovered either way, and reporting them as "the agents could not describe these" is a
-    // verdict about the SURFACE that this round did not earn — no agent looked at them. `repair-produced-nothing`
-    // is the difference, and it is the reason a re-run is worth the operator's time.
-    if (repaired.length) outcomes.record('Repair', repairBatches.length, repairReturned)
-    else {
-      outcomes.note('Repair', 'none', { agentsExpected: repairBatches.length, agentsReturned: 0, stopped: 'repair-produced-nothing' })
-      log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
-    }
+    // TRANSITION 4 — a repair round that produced nothing is not a round that found nothing; see
+    // `recordRepairOutcome` for why the two are reported differently.
+    recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, repaired, toRepair })
     described = [...described, ...repaired]
     rejectedTriggers.push(...rejectTriggers(repaired, allKeys, log))
     covered = coveredKeys(described, allKeys)
@@ -573,6 +603,8 @@ export function* run(rawInput, io = {}) {
     // …AND THE MERGE STOP, spread LAST on purpose. `stopped`, `reason` and `next` are the gate's when it fired: a
     // `next` telling the caller to merge an index that was never written is worse than no `next` at all. `complete`
     // is already false on that path through `mergeOk`, so nothing here re-decides the verdict.
-    ...(mergeStop || {}),
+    // `...mergeStop` and not `...(mergeStop || {})` (PR #171 review, Sonar S7744): spreading `null` in an object
+    // literal is already a no-op, so the guard only made the null case look like a case.
+    ...mergeStop,
   }
 }

@@ -41,12 +41,27 @@ export const RESUME_CLAUSE =
 // reading `agentsExpected` / `agentsReturned` learns the shape of the failure —
 // "all four died" and "the round dispatched none" are different repairs — and it
 // learns it from the stop rather than from the log.
-export function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0 }) {
+//
+// `resumeClause` IS A SWITCH, and it used to be a constant (PR #171 review). The
+// clause above narrates a HOST FAILURE — "nothing it would have written exists" —
+// which is true of every family this file composes except one. `app-unit-incomplete`
+// also fires on the package-MISMATCH leg, where the app builder ANSWERED, created an
+// application and a package on a live stand, and the core ran
+// `persistPending('stopping on an incomplete app unit')` immediately before composing
+// the stop precisely so that state would survive. Appending the clause there produced
+// one `next` holding two mutually exclusive instructions — go and see what the unit
+// created on the stand, and nothing it would have written exists — and an operator who
+// followed the second discards recoverable state the code deliberately wrote down. So
+// the composer no longer hardcodes one failure narrative for every family: the clause
+// rides BY DEFAULT (every `<phase>-produced-nothing` stop, and `nothing-built`, really
+// are "no agent answered"), and a site whose family owns a truer recovery sentence
+// passes `resumeClause: false` and keeps the one it already writes.
+export function gateStop({ stopped, reason, next = '', agentsExpected = 0, agentsReturned = 0, resumeClause = true }) {
   if (!stopped) throw new Error('a gate stop must name its `stopped` code')
   return {
     stopped,
     reason,
-    next: next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE,
+    next: resumeClause ? (next ? `${next} ${RESUME_CLAUSE}` : RESUME_CLAUSE) : next,
     agentsExpected,
     agentsReturned,
   }
@@ -110,6 +125,20 @@ export function stageGate({ phase, expected = 0, results = [], emptyIsLegit = nu
 //   none     — the phase dispatched agents and every one of them died.
 //   skipped  — the phase was deliberately not entered (nothing to do, or an
 //              earlier gate closed it).
+//
+// THE SHIPPED SHAPE SUPERSEDES THE TICKET'S DESIGN SECTION, recorded here so the
+// next consumer is not written against the wrong one (PR #171 review, finding 1).
+// ENG-96778's Design section specified `phaseOutcomes: [{ phase, expected,
+// returned, outcome }]` — an ARRAY, with the state under `outcome`. What ships is
+// an OBJECT keyed by phase, in insertion order, whose entries carry `state`,
+// `agentsExpected` and `agentsReturned`, plus an `occurrences` array on any phase
+// entered more than once. The keyed form is what a reader actually asks of it
+// ("what did Judge do?") without scanning, and `occurrences` has no place in the
+// specified array at all — a phase entered twice would have been two rows with
+// nothing saying which came first. Same information, ordered the same way; a
+// consumer written against the design section (including the follow-up
+// `run-status.md` task the ticket names) must read `entry.state` and iterate
+// `Object.entries(...)`, not `entry.outcome` over an array.
 // ---------------------------------------------------------------------------
 export function outcomeState(expected, returned) {
   if (expected <= 0) return 'skipped'

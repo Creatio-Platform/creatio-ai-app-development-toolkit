@@ -172,8 +172,15 @@ which is the difference between a retry and a host problem.
 | `app-unit-incomplete` | The app unit returned nothing, or created its application under a package the plan does not target. Every unit behind it in that round is **deferred, not dispatched** — they all build into that package. | `deferred` lists them. Settle the application on the stand, or re-plan against a package that can be produced; the deferred units are untouched. |
 
 **Resuming does not clear any of them.** The run journal records a death, so a resumed run replays it and
-stops in the same place — the `next` line says so. Fix the host (quota, an expired token, a role it cannot
-bind) and start a fresh run.
+stops in the same place. Fix the host (quota, an expired token, a role it cannot bind) and start a fresh run.
+
+**Two of the three say so in the stop itself; `app-unit-incomplete` deliberately does not.** The first two are
+host failures — no agent answered, nothing was written — so their `next` names both resume paths and tells you
+they will not help. `app-unit-incomplete` also fires when the app builder **answered** and created its
+application under a package the plan does not target: that run wrote to a live stand and persisted what it
+learned before stopping, so its `next` sends you to the stand instead. Read `deferred`, `packageState` and
+`targetPackage` there, not a resume command — and do not undo what the app unit created before you have looked
+at it.
 
 Two related degradations are **recorded rather than stopped**, because the run still has work worth doing:
 
