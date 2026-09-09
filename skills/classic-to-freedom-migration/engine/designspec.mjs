@@ -1575,7 +1575,9 @@ function renderPlanBanners(result, opts) {
     for (const it of structure.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
-  P.push(...renderBundleWarningNotes(result));
+  // ENG-96327 — the ℹ bundle-warning-closed note + the ⚠ behaviourIndex banners are AGENT-facing (they tell the
+  // agent how to complete/fix `behaviour-index.json`), not approver decisions, so they moved to `plan.notes.md`
+  // (renderPlanNotes). Only the ⛔ BLOCKING banners (gate/structure/coverage/planMeta/placement/signals) stay here.
   // COVERAGE banner — a schema member with no Freedom artifact and no decision. Same standing as the two above:
   // a plan that leaves a member unaccounted asserts a completeness it does not have.
   const coverage = result.coverage || { complete: true, issues: [] };
@@ -1584,7 +1586,6 @@ function renderPlanBanners(result, opts) {
     for (const it of coverage.issues) P.push(`> - ${esc(it)}`);
     P.push("");
   }
-  P.push(...renderBehaviourIndexBanners(result));
   const planMetaMissing = opts.planMetaMissing || [];
   if (planMetaMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — required plan values are unfilled:** ${planMetaMissing.map((k) => "`" + k + "`").join(", ")}. Add them to \`manifest.planMeta\` and re-run \`migrate.mjs --plan\` (each shows as a \`<FILL: …>\` below until supplied).`, "");
   const placementBlockers = opts.placementBlockers || [];
@@ -1749,6 +1750,12 @@ export function renderPlanNotes(result) {
   ];
   const unverified = noChildPageNodes(result.childPages || []);
   if (unverified.length) L.push("", "### Child-page answers still worth one more call", "", ...unverified.map(noChildPageNote));
+  // ENG-96327 — the step-5.1 behaviour-index follow-ups (a bundle warning closed by a disposition; keys that name
+  // only a wiring card, address only the section scope, or carry a rejected reported trigger). These are advisory
+  // instructions to the AGENT — fix/complete `behaviour-index.json` and re-merge — not approver decisions, so they
+  // live here rather than at the top of `plan.md`. (The ⛔ blocking banners stay in `plan.md`.)
+  const biNotes = [...renderBundleWarningNotes(result), ...renderBehaviourIndexBanners(result)].filter((l) => l !== "");
+  if (biNotes.length) L.push("", "### Behaviour-index (step 5.1) follow-ups", "", ...biNotes);
   // No `--out`-dependent footer: the CLI writes THIS string verbatim and `result.planNotes` carries the same one, so
   // the file and the programmatic result cannot drift into two slightly different documents.
   return L.join("\n") + "\n";

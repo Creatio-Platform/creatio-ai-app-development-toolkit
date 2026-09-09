@@ -7852,10 +7852,11 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         && json.structure.bundleWarningsClosed?.length === 1
         && json.structure.bundleWarningsClosed[0].disposition === "resolved-manually",
       () => ({ status: r.status, issues: json?.structure?.issues, closed: json?.structure?.bundleWarningsClosed }));
-    check("ENG-96571 A5: a CLOSED warning is rendered `ℹ … CLOSED by a recorded disposition` with its own text and note — cleared, never deleted (the rule `renderFidelityWarnings` already follows)",
-      () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stdout)
-        && plan.stdout.includes("looked the three details up by hand"),
-      () => ({ status: plan.status, line: (plan.stdout.match(/> ℹ.*bundle warning[^\n]*/) || ["(none)"])[0].slice(0, 200) }));
+    check("ENG-96571 A5: a CLOSED warning is rendered `ℹ … CLOSED by a recorded disposition` with its own text and note — in the agent-facing plan NOTES (stderr with no --out; plan.notes.md with one), never in the approver's plan.md — cleared, never deleted (the rule `renderFidelityWarnings` already follows)",
+      () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stderr)
+        && plan.stderr.includes("looked the three details up by hand")
+        && !plan.stdout.includes("CLOSED by a recorded disposition"),
+      () => ({ status: plan.status, line: (plan.stderr.match(/ℹ.*bundle warning[^\n]*/) || ["(none)"])[0].slice(0, 200), leakedToStdout: plan.stdout.includes("CLOSED by a recorded disposition") }));
     // GUARD-CAN-FAIL: the disposition is load-bearing. Drop the disposition MAP alone and the same manifest blocks
     // again — so the check above passes because the answer was read, not because the fixture cannot block.
     const noDisp = { ...closed }; delete noDisp.bundleWarningDispositions;

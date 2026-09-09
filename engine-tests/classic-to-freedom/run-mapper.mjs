@@ -7420,8 +7420,8 @@ check("handoff BACK: the generated ⚠ Custom methods table carries a `Described
   /C01 AC-1, AC-2/.test(hoPlan));
 check("handoff BACK: an undescribed row reads ⚠, not a blank",
   /⚠ not described/.test(renderPlan(ho, {})));
-check("handoff BACK: unmatched keys surface as a plan banner",
-  /matched no imperative row/.test(hoPlan));
+check("handoff BACK / ENG-96327: unmatched keys surface as an agent banner in plan.notes.md, NOT in plan.md",
+  /matched no imperative row/.test(renderPlanNotes(hoBack)) && !/matched no imperative row/.test(hoPlan));
 
 // CHAIN ROOTS: a helper resolved only to its caller is the weakest trigger the engine emits, and the header counts
 // it as still open. Once the caller is answered the helper's answer is one hop away in the same table — but the
@@ -7597,8 +7597,8 @@ const secBack = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "D
 check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS reported as `sectionOnly`",
   !secBack.behaviourIndex.unmatched.includes("setOwner")
     && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
-check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
-  /address only the SECTION scope/.test(renderPlan(secBack, {})));
+check("handoff BACK / ENG-96327: a section-only key renders a ⚠ banner in plan.notes.md (agent-facing), NOT in plan.md — matched must not read as rendered",
+  /address only the SECTION scope/.test(renderPlanNotes(secBack)) && !/address only the SECTION scope/.test(renderPlan(secBack, {})));
 // All THREE key kinds in ONE run. `sectionOnly` and `unmatched` are computed by calling the same scope-digest
 // helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
 // filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
@@ -7658,7 +7658,7 @@ check("handoff BACK: adding the section scope leaves `coverage.complete` and the
 // (`mixin:someMixin` also appears in the member table). So render ONCE, slice the banner's own line — it is pushed
 // as a single concatenated template string — and assert the keys inside that slice. Verified by mutation: blanking
 // the banner's key list turns this check red (PR#88 review, Minor).
-const wiringPlanLines = renderPlan(wiringWithSec, {}).split("\n");
+const wiringPlanLines = renderPlanNotes(wiringWithSec).split("\n"); // ENG-96327 — behaviourIndex banners live in plan.notes.md now
 const wiringBannerLine = wiringPlanLines.find((l) => /name only a wiring card/.test(l)) || "";
 check("handoff BACK: a wiring-only row renders its ⚠ plan banner naming EVERY wiring-only key ON THAT LINE — the advisory is the ONLY signal for an `externalRef` row, which never blocks on coverage",
   !!wiringBannerLine && /`mixin:someMixin`/.test(wiringBannerLine) && /`DealSection::mixin:orderUtil`/.test(wiringBannerLine),
@@ -7715,14 +7715,14 @@ check("wiringOnly: a `mixin:` row and an `externalRef` method carrying a wiring 
   hoWire.behaviourIndex.wiringOnly.includes("wired") &&
   hoWire.behaviourIndex.wiringOnly.length === 2,
   () => hoWire.behaviourIndex.wiringOnly);
-check("wiringOnly: the plan carries the ⚠ banner naming the keys and the fix",
-  /only a wiring card/.test(renderPlan(hoWire, {})) && /`mixin:LeadMixin`/.test(renderPlan(hoWire, {})));
+check("wiringOnly / ENG-96327: plan.notes.md carries the ⚠ banner naming the keys and the fix (agent-facing)",
+  /only a wiring card/.test(renderPlanNotes(hoWire)) && /`mixin:LeadMixin`/.test(renderPlanNotes(hoWire)));
 const hoWireOk = runMigration({ ...wireManifest, behaviourIndex: {
   "mixin:LeadMixin": { card: "main/C28", ac: ["AC-200"], bodyCard: "shared/C09", bodyAc: ["AC-51", "AC-53"] },
   wired: { bodyCard: "shared/C09", bodyAc: ["AC-51"] },
 } });
 check("wiringOnly: carrying the body card clears the flag — with or without a wiring card",
-  hoWireOk.behaviourIndex.wiringOnly.length === 0 && !/only a wiring card/.test(renderPlan(hoWireOk, {})));
+  hoWireOk.behaviourIndex.wiringOnly.length === 0 && !/only a wiring card/.test(renderPlanNotes(hoWireOk)));
 // FOLDED scopes are walked too. The check runs on the ROOT run only (a folded sub-run sees one page's rows, so
 // every sibling's answer would look wiring-only there) — which is exactly why the root has to reach INTO the folds:
 // a mixin declared on the mini page is the same silent hole as one on the record page. The mini's mixin is given a
@@ -7734,7 +7734,7 @@ const hoWireMini = runMigration({ ...wireManifest,
   behaviourIndex: { "mixin:MiniMixin": { card: "mini/C1", ac: ["AC-9"] } } });
 check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged from the root run",
   hoWireMini.behaviourIndex.wiringOnly.includes("mixin:MiniMixin") &&
-  /`mixin:MiniMixin`/.test(renderPlan(hoWireMini, {})),
+  /`mixin:MiniMixin`/.test(renderPlanNotes(hoWireMini)),
   () => ({ wiringOnly: hoWireMini.behaviourIndex.wiringOnly,
            scopes: hoWireMini.stubIndex.map(s => s.schema || s.role) }));
 check("wiringOnly: a FOLDED sub-run reports nothing itself — the root owns the verdict, so no wall of per-scope noise",
@@ -7750,10 +7750,10 @@ for (const [label, blank] of [["empty string", ""], ["whitespace only", "   "]])
     wired: { card: "main/C28", ac: ["AC-201"], bodyCard: blank },
   } });
   const blankPlan = renderPlan(hoBlank, {});
-  check(`wiringOnly: a ${label} bodyCard is ABSENT, not present — both legs stay flagged and the ⚠ banner still fires`,
+  check(`wiringOnly: a ${label} bodyCard is ABSENT, not present — both legs stay flagged and the ⚠ banner still fires (in plan.notes.md, ENG-96327)`,
     hoBlank.behaviourIndex.wiringOnly.includes("mixin:LeadMixin") &&
     hoBlank.behaviourIndex.wiringOnly.includes("wired") &&
-    /only a wiring card/.test(blankPlan),
+    /only a wiring card/.test(renderPlanNotes(hoBlank)),
     () => hoBlank.behaviourIndex.wiringOnly);
   // Asserted on THAT row, ending where it ends: a plan-wide match would be satisfied by any other clean row.
   const blankRow = (blankPlan.split("\n").find((l) => l.startsWith("| LeadMixin | mixin |")) || "").trim();
@@ -7865,7 +7865,7 @@ check("ENG-96571 A1: a `behaviourEstablished: false` mixin entry is NOT counted 
 const badTrigger = runMigration({ ...handoffManifest, behaviourIndex: {
   privateHelper: { trigger: "internal", from: "privateHelper", card: "C01", ac: ["AC-1"] },
 } });
-const badTriggerPlan = renderPlan(badTrigger, {});
+const badTriggerPlan = renderPlanNotes(badTrigger); // ENG-96327 — the REJECTED-TRIGGER banner lives in plan.notes.md (agent-facing)
 const badTriggerStub = badTrigger.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper");
 check("ENG-96571 A2: a row naming ITSELF as its own origin is NOT filled — `triggers` stays empty (source-level; the plan's human columns no longer render a trigger cell)",
   badTriggerStub.triggers.length === 0,
@@ -7876,16 +7876,15 @@ check("ENG-96571 A2: the run records the rejection with its REASON in `behaviour
     && /row itself/.test(badTrigger.behaviourIndex.rejectedTriggers[0].why)
     && !badTrigger.behaviourIndex.triggersFilled.includes("privateHelper"),
   () => JSON.stringify(badTrigger.behaviourIndex.rejectedTriggers));
-check("ENG-96571 A2: the plan renders the REJECTED-TRIGGER banner, naming the row and the reason, and points at the vocabulary to fix it with",
+check("ENG-96571 A2 / ENG-96327: plan.notes.md renders the REJECTED-TRIGGER banner (agent-facing), naming the row and the reason, and points at the vocabulary to fix it with",
   /reported trigger\(s\) in `manifest.behaviourIndex` were REJECTED and NOT filled in/.test(badTriggerPlan)
     && /privateHelper/.test(badTriggerPlan) && /entity-filter/.test(badTriggerPlan),
   () => badTriggerPlan.split("\n").filter((l) => /REJECTED/.test(l)));
 check("ENG-96571 A2 ANTI-VACUITY: a VALID reported trigger on the same row IS filled, prints `— reported`, and raises NO banner — the rejection above is the guard firing, not the fill path being broken",
   (() => { const r = runMigration({ ...handoffManifest, behaviourIndex: {
       privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01", ac: ["AC-1"] } } });
-    const plan = renderPlan(r, {});
     return r.behaviourIndex.rejectedTriggers.length === 0 && r.behaviourIndex.triggersFilled.includes("privateHelper")
-      && !/were REJECTED/.test(plan); })(),
+      && !/were REJECTED/.test(renderPlanNotes(r)); })(),
   () => JSON.stringify(runMigration({ ...handoffManifest, behaviourIndex: { privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01" } } }).behaviourIndex));
 // PINNED, not accidental: `behaviourEstablished: false` blocks the TRIGGER fill as well as the card. The two legs
 // must read ONE entry the same way — the workflow's `entriesOf` drops the entry entirely, so it never validates
