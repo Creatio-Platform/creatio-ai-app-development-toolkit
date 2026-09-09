@@ -13351,6 +13351,17 @@ check("ENG-96327 (self-review): a NOT_EQUAL column-to-column condition reads `wh
 check("ENG-96327 (self-review) ANTI-VACUITY: EQUAL still reads `= OtherStage` and LESS reads `< OtherStage` (esc renders it `&lt;`) — the fix states the operator, it did not drop equality nor mangle relational ops",
   /when Stage = OtherStage/.test(r1gOpRow(3)) && /when Stage &lt; OtherStage/.test(r1gOpRow(5)),
   () => ({ eq: r1gOpRow(3), lt: r1gOpRow(5) }));
+// ENG-96327 (self-review, PR #166): the CONFUSABLE boundary operators — every one COMPARISON_OP defines — each pins
+// its OWN glyph, so a copy-paste transposition (≤ vs <, ≥ vs >) that inverts a rule's gating semantics fails here.
+// `<`/`>` are esc-encoded (`&lt;`/`&gt;`); `≤`/`≥` are unicode. IS_NULL (11) reads `is empty` (no right operand).
+check("ENG-96327 (self-review): the relational boundary ops each render their exact glyph — ≤ (6), > (7), ≥ (8) — never transposed to the adjacent `<`/`>=`",
+  /when Stage ≤ OtherStage/.test(r1gOpRow(6))
+  && /when Stage &gt; OtherStage/.test(r1gOpRow(7))
+  && /when Stage ≥ OtherStage/.test(r1gOpRow(8)),
+  () => ({ le: r1gOpRow(6), gt: r1gOpRow(7), ge: r1gOpRow(8) }));
+check("ENG-96327 (self-review): a presence check IS_NULL (11) reads `is empty` — the confusable partner of IS_NOT_NULL's `is filled`, so a swap is caught",
+  /when Stage is empty/.test(r1gOpRow(11)) && !/is filled/.test(r1gOpRow(11)),
+  () => r1gOpRow(11));
 const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
 check("ENG-96327 (was ENG-96571 G ANTI-VACUITY): a comparison against a CONSTANT states the whole condition too — `when Stage = New`, the value the cell now prints (a readable constant is shown; a lookup GUID would read `a specific value`)",
   /when Stage = New/.test(r1gRow(r1gConst)),

@@ -87,20 +87,21 @@ has an identity to match on the built page.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `<action>` | `<caption resource>` | `<icon>` | `<Enabled condition>` — carry as Freedom state | group `<n>` · under `<submenu parent>` | `<package>` | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
-> **Build note — column ids:** each grid column also needs a GUID `id`; the engine mints none, so the builder assigns it.
-
 > **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its
 > container and index, the filtered column and the control. `crt.QuickFilter` also needs its own nested filter config
 > and value binding, and it is `compositeOnly`, so complete it from that component's documentation.
 
-Build notes are the two places this ChangeSet is deliberately PARTIAL — a fact with no answer to resolve. A hazard
+A build note is where this ChangeSet is deliberately PARTIAL — a fact with no answer to resolve. A hazard
 that DOES have an answer is not a note: it is a ⚠ Confirm item, gated on the `list` page key like a form page's, so
 it reaches `--units.preflight` and cannot be read past. The list page raises its own:
 
 #### ⚠ Confirm before I build (<n>)
-All nine kinds the list page can raise — the set is closed, so a kind absent from a run's plan means the run had
-nothing to ask, never that the question went unasked. Ten bullets, nine kinds: `list-columns` is listed twice
-because it asks about an EMPTY set and about a FALLBACK one, and the two are answered separately:
+This is the CLOSED set of kinds the list page raises into the machine channel (`--units.preflight`). **The HUMAN plan
+shows fewer** (ENG-96327): `list-columns`, `list-column-path`, `list-command-bar`, `list-add-routing`,
+`list-row-action` and `list-process` are DROPPED from the rendered ⚠ Confirm — each is instead stated as a
+`- **List columns:**` / `- **Command-bar actions:**` / `- **Section process:**` bullet (or the Row-actions table) in
+the List-page block above, so the approver sees the fact without a redundant question. They still ride `--units`. A
+kind absent from a run's plan means the run had nothing to ask, never that the question went unasked:
 - **[list-columns]** no list columns resolved — the grid would be built empty …
 - **[list-columns]** fallback list column set — the Classic section declares no list columns, so the grid would
   ship with a single fallback column … (the SAME kind, second item: a fallback set is an unanswered question
@@ -144,35 +145,24 @@ evidence id and no `--units.preflight` row — a question an operator was asked 
 
 ### <entity> form page
 #### Layout
-| Region | Placement | Element | Type | Source | Rule | Additional |
-| --- | --- | --- | --- | --- | --- | --- |
-| Side profile › <island> | r<row> · c<col> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
-| Tab · <name> | r<row> · c<col> (span <n>) | <field label> | … | PDS.<col> | … | … |
-| Tab · <name> | — | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
-| Tab · <name> | — | <feature> | Approvals / Attachments / Feed (component) | template context — `<Template>` ships it (measured) / ⚠ ADD — `<Template>` ships NO <feature> (measured) / ⚠ confirm on-stand — `<Template>`'s capabilities are NOT measured | — | — |
-| Tab · <name> | — | Activities / Emails | Related list | Activity · native | — | — |
-| Card actions | — | <action> | Action | — | — | ⚠ which process / verify print reports |
+| Region | Element | Type | Source | Rule | Additional |
+| --- | --- | --- | --- | --- | --- |
+| Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
+| Tab · <name> | <field label> | … | PDS.<col> | … | … |
+| Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
+| Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template context — `<Template>` ships it (measured) / ⚠ ADD — `<Template>` ships NO <feature> (measured) / ⚠ confirm on-stand — `<Template>`'s capabilities are NOT measured | — | — |
+| Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
+| Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
-**`Placement` is the cell, and the rows are SORTED BY IT** (row, then column) — not by the order the Classic
-`diff` declares the fields. `r<row> · c<col>` is the field's cell in the TARGET Freedom grid (1-based; `(span n)` /
-`(rows n)` only when wider than one cell); `—` means the element has no computed cell (a detail, a placed widget,
-a card action). Reading the table top-to-bottom into a multi-column container is what shipped
-`City1 | Country1` instead of `City1 | City2` — the classic page declared the four fields in that order while
-placing them as two rows of two.
+**The Layout table has NO cell-coordinate column, and it renders no per-region "grid" (ENG-96327).** Freedom is a
+12-column canvas and the migration agent designs the layout itself, so the plan does NOT prescribe the classic
+`row · column` cells. The rows are still SORTED into reading order — a multi-column region's fields stay adjacent (the
+pairing a naive top-to-bottom read once broke, shipping `City1 | Country1` instead of `City1 | City2`) — but the exact
+cell is the agent's call, guided by `creatio-ui-guidelines`, not a coordinate to reproduce.
 
-**Every multi-column region also renders as its grid**, one line per row, so the pairing is visible rather than
-assembled by the reader:
-
-```md
-##### Grid of `Header` — 2 columns, 8 rows (build the fields at THESE cells)
-| Row | Column 1 | Column 13 |
-| --- | --- | --- |
-| 7 | City1 | City2 |
-| 8 | Country1 | Country2 |
-```
-
-The same cells are published per field in `--units.expect.fieldLayout` (`{ name, row, column, colSpan?, rowSpan? }`),
-and `--verify` MEASURES them. **The placement leg is ADVISORY today**, so a deviation is `⚠ verify` /
+The field cells the reading-order sort implies are STILL published per field in `--units.expect.fieldLayout`
+(`{ name, row, column, colSpan?, rowSpan? }`) — that machine leg is unchanged — and `--verify` MEASURES them.
+**The placement leg is ADVISORY today**, so a deviation is `⚠ verify` /
 `unverified`, never `❌ MISSING`: a page with every expected field present by name but at different cells names
 both the planned and the built cell, the row stays OPEN (the done-gate does not pass), and the text says the
 comparison itself is not yet trustworthy. Three states in all:
@@ -237,41 +227,31 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 ### List page
 - **Add record:** via mini page `ApplicantMiniPage` — migrate as a Freedom mini page / quick-add
 - **List columns:** Name · Stage · Created on — the Classic list shows these columns; confirm this set is kept in Freedom
-
-#### List columns (in order)
-| # | Column | Grid column | Source | Type |
-| --- | --- | --- | --- | --- |
-| 1 | Name | `PDS_Name` | PDS.Name | Text (`dataValueType` 1) |
-| 2 | Stage | `PDS_Stage` | PDS.Stage | Lookup (`dataValueType` 10) → RecruitmentStage |
-| 3 | Created on | `PDS_CreatedOn` | PDS.CreatedOn | DateTime (`dataValueType` 7) |
+- **Section process:** none found
+- **Command-bar actions:** 1 found via `getSectionActions()` — see the table below; a button the section adds through its view `diff` is not captured here, so verify the full set on-stand
 
 #### Command-bar actions
 | Action | Caption | Icon | Condition | Menu position | Source package | Source | Freedom target |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `runBulkAssign` | ⚠ none read — confirm on-stand | — | ⚠ none declared — confirm on-stand | group 0 | HRApplicant | `getSectionActions` | list-page command bar — ⚠ container NOT resolved here |
 
-> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
-
-#### ⚠ Confirm before I build (1)
-- **[list-command-bar]** command-bar buttons: runBulkAssign — read from BOTH classic surfaces — the `getSectionActions()` menu and the buttons the section inserts through its own view `diff` (each row's Source cell says which) — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar
-
 ### Applicant form page
 #### Layout
-| Region | Placement | Element | Type | Source | Rule | Additional |
-| --- | --- | --- | --- | --- | --- | --- |
-| Side profile › Contact | r1 · c1 | Contact | Lookup (Contact) | PDS.Contact | — | — |
-| Side profile › Contact | r2 · c1 | Mobile phone | Phone | PDS.MobilePhone | read-only | Value from linked Contact |
-| Side profile › Contact | r3 · c1 | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | — | — |
-| Side profile › Request | r4 · c1 | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
-| Side profile › Request | r5 · c1 | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
-| Tab · Basic information | r1 · c1 | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
-| Tab · Basic information | — | Contact comms | Related list | ContactCommunication · by Contact | — | — |
-| Tab · Basic information | — | Attachments | Attachments | ⚠ confirm on-stand — `PageWithTabsFreedomTemplate`'s capabilities are NOT measured, so whether it ships Attachments is unknown | — | — |
-| Tab · Current vacancies | — | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
-| Tab · History | — | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
-| Tab · History | — | Activities | Related list | Activity · native | — | — |
-| Tab · Approvals | — | Visas | Approvals | native — confirm component on-stand | — | — |
-| Card actions | — | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
+| Region | Element | Type | Source | Rule | Additional |
+| --- | --- | --- | --- | --- | --- |
+| Side profile › Contact | Contact | Lookup (Contact) | PDS.Contact | — | — |
+| Side profile › Contact | Mobile phone | Phone | PDS.MobilePhone | read-only | Value from linked Contact |
+| Side profile › Contact | Specialist expertise level | Lookup (ExpertiseLevel) | PDS.ExpertiseLevel | — | — |
+| Side profile › Request | Request | Lookup (InternalRequest) | PDS.InternalRequest | — | — |
+| Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
+| Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
+| Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
+| Tab · Basic information | Attachments | Attachments | template context — `PageWithTabsFreedomTemplate` ships Attachments (measured); re-bind it, do not rebuild | — | — |
+| Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
+| Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
+| Tab · History | Activities | Related list | Activity · native | — | — |
+| Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
+| Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
 #### Business rules
 | Trigger | Behaviour | Effect | Freedom target |
@@ -284,10 +264,10 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 > 2 custom method(s) — see **⚠ Custom methods** below.
 
 #### ⚠ Custom methods — account for EVERY row (2)
-| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
-| --- | --- | --- | --- | --- | --- | --- |
-| onContactChange | L247-250 | attribute-onchange (from Contact attribute onChange) — reported | refresh | — | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
-| ↳ setContactInfo | L429-433 | internal call from onContactChange | sets values | Email, MobilePhone, Skype → Email, MobilePhone, Skype | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
+| Method | Source | What the item does | Use case | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- |
+| onContactChange | L247-250 | Refreshes the record when the linked contact is changed. | When a user picks a different Contact, the page reloads so the contact-derived fields show the new person's details. | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
+| ↳ setContactInfo | L429-433 | Copies the chosen contact's email, phone and Skype onto the record. | After the contact loads, its communication details are filled in so the recruiter does not retype them. | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
 
 #### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.

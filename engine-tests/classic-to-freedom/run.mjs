@@ -1093,6 +1093,14 @@ check("ENG-96327: symbolic `Terrasoft.ComparisonType.EQUAL`→3 and `IS_NOT_NULL
   && a3Pres.conditions[0].right.value === null
   && a3Contain.conditions[0].comparison === null,
   () => JSON.stringify({ eq: a3Sym.conditions[0], pres: a3Pres.conditions[0], contain: a3Contain.conditions[0] }));
+// ENG-96327 (self-review, PR #166): the REST of the closed symbolic set resolves to its numeric code too — the
+// confusable pairs (NOT_EQUAL vs EQUAL, LESS vs LESS_OR_EQUAL, GREATER vs GREATER_OR_EQUAL, IS_NULL vs IS_NOT_NULL)
+// where a transposed member would silently resolve to the wrong operator. Each maps onto the renderer's contract.
+const symCmp = (name) => a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.${name}, "rightExpression": { "type": 0, "value": "New" } }]`).conditions[0]?.comparison;
+check("ENG-96327: every listed symbolic ComparisonType resolves to its numeric code (NOT_EQUAL→4, LESS→5, LESS_OR_EQUAL→6, GREATER→7, GREATER_OR_EQUAL→8, IS_NULL→11)",
+  symCmp("NOT_EQUAL") === 4 && symCmp("LESS") === 5 && symCmp("LESS_OR_EQUAL") === 6
+  && symCmp("GREATER") === 7 && symCmp("GREATER_OR_EQUAL") === 8 && symCmp("IS_NULL") === 11,
+  () => JSON.stringify({ ne: symCmp("NOT_EQUAL"), lt: symCmp("LESS"), le: symCmp("LESS_OR_EQUAL"), gt: symCmp("GREATER"), ge: symCmp("GREATER_OR_EQUAL"), isnull: symCmp("IS_NULL") }));
 // (iii) the object-MAP form — a non-array `conditions`. It is READ, through the same `safeKeys` the declared count
 // uses, so the two halves agree: 2 declared / 2 sanitized. Before the ENG-96571 review `sanitizeConditions`
 // returned `[]` for it while `declaredConditionCount` counted its keys, so `conditionGap` saw `declared > 0` with
