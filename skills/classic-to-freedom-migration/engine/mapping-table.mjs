@@ -359,7 +359,7 @@ const FEATURE_ENTITY_ROWS = [
 // flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed.
 const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
-const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; auto-populates from the object's DCM case.";
+const DCM_NEXTSTEPS_NOTE = "Next steps — shipped by the DCM case template (`crt.NextSteps`); auto-populates from the object's DCM case.";
 // `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
 // Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
 // (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
@@ -367,7 +367,7 @@ const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; au
 // page). The signals-completeness gate blocks the plan until `signals.dcm` is resolved, so a non-blocked
 // plan always has a definite answer here.
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
-const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
+const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (`crt.NextSteps`)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
 // ENG-95543 — the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
 // `mapWidgets` consumes them directly, and rewriting that builder was not part of giving the data one home.
 // `verify.componentType` is stated wherever the Freedom component type is KNOWN and registry-resolvable — the DCM
@@ -680,16 +680,17 @@ export const FREEDOM_TEMPLATE_CAPABILITIES = Object.freeze({
     tabs: true, feed: false, attachments: false, topAreaColumns: 1, profileIsland: false,
     measuredIn: "ENG-96445 / ENG-96444 (2026-09-02, paired migration run)",
   }),
-  // NOT A STAND MEASUREMENT — a named fixture, kept in the table for one reason: every template measured so far
-  // ships NO Feed and NO Attachments, so the `provided` verdict (and the "ships … (measured); re-bind it, do not
-  // rebuild" Source cell it renders) is unreachable from any real manifest and therefore untested. The first stand
-  // template that DOES ship Feed would then exercise that rendering for the first time in production — reviving
-  // the very false-promise this feature removes. The `__` prefix is not a legal Creatio schema name, so no real
-  // manifest can name it by accident; delete this entry once a real feed-shipping template is measured into the
-  // table above and the tests point at that one instead.
-  __FixtureTemplateShippingFeed: Object.freeze({
-    tabs: true, feed: true, attachments: false, topAreaColumns: 1, profileIsland: false,
-    measuredIn: "NOT MEASURED — test fixture for the template-PROVIDED verdict (PR #156 review, finding 2)",
+  // The DCM case template (chosen whenever `signals.dcm` is present). MEASURED via `get-page
+  // PageWithTabsAndProgressBarTemplate` on the kravchuk_0922 stand (2026-09-09): its own body ships the
+  // `crt.EntityStageProgressBar` and a `crt.NextSteps` (in `NextStepsTabContainer`); its merged bundle also carries
+  // `crt.Feed` (`FeedTabContainer`), `crt.FileList` (`AttachmentsTabContainer`) and a `SideAreaProfileContainer`
+  // (side profile island; no top area). So on a case page Feed / Attachments / Next steps are template CONTEXT —
+  // re-bind, do not rebuild — the opposite of what the old "capabilities NOT measured" hedge told the agent.
+  // `nextSteps` is a capability key `widgetSource` reads directly (no `CAPABILITY_FEATURE` entry, so it files no
+  // extra coverage count — the DCM `dcm-next` row already covers it).
+  PageWithTabsAndProgressBarTemplate: Object.freeze({
+    tabs: true, feed: true, attachments: true, nextSteps: true, topAreaColumns: null, profileIsland: true,
+    measuredIn: "get-page on kravchuk_0922 (2026-09-09): own body EntityStageProgressBar + NextSteps; merged bundle crt.Feed + crt.FileList + crt.NextSteps + SideAreaProfileContainer",
   }),
 });
 

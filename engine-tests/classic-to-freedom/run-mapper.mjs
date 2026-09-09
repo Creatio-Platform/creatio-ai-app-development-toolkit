@@ -3843,11 +3843,13 @@ const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
   /Filter · Req[^\n]*2 filters/.test(dupFilt.designSpec));
-// #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
+// #5 — with no template that ships it, Next steps is the `crt.NextSteps` DESIGNER COMPOSITE (a toggle-container
+// preset you drop), NOT a hand-built tab. (ENG-96327: verified via get-component-info — "Next steps" is a
+// `crt.ExpansionPanel` preset wrapping `crt.NextSteps`.)
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — a new tab, not template-provided",
-  /\| Tab · Next steps \(new\) \| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
+check("#5 widgets: Next steps is the `crt.NextSteps` composite (toggle container), NOT a hand-built tab, when no chosen template ships it",
+  /\| Tab · Next steps \| Next steps \| Component \| ⚠ ADD — the `Next steps` designer composite \(`crt\.NextSteps` in a `crt\.ExpansionPanel` toggle container\), not a hand-built tab/.test(wReg.designSpec));
 
 // #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
 // NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
@@ -3865,11 +3867,19 @@ check("#8 DCM: the on-stand case check (SysSchema ManagerName='DcmSchemaManager'
   /DcmSchemaManager/.test(MAPPING_DOC) && /CaseSchemaManager/.test(MAPPING_DOC)
   && !/DcmSchemaManager/.test(dcmCs.designSpec),
   () => "doc carries the DcmSchemaManager check; plan does not");
-check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
-  /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
+check("#8 DCM: with no template chosen, Next steps is the `crt.NextSteps` composite (ADD — toggle container, not a hand-built tab); the progress bar is PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind)",
+  /\| Tab · Next steps \| Next steps \| Component \| ⚠ ADD — the `Next steps` designer composite/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
+// ENG-96327 — and when the plan CHOOSES that template (the normal DCM case), Next steps is template CONTEXT: the
+// template ships `crt.NextSteps`, so the row reads re-bind, not ADD (it is not a hand-built tab, nor an add at all).
+const dcmCsTpl = runMigration({ entity: "X", planMeta: { formTemplate: "PageWithTabsAndProgressBarTemplate" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("ENG-96327: on a DCM page whose chosen template ships Next steps, the row is template context / re-bind — NOT an ADD, never a hand-built tab",
+  /Next steps \| Component \| template context — `PageWithTabsAndProgressBarTemplate` ships Next steps \(measured\); re-bind it, do not rebuild/.test(dcmCsTpl.designSpec)
+  && !/Next steps \| Component \| ⚠ ADD/.test(dcmCsTpl.designSpec),
+  () => dcmCsTpl.designSpec.split("\n").filter((l) => /Next steps/.test(l)));
 check("#8 DCM: the widget PLACEMENT recipe (PageWithTabsAndProgressBarTemplate re-bind / MainContainer fallback, tools slot, flag-icon) lives in the mapping doc, not the plan note",
   /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC) && /MainContainer/.test(MAPPING_DOC)
   && !/flag-icon/.test(dcmCs.designSpec)
@@ -12409,22 +12419,22 @@ check("ENG-96457 (item 2): …and it gets its own EXPECTED COUNT with a `crt.Fee
 check("ENG-96457 (item 2): the template RECOMMENDATION is checked against the template — a 2-column Classic Header against a measured ONE-column top area is stated as a decision AT the recommendation, not discovered by the build",
   /top area has 1 column\(s\) and this Classic Header has 2/.test(br1PlanOut) && /decide before building/i.test(br1PlanOut),
   () => br1PlanOut.split("\n").filter((l) => /Template recommendation|top area has/.test(l)));
-// PR #156 review (finding 2): the THIRD verdict, `provided`. Every template measured so far ships NO Feed, so this
-// arm — and the "ships … (measured); re-bind it" Source cell it renders — was reachable by no fixture at all, and
-// the first stand template that does ship Feed would have exercised it for the first time in production. Both
-// halves are pinned: the Source cell says RE-BIND (not ADD), and `templateAbsentRows` files NO extra `crt.Feed`
-// expected count for it — an element the template ships must not also be demanded as an explicit build step.
+// PR #156 review (finding 2) / ENG-96327: the THIRD verdict, `provided`. It is now reachable from a REAL measured
+// template — `PageWithTabsAndProgressBarTemplate`, the DCM case template, measured (get-page, kravchuk_0922) to ship
+// Feed + Attachments + Next steps. Both halves are pinned: the Source cell says RE-BIND (not ADD), and
+// `templateAbsentRows` files NO extra `crt.Feed` expected count — an element the template ships must not also be
+// demanded as an explicit build step.
 const br1WithTemplate = (tpl, mode) => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
   m.planMeta = { ...m.planMeta, formTemplate: tpl };
   return spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], { input: JSON.stringify(m), encoding: "utf8" }); };
-check("ENG-96457 (item 2): a template MEASURED to ship Feed renders the third verdict — the Feed row reads template context / re-bind it, and it gets NO extra `crt.Feed` expected count (what the template ships must not also be demanded as a build step)",
-  () => { const out = br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "";
-    const rows = (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n");
-    return /template context — `__FixtureTemplateShippingFeed` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
+check("ENG-96457/ENG-96327: a template MEASURED to ship Feed renders the third verdict — the Feed row reads template context / re-bind it, and it gets NO extra `crt.Feed` expected count (what the template ships must not also be demanded as a build step)",
+  () => { const out = br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--checklist").stdout || "").split("\n");
+    return /template context — `PageWithTabsAndProgressBarTemplate` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
       && !/ships NO Feed/.test(out)
       && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
-  () => ({ feedRows: (br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
-    checklist: (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
+  () => ({ feedRows: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
+    checklist: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
 check("ENG-96457 (item 2): an UNMEASURED template is 'confirm on-stand', never a claim in either direction — the capability table's third state is what keeps it honest",
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
     m.planMeta = { ...m.planMeta, formTemplate: "PageWithTabsFreedomTemplate" };

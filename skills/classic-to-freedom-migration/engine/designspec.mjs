@@ -257,7 +257,16 @@ function widgetSource(w, opts) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
   if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed)"; // ENG-96327 — the re-bind / MainContainer-fallback recipe lives in the mapping doc, not this cell
-  if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
+  if (w.placement === "tab-next-to-feed") {
+    // Next steps is NOT a hand-built tab. The DCM case template ships it (measured — `PageWithTabsAndProgressBarTemplate`
+    // hosts `crt.NextSteps` in its own `NextStepsTabContainer`), so when the chosen template provides it the row is
+    // template context / re-bind. Otherwise it is the `Next steps` DESIGNER COMPOSITE — a `crt.NextSteps` inside a
+    // `crt.ExpansionPanel` (toggle container) preset you DROP, never a tab you author by hand.
+    const tpl = formTemplateOf(opts);
+    if (templateVerdict(opts, "nextSteps") === TPL.PROVIDED)
+      return `template context — \`${esc(tpl)}\` ships Next steps (measured); re-bind it, do not rebuild`;
+    return "⚠ ADD — the `Next steps` designer composite (`crt.NextSteps` in a `crt.ExpansionPanel` toggle container), not a hand-built tab";
+  }
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
   // ENG-96457 (item 2) — a base-declared widget is template context only if the CHOSEN template really ships it.
@@ -266,7 +275,7 @@ function widgetSource(w, opts) {
 }
 function rowsForWidgets(widgets, opts) {
   return (widgets || []).map((w) => {
-    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps" : "Header / top";
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w, opts), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
@@ -2209,7 +2218,7 @@ function buildLayoutGroupRows(cs, regionOf) {
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps" : "Header / top", esc(w.widget));
   return order.map((k) => {
     const e = byRegion.get(k);
     const parts = [];
