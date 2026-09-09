@@ -2230,6 +2230,26 @@ export function oversizeStateLine(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES)
   const bytes = encodedAsciiBytes(line)
   return bytes > maxBytes ? bytes : 0
 }
+// THE ONLY FIELD A RETRY MAY ASK THE AGENT TO SHORTEN. The copied line is verbatim, and every other field is a
+// stand fact reported field by field \u2014 an answer cannot drop one to save bytes without dropping the fact.
+export const RECONCILE_SHRINKABLE_FIELDS = ['notes']
+// AN ANSWER'S FLOOR: what it weighs with the shrinkable text gone. Over the ceiling THERE, no next answer can fit,
+// so the attempt budget buys nothing and the run stops on the first one.
+//
+// THIS IS THE PREDICATE, not `oversizeStateLine` above. A line UNDER the ceiling that leaves less room than the
+// stand facts need is exactly as unwinnable as a line over it: measured on the Contracts run, the line was 15327 B
+// of a 16000 B ceiling and the facts needed 2478 B, so three attempts were spent asking for a 1805 B reduction
+// against 761 B of shortenable text \u2014 and the generic recovery text then advised re-running the same route,
+// which reproduces the same bytes.
+//
+// Returns the floor's byte count when it exceeds `maxBytes`, else 0.
+export function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
+  if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return 0
+  const floor = { ...answer }
+  for (const k of RECONCILE_SHRINKABLE_FIELDS) delete floor[k]
+  const bytes = encodedAsciiBytes(JSON.stringify(floor))
+  return bytes > maxBytes ? bytes : 0
+}
 export function stateFromAnswer(answer) {
   const line = typeof answer?.summary === 'string' ? answer.summary.trim() : ''
   if (!line) return { fault: 'summary: the state line is missing — the state command printed none, or it was not copied. Nothing is scheduled off a state nobody produced' }

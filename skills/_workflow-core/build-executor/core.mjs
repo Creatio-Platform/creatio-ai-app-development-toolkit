@@ -38,7 +38,7 @@ import {
   guidelinesCloseMiss, guidelinesReturnFor, inContextParkWhy, inContextParkableKeys,
   isUnitOpenWithFindings, owesGuidelines,
   ownPackageRecord, packagePreconditionStop, pageStateOf, shortfallOf, shortfallText, parkableKeys, planGapKindLabel, planGapNext, planInvalidNextAll,
-  preflightToRun, oversizeStateLine, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, stateFromAnswer, componentSweepFaults, reopenKeySet, repairBlock, requeueDecisions,
+  preflightToRun, oversizeStateLine, unshrinkableAnswerBytes, RECONCILE_ANSWER_MAX_BYTES, reconcileShapeErrors, stateFromAnswer, componentSweepFaults, reopenKeySet, repairBlock, requeueDecisions,
   RESOLUTION_NOT_APPLIED, resolutionAttribution, resolutionsForUnit, resolutionsPromptText,
   resolvePackageState, roundsRun, scheduleUnits, sectionRouteFrom, selfCheckDiscrepancyText, selfCheckMismatches, selfCheckStillShort,
   shouldPauseAfter, templateMismatches, templateNameList, unknownCheckpointKeys, verifyFetchPlan,
@@ -838,9 +838,11 @@ const resolutionsReopened = new Set()
   // move differs between them, so the last attempt's fault list and rejection are held for the failure text to name.
   let lastShapeFaults = []
   let lastHostRejection = ''
-  // The THIRD failure, and the only one that ends the budget early: the copied line is over the wire ceiling. Held
-  // as the byte count so the stop can name it, and reset per call with the other two.
-  let lastOversizeLine = 0
+  // The THIRD failure, and the only one that ends the budget early: the answer cannot fit the wire ceiling even
+  // with its shortenable text gone. Held as that floor's byte count so the stop can name it, and as the line's own
+  // size so the stop can say which half is the bulk. Reset per call with the other two.
+  let lastOversizeFloor = 0
+  let lastOversizeLineBytes = 0
   // ONE WRITER for the attempt-failure pair: both fields move together, so no branch can set one and leave the
   // other stale — the far readers (the stop texts, the round-tail log) key on whichever is set last.
   function recordAttemptFailure(faults, rejection) {
@@ -849,15 +851,17 @@ const resolutionsReopened = new Set()
   }
   function* reconcileAgent(roundNo, id, label, note) {
     recordAttemptFailure([], '')
-    lastOversizeLine = 0
+    lastOversizeFloor = 0
+    lastOversizeLineBytes = 0
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
       // Sequential by definition: attempt 2 exists only because attempt 1 failed (same shape as the round's own
       // `dispatchUnit` loop, which is sequential for the same reason).
       const answer = yield* reconcileAttempt(roundNo, id, label, note, attempt)
       if (answer) return answer
-      // A LINE OVER THE CEILING ENDS THE BUDGET HERE. The agent copies that line verbatim, so a retry can only
-      // re-send the same bytes: spending the remaining attempts would cost two dispatches to learn nothing.
-      if (lastOversizeLine) return null
+      // AN ANSWER THAT CANNOT FIT ENDS THE BUDGET HERE. The line is copied verbatim and the stand facts are
+      // reported field by field, so a retry can only re-send the same bytes: spending the remaining attempts
+      // would cost two dispatches to learn nothing.
+      if (lastOversizeFloor) return null
     }
     return null
   }
@@ -942,14 +946,17 @@ const resolutionsReopened = new Set()
     // a string where the arithmetic reads a boolean, spends an attempt and is named in the log — never merged
     // into the state, where it would reach the park/close arithmetic as `undefined` and settle a page on a fact
     // nobody established.
-    // THE LINE'S OWN SIZE, CHECKED BEFORE THE SHAPE. Over the ceiling there is nothing to ask for: the fault is
-    // the plan's size, the engine already said so on stderr where it computed it, and the remaining attempts are
-    // not spent. Every other fault below is something a next answer can fix.
-    const oversize = oversizeStateLine(answer)
+    // WHETHER ANY ANSWER COULD FIT, CHECKED BEFORE THE SHAPE. Measured with the shortenable text removed: if the
+    // floor is already over the ceiling there is nothing left to ask for, so the remaining attempts are not spent.
+    // A line UNDER the ceiling that leaves the stand facts too little room lands here too — that band is what
+    // spent three attempts on the Contracts run and then advised a re-run that reproduced the same bytes.
+    // Every other fault below is something a next answer can fix.
+    const oversize = unshrinkableAnswerBytes(answer)
     if (oversize) {
-      lastOversizeLine = oversize
+      lastOversizeFloor = oversize
+      lastOversizeLineBytes = oversizeStateLine(answer, 0)
       recordAttemptFailure([], '')
-      log(`Reconcile (${label}) copied a state line of ${oversize} B on attempt ${attempt} of ${RECONCILE_ATTEMPTS}, over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling — NOT retrying, since a verbatim copy cannot be made smaller; nothing was built`)
+      log(`Reconcile (${label}) answered ${oversize} B with its shortenable text already gone on attempt ${attempt} of ${RECONCILE_ATTEMPTS} (state line ${lastOversizeLineBytes} B), over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling — NOT retrying, since no next answer can fit; nothing was built`)
       return null
     }
     const faults = reconcileShapeErrors(answer)
@@ -1012,9 +1019,12 @@ const resolutionsReopened = new Set()
   // THE ONE RECONCILE FAILURE A RE-RUN CANNOT CLEAR, so it is named before the transient ones. It is also not the
   // agent's: the state is on disk in full, and what does not fit is the copy of it this script's own answer channel
   // can carry.
-  const oversizeLineClause = () => `the state line is ${lastOversizeLine} B, over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling. The Reconcile agent copies that line verbatim and cannot shorten it, so the remaining attempts were NOT spent and a re-run will not clear it: this plan is past what one copied line can carry. The state itself is complete in \`reconcile.json\` in the migration folder. Build this plan in smaller slices (fewer units per run)`
+  // NAMES BOTH HALVES, and never advises a re-run. The operator's move depends on which half is the bulk: a
+  // dominant line is the plan's size, dominant facts are the stand's. `notes` is excluded from the number
+  // because emptying it is what the retry would have asked for and it still would not have fit.
+  const oversizeLineClause = () => `no answer to Reconcile can fit the ${RECONCILE_ANSWER_MAX_BYTES}-byte ceiling: with its shortenable text removed the answer is still ${lastOversizeFloor} B, of which the copied state line is ${lastOversizeLineBytes} B. The line is copied verbatim and the stand facts are reported field by field, so nothing in it can be traded away — the remaining attempts were NOT spent, and RE-RUNNING THIS BUILD WILL PRODUCE THE SAME BYTES. The state itself is complete in \`reconcile.json\` in the migration folder. Reduce what has to travel: build this plan in smaller slices (fewer units per run), or shrink the plan's ⚠ Confirm worklist, which is the largest part of the line on a heavily customized page`
   const reconcileFailedNext = () => {
-    if (lastOversizeLine) return `${oversizeLineClause()}. Nothing was built`
+    if (lastOversizeFloor) return `${oversizeLineClause()}. Nothing was built`
     if (lastHostRejection) {
       return `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
     }
@@ -1027,7 +1037,7 @@ const resolutionsReopened = new Set()
   // ternary in the return: the lead-in differs there (the verdict on disk is this round's), so only the failure
   // clause is shared vocabulary.
   const reconcileRoundFailureClause = () => {
-    if (lastOversizeLine) return `The round could not be reconciled: ${oversizeLineClause()}.`
+    if (lastOversizeFloor) return `The round could not be reconciled: ${oversizeLineClause()}.`
     if (lastHostRejection) return `The host REJECTED the answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}). ${REPEATED_REJECTION_TRIAGE}`
     if (lastShapeFaults.length) return `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
     return `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`

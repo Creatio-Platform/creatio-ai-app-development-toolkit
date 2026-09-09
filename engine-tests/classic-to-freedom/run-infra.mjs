@@ -5577,12 +5577,41 @@ const oversizeRun = await runWith({}, async (prompt, opts) => {
 check("ENG-96776 EXECUTES the oversize-line stop: ONE dispatch, not three — a verbatim copy cannot be shortened, so the remaining attempts are not spent on it",
   !oversizeRun.threw && oversizeRun.stopped === "reconcile-failed" && oversizeCalls === 1,
   () => (oversizeRun.threw ? `threw: ${oversizeRun.threw}` : `calls=${oversizeCalls} stopped=${oversizeRun.stopped}`));
-check("ENG-96776: and the stop text names the bytes, says a re-run will NOT clear it, and sends the operator to the file and to smaller slices — the three things this failure needs that the generic Reconcile advice gets wrong",
-  !oversizeRun.threw && /state line is \d+ B, over the \d+-byte answer ceiling/.test(oversizeRun.next || "")
-    && /re-run will not clear it/.test(oversizeRun.next || "")
+check("ENG-96776: and the stop text names BOTH halves — the floor and the line inside it — says re-running produces the same bytes, and sends the operator to the file and to what to reduce. The generic advice says \"re-run this build on the SAME route\", which on a size ceiling is how one wasted run becomes two",
+  !oversizeRun.threw && /with its shortenable text removed the answer is still \d+ B, of which the copied state line is \d+ B/.test(oversizeRun.next || "")
+    && /RE-RUNNING THIS BUILD WILL PRODUCE THE SAME BYTES/.test(oversizeRun.next || "")
     && /reconcile\.json/.test(oversizeRun.next || "") && /smaller slices/.test(oversizeRun.next || "")
     && !/the host is not blocking anything/.test(oversizeRun.next || ""),
   () => (oversizeRun.next || "").slice(0, 300));
+
+// ENG-96776 (the Contracts regression) EXECUTES THE BAND THE FIRST FIX MISSED. The stop used to key on the LINE
+// alone being over the ceiling. A line UNDER it that leaves the stand facts too little room is exactly as
+// unwinnable, and that is what a real run hit: line 15327 B of a 16000 B ceiling, facts 2478 B, so three attempts
+// were spent asking for a 1805 B reduction against 761 B of shortenable text \u2014 and the generic recovery text then
+// advised re-running the same route, which the operator's agent did, reproducing the same bytes.
+//
+// The line here is deliberately under the ceiling and the FACTS carry the overflow, so a predicate keyed on the
+// line would let this through and spend the budget.
+let bandCalls = 0;
+const bandRun = await runWith({}, async (prompt, opts) => {
+  if (!isReconcileStateAnswer(opts)) return null;
+  bandCalls += 1;
+  return {
+    summary: JSON.stringify({ planVersion: "v1", planGaps: [], unitKeys: ["main"], buildOrder: ["main"],
+      verify: { complete: false }, roundOf: { main: 0 }, targetPackage: "Pkg", pad: "x".repeat(14500) }),
+    approval: { found: true, version: "v1" }, packageState: "exists",
+    componentResolution: [], templateResolution: [], schemaNamePrefix: "Usr", schemaNamePrefixEmpty: false,
+    verifyTablePath: "v".repeat(2000),
+    notes: "n".repeat(400),
+  };
+}).catch((e) => ({ threw: e.message }));
+check("ENG-96776 (the Contracts regression): a state line UNDER the ceiling whose stand facts push the answer over it stops on the FIRST dispatch \u2014 the band between `the line fits` and `the line plus the facts fit` is not repairable either, and three attempts there is what produced a wasted run and then a wasted re-run",
+  !bandRun.threw && bandRun.stopped === "reconcile-failed" && bandCalls === 1,
+  () => (bandRun.threw ? `threw: ${bandRun.threw}` : `calls=${bandCalls} stopped=${bandRun.stopped}`));
+check("ENG-96776 (the Contracts regression): and the stop reports the FLOOR, not the line \u2014 an operator told only the line's size would read a line under the ceiling and conclude the tool was wrong",
+  !bandRun.threw && /with its shortenable text removed the answer is still \d+ B/.test(bandRun.next || "")
+    && /RE-RUNNING THIS BUILD WILL PRODUCE THE SAME BYTES/.test(bandRun.next || ""),
+  () => (bandRun.next || "").slice(0, 300));
 
 // The informed retry has to carry the WIRE fault too, or a line dropped once is dropped again for the whole budget.
 let wirePrompts = [];
@@ -6243,11 +6272,12 @@ check("PR #159 (Major 3): and the retried answer is ACCEPTED — the run proceed
 // fault — its remedy is to move bulk off the wire, which the sweep rule contradicts — so the anchored match must
 // ignore it. A big all-valid sweep faults on size alone.
 const oversizePrompts = [];
-const bigResolution = Array.from({ length: 400 }, (_, i) => ({ type: "crt.T" + i, resolvedFrom: "stand", resolved: true, note: "x".repeat(40) }));
+const bigResolution = Array.from({ length: 40 }, (_, i) => ({ type: "crt.T" + i, resolvedFrom: "stand", resolved: true }));
 const oversizeRetry = await runWith({}, async (prompt, opts = {}) => {
   if (opts.phase !== "Reconcile") return null;
   oversizePrompts.push(prompt);
-  if (oversizePrompts.length === 1) return { ...baselineState(bigResolution) };
+  // Over the ceiling on SHORTENABLE text: the retry is legitimate, so the prompt's wording is what this pins.
+  if (oversizePrompts.length === 1) return { ...baselineState(bigResolution), notes: "x".repeat(17000) };
   return { ...baselineState([{ type: "crt.CommunicationOptions", resolvedFrom: "stand", resolved: true }]), componentTypes: ["crt.CommunicationOptions"] };
 }).catch((e) => ({ threw: e.message }));
 check("PR #159 (Major 3, round 2): an OVER-SIZE-only rejection does NOT carry the sweep rule — the size fault names `componentResolution (N B)` as a large field, but the anchored `componentResolution[[:]` match ignores the space-parenthesis form, so the retry keeps the size remedy uncontradicted",

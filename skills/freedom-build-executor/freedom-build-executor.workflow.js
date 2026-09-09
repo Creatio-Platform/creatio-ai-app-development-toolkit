@@ -1752,6 +1752,14 @@ function oversizeStateLine(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   const bytes = encodedAsciiBytes(line)
   return bytes > maxBytes ? bytes : 0
 }
+const RECONCILE_SHRINKABLE_FIELDS = ['notes']
+function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
+  if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return 0
+  const floor = { ...answer }
+  for (const k of RECONCILE_SHRINKABLE_FIELDS) delete floor[k]
+  const bytes = encodedAsciiBytes(JSON.stringify(floor))
+  return bytes > maxBytes ? bytes : 0
+}
 function stateFromAnswer(answer) {
   const line = typeof answer?.summary === 'string' ? answer.summary.trim() : ''
   if (!line) return { fault: 'summary: the state line is missing — the state command printed none, or it was not copied. Nothing is scheduled off a state nobody produced' }
@@ -2734,18 +2742,20 @@ const resolutionsReopened = new Set()
   const RECONCILE_ATTEMPTS = 3
   let lastShapeFaults = []
   let lastHostRejection = ''
-  let lastOversizeLine = 0
+  let lastOversizeFloor = 0
+  let lastOversizeLineBytes = 0
   function recordAttemptFailure(faults, rejection) {
     lastShapeFaults = faults
     lastHostRejection = rejection
   }
   function* reconcileAgent(roundNo, id, label, note) {
     recordAttemptFailure([], '')
-    lastOversizeLine = 0
+    lastOversizeFloor = 0
+    lastOversizeLineBytes = 0
     for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt += 1) {
       const answer = yield* reconcileAttempt(roundNo, id, label, note, attempt)
       if (answer) return answer
-      if (lastOversizeLine) return null
+      if (lastOversizeFloor) return null
     }
     return null
   }
@@ -2790,11 +2800,12 @@ const resolutionsReopened = new Set()
         `Reconcile (${label}) returned nothing on attempt ${attempt} of ${RECONCILE_ATTEMPTS} — giving up, nothing was built; read the host's own reason before re-running, since the schema-size refusal is deterministic`)
       return null
     }
-    const oversize = oversizeStateLine(answer)
+    const oversize = unshrinkableAnswerBytes(answer)
     if (oversize) {
-      lastOversizeLine = oversize
+      lastOversizeFloor = oversize
+      lastOversizeLineBytes = oversizeStateLine(answer, 0)
       recordAttemptFailure([], '')
-      log(`Reconcile (${label}) copied a state line of ${oversize} B on attempt ${attempt} of ${RECONCILE_ATTEMPTS}, over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling — NOT retrying, since a verbatim copy cannot be made smaller; nothing was built`)
+      log(`Reconcile (${label}) answered ${oversize} B with its shortenable text already gone on attempt ${attempt} of ${RECONCILE_ATTEMPTS} (state line ${lastOversizeLineBytes} B), over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling — NOT retrying, since no next answer can fit; nothing was built`)
       return null
     }
     const faults = reconcileShapeErrors(answer)
@@ -2828,9 +2839,9 @@ const resolutionsReopened = new Set()
   }
   const REPEATED_REJECTION_TRIAGE = 'If the SAME rejection repeats across launches, stop re-running and read the host\'s own reason: `blocked by safety classifier: output schema too large to classify safely` is deterministic (a serialized agent schema over 4096 bytes, in an `auto`-permission session) and no number of attempts clears it; `StructuredOutput was called with input that could not be parsed as JSON` repeating on every attempt means the answer keeps reaching the host as invalid JSON — the `reconcile-answer-*` files in the migration folder hold the exact bytes of every submission, and they are the evidence to attach. They can carry live-stand data: delete them once the investigation is done (the engine also purges any capture older than 14 days on the next run in this folder)'
   const RECONCILE_FAILED_NEXT = `the Reconcile agent returned nothing on ${RECONCILE_ATTEMPTS} attempts — re-run this build on the SAME route. A failure at the run's first agent may be transient (a rejected structured answer, a dropped connection): it is NOT evidence that this route is unavailable, and switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
-  const oversizeLineClause = () => `the state line is ${lastOversizeLine} B, over the ${RECONCILE_ANSWER_MAX_BYTES}-byte answer ceiling. The Reconcile agent copies that line verbatim and cannot shorten it, so the remaining attempts were NOT spent and a re-run will not clear it: this plan is past what one copied line can carry. The state itself is complete in \`reconcile.json\` in the migration folder. Build this plan in smaller slices (fewer units per run)`
+  const oversizeLineClause = () => `no answer to Reconcile can fit the ${RECONCILE_ANSWER_MAX_BYTES}-byte ceiling: with its shortenable text removed the answer is still ${lastOversizeFloor} B, of which the copied state line is ${lastOversizeLineBytes} B. The line is copied verbatim and the stand facts are reported field by field, so nothing in it can be traded away — the remaining attempts were NOT spent, and RE-RUNNING THIS BUILD WILL PRODUCE THE SAME BYTES. The state itself is complete in \`reconcile.json\` in the migration folder. Reduce what has to travel: build this plan in smaller slices (fewer units per run), or shrink the plan's ⚠ Confirm worklist, which is the largest part of the line on a heavily customized page`
   const reconcileFailedNext = () => {
-    if (lastOversizeLine) return `${oversizeLineClause()}. Nothing was built`
+    if (lastOversizeFloor) return `${oversizeLineClause()}. Nothing was built`
     if (lastHostRejection) {
       return `the host REJECTED the Reconcile agent's answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}) — re-run this build on the SAME route. ${REPEATED_REJECTION_TRIAGE}. Nothing was built`
     }
@@ -2840,7 +2851,7 @@ const resolutionsReopened = new Set()
     return RECONCILE_FAILED_NEXT
   }
   const reconcileRoundFailureClause = () => {
-    if (lastOversizeLine) return `The round could not be reconciled: ${oversizeLineClause()}.`
+    if (lastOversizeFloor) return `The round could not be reconciled: ${oversizeLineClause()}.`
     if (lastHostRejection) return `The host REJECTED the answer on the last of ${RECONCILE_ATTEMPTS} attempts (${lastHostRejection}). ${REPEATED_REJECTION_TRIAGE}`
     if (lastShapeFaults.length) return `Every one of the ${RECONCILE_ATTEMPTS} attempts ANSWERED and every answer was short of the shape this script computes on (${lastShapeFaults.join(' · ')}) — the host blocked nothing, the transcription is what failed.`
     return `A failure at Reconcile may be transient (${RECONCILE_ATTEMPTS} attempts were already made): switching routes over it leaves two routes writing one stand from two views of it. ${REPEATED_REJECTION_TRIAGE}`
