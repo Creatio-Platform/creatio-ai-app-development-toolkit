@@ -646,21 +646,20 @@ function renderListPageBlock(result, section, opts = {}) {
   if (!section?.schemaGathered) L.push("- ⚠ **Section schema not gathered** — the classic `*Section` chain is not in `manifest.section`, so the list page's **quick filters / section actions were NOT analyzed** (resolved list-column evidence, when shown below, does not replace the schema chain). `get-classic-page-sources` derives the section name from the entity (`<entity>Section[V2]`); if the real section is named off the page prefix (e.g. `Applicant1Page` → `Applicant1Section`) it returns `sectionLayerCount: 0`. Bundle the section schema by name into `manifest.section` and re-run.");
   L.push(`- **Add record:** ${addRecordDescription(result)}`);
   if (section) {
-    L.push(answeredListColumnLine(section, opts.resolutions || null,
-      (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item));
-    // ENG-96327 — an EXPLICIT found/not signal for the section's Run-process launch (binary, so it is stated here,
-    // not raised as a ⚠ Confirm). Same treatment as `- **Command-bar actions:**`.
-    L.push(section.processLaunch
-      ? `- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`
-      : "- **Section process:** none found");
-    // ENG-96327 — an EXPLICIT found/not signal for the section's command-bar actions. The `#### Command-bar actions`
-    // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
-    // only place the "none found" fact is stated (the `list-command-bar` ⚠ Confirm that used to carry it is now
-    // dropped from the human plan as noise). Always shown, so the approver sees found-or-not at a glance.
+    // ENG-96327 — one push of three explicit found/not signals (all binary, so stated here rather than raised as ⚠
+    // Confirm rows): the answered list-column line, the Section-process launch, and the command-bar actions. The
+    // `#### Command-bar actions` table below lists actions WHEN present, so the "none found" line is the only place
+    // that fact is stated once the `list-command-bar` ⚠ Confirm is dropped as noise.
     const cbaCount = (result.listChangeSet?.commandBarActions || []).length;
-    L.push(cbaCount
-      ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
-      : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
+    L.push(
+      answeredListColumnLine(section, opts.resolutions || null,
+        (result.listChangeSet?.needsDecision || []).find((d) => d.kind === "list-columns")?.item),
+      section.processLaunch
+        ? `- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`
+        : "- **Section process:** none found",
+      cbaCount
+        ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
+        : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
   // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
@@ -1019,6 +1018,29 @@ function renderConfirmWorklist(cs, opts = {}) {
   return [...L, ""];
 }
 
+// The Layout table's data rows (region-grouped, in reading order) plus the once-only cross-datasource note. Its own
+// function so `renderDesignSpec` keeps its branch count under Sonar S3776 (two loops + a 4-clause sort + the note).
+function renderLayoutRows(order, byRegion, cs) {
+  const L = [];
+  for (const region of order) {
+    // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
+    // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
+    // ENG-96327 (B) — the cell coordinates are NOT shown (see gridMapTables note above); the sort still groups the
+    // row's fields together for the reader, and the agent designs the 12-column Freedom layout itself.
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
+      || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
+      || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
+      || a.i - b.i);
+    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
+  }
+  // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
+  // paragraph in every linked field's Additional cell.
+  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+    L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  }
+  return L;
+}
+
 export function renderDesignSpec(result, opts = {}) {
   const cs = result.changeSet || {};
   const section = result.section || null;
@@ -1099,22 +1121,7 @@ export function renderDesignSpec(result, opts = {}) {
       "| Region | Element | Type | Source | Rule | Additional |",
       "| --- | --- | --- | --- | --- | --- |",
     );
-    for (const region of order) {
-      // ENG-96457 (item 1) — READING ORDER, not declaration order: row first, then column. Elements with no computed
-      // cell keep their relative position via `i`, so a widget/action never jumps above the fields it sits beside.
-      // ENG-96327 (B) — the cell coordinates are NOT shown (see gridMapTables note above); the sort still groups the
-      // row's fields together for the reader, and the agent designs the 12-column Freedom layout itself.
-      const items = byRegion.get(region).sort((a, b) => a.sort - b.sort
-        || (a.layout?.row ?? Infinity) - (b.layout?.row ?? Infinity)
-        || (a.layout?.column ?? Infinity) - (b.layout?.column ?? Infinity)
-        || a.i - b.i);
-      for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
-    }
-    // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
-    // paragraph in every linked field's Additional cell.
-    if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
-      L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
-    }
+    L.push(...renderLayoutRows(order, byRegion, cs));
   }
 
   L.push(...renderLogicSection(cs));
@@ -1780,6 +1787,19 @@ export function renderPlanNotes(result) {
   return L.join("\n") + "\n";
 }
 
+// The line for a child that did NOT fold to a spec — five terminal states (parse error, a real unfetched edit page,
+// recorded no-page, read/attach-only, or not-yet-verified), in the SAME order the render chain tested them. None
+// recurse, so pulling them out of `renderChild` keeps that renderer's branch count under Sonar's S3776 limit.
+function childUnfoldedLine(c) {
+  if (c.specError) return `> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`;
+  if (typeof c.editPage === "string" && c.editPage) return `> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`;
+  if (c.editPage === false) return noChildPageLine(c);
+  // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording says so —
+  // the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
+  if (c.editable === false) return `> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`;
+  return `> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`;
+}
+
 function renderChildMappings(childs) {
   if (!childs.length) return [];
   const P = ["### Child page mappings", ""];
@@ -1795,29 +1815,21 @@ function renderChildMappings(childs) {
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
     } else if (c.formless === "inline-grid") {
-      P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`, "");
       // ENG-96327 — show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT the full form-page mapping: the
       // intro just said there is no form page. `c.logicSpec` is produced by `foldOneChildPage` for inline-grid
-      // children; fall back to the full spec if (defensively) it is absent.
-      P.push("", demoteHeadings(c.logicSpec || c.spec, lvl - 2)); // Business rules / ⚠ Custom methods / ⚠ Other declared logic
+      // children; fall back to the full spec if (defensively) it is absent. One push (intro + the demoted logic).
+      P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
+        "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2)); // Business rules / ⚠ Custom methods / ⚠ Other declared logic
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
     } else if (c.formless === "empty") {
       P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");
     } else if (c.spec) {
       P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
-    } else if (c.specError) {
-      P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
-    } else if (typeof c.editPage === "string" && c.editPage) {
-      P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
-    } else if (c.editPage === false) {
-      P.push(noChildPageLine(c));
-    } else if (c.editable === false) {
-      // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
-      // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
-      P.push(`> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`);
     } else {
-      P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`);
+      // The child did not fold to a spec — one of five verification/parse states, none of which recurse. Extracted
+      // to `childUnfoldedLine` so this renderer keeps ONE branch here instead of five (Sonar S3776).
+      P.push(childUnfoldedLine(c));
     }
     P.push("");
   };

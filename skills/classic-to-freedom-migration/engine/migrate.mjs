@@ -2618,24 +2618,28 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   return collectResolvedGates(changeSet, reg.source);
 }
 
+// One schema entry → its body string: an inline `body`, or the contents of its `file` (read safely). Its own
+// function so `runMigration` keeps its branch count under Sonar S3776 (three guarded paths live here, not there).
+function readSchemaBody(e, baseDir) {
+  if (e?.body != null) return String(e.body);
+  // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
+  // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
+  if (!e || typeof e.file !== "string" || !e.file)
+    throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, e.file);
+  // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
+  // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
+  // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
+  // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
+  if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
+    throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
+  return fs.readFileSync(resolved, "utf8");
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
-  const bodyOf = (e) => {
-    if (e?.body != null) return String(e.body);
-    // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
-    // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
-    if (!e || typeof e.file !== "string" || !e.file)
-      throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
-    const base = path.resolve(baseDir);
-    const resolved = path.resolve(base, e.file);
-    // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
-    // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
-    // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
-    // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
-    if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
-      throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
-    return fs.readFileSync(resolved, "utf8");
-  };
+  const bodyOf = (e) => readSchemaBody(e, baseDir);
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseSchema(bodyOf(e), e.pkg));
   const schemas = parse(manifest.schemas);
   const seedTemplate = parse(manifest.seed);

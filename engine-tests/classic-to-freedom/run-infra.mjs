@@ -7856,7 +7856,7 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
       () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stderr)
         && plan.stderr.includes("looked the three details up by hand")
         && !plan.stdout.includes("CLOSED by a recorded disposition"),
-      () => ({ status: plan.status, line: (plan.stderr.match(/ℹ.*bundle warning[^\n]*/) || ["(none)"])[0].slice(0, 200), leakedToStdout: plan.stdout.includes("CLOSED by a recorded disposition") }));
+      () => ({ status: plan.status, line: (plan.stderr.split("\n").find((l) => l.includes("bundle warning")) || "(none)").slice(0, 200), leakedToStdout: plan.stdout.includes("CLOSED by a recorded disposition") }));
     // GUARD-CAN-FAIL: the disposition is load-bearing. Drop the disposition MAP alone and the same manifest blocks
     // again — so the check above passes because the answer was read, not because the fixture cannot block.
     const noDisp = { ...closed }; delete noDisp.bundleWarningDispositions;
