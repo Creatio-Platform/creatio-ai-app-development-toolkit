@@ -2961,10 +2961,14 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan`/`pageUnits` can read it — both take it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  // ENG-96327 — a CHILD page's design spec is only ever EMBEDDED into the parent plan (foldOneChildPage → c.spec),
-  // never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no Entity/Size
+  // ENG-96327 — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into the parent
+  // plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no Entity/Size
   // preamble, no Member ledger — the parent plan owns those, and the main page in the same plan already omits them.
-  out.designSpec = renderDesignSpec(out, opts.isChildPage ? { ...specOpts, embedded: true } : specOpts);
+  // `formOnly` is propagated for the TYPED fold (`foldTypedPages` passes it) so the per-type spec skips the List-page
+  // block — a typed page is NOT its own section; the ONE list page is rendered once by the base fold. `checklistOpts`
+  // carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
+  const isSubPageRun = opts.isChildPage || opts.isMiniPage || opts.formOnly;
+  out.designSpec = renderDesignSpec(out, isSubPageRun ? { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) } : specOpts);
   out.plan = renderPlan(out, specOpts);
   // ENG-96571 C3 — the agent-facing half of the plan, published as its OWN artifact so `plan.md` carries only what
   // the approver needs. The CLI writes it to `<out-basename>.notes.md` beside the plan (or echoes it to stderr).

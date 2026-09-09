@@ -5561,6 +5561,29 @@ check("typed-page: base form spec SUPPRESSED (no general mapping) — only List 
   && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
   && !docFirstSize.includes(" fields ·"),     // …NOT the base-derived "N fields · … · 0 rules" line
   () => docFirstSize);
+// ENG-96327 — REGRESSION GUARD for the real TsService shape: a typed page's bundle carries the SECTION layers (same
+// entity as the section), so the typed sub-run is itself a "section migration". Its per-type spec must therefore be
+// rendered `formOnly` + `embedded` (migrate.mjs re-applies both for the typed fold, since `checklistOpts` drops
+// `formOnly`) — otherwise the per-type form wrongly renders its OWN `##### List page` (a typed page is not its own
+// section; the ONE list page is rendered once by the base) AND a `Member ledger` (an internal accounting block kept
+// out of the human plan). The earlier typed goldens used section-less bundles, so they never exercised this path.
+const typedSecBundle = (nm, field) => ({
+  schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});` }],
+  seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }] });
+const typedSecRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [{ schema: "XICPage" }, { schema: "XOCPage" }],
+  typedPageSchemas: { XICPage: typedSecBundle("XICPage", "SenderField"), XOCPage: typedSecBundle("XOCPage", "RecipientField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS });
+const typedFormsBlock = (typedSecRun.plan.split("### Typed page mappings")[1] || "");
+check("ENG-96327: a typed per-type form whose bundle carries SECTION layers renders NEITHER its own List page NOR a Member ledger — the base fold owns the ONE list page, and the ledger is out of the human plan",
+  /^### List page/m.test(typedSecRun.plan)                              // non-vacuous: the base fold DOES render one list page
+  && /#### Typed form:/.test(typedFormsBlock) && typedFormsBlock.includes("SenderField") // the per-type form rendered its fields
+  && !/#{4,6} List page/.test(typedFormsBlock)                          // …but NO nested List page inside the typed forms
+  && !/Member ledger/.test(typedFormsBlock),                            // …and NO Member ledger inside the typed forms
+  () => typedFormsBlock.split("\n").filter((l) => /List page|Member ledger|Typed form/.test(l)).slice(0, 8));
 // ENG-96327/ENG-96553 — the Type suffix on each `#### Typed form:` heading: a resolved `typeName` shows the NAME;
 // `typeColumnDisplayValue` (the `list-entity-client-schemas` field) is accepted verbatim too; an unresolved raw
 // Type GUID shows the GUID + a ⚠ to resolve it on-stand (a bare GUID names no Type to the approver).
