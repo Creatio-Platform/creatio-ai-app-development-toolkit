@@ -3786,14 +3786,15 @@ check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
-check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
-  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+check("C2 / ENG-96327: a lookup-GUID rule NO LONGER prompts a [lookup-value] note in the human plan — the agent resolves GUIDs to display names itself; the decision still exists on the ChangeSet (rides --units)",
+  !/\[lookup-value\]/.test(guidCs.designSpec)
+  && (guidCs.changeSet?.needsDecision || []).some((n) => n.kind === "lookup-value"));
 /* PR #128 review (RC-8b) — and EXACTLY ONCE. The check above uses `.test()`, which cannot see a double-render: the
    item used to be pushed straight into the rendered worklist, and a re-added render-time `confirm.push` would emit
    it twice — one copy with an evidence id and one without — with this suite still green. The copy without an id is
    the original defect (a question an operator was asked and had nowhere to answer), so a count is the assertion. */
-check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACTLY ONCE — a re-added render-time push would double-render it, one copy carrying an id and one not, and `.test()` is blind to that",
-  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1,
+check("ENG-95503 / ENG-96327: the `[lookup-value]` line is rendered ZERO times in the human plan (dropped as builder work — the agent resolves GUIDs); its id lives on --units.preflight, not the human ⚠ Confirm",
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 0,
   () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length);
 /* PR #128 review (round 15, Major) — AND THE FILTER MUST NOT SWALLOW IT. Before this PR the lookup-value prompt was
    pushed straight into the rendered `confirm` array, bypassing all filtering. It now arrives as a `needsDecision`
@@ -3806,11 +3807,10 @@ check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACT
    naming the cause: the surrounding goldens do go red if the Set grows, but they read as three unrelated failures.
    The accidental route is real and not hypothetical — `SHOWN_ELSEWHERE` spreads `IMPERATIVE_MEMBER_KINDS`, so
    adding a `lookup-value` entry to `MEMBER_KIND_NOTE` for its prose would silently enrol it in the filter. */
-check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` filter on BOTH surfaces — it renders in the ⚠ Confirm worklist AND publishes a `--units.preflight` row. A kind in that Set is dropped from both at once, so the operator is never asked and no id exists for an answer to bind to",
-  () => { const rendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1
-        && /#### ⚠ Confirm before I build/.test(guidCs.designSpec);
+check("PR #128 review (round 15) / ENG-96327: `lookup-value` is DROPPED from the human ⚠ Confirm (BUILDER_ONLY — the agent resolves GUIDs) but STILL publishes a `--units.preflight` row, so the decision id exists for an answer to bind to. It must NOT be in `SHOWN_ELSEWHERE`, which would drop it from --units too",
+  () => { const notRendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 0;
     const published = pageUnits(guidCs, checklistOpts({})).preflight.filter((r) => r.kind === "lookup-value");
-    return rendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
+    return notRendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
   () => ({ rendered: (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length,
     published: pageUnits(guidCs, checklistOpts({})).preflight.map((r) => r.kind) }));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),

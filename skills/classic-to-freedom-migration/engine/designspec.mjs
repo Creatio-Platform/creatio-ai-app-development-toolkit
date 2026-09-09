@@ -924,6 +924,10 @@ const BUILDER_ONLY_CONFIRM_KINDS = new Set([
   // fields in the template's existing tab, do NOT create a new one" — a build mechanic. (This supersedes the earlier
   // layout-type KEEP: once the coordinates are dropped and the template is recommended, no human call remains.)
   "layout-type", "base-tab-placement",
+  // `lookup-value` — a business-rule condition compares against a lookup-record GUID; the AGENT resolves that GUID to
+  // its display name on-stand when it builds the rule (b24bb0f dropped this prompt; the strategy-A rebase lost it and
+  // it leaked back). It rides `--units.preflight`, so the agent still gets it.
+  "lookup-value",
 ]);
 // ENG-96327 (product decision) — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in
 // the List-page block: `list-columns` (the profile caveat is on the `- **List columns:**` line), `list-column-path`
