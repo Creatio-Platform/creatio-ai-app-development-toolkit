@@ -918,6 +918,12 @@ const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter",
 // channel that actually reaches the builder, and these already ride it. A DENYLIST: a new kind stays visible.
 const BUILDER_ONLY_CONFIRM_KINDS = new Set([
   "visibility-rule", "ancestor-visibility", "rule-target-missing", "unmapped-component", "parse-gap", "registry-composite-only",
+  // ENG-96327 — LAYOUT decisions the AGENT owns, not the approver: `layout-type` (header region vs left profile) is
+  // already the subject of the `Template recommendation` blockquote AND the agent designs the 12-column Freedom
+  // layout itself (the classic coordinates are no longer prescribed), and `base-tab-placement` just says "put these
+  // fields in the template's existing tab, do NOT create a new one" — a build mechanic. (This supersedes the earlier
+  // layout-type KEEP: once the coordinates are dropped and the template is recommended, no human call remains.)
+  "layout-type", "base-tab-placement",
 ]);
 // ENG-96327 (product decision) — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in
 // the List-page block: `list-columns` (the profile caveat is on the `- **List columns:**` line), `list-column-path`
