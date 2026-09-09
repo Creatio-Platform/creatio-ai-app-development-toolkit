@@ -9253,6 +9253,27 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         () => (e2e.threw ? `threw: ${e2e.threw}` : describe({ dispatches: reconcileDispatches, stopped: e2e.stopped, reported: e2e.planGaps, computed: e2eGaps })));
     }
 
+    // PR #172 review (Major 1): EVERY value-taking flag has to be in `VALUE_FLAGS`, or its value satisfies the
+    // positional-manifest search and the OUTPUT path is read as the manifest. `--reconcile` and `--queue` were
+    // not, and the suites all pass the manifest FIRST, which is exactly why none of them caught it. This one puts
+    // the manifest LAST — the form a hand-typed command takes — and a regression shows up as the run reading its
+    // own output file as the plan.
+    {
+      const stale = path.join(dir, "stale-reconcile.json");
+      writeFileSync(stale, JSON.stringify({ notAManifest: true }));
+      const last = spawnSync(process.execPath, [ENGINE_MJS, "--verify", "--built", builtFile,
+        "--reconcile", stale, "--queue", queueFile, "--out", path.join(dir, "verify-last.md"), manifestFile], { encoding: "utf8" });
+      const wrote = (() => { try { return JSON.parse(readFileSync(stale, "utf8")); } catch { return null; } })();
+      check("ENG-96776 / PR #172 (Major): with the manifest LAST, `--reconcile`'s own path is not mistaken for it — the run reads the real manifest and writes the state where it was told, instead of dying on a misleading `manifest must be an object` error over its own output file",
+        !/manifest must be an object/.test(String(last.stderr)) && Array.isArray(wrote?.unitKeys),
+        () => ({ stderr: (/^migrate\.mjs:.*$/m.exec(String(last.stderr)) || [""])[0].slice(0, 180), wroteState: Array.isArray(wrote?.unitKeys) }));
+
+      check("ENG-96776 / PR #172 (Major): and BOTH new value flags are registered, so neither value can satisfy the positional search — the list is the mechanism, and a flag added without it fails silently rather than loudly",
+        /const VALUE_FLAGS = new Set\(\[[^\]]*"--reconcile"[^\]]*\]\)/.test(mgSrc)
+          && /const VALUE_FLAGS = new Set\(\[[^\]]*"--queue"[^\]]*\]\)/.test(mgSrc),
+        () => (/const VALUE_FLAGS = new Set\([^;]*/.exec(mgSrc) || [""])[0].slice(0, 260));
+    }
+
     // The three guards. Each one is a refusal, not a warning: a state without a verdict, or a table sharing stdout
     // with the state line, is a state a caller cannot use.
     const noOut = spawnSync(process.execPath, [ENGINE_MJS, manifestFile, "--verify", "--built", builtFile, "--reconcile", path.join(dir, "x.json")], { encoding: "utf8" });
@@ -9353,6 +9374,28 @@ check("ENG-96776: the engine warns against the SAME wire ceiling the workflow ga
       && wf.oversizeStateLine({}) === 0 && wf.oversizeStateLine(null) === 0
       && wf.oversizeStateLine({ summary: ok }, 10) === Buffer.byteLength(ok),
     () => JSON.stringify({ big: wf.oversizeStateLine?.({ summary: big }), ok: wf.oversizeStateLine?.({ summary: ok }) }));
+
+  // PR #172 review (Minor 4): the guards reached only transitively until now. An unrecognised shape must read as
+  // "no floor to judge" rather than throwing inside the arrival path, which runs before any fault is classified.
+  check("ENG-96776: `unshrinkableAnswerBytes` answers 0 for anything that is not an object — null, an array, a string, undefined — so a malformed answer reaches the shape check instead of throwing in the guard ahead of it",
+    [null, undefined, [], "x", 7, true].every((bad) => wf.unshrinkableAnswerBytes?.(bad) === 0),
+    () => JSON.stringify([null, undefined, [], "x", 7, true].map((bad) => wf.unshrinkableAnswerBytes?.(bad))));
+
+  // PR #172 review (Minor 2): free TEXT is shrinkable wherever it sits. An answer pushed over by verbose per-entry
+  // provenance prose is repairable — the entry survives without its note — so the terminal stop must not claim it.
+  const noteHeavy = {
+    summary: ok, approval: { found: true }, packageState: "exists",
+    componentResolution: Array.from({ length: 60 }, (_, i) => ({ type: `crt.T${i}`, resolved: true, resolvedFrom: "stand", note: "p".repeat(280) })),
+  };
+  check("ENG-96776 / PR #172: an answer made oversize by per-entry `note` prose is NOT terminal — the floor is measured with those notes gone, so the run spends a retry that can actually fit instead of stopping on a plan-size verdict it has no evidence for",
+    wf.encodedAsciiBytes(JSON.stringify(noteHeavy)) > wf.RECONCILE_ANSWER_MAX_BYTES
+      && wf.unshrinkableAnswerBytes?.(noteHeavy) === 0
+      && wf.reconcileShapeErrors(noteHeavy).some((f) => /over the \d+-byte ceiling/.test(f)),
+    () => JSON.stringify({ whole: wf.encodedAsciiBytes(JSON.stringify(noteHeavy)), floor: wf.unshrinkableAnswerBytes?.(noteHeavy) }));
+
+  check("ENG-96776 / PR #172: and the same answer WITHOUT the notes still over the ceiling IS terminal — stripping the free text is what decides it, not the presence of a `note` key",
+    wf.unshrinkableAnswerBytes?.({ ...noteHeavy, componentResolution: noteHeavy.componentResolution.map((r) => ({ ...r, type: r.type + "x".repeat(280) })) }) > wf.RECONCILE_ANSWER_MAX_BYTES,
+    () => String(wf.unshrinkableAnswerBytes?.({ ...noteHeavy, componentResolution: noteHeavy.componentResolution.map((r) => ({ ...r, type: r.type + "x".repeat(280) })) })));
 
   const bulky = wf.reconcileShapeErrors({ summary: ok, notes: "n".repeat(wf.RECONCILE_ANSWER_MAX_BYTES) });
   check("ENG-96776: the size fault names what the LINE costs and what is left for the agent's own fields, and it never lists `summary` among the offenders to cut — advice to shorten a verbatim copy is advice that cannot be followed",

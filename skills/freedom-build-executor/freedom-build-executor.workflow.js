@@ -1753,10 +1753,19 @@ function oversizeStateLine(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   return bytes > maxBytes ? bytes : 0
 }
 const RECONCILE_SHRINKABLE_FIELDS = ['notes']
+const RECONCILE_SHRINKABLE_ENTRY_LISTS = ['componentResolution', 'templateResolution']
+const withoutEntryNotes = (rows) => (Array.isArray(rows)
+  ? rows.map((r) => (r && typeof r === 'object' && !Array.isArray(r) && 'note' in r
+    ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'note'))
+    : r))
+  : rows)
 function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return 0
   const floor = { ...answer }
   for (const k of RECONCILE_SHRINKABLE_FIELDS) delete floor[k]
+  for (const k of RECONCILE_SHRINKABLE_ENTRY_LISTS) {
+    if (Array.isArray(floor[k])) floor[k] = withoutEntryNotes(floor[k])
+  }
   const bytes = encodedAsciiBytes(JSON.stringify(floor))
   return bytes > maxBytes ? bytes : 0
 }

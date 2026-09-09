@@ -2230,9 +2230,16 @@ export function oversizeStateLine(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES)
   const bytes = encodedAsciiBytes(line)
   return bytes > maxBytes ? bytes : 0
 }
-// THE ONLY FIELD A RETRY MAY ASK THE AGENT TO SHORTEN. The copied line is verbatim, and every other field is a
-// stand fact reported field by field \u2014 an answer cannot drop one to save bytes without dropping the fact.
+// WHAT A RETRY MAY ASK THE AGENT TO SHORTEN. The copied line is verbatim and every stand fact is reported field by
+// field, so neither can be traded away. Free TEXT can: the top-level `notes`, and the per-entry `note` a
+// provenance row may carry. Dropping an entry's note keeps the row — and the fact — intact.
 export const RECONCILE_SHRINKABLE_FIELDS = ['notes']
+export const RECONCILE_SHRINKABLE_ENTRY_LISTS = ['componentResolution', 'templateResolution']
+const withoutEntryNotes = (rows) => (Array.isArray(rows)
+  ? rows.map((r) => (r && typeof r === 'object' && !Array.isArray(r) && 'note' in r
+    ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'note'))
+    : r))
+  : rows)
 // AN ANSWER'S FLOOR: what it weighs with the shrinkable text gone. Over the ceiling THERE, no next answer can fit,
 // so the attempt budget buys nothing and the run stops on the first one.
 //
@@ -2247,6 +2254,11 @@ export function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_
   if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return 0
   const floor = { ...answer }
   for (const k of RECONCILE_SHRINKABLE_FIELDS) delete floor[k]
+  // The per-entry notes come off too, or an answer made oversize by verbose provenance prose would be declared
+  // terminal when a "cut the free text" retry could have fit — the one case this stop must NOT claim.
+  for (const k of RECONCILE_SHRINKABLE_ENTRY_LISTS) {
+    if (Array.isArray(floor[k])) floor[k] = withoutEntryNotes(floor[k])
+  }
   const bytes = encodedAsciiBytes(JSON.stringify(floor))
   return bytes > maxBytes ? bytes : 0
 }
