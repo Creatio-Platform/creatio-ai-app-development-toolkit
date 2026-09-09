@@ -6509,6 +6509,19 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     brow[2] === "message" && brow[3] === "Broadcasts that the total changed so other widgets refresh."
     && brow[4] === "After the amount is recomputed, publish CalcTotal." && brow[3] !== "⚠ not described",
     () => brow);
+  // ENG-96534 (self-review Major, PR #166): the AGGREGATED-member path (2+ behaviour cards, refs.length > 1) must
+  // carry whatItDoes/useCase THROUGH `mergeDescribedIn` too. A `module-dep` row aggregating UsrModA + UsrModB,
+  // answered by a card PER module, used to build its merged describedIn from only card/ac/bodyCard/bodyAc — so the
+  // renderer read undefined and printed `⚠ not described` while the header still counted the row described.
+  const aggRun = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+    schemas: [{ pkg: "MD", body: `define("MDPage",["UsrModA","UsrModB"],function(){return{entitySchemaName:"X",methods:{},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+    behaviourIndex: { "module-dep:UsrModA": { whatItDoes: "Wires module A.", useCase: "Loaded so A is available." },
+      "module-dep:UsrModB": { whatItDoes: "Wires module B." } } }, { baseDir: FIX });
+  const aggRow = (renderPlan(aggRun, {}).split("\n").find((l) => l.startsWith("| UsrModA, UsrModB |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (self-review): an AGGREGATED member row (2+ cards → mergeDescribedIn) carries the merged whatItDoes/useCase — NOT `⚠ not described` while counted described",
+    aggRow[2] === "module-dep" && aggRow[3] === "Wires module A." && aggRow[3] !== "⚠ not described"
+    && aggRow[4] === "Loaded so A is available.",
+    () => aggRow);
 }
 
 // ---- method body EVIDENCE replaces name-guessing ----

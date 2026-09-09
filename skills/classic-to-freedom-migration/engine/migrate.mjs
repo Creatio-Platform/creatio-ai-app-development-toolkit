@@ -982,6 +982,11 @@ function mergeDescribedIn(refs) {
     ac: uniq(refs.flatMap((r) => r.ac || [])),
     bodyCard: refs.find((r) => r.bodyCard)?.bodyCard || null,
     bodyAc: uniq(refs.flatMap((r) => r.bodyAc || [])),
+    // ENG-96534 (self-review) — the plain-language columns MUST survive the merge too: an AGGREGATED member row (2+
+    // behaviour cards) that omitted these read `⚠ not described` in the plan while the header still counted it
+    // described — the exact contradiction ENG-96534 removes. First non-null wins, like `card`/`bodyCard`.
+    whatItDoes: refs.find((r) => r.whatItDoes)?.whatItDoes || null,
+    useCase: refs.find((r) => r.useCase)?.useCase || null,
   };
 }
 
