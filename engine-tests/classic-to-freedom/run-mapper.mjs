@@ -4213,13 +4213,15 @@ check("ENG-95861: `--verify` renders that same row N/A too — and tallies it as
 check("ENG-95861: the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
   /\| InternalRequest — opened by detail "VacDetail" \| Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
   () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
-check("ENG-95861: the child section states the boundary and that NOTHING is built for it",
+check("ENG-95861/ENG-96327: the child section states the boundary concisely — the page, the owning section, and that migrating it is out of scope",
   /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
-  && /Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
-  && /publishes NO deliverable/.test(xsBoundary.plan));
-check("ENG-95861: it also states how to REVERSE the decision — a scope decision, not a defect",
-  /drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
-  && /reversible by re-planning, never a defect of this plan/.test(xsBoundary.plan));
+  && /belongs to the `Internal requests` section/.test(xsBoundary.plan)
+  && /Migrating it is that section's own job — not part of this plan/.test(xsBoundary.plan));
+check("ENG-96327: the verbose gate-mechanics and reversal recipe are GONE from the human plan — agent reassurance, not approver content",
+  !/Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
+  && !/publishes NO deliverable/.test(xsBoundary.plan)
+  && !/drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
+  && !/reported MISSING/.test(xsBoundary.plan));
 check("ENG-95861: the Main-scope LEGEND enumerates the fourth call (a 3-call legend under a 4-call table is a gap)",
   /\*\*`Reuse \(Classic\)`\*\* = a cross-section boundary the user approved/.test(xsBoundary.plan));
 check("ENG-95861: the plan never claims the child page was mapped, and prints no `Rebuild (child)` for it",

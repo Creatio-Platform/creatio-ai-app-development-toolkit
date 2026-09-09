@@ -1687,17 +1687,18 @@ function reuseClassicChildSentence(c) {
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
 }
 
-// ENG-95861 — the boundary child's own block in `### Child page mappings`. Own fn for Sonar CC 15: `renderChild`
-// already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than a mapping.
-// It says three things, because a reader who takes any one of them wrong re-opens a settled decision: what stays
-// Classic, that nothing here is a deliverable (so nothing about it can ever read MISSING), and how to reverse it.
+// ENG-95861 / ENG-96327 — the boundary child's own line in `### Child page mappings`. Own fn for Sonar CC 15:
+// `renderChild` already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than
+// a mapping. The human fact only: which Classic page this related list keeps opening, whose section owns it, and that
+// migrating it is out of this plan's scope. The gate mechanics it used to spell out (no `--units`/`--verify`, never
+// reads MISSING) are AGENT reassurance, and the reversal recipe (drop `opensClassicPage`, add `childPageSchemas`,
+// re-run) is agent scope-change how-to — neither is something the approver acts on, so both are dropped; the Main-
+// scope row states the same boundary in the table, and `decisions.md` records the scope call.
 function boundaryChildLines(c) {
   const pg = boundaryClassicPage(c);
   const opens = pg ? "`" + esc(pg) + "`" : "the Classic page the detail already opens";
   return [
-    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. **Nothing here is folded, rebuilt or built** — the platform opens a Classic page from a Freedom related list, and that is the intended end state, not a gap. This resolution publishes NO deliverable: no \`--units\` build unit, no \`--verify\` row, so nothing about ${esc(c.entity)} can be reported MISSING.`,
-    ">",
-    `> **Migrating ${esc(c.entity)} is that section's own job.** If the user later widens the scope, drop \`opensClassicPage\` from this detail's manifest entry, supply the child page's schema in \`childPageSchemas\`, and re-run — the boundary is a scope decision recorded in \`decisions.md\`, reversible by re-planning, never a defect of this plan.`,
+    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. Migrating it is that section's own job — not part of this plan.`,
   ];
 }
 
