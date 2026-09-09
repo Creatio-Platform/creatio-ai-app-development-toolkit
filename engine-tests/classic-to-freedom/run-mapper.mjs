@@ -5621,6 +5621,12 @@ check("ENG-96327/ENG-96553 typed type: typeName shows the NAME; typeColumnDispla
   && !/Tax return[^\n]*⚠ resolve/.test(typedTypeRun.plan)
   && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedTypeRun.plan),
   () => typedTypeRun.plan.split("\n").filter((l) => /Typed form/.test(l)));
+check("ENG-96327: the MAIN SCOPE typed rows ALSO show the RESOLVED Type name (not the raw GUID) — same typedTypeSuffix as the heading; a real TsService run rendered GUIDs here because this row used raw `t.type`",
+  /\| XICPage — type "Retirement plan" \(typed form\) \|/.test(typedTypeRun.plan)
+  && /\| XDVPage — type "Tax return" \(typed form\) \|/.test(typedTypeRun.plan)
+  && /\| XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand \(typed form\) \|/.test(typedTypeRun.plan)
+  && !/\| XICPage — type "1b2f4d6e[^\n]*\(typed form\) \|/.test(typedTypeRun.plan),   // the GUID must NOT be what the Main-scope row shows for a resolved type
+  () => typedTypeRun.plan.split("\n").filter((l) => /\(typed form\)/.test(l)));
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
 // (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
 const docRuleRun = runMigration({
