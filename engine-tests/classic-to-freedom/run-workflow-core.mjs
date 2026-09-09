@@ -847,6 +847,41 @@ const MAIN_ONLY = { ...FULL_DESCRIBE, indexEntries: FULL_DESCRIBE.indexEntries.f
     () => result.phaseOutcomes?.Merge?.state === "none" && result.phaseOutcomes.Describe.state === "ok",
     () => JSON.stringify(result.phaseOutcomes));
 }
+{
+  // AC 8, THE OTHER SHAPE OF PRODUCING NOTHING (PR #171 review, finding 3). The Merge host ANSWERS, with a
+  // schema-shaped object that names neither deliverable. Before the gate was fed `mergeDeliverables` instead of
+  // the bare answer, this leg returned no `stopped`, the two FABRICATED fallback paths (`<outDir>/customizations.md`
+  // and `<outDir>/behaviour-index.json`, files nothing wrote) and the happy-path `next` telling the caller to merge
+  // an index that does not exist — the exact state AC 8's stop exists to make impossible, reached by answering
+  // rather than by dying.
+  const PATHLESS = { cardCount: 4, droppedDuplicates: [] };
+  const { result } = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.VALUE, value: PATHLESS } : happyAnswer(i)));
+  check("AC 8: a Merge that ANSWERS without a reportPath/indexPath takes the same `merge-produced-nothing` stop — an answer is not a deliverable, and `complete: false` alone cannot tell an undescribed surface from a described one nobody wrote out",
+    () => result.stopped === "merge-produced-nothing" && result.complete !== true && result.coverage.complete === false,
+    () => JSON.stringify({ stopped: result.stopped, coverage: result.coverage }));
+  check("AC 8: and `next` is the GATE's — the run must not hand back the happy-path instruction to merge an index that was never written, beside two fallback paths to files nothing wrote",
+    () => !/merge indexPath into manifest/.test(result.next || "") && /re-merges them/.test(result.next || "")
+      && /Resuming this run does NOT help/.test(result.next || ""),
+    () => result.next);
+  check("AC 8: `phaseOutcomes.Merge` is `none` with `agentsReturned: 1` — the SAME split AC 7 makes for Critique: 'the host never answered' and 'the host answered and wrote nothing' are different repairs and only this number holds them apart",
+    () => result.phaseOutcomes?.Merge?.state === "none" && result.phaseOutcomes.Merge.agentsReturned === 1
+      && result.phaseOutcomes.Merge.agentsExpected === 1,
+    () => JSON.stringify(result.phaseOutcomes?.Merge));
+  // HALF a deliverable is none of one: the report exists and the index is the fabricated fallback, which is the
+  // shape that would actually reach an operator (a merge that wrote its report and died before the index).
+  const HALF = { reportPath: "out/customizations.md", cardCount: 4, droppedDuplicates: [] };
+  const half = await runCba(INPUT, (i) => (i.phase === "Merge" ? { outcome: OUTCOME.VALUE, value: HALF } : happyAnswer(i)));
+  check("AC 8: a Merge that returned ONE of the two paths stops too — the missing half is filled by a fallback path to a file nothing wrote, so 'one path' is not a deliverable",
+    () => half.result.stopped === "merge-produced-nothing" && half.result.phaseOutcomes?.Merge?.agentsReturned === 1,
+    () => JSON.stringify({ stopped: half.result.stopped, merge: half.result.phaseOutcomes?.Merge }));
+  // THE CONTROL, so none of the four checks above is measuring the fixture rather than the rule: the identical run
+  // with BOTH paths present stops on nothing, keeps the happy-path `next`, and records Merge `ok`.
+  const ok = await runCba(INPUT, happyAnswer);
+  check("AC 8 (control): a Merge that returns BOTH paths is untouched — no `stopped`, the happy-path `next`, `phaseOutcomes.Merge` `ok` with `agentsReturned: 1`",
+    () => !ok.result.stopped && /merge indexPath into manifest/.test(ok.result.next || "")
+      && ok.result.phaseOutcomes?.Merge?.state === "ok" && ok.result.phaseOutcomes.Merge.agentsReturned === 1,
+    () => JSON.stringify({ stopped: ok.result.stopped, next: ok.result.next, merge: ok.result.phaseOutcomes?.Merge }));
+}
 
 // AC 3 — phaseOutcomes on EVERY exit path, the two skips and the context failure included.
 {

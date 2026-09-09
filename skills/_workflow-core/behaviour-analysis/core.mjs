@@ -23,7 +23,7 @@
 // pages at 0-of-8 described while the plan showed nothing wrong.
 
 import { step, ACCESS } from '../work-item.mjs'
-import { stageGate, makePhaseOutcomes } from '../stage-gate.mjs'
+import { stageGate, gateStop, makePhaseOutcomes } from '../stage-gate.mjs'
 import { CONTEXT_SCHEMA, DESCRIBE_SCHEMA, CRITIQUE_SCHEMA, MERGE_SCHEMA } from './schemas.mjs'
 import { rules, contextPrompt, describePrompt, repairNote, critiquePrompt, mergePrompt } from './prompts.mjs'
 import {
@@ -238,8 +238,7 @@ function recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, rep
 // AND THE TWO NUMBERS GO SIDE BY SIDE, with the sentence that says why they differ. The verdict counts DIGEST
 // rows; the engine's ledger for the scope it mapped is a larger population, and a plan header that printed one of
 // them as "N of M" read as a surface census it never was.
-function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
-  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
+function reportVerdict(log, { mergeOk, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
   if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
   const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
@@ -251,6 +250,57 @@ function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnl
   log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
   if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
   return complete
+}
+
+// THE MERGE DELIVERABLE TEST, asked in ONE place. `reportPath` and `indexPath` are what this phase exists to
+// produce, so the question the run puts to Merge is never "did an agent answer" but "is there a report and an
+// index". Both are required: a return naming one of them wrote half a deliverable, and the other half is the
+// fallback path below — a file nothing wrote.
+const mergeDeliverables = (merged) => !!(merged?.reportPath && merged?.indexPath)
+
+// WHAT THE CALLER IS TOLD ABOUT THE MERGE PHASE — the same split `reportCritique` makes above, for the same
+// reason (PR #171 review, finding 3). "The host never answered" and "the host answered and wrote nothing" are one
+// `state: 'none'` and two different repairs, and `agentsReturned` is what holds them apart: 0 means fix the host,
+// 1 means the host is alive and the merge item itself failed. Recorded through `note` rather than `record`
+// precisely so the STATE can disagree with the arithmetic — on this phase an answer is not evidence of a
+// deliverable. A phase that answered usably, and one that did not answer at all, record byte-identically to what
+// `record('Merge', 1, [merged])` wrote before.
+function reportMerge(merged, mergeOk, outcomes, log) {
+  if (merged && !mergeOk) {
+    log('⚠ the Merge agent ANSWERED without returning both a reportPath and an indexPath — nothing was written, so the phase is reported as dead')
+  }
+  outcomes.note('Merge', okOrNone(mergeOk), { agentsExpected: 1, agentsReturned: answeredCount(merged) })
+}
+
+// TRANSITION 5 — MERGE PRODUCED NOTHING, on BOTH shapes of producing nothing. `complete: false` already said the
+// run had no deliverable, and that is exactly the problem: an INCOMPLETE surface and a surface that was fully
+// described but never written out are the same boolean and opposite repairs. The first needs another describe
+// round; the second needs the merge re-run over cards that are already on disk. The stop rides on the FULL return
+// rather than replacing it — the coverage numbers are real and a caller that loses them re-derives nothing.
+//
+// AND THE GATE IS FED THE DELIVERABLE, NOT THE ANSWER (PR #171 review, finding 3). `stageGate` fires on a NULLISH
+// result, so a Merge that came back schema-valid and pathless used to slip past it entirely: no `stopped`, the
+// two fabricated fallback paths below, and the happy-path `next` telling the caller to merge an index that does
+// not exist. Same stop code for both, because the consequence is identical and a caller branching on `stopped`
+// must not have to learn two names for it; different arithmetic and a different `next`, because the repairs are
+// not the same one.
+//
+// `resumeClause: false` on the answered leg: the shared clause narrates a HOST failure ("fix what killed the
+// agents"), and nothing killed this one. What is true here — that a resume replays the recorded answer and lands
+// on this same stop — is said in the sentence this leg writes itself.
+function mergeGate(merged, mergeOk, outDir) {
+  if (mergeOk) return null
+  const what = 'no report and no index were written, so this run produced no deliverable — the coverage numbers it returns are real, but nothing on disk carries them'
+  const fix = `The cards the Describe round wrote are already in ${outDir}, so a fresh run re-merges them instead of re-describing the surface.`
+  if (!merged) return stageGate({ phase: 'merge', expected: 1, results: [merged], label: 'Merge', what, fix })
+  return gateStop({
+    stopped: 'merge-produced-nothing',
+    reason: `the Merge agent answered without returning both a reportPath and an indexPath — ${what}. An answer is not a deliverable: the phase is as dead as one whose agent never came back.`,
+    next: `${fix} Resuming this run does NOT help — the journal records the answer this phase gave, so a replay produces the same pathless return and stops here again.`,
+    agentsExpected: 1,
+    agentsReturned: 1,
+    resumeClause: false,
+  })
 }
 
 export function* run(rawInput, io = {}) {
@@ -556,22 +606,17 @@ export function* run(rawInput, io = {}) {
     note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
   })
 
-  outcomes.record('Merge', 1, [merged])
-  // TRANSITION 5 — MERGE PRODUCED NOTHING. `complete: false` already said the run had no deliverable, and that is
-  // exactly the problem: an INCOMPLETE surface and a surface that was fully described but never written out are
-  // the same boolean and opposite repairs. The first needs another describe round; the second needs the merge
-  // re-run over cards that are already on disk. The stop rides on the FULL return below rather than replacing it —
-  // the coverage numbers are real and a caller that loses them re-derives nothing.
-  const mergeStop = stageGate({
-    phase: 'merge', expected: 1, results: [merged], label: 'Merge',
-    what: 'no report and no index were written, so this run produced no deliverable — the coverage numbers it returns are real, but nothing on disk carries them',
-    fix: `The cards the Describe round wrote are already in ${input.outDir}, so a fresh run re-merges them instead of re-describing the surface.`,
-  })
+  // THE DELIVERABLE, ASKED ONCE and then answered everywhere — the phase outcome, TRANSITION 5's stop and the
+  // closing verdict all read this one boolean, so none of them can decide the phase went well while another
+  // decides it did not. See `mergeGate` for why the gate is fed this and not `merged`.
+  const mergeOk = mergeDeliverables(merged)
+  reportMerge(merged, mergeOk, outcomes, log)
+  const mergeStop = mergeGate(merged, mergeOk, input.outDir)
 
   // The verdict is arithmetic, not an agent's closing sentence — see `isComplete`. Computed HERE, after the repair
   // round, so it reads the repaired counts. Coverage alone is not completion: the report and the index are the
   // DELIVERABLES, and a Merge item that returned nothing wrote neither.
-  const complete = reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
+  const complete = reportVerdict(log, { mergeOk, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
 
   return {
     surface: SURFACE,

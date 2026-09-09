@@ -968,8 +968,7 @@ function recordRepairOutcome(outcomes, log, { repairBatches, repairReturned, rep
   log(`⚠ repair-produced-nothing: all ${repairBatches.length} repair agent(s) returned nothing, so the ${toRepair.length} row(s) this round was given are UNATTEMPTED — they stay uncovered below, but nothing looked at them, so they are not rows the agents could not describe`)
 }
 
-function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
-  const mergeOk = !!(merged?.reportPath && merged?.indexPath)
+function reportVerdict(log, { mergeOk, allKeys, covered, uncoveredKeys, wiringOnly, totals, rejectedTriggers }) {
   if (!mergeOk) log('the Merge phase returned no report/index — the coverage numbers stand, but this run has no deliverable and is NOT complete')
   const complete = mergeOk && isComplete(allKeys.size, uncoveredKeys, wiringOnly)
   const wiringNote = wiringOnly.length ? ` · ${wiringOnly.length} mixin row(s) still missing the body card` : ''
@@ -981,6 +980,30 @@ function reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnl
   log(`${covered.size}/${allKeys.size} digest row(s) described · ${ledger === null ? 'unknown' : ledger} member(s) in the engine's ledger for the scope it mapped — the digest is the WORKLIST, not a surface census`)
   if (rejectedTriggers.length) log(`${rejectedTriggers.length} reported trigger(s) were REJECTED and are not carried into the index: ${rejectedTriggers.map((r) => r.key).join(', ')}`)
   return complete
+}
+
+const mergeDeliverables = (merged) => !!(merged?.reportPath && merged?.indexPath)
+
+function reportMerge(merged, mergeOk, outcomes, log) {
+  if (merged && !mergeOk) {
+    log('⚠ the Merge agent ANSWERED without returning both a reportPath and an indexPath — nothing was written, so the phase is reported as dead')
+  }
+  outcomes.note('Merge', okOrNone(mergeOk), { agentsExpected: 1, agentsReturned: answeredCount(merged) })
+}
+
+function mergeGate(merged, mergeOk, outDir) {
+  if (mergeOk) return null
+  const what = 'no report and no index were written, so this run produced no deliverable — the coverage numbers it returns are real, but nothing on disk carries them'
+  const fix = `The cards the Describe round wrote are already in ${outDir}, so a fresh run re-merges them instead of re-describing the surface.`
+  if (!merged) return stageGate({ phase: 'merge', expected: 1, results: [merged], label: 'Merge', what, fix })
+  return gateStop({
+    stopped: 'merge-produced-nothing',
+    reason: `the Merge agent answered without returning both a reportPath and an indexPath — ${what}. An answer is not a deliverable: the phase is as dead as one whose agent never came back.`,
+    next: `${fix} Resuming this run does NOT help — the journal records the answer this phase gave, so a replay produces the same pathless return and stops here again.`,
+    agentsExpected: 1,
+    agentsReturned: 1,
+    resumeClause: false,
+  })
 }
 
 function* run(rawInput, io = {}) {
@@ -1202,14 +1225,11 @@ function* run(rawInput, io = {}) {
     note: 'dedupe the cards, emit customizations.md + behaviour-index.json',
   })
 
-  outcomes.record('Merge', 1, [merged])
-  const mergeStop = stageGate({
-    phase: 'merge', expected: 1, results: [merged], label: 'Merge',
-    what: 'no report and no index were written, so this run produced no deliverable — the coverage numbers it returns are real, but nothing on disk carries them',
-    fix: `The cards the Describe round wrote are already in ${input.outDir}, so a fresh run re-merges them instead of re-describing the surface.`,
-  })
+  const mergeOk = mergeDeliverables(merged)
+  reportMerge(merged, mergeOk, outcomes, log)
+  const mergeStop = mergeGate(merged, mergeOk, input.outDir)
 
-  const complete = reportVerdict(log, { merged, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
+  const complete = reportVerdict(log, { mergeOk, allKeys, covered, uncoveredKeys, wiringOnly, totals: input.totals, rejectedTriggers })
 
   return {
     surface: SURFACE,

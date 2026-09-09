@@ -1893,9 +1893,12 @@ check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
-  // Optional chaining now (the null-guard was spelled out longhand); the GUARANTEE is unchanged — the verdict
-  // requires a Merge that produced BOTH deliverables, not merely a coverage count.
-  /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
+  // THE TEST MOVED OUT OF `reportVerdict`, THE GUARANTEE DID NOT (PR #171 review, finding 3). The two-path test is
+  // now `mergeDeliverables` and `run` asks it ONCE, because the merge GATE needs the same answer the verdict does:
+  // while the verdict owned it privately, a Merge that answered without either path failed the verdict and slipped
+  // past the gate. Optional chaining, as before; the verdict still requires BOTH deliverables, not a coverage count.
+  /const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
+    && /const mergeOk = mergeDeliverables\(merged\)/.test(bhSrc)
     && /const complete = mergeOk && isComplete\(/.test(bhSrc));
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
@@ -7714,11 +7717,16 @@ const cbaVerdictAt = cbaSrc.indexOf("const complete = reportVerdict(log, {");
 check("cba workflow: the verdict is computed AFTER the repair round — hoisting the CALL above it would read the stale round-1 counts and pass every pin above",
   cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
   () => `repair block at ${cbaRepairAt}, verdict call at ${cbaVerdictAt}`);
-check("cba workflow: and the arithmetic behind that call is `mergeOk && isComplete(...)` inside `reportVerdict` — coverage alone is not completion, the report and the index are the deliverables",
+// The deliverable test itself is `mergeDeliverables`, computed once in `run` and passed in — the same boolean the
+// merge GATE is fed, so the verdict and the gate cannot disagree about whether the phase produced anything (PR #171
+// review, finding 3). Pinned here as three parts because that is what the rule now is: the test, the single call
+// that answers it, and the verdict that requires it beside the coverage arithmetic.
+check("cba workflow: and the arithmetic behind that call is `mergeOk && isComplete(...)` inside `reportVerdict`, over the ONE `mergeDeliverables` answer `run` computes — coverage alone is not completion, the report and the index are the deliverables",
   /function reportVerdict\(log, \{/.test(cbaSrc)
     && /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc)
-    && /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(cbaSrc),
-  () => `reportVerdict:${/function reportVerdict\(log, \{/.test(cbaSrc)} complete:${/const complete = mergeOk && isComplete\(/.test(cbaSrc)} mergeOk:${/const mergeOk = !!\(merged\?\.reportPath/.test(cbaSrc)}`);
+    && /const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(cbaSrc)
+    && /const mergeOk = mergeDeliverables\(merged\)/.test(cbaSrc),
+  () => `reportVerdict:${/function reportVerdict\(log, \{/.test(cbaSrc)} complete:${/const complete = mergeOk && isComplete\(/.test(cbaSrc)} test:${/const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath/.test(cbaSrc)} asked:${/const mergeOk = mergeDeliverables\(merged\)/.test(cbaSrc)}`);
 
 
 // ---------------------------------------------------------------------------
