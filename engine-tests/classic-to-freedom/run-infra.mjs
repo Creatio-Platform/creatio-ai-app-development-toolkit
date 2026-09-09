@@ -1867,8 +1867,8 @@ check("--stubs totals carry `members`, and the shortcut needs BOTH counts explic
 // emits no section scope). This pin only keeps the construction in its own function: inlined back into
 // `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
 check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /function sectionStubScopes\(manifest, opts, sectionSchemas\)/.test(mgSrc)
-    && /if \(opts\.scopeSchema \|\| !sectionSchemas\.length\) return \[\];/.test(mgSrc)
+  /function sectionStubScopes\(manifest, opts, sectionEff\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionEff\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
@@ -7030,12 +7030,15 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
 // growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
 const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
-  // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 9 and the check stays
-  // green. Naming the kind this PR adds is what makes the assertion say which set it is pinning (review #156).
-  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 9
-    && LIST_DECISION_KINDS.includes("list-add-routing"),
+  // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 11 and the check stays
+  // green. Naming the kinds a PR adds is what makes the assertion say which set it is pinning (review #156);
+  // ENG-94714 added `list-grid-config` and `list-section-element`, so both are named here beside `list-add-routing`.
+  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 11
+    && LIST_DECISION_KINDS.includes("list-add-routing")
+    && LIST_DECISION_KINDS.includes("list-grid-config") && LIST_DECISION_KINDS.includes("list-section-element"),
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
-    registrySize: LIST_DECISION_KINDS.length, hasAddRouting: LIST_DECISION_KINDS.includes("list-add-routing") }));
+    registrySize: LIST_DECISION_KINDS.length,
+    missingNamed: ["list-add-routing", "list-grid-config", "list-section-element"].filter((k) => !LIST_DECISION_KINDS.includes(k)) }));
 
 // --- blockedByParked: exact with the parent edge, honestly approximated without it. ---
 const parents = { "child:Leaf": "child:Mid", "child:Mid": "main", main: null, "child:Other": "main" };
