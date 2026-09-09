@@ -42,6 +42,9 @@ enables it in `~/.codex/config.toml` and adds the `clio` MCP server:
 python installer/install.py --target codex
 ```
 
+Supported Codex CLI: 0.130 or newer (verified on 0.130.0 and 0.153.4). Older releases that still
+offered `codex plugin add` are not supported by this installer path.
+
 Or register the marketplace and install interactively: `codex plugin marketplace add <repository URL>`,
 then `/plugins` inside Codex and pick `creatio-ai-app-development-toolkit`; run the installer once anyway
 to add the `clio` MCP server.

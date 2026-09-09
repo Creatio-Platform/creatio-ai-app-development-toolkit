@@ -377,15 +377,18 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
             ],
         )
 
-    def test_install_verb_changes_install_subcommand(self):
+    def test_install_verb_parameterizes_the_install_subcommand(self):
+        # General parameterization of the shared helper: no production caller passes a
+        # non-default verb today (Claude/Copilot use "install", Codex skips the step), so
+        # this pins the contract with a neutral CLI rather than a Codex-reachable state.
         installer = load_installer()
         commands = []
 
         with patch.object(installer, "run_checked", side_effect=lambda command, **_: commands.append(command)):
-            installer.register_remote_marketplace_and_install_plugin(["codex"], install_verb="add")
+            installer.register_remote_marketplace_and_install_plugin(["some-agent"], install_verb="add")
 
         install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
-        self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
+        self.assertEqual(install_calls, [["some-agent", "plugin", "add", installer.PLUGIN_SOURCE]])
 
     def test_install_plugin_false_skips_the_install_step_on_both_paths(self):
         # Codex CLI has no `plugin add`/`plugin install`; install_codex
@@ -1151,6 +1154,108 @@ class InstallCodexTests(unittest.TestCase):
             self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
             self.assertEqual(config_body.count("[mcp_servers.clio]"), 1)
 
+    def test_materialize_removes_stale_versions_on_its_own(self):
+        # install_codex wipes the whole marketplace cache before it calls
+        # materialize_codex_plugin, so the idempotency test above cannot tell whether
+        # the per-plugin cleanup inside materialize_codex_plugin works. Call it directly.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_release_manifest(repo_root)
+            codex_home = Path(temp) / "home" / ".codex"
+            plugin_cache = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME
+            stale = plugin_cache / "0.0.9"
+            stale.mkdir(parents=True)
+            (stale / "marker").write_text("old\n", encoding="utf-8")
+            sibling = codex_home / "plugins" / "cache" / "creatio" / "other-plugin" / "1.0.0"
+            sibling.mkdir(parents=True)
+
+            with patch("builtins.print"):
+                target = installer.materialize_codex_plugin(repo_root, codex_home)
+
+            self.assertEqual(target, plugin_cache / "0.1.0")
+            self.assertTrue((target / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+            self.assertFalse(stale.exists())
+            # Only this plugin's cache root is replaced; a sibling plugin's cache is untouched.
+            self.assertTrue(sibling.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+
+    def test_failed_marketplace_registration_propagates_and_writes_nothing(self):
+        # Loud failure: when Codex's marketplace registration fails, install_codex raises
+        # (so `--target codex` exits non-zero and an auto-detected run records the failure)
+        # and neither the cache directory nor the enabled block is written.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+
+            def fake_run(command, **_kwargs):
+                if command[1:4] == ["plugin", "marketplace", "remove"]:
+                    raise RuntimeError("Error: marketplace 'creatio' not found")
+                if command[1:4] == ["plugin", "marketplace", "add"]:
+                    raise RuntimeError("fatal: unable to access the repository: network unreachable")
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"), self.assertRaisesRegex(RuntimeError, "network unreachable"):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse((codex_home / "plugins" / "cache" / "creatio").exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[plugins.", config_body)
+            self.assertIn('model = "gpt-5.4"', config_body)
+
+            # The same failure under an explicit --target exits the run non-zero.
+            targets = [{"id": "codex", "name": "Codex", "home": codex_home}]
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"), self.assertRaisesRegex(RuntimeError, "network unreachable"):
+                installer.install_for_targets(repo_root, targets, "codex")
+
+    def test_failure_after_the_cache_wipe_leaves_no_dangling_enabled_block(self):
+        # A previous install is on disk (cache + enabled block). If materialization fails
+        # after install_codex has wiped the cache, the enabled block must be gone too —
+        # otherwise config.toml would point Codex at a version directory that no longer
+        # exists. The block comes back only when a later run materializes successfully.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            previous = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            previous.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.4"\n\n'
+                '[plugins."creatio-ai-app-development-toolkit@creatio"]\n'
+                "enabled = true\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), patch.object(
+                installer, "copy_plugin_runtime_surface", side_effect=OSError("disk full mid-copy")
+            ), patch("builtins.print"), self.assertRaisesRegex(OSError, "disk full"):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse(previous.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[plugins.", config_body)
+            self.assertIn('model = "gpt-5.4"', config_body)
 
     def test_tolerates_marketplace_remove_not_found(self):
         installer = load_installer()

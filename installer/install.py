@@ -992,10 +992,15 @@ def install_codex(repo_root: Path, home: Path) -> None:
     )
 
     # config.toml leftovers from the file-copy install. Leave [mcp_servers.clio]
-    # alone — merge_codex_mcp_config re-merges it below; the plugin block is
-    # rewritten by enable_codex_plugin.
+    # alone — merge_codex_mcp_config re-merges it below. The plugin block is
+    # removed HERE, next to the cache wipe above, and re-added only by
+    # enable_codex_plugin once the cache exists again: if anything between the two
+    # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
+    # the run exits non-zero without leaving `enabled = true` pointing at a version
+    # directory that no longer exists.
     config_path = codex_home / "config.toml"
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
+    remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
     remove_codex_skill_config_override(config_path, f"{PLUGIN_NAME}:{SKILL_NAME}")
 
     register_remote_marketplace_and_install_plugin(
