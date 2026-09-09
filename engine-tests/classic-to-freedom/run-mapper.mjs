@@ -5584,6 +5584,21 @@ check("ENG-96327: a typed per-type form whose bundle carries SECTION layers rend
   && !/#{4,6} List page/.test(typedFormsBlock)                          // …but NO nested List page inside the typed forms
   && !/Member ledger/.test(typedFormsBlock),                            // …and NO Member ledger inside the typed forms
   () => typedFormsBlock.split("\n").filter((l) => /List page|Member ledger|Typed form/.test(l)).slice(0, 8));
+// ENG-96327 (point 8) — the agent no longer supplies `listTemplate` (SKILL.md dropped it); the engine DEFAULTS it to
+// ListPageV3Template, so the Main-scope list-page row shows the real template, never a `<FILL:>` and never an agent's
+// wrong guess (a real TsService run once rendered `list` there because the agent filled it). An explicit override
+// still wins (the goldens above pass one). This locks the default AT THE MAIN-SCOPE RENDER — the surface that leaked.
+const noListTplMeta = { scope: "s", environment: "e", package: "p", approach: "Rebuild", whatItDoes: "x", sectionSchema: "XSection", formTemplate: "PageWithTabsFreedomTemplate" };
+const noListTplRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  addRecordMiniPage: false, planMeta: noListTplMeta, signals: FULL_SIGNALS });
+check("ENG-96327 (point 8): with NO planMeta.listTemplate the Main-scope list-page row shows the DEFAULT ListPageV3Template — not a `<FILL:>`, not blank, not an agent's guess",
+  /\| XSection \(list page\) \| ListPageV3Template \| Rebuild \|/.test(noListTplRun.plan)
+  && !/<FILL: Freedom list template>/.test(noListTplRun.plan)
+  && (noListTplRun.planMetaMissing || []).indexOf("listTemplate") === -1,
+  () => noListTplRun.plan.split("\n").filter((l) => /\(list page\)/.test(l)));
 // ENG-96327/ENG-96553 — the Type suffix on each `#### Typed form:` heading: a resolved `typeName` shows the NAME;
 // `typeColumnDisplayValue` (the `list-entity-client-schemas` field) is accepted verbatim too; an unresolved raw
 // Type GUID shows the GUID + a ⚠ to resolve it on-stand (a bare GUID names no Type to the approver).
