@@ -5,9 +5,9 @@ export const meta = {
   // resolution may key on either.
   name: 'creatio-freedom-build-executor',
   description:
-    'Build an APPROVED Classic→Freedom migration plan on a live stand until the engine gate is green. Reconcile reads the queue file and runs `--units` + `--verify --verify-json` to learn what the stand already has, Preflight resolves the ⚠ worklist in parallel (read-only), Build runs SEQUENTIALLY leaf-first with one fresh-context agent per page, a SEPARATE read-only verifier assembles `--built` from get-page, a THIRD agent writes only `judge`, and repair rounds run until every unit closes or is parked. Every verdict is arithmetic over the engine\'s own numbers, never an agent\'s assertion.',
+    'Build an APPROVED Classic→Freedom migration plan on a live stand until the engine gate is green. Reconcile runs `--reconcile`, which COMPUTES the run state from the folder, and reports the stand facts no command can read. It learns what the stand already has, Preflight resolves the ⚠ worklist in parallel (read-only), Build runs SEQUENTIALLY leaf-first with one fresh-context agent per page, a SEPARATE read-only verifier assembles `--built` from get-page, a THIRD agent writes only `judge`, and repair rounds run until every unit closes or is parked. Every verdict is arithmetic over the engine\'s own numbers, never an agent\'s assertion.',
   phases: [
-    { title: 'Reconcile', detail: 'one read-only agent: queue file + `--units` + a get-page sweep + `--verify --verify-json` — the baseline, and the round counters, written BEFORE the round runs' },
+    { title: 'Reconcile', detail: 'one read-only agent: a get-page sweep, then `--reconcile` computes the run state into `reconcile.json` and prints one line the agent copies back — plus the four facts only a stand read can give' },
     { title: 'Refs', detail: 'one read-only agent, once per run: caches the guidance/contracts/component docs every fresh-context builder would refetch, and writes the per-page spec slice' },
     { title: 'Preflight', detail: 'parallel read-only agents: resolve the ⚠ Confirm worklist into evidence records (no stand writes)' },
     { title: 'Build', detail: 'SEQUENTIAL — one agent per page unit, leaf-first, fresh context; the stand is a shared mutable resource' },

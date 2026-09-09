@@ -180,10 +180,11 @@ At `stopped: 'paused-at-round'` the return carries four things, and the run writ
 points at them.** `verify.md` is the table an operator reads and `verify.json` is the same rows
 machine-readable, each stamped by the engine with `rowSeverity` (`correctness` / `fidelity`) — so
 **read the correctness rows first**, and a layout polish is never repaired above a missing field.
-That split is this boundary's existing rule, not a new one: the central verify Reconcile transcribes
-the counts-only `verify-summary.json`, its answer is capped at 16000 wire bytes, and per-row prose
+That split is this boundary's existing rule, not a new one: the counts the central verify Reconcile
+carries are the counts-only ones, its answer is capped at 16000 wire bytes, and per-row prose
 crossing this boundary is what truncated a real run's first structured answer before it built
-anything. The severity tally is REAL for pages too: the engine's counts-only `verify-summary.json`
+anything. Those counts are computed into the state line now rather than transcribed, and the cap is
+what the line is measured against. The severity tally is REAL for pages too: the engine's counts-only `verify-summary.json`
 publishes `openCorrectness` / `openFidelity` per page — each open row counted once under the
 `rowSeverity` band stamped on it — and the stop tallies those two integers, never re-deriving the
 band. `unstamped` is left only for a page whose summary predates the two fields (a folder verified by
@@ -336,11 +337,13 @@ being absent, which is the whole invalidation story: no versions, no timestamps.
 time, and rule 2 of the parent skill keeps them out of the generated tables by design — so a slice without them is a
 slice that silently drops what was agreed.
 
-**Reconcile transcribes the DIGEST.** `--verify-digest` is the same verdict shape with the open rows of already-
-complete pages dropped, because a workflow script has no filesystem: the only route from a file into its arithmetic
-is an agent retyping it into a tool call. On that run the full verdict was 102 KB and Reconcile spent 41 minutes, 19
-of its 40 shell commands slicing it and three attempts at its structured answer. `verify.json` is still written,
-unchanged, for audit and for the human table.
+**Reconcile COPIES the state; it does not transcribe it.** `--reconcile` computes the run state from the folder,
+writes `reconcile.json`, and prints it after a fixed marker as one line of JSON. The agent copies that line into
+`summary` and reports only the facts no command can read: the approval, and the four stand reads. A workflow script
+still has no filesystem, so a copy is the one route from a file into its arithmetic — but a copy is verifiable and a
+retyped value is not. The line grows with the plan and shares the answer's byte ceiling: past roughly 32 units the
+run stops at Reconcile naming the size, because a verbatim copy cannot be shortened by re-asking for it.
+`--verify-digest` and `verify.json` are still written, unchanged, for audit and for the human table.
 
 **The parent edge comes from `--units`, not from the plan.** The engine folded the tree; recovering it by parsing
 the `### Child page mappings` prose the same engine printed is how a partial parse made grandchildren read as roots
@@ -710,9 +713,9 @@ Details of the record shapes, the ids and the judge tri-state:
   artefact or an omitted sweep costs one Reconcile attempt instead of either a wrong diagnosis or an unvalidated round
   (a PARTIAL sweep stays non-gating, as documented above, so one failed call cannot end the round). The absence door
   that pairs with it — dropping **both** `componentTypes` and `componentResolution` at once, which would leave the
-  sweep nothing to gate against — is closed at the host: `componentTypes` is now in `RECONCILE_SCHEMA.required` (room
-  made by trimming a superfluous per-string cap on `sectionRouteByRun`), so an answer omitting the key is refused
-  before the model runs. `[]` stays the honest value for a plan with no gated types, so a correct run pays nothing;
+  sweep nothing to gate against — is closed by construction: `componentTypes` is COMPUTED into the state line, so
+  there is no answer that can omit it. `RECONCILE_SCHEMA.required` names `summary`, `approval` and `packageState`
+  only, and the sweep runs on the merged state, where the published types and the agent's resolutions meet. `[]` stays the honest value for a plan with no gated types, so a correct run pays nothing;
   a **`stand` claim** whose own `note` carries clio's catalog-fallback tokens (`probe-error` / `latest-fallback`) is a
   shape fault — a mis-classified catalog answer is caught while those tokens survive into the note. This is a
   **best-effort** cross-check over free text clio owns, **not** a machine-verified guarantee (the earlier docs

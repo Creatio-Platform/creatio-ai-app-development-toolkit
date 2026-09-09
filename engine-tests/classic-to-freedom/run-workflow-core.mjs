@@ -1608,7 +1608,7 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
 {
   const ctx = makeContext(BEX_INPUT, "/plug/skills/_workflow-core/build-executor/core.mjs");
   check("build-executor context: every engine command line is SHELL-QUOTED — a migration folder with a space would otherwise split into two arguments and every phase would read or write the wrong path, with no error",
-    /--units --resolutions '\/mig\/resolutions\.json' --slices '\/mig\/slices'/.test(ctx.CLI_UNITS) && ctx.CLI_VERIFY.includes("'/mig/built.json'"),
+    /--units --resolutions '\/mig\/resolutions\.json' --slices '\/mig\/slices'/.test(ctx.CLI_UNITS) && ctx.CLI_RECONCILE.includes("'/mig/built.json'"),
     () => ctx.CLI_UNITS);
   check("build-executor context: the round budget is the DESIGN value by default and the operator's when given — the helpers take it as a parameter now, so a configured value that never reached them would park early or never",
     ctx.MAX_ROUNDS === DEFAULT_MAX_ROUNDS && makeContext({ ...BEX_INPUT, maxRounds: 5 }, "").MAX_ROUNDS === 5);
@@ -1710,44 +1710,47 @@ check("build-executor: the skills root resolves from EITHER anchor — the gener
       next1.items[0].id === "reconcile.baseline" && next1.items[0].access === "stand-read-only"
         && /RECONCILE phase of a Freedom build run — round 1/.test(next1.items[0].prompt),
       () => JSON.stringify(next1.items[0]).slice(0, 300));
-    check("build-executor cli: the prompt carries the run's OWN engine command lines, shell-quoted — a Codex agent runs them verbatim",
-      next1.items[0].prompt.includes("'/plug/skills/classic-to-freedom-migration/engine/migrate.mjs' '/mig/manifest.json' --units"));
+    check("build-executor cli: the prompt carries the run's OWN engine command line, shell-quoted — a Codex agent runs it verbatim — and it is the STATE command, writing the state file this run's folder holds",
+      next1.items[0].prompt.includes("'/plug/skills/classic-to-freedom-migration/engine/migrate.mjs' '/mig/manifest.json' --verify --built '/mig/built.json' --reconcile '/mig/reconcile.json' --queue '/mig/build-queue.json'"),
+      () => (next1.items[0].prompt.match(/^.*migrate\.mjs.*$/m) || [""])[0].slice(0, 400));
 check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL — a per-dispatch answer file (named by the dispatch label, so no retry or later call-site overwrites it) and the exact encoder source the offline suite executes",
       next1.items[0].prompt.includes("/mig/reconcile-answer-baseline-1.json")
         && next1.items[0].prompt.includes("/mig/encode-answer.mjs")
         && next1.items[0].prompt.includes(bex.ANSWER_ENCODER_SOURCE),
       () => next1.items[0].prompt.slice(-600));    // A green baseline closes the run with no stand write at all.
-    const green = {
-      approval: { found: true, version: "plan-abc", quote: "approved" }, planVersion: "plan-abc",
-      unitKeys: ["main"], buildOrder: ["main"], targetPackage: "P", packageState: "exists", mainEntity: "Deal",
-      sectionHost: "existing-app", applicationCode: "App", componentTypes: [], componentResolution: [],
+    // THE RECONCILE ANSWER, in the shape the contract asks for: the COMPUTED half is one JSON line the agent
+    // copied off the state command's stdout, and only the facts a stand read alone can give are sibling fields.
+    // A fixture that put a computed field beside `summary` would be modelling an answer the script does not read.
+    const STATE = {
+      planVersion: "plan-abc",
+      unitKeys: ["main"], buildOrder: ["main"], targetPackage: "P", mainEntity: "Deal",
+      sectionHost: "existing-app", applicationCode: "App", componentTypes: [], templateNames: [],
       pageSchemas: { main: "MainPage" }, parents: {}, reachability: [], reachabilityState: {},
       preflightItems: [], resolutionsUnmatched: [], resolutionsConflicts: [],
-      // ENG-95503 — the answer channel's three round-trip keys are REQUIRED of Reconcile, so a fixture that omits
-      // them is refused by the schema exactly as a live agent would be. `[]` is the honest first-run value for all
-      // three: no answer has gone unconsumed, and no repair grant has been spent.
       unconsumedResolutions: [], resolutionsReopened: [], resolutionsPending: [],
-      // `runResolutions: []` is REQUIRED of a Reconcile answer as of the ENG-96204 PR review (F7): it is the one
-      // channel the mode choice and every round authorisation travel through, and `[]` versus "field omitted"
-      // had to stop being indistinguishable. This fixture is also the CLI's proof that the requirement is really
-      // enforced on the submit path — drop the key and the submit is REJECTED against the item's responseSchema,
-      // which is exactly what an agent-mediated Reconcile used to be allowed to get away with silently.
       runResolutions: [],
-      // `roundState` is REQUIRED for the same reason (ENG-96474, re-homed by ENG-96455): its
-      // `consumedRoundAnswers` is the record of which of those round answers are already spent, and an omitted
-      // list would read every spent `go` as live. The three facts became ONE object when the merge with PR #128's
-      // answers channel put `RECONCILE_SCHEMA` over the host's 4096-byte cap (DR-7), so this fixture is also the
-      // CLI's proof of the NEW wire form: drop the object and the submit is rejected against the responseSchema.
       roundState: { layoutPassDone: false, roundsSpent: 0, consumedRoundAnswers: [] },
       evidenceIds: [], unjudgedEvidenceIds: [], evidenceFiled: [], evidenceRejected: [],
       parkedUnits: [], proposals: [], blocked: [], discrepancies: [], staleQueueKeys: [], newKeys: [],
-      schemaNamePrefixEmpty: false,
-      // No `verify.planGaps`: the Reconcile prompt names the fields to copy from the counts-only summary and
-      // that is not among them (ENG-95857 — the plan-level verdict has ONE home, `--units.planGaps`). Keeping it
-      // here would make the suite's model answer describe a shape the contract no longer asks for.
+      pagesRecorded: [], packageCreatedByRun: null, orphanedPagesOnFile: [], sectionRouteByRun: null,
+      // No `verify.planGaps`: the plan-level verdict has ONE home, `--units.planGaps`, which the state carries at
+      // the top level.
       verify: { complete: true, missing: 0, unverified: 0, buildMissing: 0, pending: 0, builderOpen: 0, pages: { main: { complete: true, buildComplete: true, buildMissing: 0 } } },
-      exitCode: 0, planGaps: [], roundOf: {}, verifyTablePath: "/mig/verify.md", notes: "",
+      planGaps: [], roundOf: {}, continuationOf: {},
     };
+    // The stand facts and the approval. These are the answer's own fields, and the schema REQUIRES `summary`,
+    // `approval` and `packageState` — drop one and the submit is rejected against the item's responseSchema,
+    // which is the CLI's proof that the requirement is really enforced on the submit path.
+    const FACTS = {
+      approval: { found: true, version: "plan-abc", quote: "approved" },
+      packageState: "exists", componentResolution: [], templateResolution: [],
+      schemaNamePrefix: "Usr", schemaNamePrefixEmpty: false,
+      exitCode: 0, verifyTablePath: "/mig/verify.md", notes: [],
+    };
+    // One composer for every scenario below: the overrides belong INSIDE the state line, because that is where the
+    // run reads them from.
+    const answerWith = (over = {}) => ({ ...FACTS, summary: JSON.stringify({ ...STATE, ...over }) });
+    const green = answerWith();
     const gFile = path.join(tmp, "green.json"); writeFileSync(gFile, JSON.stringify(green));
     const sub = cli("submit", runFile, "reconcile.baseline", gFile);
     check("build-executor cli: the Reconcile result is accepted (the required keys the schema names are all present)",
@@ -1819,8 +1822,8 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       cli("start", gapRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
       cli("next", gapRun);
       const gapFile = path.join(tmp, "plangap-answer.json");
-      writeFileSync(gapFile, JSON.stringify({ ...green, notes: "",
-        planGaps: ["plan INCOMPLETE — on-stand signals not resolved (4): dcm, processes, printables, deduplication"] }));
+      writeFileSync(gapFile, JSON.stringify(answerWith({
+        planGaps: ["plan INCOMPLETE — on-stand signals not resolved (4): dcm, processes, printables, deduplication"] })));
       const subGap = cli("submit", gapRun, "reconcile.baseline", gapFile);
       check("build-executor T3: a Reconcile answer whose ONLY plan-level input is the engine's published set is accepted",
         subGap.status === 0, () => subGap.stderr);
@@ -1844,8 +1847,8 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       cli("start", gateRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
       cli("next", gateRun);
       const gateFile = path.join(tmp, "plangap-gate-answer.json");
-      writeFileSync(gateFile, JSON.stringify({ ...green, notes: "",
-        planGaps: ["gate BLOCKED (2 correctness signal(s))"] }));
+      writeFileSync(gateFile, JSON.stringify(answerWith({
+        planGaps: ["gate BLOCKED (2 correctness signal(s))"] })));
       cli("submit", gateRun, "reconcile.baseline", gateFile);
       const gateDone = JSON.parse(cli("next", gateRun).stdout);
       check("build-executor T3: a BLOCKED correctness gate sends the operator to the STAND / input schemas, NOT the manifest — the per-kind remedy is the point of naming the kind",
@@ -1927,7 +1930,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       cli("start", placeRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
       cli("next", placeRun);
       const placeFile = path.join(tmp, "plangap-placement-answer.json");
-      writeFileSync(placeFile, JSON.stringify({ ...green, notes: "", planGaps: placementEntries }));
+      writeFileSync(placeFile, JSON.stringify(answerWith({ planGaps: placementEntries })));
       cli("submit", placeRun, "reconcile.baseline", placeFile);
       const placeDone = JSON.parse(cli("next", placeRun).stdout);
       check("build-executor F6: the engine's own PLACEMENT entry stops the run at `plan-gap` with zero rounds — no stand write — and the report names placement and sends the operator to the MANIFEST",
@@ -1939,11 +1942,12 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
     // …and the prompt no longer asks for the transcription at all. This is the regression boundary: as long as the
     // instruction to "add any PLAN-level stderr line" survives, the set the stop reads is partly hand-retyped
     // prose, and the fourth kind — which has no stderr line in that enumeration — can never reach it.
-    check("build-executor T3: the Reconcile prompt sources `planGaps` from `--units.planGaps` VERBATIM and no longer instructs the agent to top it up from stderr lines",
-      next1.items[0].prompt.includes("`--units.planGaps`")
+    check("ENG-96776 / T3: the Reconcile prompt no longer sources `planGaps` at all — the engine computes the plan-level verdict into the state line, so there is no field for an agent to top up from stderr and no instruction to do it",
+      !/planGaps/.test(next1.items[0].prompt)
         && !/add any PLAN-level stderr line/.test(next1.items[0].prompt)
-        && !/STRUCTURE INCOMPLETE`, `COVERAGE INCOMPLETE/.test(next1.items[0].prompt),
-      () => (next1.items[0].prompt.match(/^.*planGaps.*$/gm) || []).join("\n---\n").slice(0, 900));
+        && !/STRUCTURE INCOMPLETE`, `COVERAGE INCOMPLETE/.test(next1.items[0].prompt)
+        && next1.items[0].prompt.includes("Return `summary` = that line, copied character for character"),
+      () => (next1.items[0].prompt.match(/^.*(planGaps|summary).*$/gm) || []).join("\n---\n").slice(0, 900));
     /* AC5 AT THE RUN LEVEL, EXECUTED (PR #128 review, round 17, Major 9).
        Every consumption DECISION was executed by the offline helper suite, but the RUN-level guarantee — a
        persisted unconsumed answer plus a green gate must NOT report `complete`, must hand the row back, and must
@@ -1957,8 +1961,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
       cli("start", heldRun, "--workflow", "freedom-build-executor", "--input", inputFile, "--host", "codex");
       JSON.parse(cli("next", heldRun).stdout);
       const HELD_ID = "main#confirm:entity-filter:Department";
-      const held = {
-        ...green,
+      const held = answerWith({
         // The question is PUBLISHED and ANSWERED, so the pair is genuinely OWED — the row survives on the owed
         // path rather than on `reconcileUnconsumed`'s fail-closed branch for an unpublished id.
         preflightItems: [{ id: HELD_ID, pageKey: "main", kind: "entity-filter", item: "Department",
@@ -1971,7 +1974,7 @@ check("build-executor cli: the Reconcile prompt carries the SUBMISSION PROTOCOL 
         // The grant was already spent on that earlier session, so nothing re-opens the unit: `resolutionsPending`
         // is empty and `openNow()` is empty. This is the ONLY shape the scenario can take once the grant is gone.
         resolutionsReopened: [{ unit: "main", id: HELD_ID }], resolutionsPending: [],
-      };
+      });
       const hFile = path.join(tmp, "held-reconcile.json"); writeFileSync(hFile, JSON.stringify(held));
       const hSub = cli("submit", heldRun, "reconcile.baseline", hFile);
       check("build-executor cli (AC5): a Reconcile carrying a persisted unconsumed answer is accepted — the row is data the schema requires, not an error",

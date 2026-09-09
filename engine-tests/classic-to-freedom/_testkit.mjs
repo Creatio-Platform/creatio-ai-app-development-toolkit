@@ -1,3 +1,7 @@
+// The Reconcile wire form is imported from the engine, never restated here: a copy of it would let a fixture
+// drift from the line a real run copies.
+import { reconcileWireState } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+
 // Shared golden-test helpers: build normalized ParsedSchema records and diff ops in ONE place, so the
 // schema/op shape lives here (both run.mjs and run-mapper.mjs import it) instead of two hand-kept copies
 // that could drift and silently feed mergeHierarchy a malformed fixture.
@@ -31,3 +35,30 @@ export const makeSchema = (pkg, o = {}) => ({
   methods: o.methods || [], attributes: [], modules: o.modules || [], features: o.features || [], actionHints: o.actionHints || [],
   refModules: o.refModules || [],
 });
+
+// THE RECONCILE WIRE SPLIT, in one place because two suites drive the same contract. A scripted answer is written
+// FLAT, the way the run consumes it; on the wire the computed half is a COPIED STATE LINE and only the facts a
+// stand read can give are sibling fields. A fixture that must be malformed on the wire composes its own object and
+// does not come through here — nor does one that already carries a `summary`.
+//
+// The state keys the engine always computes are filled in when a fixture omits them: an omission models a MINIMAL
+// run, not a malformed line.
+//
+// AND THE LINE IS BUILT BY THE ENGINE'S OWN `reconcileWireState`, not by writing the state out whole. A fixture
+// that carried a field the wire form drops would run on a richer state than production ever sees, and a caller
+// reading that field would look correct here and starve on a live run.
+export const RECONCILE_ANSWER_FIELDS = new Set(["summary", "approval", "packageState", "componentResolution",
+  "templateResolution", "schemaNamePrefix", "schemaNamePrefixEmpty", "exitCode", "verifyTablePath", "notes"]);
+export const asReconcileAnswer = (flat) => {
+  if (flat === null || typeof flat !== "object" || Array.isArray(flat)) return flat;
+  if (typeof flat.summary === "string") return flat;
+  const answer = {};
+  const state = { planVersion: null, planGaps: [], unitKeys: [], buildOrder: [], verify: {}, roundOf: {}, targetPackage: null };
+  for (const [k, v] of Object.entries(flat)) (RECONCILE_ANSWER_FIELDS.has(k) ? answer : state)[k] = v;
+  return { ...answer, summary: JSON.stringify(reconcileWireState(state)) };
+};
+
+// The package-record re-read runs in the Reconcile phase but answers a DIFFERENT contract
+// (`{ read, packageCreated }`), so it is not a state answer and is never wrapped.
+export const isReconcileStateAnswer = (opts) =>
+  opts?.phase === "Reconcile" && !String(opts?.label || "").includes("package-record");
