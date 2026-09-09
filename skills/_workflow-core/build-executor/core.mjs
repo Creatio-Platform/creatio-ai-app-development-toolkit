@@ -1818,6 +1818,13 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
     carryPersisted = carryFingerprint()
     return filed.length
   }
+  // ENG-96778 (PR #171 review F4) — THE RECORDS BEHIND A SET OF JUDGE IDS. `preflightEvidence` holds every resolved
+  // preflight record no writer has yet reported filing; this picks out the ones a given Judge dispatch is being
+  // asked to rule on, so the ids it receives arrive with their records rather than as names of nothing. Returns a
+  // plain object because that is what `preflightEvidenceJudgeBlock` renders (and renders as '' when it is empty).
+  const unfiledEvidenceFor = (ids) => Object.fromEntries(
+    (ids || []).filter((id) => Object.hasOwn(preflightEvidence, id)).map((id) => [id, preflightEvidence[id]]),
+  )
   // EVERYTHING ELSE that must survive a kill — the proposals a builder returned, the blockers it stated, the
   // builder-vs-stand discrepancies the verifier found, and the Freedom schemas the round learned. Reference 02
   // promises these are "persisted every round, not at the end", and they were not: they were appended to arrays
@@ -3906,9 +3913,26 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       outcomes.skipped('Judge', 'no evidence record was waiting on a verdict')
       return
     }
-    const judged = yield* judgeRound(judgeIds)
+    // ENG-96778 (PR #171 review F4 / implementation risk R-E) — THE RECORDS RIDE WITH THE IDS.
+    // A dead post-preflight Judge leaves its ids queued (AC 13, just above) but it is also the WRITER of those
+    // records into the built file, and `preflightEvidence` lives only in this process until some writer reports
+    // filing it. So the next Judge used to receive ids with nothing behind them: `judgeRound(judgeIds)` passed no
+    // evidence block, the ids resolved to no `evidence[<id>]` entry, and the honest judge answer is "an id with no
+    // record is not mine to invent" — leaving the row open until an entirely new run re-resolved the ⚠ Confirm
+    // item. Handing the still-unfiled records to the ids' next reader closes that: the same block, the same merge
+    // instruction and the same `evidenceWritten` receipt the post-preflight dispatch already uses.
+    // FILTERED TO THE IDS THIS JUDGE IS ACTUALLY RULING ON, not the whole carry: a record whose id is not in this
+    // dispatch has no reader here, and sending it would grow the prompt with rows nobody was asked about.
+    // EMPTY IS THE HEALTHY CASE and it is byte-identical to before — `preflightEvidenceJudgeBlock` renders '' for
+    // an empty set, and on a run whose post-preflight Judge answered and reported its filing there is nothing left.
+    const carried = unfiledEvidenceFor(judgeIds)
+    const judged = yield* judgeRound(judgeIds, carried)
     outcomes.record('Judge', 1, [judged], { round })
     takeJudgeFindings(judged)
+    // Honour the receipt at THIS site too, for the same reason the post-preflight site does: a record we handed
+    // over and the judge reported merging is on file, so it leaves the carry. Anything unreported stays and rides
+    // to the next writer — the merge is idempotent, so a re-send costs a few prompt bytes and never a record.
+    if (Object.keys(carried).length) markEvidenceFiled(judged?.evidenceWritten)
     // AC 13 — same rule as the post-preflight Judge above: a verdict list that never arrived is not a filing
     // receipt, so the ids stay queued instead of being cleared. Whatever the judge SKIPPED still comes back as
     // `unjudgedEvidenceIds` on the next reconcile; what it never ruled on at all would not have.

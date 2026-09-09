@@ -341,5 +341,49 @@ check("AC 13: and it names WHERE the ruling went missing — the post-preflight 
       && j.occurrences.some((o) => o.state === "ok"); },
   () => JSON.stringify(resultOf(deadJudge)?.phaseOutcomes?.Judge));
 
+// ===========================================================================
+// ENG-96778 review F4 (= the implementation stage's discovered risk R-E) — THE RECORDS RIDE WITH THE IDS.
+// AC 13 keeps a dead Judge's evidence ids queued, and the leg above proves the id reaches the next Judge. But the
+// Judge is also the WRITER of those preflight records into the built file, and `preflightEvidence` lives only in
+// this process: the next Judge used to be handed the id with NOTHING behind it — no `evidence[<id>]` entry in the
+// built file, no block in its prompt — so the only honest verdict left was "an id with no record is not mine to
+// invent", and a page waiting on that row stayed open until an entirely new run re-resolved the ⚠ Confirm item.
+// These two legs are a PAIR: the record travels while it is still unfiled, and it stops travelling the moment a
+// writer reports filing it. Without the control, the first would pass on a build that appended the block always.
+// ===========================================================================
+console.log("\n===== F4: a dead Judge's evidence RECORDS reach the next Judge, not just their ids =====");
+
+const laterJudge = judgeItems(deadJudge)[1];
+check("F4: the later Judge is handed the RECORD behind the queued id, not only its name — otherwise it is asked to rule on an id whose `evidence` entry nothing ever wrote, and the row stays open for a whole new run",
+  () => !!laterJudge && laterJudge.prompt.includes("PREFLIGHT EVIDENCE TO FILE BEFORE JUDGING")
+    && laterJudge.prompt.includes(JSON.stringify({ [PREFLIGHT_ITEM.id]: { referencePage: "Contacts_FormPage", components: ["crt.Input"] } })),
+  () => (laterJudge ? laterJudge.prompt.slice(0, 1200) : "no second Judge was dispatched"));
+
+// THE CONTROL that makes the leg above a measurement of the RULE rather than of an unconditional append. Same
+// shape, one difference that decides it: the post-preflight Judge ANSWERS and reports `evidenceWritten` for the
+// record, so the record is on file and has no business riding to anyone ever again.
+// THE SECOND RECONCILE REPORTS THE SAME ID STILL UNJUDGED — filed but not ruled on, which is exactly what a Judge
+// that returned `evidenceWritten: [id]` with an empty `verdicts` leaves behind. That is what makes this control
+// bite: the id IS in the round Judge's dispatch, so the only thing that can keep the record out of its prompt is
+// the filing receipt. Point it at a different id instead and the leg would pass on the id filter alone, measuring
+// nothing about the receipt — the F2 failure mode this suite has already been burned by once.
+const judgeFiledEvidence = driveRun("judge-filed-evidence", {
+  Reconcile: (item, nth) => (nth === 1
+    ? reconcile({ preflightItems: [PREFLIGHT_ITEM] })
+    : reconcile({ unjudgedEvidenceIds: [PREFLIGHT_ITEM.id] })),
+  Preflight: () => PREFLIGHT_RESOLVED,
+  Judge: () => ({ verdicts: [], evidenceWritten: [PREFLIGHT_ITEM.id] }),
+  Refs: () => REFS_OK,
+  Build: () => PAGE_BUILT,
+  Verify: () => VERIFY_OK,
+  Close: () => ({ written: true }),
+}, 26);
+check("F4 (control): once a Judge REPORTS filing the record it stops travelling — the next Judge in the same run gets the ids alone, exactly as a healthy run always did",
+  () => { const later = judgeItems(judgeFiledEvidence)[1];
+    return !!later && !later.prompt.includes("PREFLIGHT EVIDENCE TO FILE BEFORE JUDGING")
+      && !later.prompt.includes("Contacts_FormPage"); },
+  () => JSON.stringify({ judges: judgeItems(judgeFiledEvidence).map((j) => j.id),
+    hasBlock: judgeItems(judgeFiledEvidence).map((j) => j.prompt.includes("PREFLIGHT EVIDENCE TO FILE BEFORE JUDGING")) }));
+
 console.log(`\n=================\nSTAGE-GATES GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

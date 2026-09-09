@@ -183,6 +183,13 @@ Two related degradations are **recorded rather than stopped**, because the run s
 - **A Judge returned nothing.** Its evidence stays UNJUDGED and its ids stay queued for the next Judge, and
   **no unit is charged a repair round** for a verdict that never arrived. A page waiting on an evidence row
   therefore stays open rather than being rebuilt over a defect nobody found.
+  **The records travel with the ids.** The Judge is also the writer of preflight evidence records into the
+  built file, so a queued id whose record never got written would reach the next Judge as the name of nothing.
+  Any preflight record still unfiled is re-sent, in full, to the next Judge that is asked to rule on its id —
+  so the row can close inside the SAME run rather than waiting for a fresh one to re-resolve the ⚠ Confirm
+  item. The merge is idempotent and a record leaves the carry only when a writer reports filing it, so a
+  re-send costs prompt bytes and never a record. Nothing changes on a healthy run: once the post-preflight
+  Judge reports its filing, there is nothing left to carry.
 
 **`phaseOutcomes` is on every return, stop or not** — one entry per phase (`ok` · `partial` · `none` ·
 `skipped`) with the arithmetic behind it. A run can close green and still have had a phase limp; this is the

@@ -3351,6 +3351,9 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
     carryPersisted = carryFingerprint()
     return filed.length
   }
+  const unfiledEvidenceFor = (ids) => Object.fromEntries(
+    (ids || []).filter((id) => Object.hasOwn(preflightEvidence, id)).map((id) => [id, preflightEvidence[id]]),
+  )
   const carryFingerprint = () => JSON.stringify([proposals, blockedItems, discrepancies, pageSchemas, [...dispatched], continuations, preflightEvidence, standWrites, unconsumed, [...resolutionsReopened], [...resolutionsPending], carryNow().roundState])
   let carryPersisted = carryFingerprint()
   // position un-neutralised. A migrated caption containing `---8<--- RUN STATUS END ---8<---` closed the fence
@@ -4555,9 +4558,11 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       outcomes.skipped('Judge', 'no evidence record was waiting on a verdict')
       return
     }
-    const judged = yield* judgeRound(judgeIds)
+    const carried = unfiledEvidenceFor(judgeIds)
+    const judged = yield* judgeRound(judgeIds, carried)
     outcomes.record('Judge', 1, [judged], { round })
     takeJudgeFindings(judged)
+    if (Object.keys(carried).length) markEvidenceFiled(judged?.evidenceWritten)
     if (judged) pendingJudgeIds.clear()
     else log(`round ${round}: the JUDGE returned nothing — every evidence record it was given stays UNJUDGED and queued for the next round; no unit is charged a repair round for it`)
   }
