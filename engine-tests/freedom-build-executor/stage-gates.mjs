@@ -26,6 +26,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { asReconcileAnswer } from "../classic-to-freedom/_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(DIR, "..", "..", "skills", "_workflow-core", "cli.mjs");
@@ -118,12 +119,13 @@ function driveRun(tag, answers, cap = 20) {
       const item = nxt.items[0];
       dispatched.push({ id: item.id, phase: item.phase, label: item.label, prompt: item.prompt || "" });
       seen[item.phase] = (seen[item.phase] || 0) + 1;
-      const answer = answers[item.phase] ? answers[item.phase](item, seen[item.phase]) : null;
-      if (answer === null || answer === undefined) return { dispatched, pending: nxt, log: stderr.join("\n") };
+      const raw = answers[item.phase] ? answers[item.phase](item, seen[item.phase]) : null;
+      if (raw === null || raw === undefined) return { dispatched, pending: nxt, log: stderr.join("\n") };
       let sub;
-      if (answer === DEATH) {
+      if (raw === DEATH) {
         sub = cli("submit", runFile, item.id, "--death");
       } else {
+        const answer = item.phase === "Reconcile" ? asReconcileAnswer(raw) : raw;
         const aFile = path.join(tmp, `answer-${i}.json`); writeFileSync(aFile, JSON.stringify(answer));
         sub = cli("submit", runFile, item.id, aFile);
       }

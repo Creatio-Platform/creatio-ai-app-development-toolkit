@@ -618,7 +618,12 @@ function listRowActionsTable(rowActions) {
   if (!rowActions?.length) return [];
   const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
   for (const ra of rowActions) {
-    const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    // The PROPERTY the condition binds travels with the method name (ENG-94714). `visible` and `enabled` are not
+    // interchangeable: porting an enablement condition as a visibility rule hides the control instead of greying
+    // it, and porting either as nothing ships an always-available action. The cell says which one it is.
+    const cond = ra.condition
+      ? `\`${esc(ra.condition)}\` on \`${esc(ra.conditionProperty || "visible")}\` — carry as Freedom state`
+      : "⚠ none declared — confirm on-stand";
     const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
     L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
   }
@@ -637,7 +642,12 @@ function listCommandBarTable(actions) {
     // without its `Enabled` condition ships always-enabled. `Menu position` carries the separator-delimited
     // group and the submenu container, which are the only record of the classic menu's shape.
     const cap = a.caption ? `\`${esc(a.caption)}\`` : "⚠ none read — confirm on-stand";
-    const cond = a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    // Same rule as the Row actions table above: the bound property is part of the condition, not a detail. A
+    // button may carry BOTH (the real `SagRequestCombinedSectionButton` binds one method to `visible` and another
+    // to `enabled`), so every one this run resolved is rendered rather than only the first.
+    const cond = a.conditions?.length
+      ? a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state"
+      : (a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand");
     const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
     L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
@@ -671,6 +681,15 @@ function renderListBuildNotes(lcs) {
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderListPageBlock(result, section, opts = {}) {
   const L = ["### List page"];
+  // The LIST page's own verdict, first thing in the block (ENG-94714). It is stated HERE rather than in the plan's
+  // top banners because it is scoped: the record page above it may be perfectly approvable on the same run, and a
+  // banner at the top would read as a verdict on the whole plan. Everything below it still renders — a partial
+  // reading is evidence, and hiding it would leave the operator with a blocked page and no idea what was found.
+  if (result.listGate?.blocked) {
+    L.push("", "> ⛔ **The list page is NOT approvable from this run.** The section's own evidence is incomplete, so what follows is a PARTIAL reading of the Classic list — an element it shows may be missing below with nothing naming it. The record page above is unaffected and is judged on its own gate.");
+    for (const r of result.listGate.reasons) L.push(`> - ${esc(r)}`);
+    L.push("");
+  }
   // The plan is the document an operator APPROVES, so it must not present a full build spec for a page the run
   // deliberately does not build. Same treatment as the `Navigable section registered` row: state the decision, then
   // keep the contents as a record of what a later run — the one that adds the menu entry — would build.
@@ -926,6 +945,22 @@ function answeredText(r) {
   const attribution = who ? ` _(${who})_` : "";
   return `**✅ answered:** ${esc(r.answer)}${attribution}`;
 }
+// The worklist's header. The count is EVERY half, and it says which is which: "(3)" on a run where two of the
+// three were answered reads as three open questions. Each qualifier is only mentioned when there IS one, so an
+// unanswered run's header is unchanged and the answered-only wording stays the ENG-96457 one.
+// ENG-96571 review 2 (finding 6) — `advisories` is the count of things this worklist has to say that are NOT rows
+// (a not-applicable key, a key that matched no row). With no open row the header used to read a bare `(0)`, which
+// summarizes such a section as "zero questions, nothing to see" — the opposite of what its body says. `(0 open)`
+// says the count is the OPEN half and that something else follows. Own fn so `renderConfirmWorklist` gains no
+// branch of its own (Sonar CC 15).
+function confirmHeader(open, closed, answered, advisories) {
+  const H = (tail) => `#### ⚠ Confirm before I build (${tail})`;
+  if (closed && answered) return H(`${open} open, ${closed} closed, ${answered} answered`);
+  if (closed) return H(`${open} open, ${closed} closed`);
+  if (answered) return H(`${open}, ${answered} answered`);
+  if (advisories) return H(`${open} open`);
+  return H(String(open));
+}
 function renderConfirmWorklist(cs, opts = {}) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -962,14 +997,14 @@ function renderConfirmWorklist(cs, opts = {}) {
   // this line, would read a plan that neither shows the answer nor says it was not applied.
   // (ENG-96457: it also means every kind that reaches this worklist can carry an answer — including this one.)
   const notApplicable = cs.confirmNotApplicable || [];
-  if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length) return [];
-  // The header counts EVERY half, and says which is which: "(3)" on a run where two of the three were answered
-  // reads as three open questions. Each qualifier is only mentioned when there IS one, so an unanswered run's
-  // header is unchanged, and the answered-only wording stays the ENG-96457 one.
-  let head = `#### ⚠ Confirm before I build (${confirm.length})`;
-  if (closedRows.length && answered) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed, ${answered} answered)`;
-  else if (closedRows.length) head = `#### ⚠ Confirm before I build (${confirm.length} open, ${closedRows.length} closed)`;
-  else if (answered) head = `#### ⚠ Confirm before I build (${confirm.length}, ${answered} answered)`;
+  // ENG-96571 review 2 (finding 3) — a recorded key that matched NO row on this surface: a typo in the kind or the
+  // item (`rule-condtion:Job`, `rule-condition:Jobb`). It closed nothing, is in none of `closed`/`invalid`/
+  // `notApplicable` (those need a row to attach to), and without this line the operator reads a plan where the
+  // question is still open and their answer appears nowhere at all. Same channel and same voice as
+  // `behaviourIndex.unmatched`.
+  const unmatched = cs.confirmUnmatched || [];
+  if (!confirm.length && !closedRows.length && !invalid.length && !notApplicable.length && !unmatched.length) return [];
+  const head = confirmHeader(confirm.length, closedRows.length, answered, notApplicable.length + unmatched.length);
   const L = [head, ...confirm];
   if (closedRows.length) {
     const closedList = closedRows.map((d) => `**[${esc(d.kind)}]** ${esc(d.item)} → **${esc(d.disposition)}**${noteSuffix(d.note)}`).join(" · ");
@@ -985,6 +1020,14 @@ function renderConfirmWorklist(cs, opts = {}) {
     // ONE LINE PER CHANNEL. A single shared sentence sent every kind to `memberDispositions`, which is the wrong
     // channel for `detail-editpage` — see `NA_ADVICE`.
     L.push("", ...notApplicableLines(notApplicable));
+  }
+  if (unmatched.length) {
+    const list = unmatched.map((k) => "`" + esc(k) + "`").join(", ");
+    // ENG-96571 review 3 (BLOCKER) — the multi-page CAVEAT IS GONE, because the limitation it described is. The
+    // report is judged once AT THE ROOT over the union of every folded scope's rows (`confirmSeenAll`, migrate.mjs),
+    // so a bare key is checked against the WHOLE surface instead of being suppressed whenever the run folds
+    // anything. The absence of this line now does mean every recorded key found a row somewhere on the surface.
+    L.push("", `> ⚠ ${unmatched.length} recorded \`confirmDispositions\` key(s) matched NO ⚠ Confirm row on this surface: ${list}. Nothing was closed by them — check the \`<kind>:<item>\` spelling against the rows above (and against \`preflight[]\` in \`--units\`), then re-run. **What this line can see:** every page of this run — the record page, the list page, and every child/typed/mini page it folds. A BARE key matches when ANY of them raised that row; a \`<schema>::<kind>:<item>\` key matches only on the page it names, so a key whose \`<schema>\` prefix names no page of this run is reported here too.`);
   }
   return [...L, ""];
 }
@@ -1137,7 +1180,24 @@ function triggerText(t) {
   // trigger carrying a `lifecycle` field), because it is a different ANSWER: the platform starts this chain, which
   // is what the reader needs, whereas a bare `internal` trigger leaves the origin open. The rendered text is
   // deliberately UNCHANGED by the rename — the plan reads the same, only the shape it is computed from is honest.
-  if (t.kind === "lifecycle") return `${esc(t.from)} (platform lifecycle) → internal call${callersSuffix(t)}`;
+  // ENG-96571 review 2 (finding 2) — `hook` is the platform method that ANSWERS the chain and `from` the IMMEDIATE
+  // caller, and on a chain longer than one hop they are different methods. The hook is what this cell names (it is
+  // the answer); `via` names the hops BETWEEN the immediate caller and the hook — it never repeats `from` and never
+  // ends on the hook (`composeUpstream` peels both off), so `via` is what keeps a chain longer than TWO hops
+  // whole. `hook ?? from` because a one-hop answer carries no `hook`: there the immediate caller IS the hook.
+  //
+  // WHAT EACH DEPTH ACTUALLY RENDERS (ENG-96571 review 3 — this comment used to claim the middle one printed
+  // `via mid`, which it does not; `mid` reaches the reader through the FOLD, not through this cell):
+  //   · `onSaved → leaf`        → `onSaved (platform lifecycle) → internal call`   (`from` IS the hook, no `via`)
+  //   · `onSaved → mid → leaf`  → `onSaved (platform lifecycle) → internal call`   (`from: mid`, and `via` is EMPTY
+  //     because `mid` is the immediate caller — the reader learns `mid` from `leaf` folding under it, whose Freedom
+  //     target reads ``port with `mid` ``)
+  //   · `onSaved → top → mid → leaf` → `onSaved (platform lifecycle) → internal call via top`   (`from: mid`,
+  //     `via: ["top"]` — the first hop this cell has anything left to name)
+  if (t.kind === "lifecycle") {
+    const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
+    return `${esc(t.hook ?? t.from)} (platform lifecycle) → internal call${via}${callersSuffix(t)}`;
+  }
   if (t.kind === "internal") {
     const via = t.via?.length ? ` via ${t.via.map(esc).join(" → ")}` : "";
     if (t.rootTrigger) return `${triggerText(t.rootTrigger)} → ${esc(t.root)}${via} (internal call)${callersSuffix(t)}`;
@@ -1868,8 +1928,9 @@ export function renderPlanNotes(result) {
     "",
     "### Presenting the plan",
     "",
-    "- Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` slots in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
-    "- Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
+    // ENG-96571 review 2 (finding 5) — from `PLAN_AUTHORING_SENTENCES`, not hand-written here: this document and
+    // the CLI's stderr line carried two copies of the same rule in two wordings. See the constant.
+    ...PLAN_AUTHORING_SENTENCES.map((s) => `- ${s}`),
     "- The Plan-vs-Done control table is NOT part of `plan.md`: produce it with `--checklist` AFTER implementation, and close the build with `--verify --built <file>`.",
   ];
   const unverified = noChildPageNodes(result.childPages || []);
@@ -2110,7 +2171,19 @@ function renderIdentifiers(opts) {
 // `manifest.planMeta` and "present this VERBATIM". A plan is the artifact a human approves; instructions to the
 // generator are not part of it. `migrate.mjs --plan` writes this to STDERR (and the worklog) instead, so the agent
 // still gets the rule and the file stays free of it. Exported so there is exactly ONE copy of the text.
-export const PLAN_AUTHORING_NOTE = "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present the plan VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).";
+//
+// ENG-96571 review 2 (finding 5) — ONE copy, in ONE shape, for BOTH channels. `renderPlanNotes` used to hand-write
+// these two sentences again, in its own slightly different wording ("`<FILL: …>` slots in `plan.md`" vs "`<FILL: …>`
+// above"), so the rule the agent must follow existed twice and an edit to either left the other stating the old
+// version of it. The sentences are the unit both channels need — the notes document renders them as its two
+// bullets, the CLI's stderr line as one paragraph — so they are exported as an ARRAY and the paragraph is derived
+// from it. The wording is the notes' one (it names `plan.md` instead of saying "above", which was only ever true
+// while the text was appended to the plan itself).
+export const PLAN_AUTHORING_SENTENCES = [
+  "Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` slots in `plan.md`), then present `plan.md` VERBATIM — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing.",
+  "Corrections/enrichments go in an *Adjustments* list at the very end of `plan.md` — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).",
+];
+export const PLAN_AUTHORING_NOTE = PLAN_AUTHORING_SENTENCES.join(" ");
 
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -2637,9 +2710,16 @@ function evidenceRow(id, label, extra = {}, vkExtra = {}) {
 // The RAW `kind`/`item` ride on the ROW (not on the `vk`, which is the resolvers' input): `--units.preflight`
 // republishes them next to the id so the executor reads the decision it must resolve without re-parsing an id —
 // and without `esc`, which is a rendering transform and would not round-trip.
+// ENG-96571 review 2 (finding 1) — a row CLOSED by `manifest.confirmDispositions` is NOT an evidence row. The
+// disposition is the answer, and `renderConfirmWorklist` already prints it as `ℹ … CLOSED by a recorded
+// disposition`; publishing it here anyway put the same answered question back into `--units.preflight` and into the
+// `--verify` gate as an OPEN evidence id (`main#confirm:<kind>:<item>`), so a plan that said "(2 open, 1 closed)"
+// shipped three questions to the executor and the third could never be closed by anything but a second answer in
+// another channel. Deliberately NOT re-added as a plain row either: a `vk`-less row still renders as
+// `☐ confirm on-stand` in the control table, which is the same open-looking item under a different marker.
 function confirmWorklistRows(pageKey, cs) {
   return (cs.needsDecision || [])
-    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind))
+    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind) && !nn.closed)
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
       { confirm: { kind: d.kind, item: d.item } }));
 }
@@ -3408,6 +3488,105 @@ function resolutionConflicts(index, published) {
   }
   return out;
 }
+// ⚠ A QUESTION CLOSED BY A DISPOSITION IS STILL A QUESTION THIS RUN ASKED (ENG-96571 review 3).
+// `confirmWorklistRows` stops publishing a row `manifest.confirmDispositions` closed — correctly: a closed row is
+// not open work, and republishing it put an unclosable evidence id into `--units.preflight` and the `--verify`
+// gate (review 2, finding 1). But `unmatchedResolutions` judges `resolutions.json` against `preflight[]`, so the
+// same removal made an ANSWER to that question "an answer nobody asked for": with the disposition recorded,
+// `resolutionsUnmatched` reported the entry and `resolutionsMatched` fell to 0. And that is the DOCUMENTED path —
+// `references/migration-documentation.md` tells the operator to fill BOTH channels for one question, so following
+// the documentation produced a ⚠ line accusing the operator of answering a question nobody asked.
+//
+// So the closed rows stay KNOWN to the reconciliation while staying out of the open work: they are not in
+// `preflight[]`, they close no `--verify` row, and they are not counted in `resolutionsMatched` (that count means
+// "an OPEN question got an answer"). They are reported in their own field, `resolutionsClosed`. Same shape of
+// exemption as the `isRunScoped` one above and for the same reason — the report exists to mean "this answer
+// reaches no builder", which is false of both.
+//
+// BOTH KEY FORMS, deliberately: the descriptor carries `id` as well as `kind`+`item`, so `askedKeys` indexes it
+// under both and an operator who answered the closed question by its published id is exempt too. Guarding only
+// the pair form left the id form reporting the answer, which is the very asymmetry `unmatchedResolutions`'
+// own comment warns about.
+//
+// `closed[]` on `result.confirmDispositions` is NOT the input here even though it looks like the obvious one:
+// (a) `applyConfirmDispositions` pushes the BARE `confirmKeyOf(n)` (never a `<schema>::` form — the scoped spelling
+// is only how the answer is LOOKED UP), so that array's keys would have to be split back on a colon into
+// `kind`/`item`, and `item` carries colons (`field-control:(1 fields)`) — the exact ambiguity `resolutionKey`
+// exists to avoid; and (b) it is THIS scope's report only, so it says nothing about a row closed inside a
+// child/typed/mini fold, whose confirm rows `checklistGroups` splices in here. Walking the `needsDecision` rows
+// the fold already annotated in place gives the unsplit pair and covers the whole tree.
+// The `pageKey` for the list page's rows is read off the keys `checklistGroups` ACTUALLY emitted rather than
+// re-deciding the withhold rule — that rule (`listConfirmOnMain = []` once the `list` key is published) lives in
+// one place, and a second copy of it here is how the two would come to disagree.
+// The CLOSED ⚠ Confirm rows of one ChangeSet. Own name so the root/list scopes and a hand-built nested result
+// (goldens, direct API callers may nest a whole result under `childPages`) read the same predicate.
+const closedOf = (cs) => (cs?.needsDecision || []).filter((n) => n.closed === true);
+function closedConfirmQuestions(result, byKey) {
+  const out = [];
+  const seen = new Set();
+  const takePairs = (pairs, pageKey) => {
+    for (const n of pairs || []) {
+      // `SHOWN_ELSEWHERE` mirrors `confirmWorklistRows`' filter so the two read the same rows. Such a kind can
+      // never carry `closed` anyway (`applyConfirmDispositions` reports it as `notApplicable` and closes nothing),
+      // so this guard is symmetry, not load-bearing logic.
+      if (SHOWN_ELSEWHERE.has(n.kind)) continue;
+      // ENG-96571 review 3 (finding 5) — de-duped on the EMITTED `id`, not on `resolutionKey(kind, item)`. The id is
+      // page-scoped (`${pageKey}#confirm:…`) while the pair is not, so a pair-keyed dedupe kept only the FIRST page
+      // visited: one bare disposition key closing the identical row on `main` and on a folded sub-page — the normal
+      // effect of an inherited bare key, and the documented "one answer for the whole surface" pattern — published
+      // `main#confirm:<pair>` and dropped `C1Child#confirm:<pair>`. An operator who answered by the sub-page's
+      // published id (an id `--units.preflight` printed before the disposition was recorded) then landed in
+      // `resolutionsUnmatched` through the `byId` loop, because `pairMatched` needs a `kind`/`item` an id-only entry
+      // does not carry — the exact false "an answer nobody asked for" this block exists to remove, on the path its
+      // own comment promises to cover. Keeping every page's id makes the id-form exemption hold on every page.
+      // `closedResolutions` de-dupes its OUTPUT by pair, so one answer still produces one `resolutionsClosed` row.
+      const id = `${pageKey}#confirm:${confirmKeyOf(n)}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, kind: n.kind, item: n.item });
+    }
+  };
+  const takeChangeSet = (cs, pageKey) => takePairs(closedOf(cs), pageKey);
+  takeChangeSet(result.changeSet, "main");
+  // MAIN SCOPE ONLY for `listChangeSet`, exactly as `checklistGroups` splices it: a sub-bundle carrying its own
+  // `section` gets a `listChangeSet` whose rows are never published, so a "closed" row there is not a question
+  // this run asked and must not exempt an answer.
+  takeChangeSet(result.listChangeSet, byKey.has(LIST_PAGE_KEY) ? LIST_PAGE_KEY : "main");
+  // A FOLDED sub-page node exposes `pageRows`, not its `changeSet` — the ChangeSet stays inside the fold — so the
+  // pairs come from `confirmClosed`, which `migrate.mjs` publishes on the node for exactly this reader. A node
+  // built by hand (goldens, direct API callers) carries neither and contributes nothing, which is correct.
+  for (const nd of subPageNodes(result)) takePairs(nd.confirmClosed || closedOf(nd.changeSet), nd.pageKey);
+  return out;
+}
+// The answers that landed on a question a disposition had already CLOSED — the operator answered it through both
+// channels, which the documentation tells them to do. Reported (never silent) because the entry reached no
+// builder: it is not a miss, but it is not work either.
+// ⚠ ONLY WHEN THE PAIR IS CLOSED EVERYWHERE. Pair matching is page-agnostic, and one `kind`+`item` can be closed on
+// one page while the identical row is still OPEN on another — a scoped `C1Child::field-labels:(all fields)`
+// disposition closes the child's row and leaves `main`'s standing. There the answer DID reach an open question and
+// IS counted in `resolutionsMatched`, so listing it here would make this field's own stderr line ("target
+// questions already CLOSED … NOT counted in `resolutionsMatched`") state two things that are both false of that
+// run. So a pair still present in `preflight[]` is excluded: `resolutionsClosed` means "this answer reaches no
+// OPEN question because a disposition already closed it", which is exactly what the line claims.
+function closedResolutions(index, closedQuestions, published) {
+  if (!index) return [];
+  const open = new Set(published.map((p) => resolutionKey(p.kind, p.item)));
+  const out = [];
+  // ENG-96571 review 3 (finding 5) — `closedQuestions` now carries ONE DESCRIPTOR PER PAGE for a pair closed on more
+  // than one page (that is what makes the id-form exemption hold everywhere). This report is per QUESTION, not per
+  // page: the field's own ℹ line counts answers that reach no open question, so emitting the same pair once per page
+  // would inflate it. De-duped on the pair here, which is the shape this output has always had.
+  const emitted = new Set();
+  for (const q of closedQuestions) {
+    const pair = resolutionKey(q.kind, q.item);
+    if (open.has(pair) || emitted.has(pair)) continue;
+    const hit = matchResolution(index, q);
+    if (!hit) continue;
+    emitted.add(pair);
+    out.push({ kind: q.kind, item: q.item, answer: hit.answer });
+  }
+  return out;
+}
 // An already-built index passes through; a parsed file is indexed here.
 const asResolutionIndex = (r) => (r?.byKindItem instanceof Map ? r : buildResolutionIndex(r ?? null));
 // `resolution: null` for an open question — an omitted field cannot be told apart from an engine that publishes none.
@@ -3428,6 +3607,9 @@ export function pageUnits(result, opts = {}) {
   // with the unmatched report below, so the two cannot disagree about what matched.
   const resIndex = asResolutionIndex(opts.resolutions);
   const preflight = preflightUnits(evidence.filter((r) => r.confirm), resIndex);
+  // The questions a recorded disposition CLOSED — asked by this run, answerable through `resolutions.json` too,
+  // and deliberately NOT in `preflight[]`. See `closedConfirmQuestions`.
+  const closedQuestions = closedConfirmQuestions(result, byKey);
   // Built BEFORE the return object rather than inline in it, because `templateNames` below is derived FROM these
   // units — the template each page expects is already decided here, and re-deriving it from the rows a second time
   // is how one source of truth becomes two that agree only until someone edits one of them.
@@ -3476,10 +3658,22 @@ export function pageUnits(result, opts = {}) {
     // was recorded (see the resolutions block above).
     preflight,
     // One question answered twice through the two key forms — the pair wins and the id-keyed answer is dropped, so
-    // the discard is named rather than left silent.
-    resolutionsConflicts: resolutionConflicts(resIndex, preflight),
+    // the discard is named rather than left silent. The CLOSED questions are in this set for the same reason they
+    // are in the unmatched one (ENG-96571 review 3): `closedResolutions` resolves through `matchResolution`, which
+    // prefers the pair and discards the `id`-keyed answer — so a closed question answered twice discards one of
+    // them exactly like an open one, and judging conflicts against `preflight` alone left that discard silent.
+    resolutionsConflicts: resolutionConflicts(resIndex, [...preflight, ...closedQuestions]),
     // Answers matching no question this plan asks — published so the CLI reports them rather than dropping them.
-    resolutionsUnmatched: unmatchedResolutions(resIndex, preflight),
+    // The published set is `preflight` PLUS the questions a disposition closed: a closed question was still asked,
+    // so an answer to it is not "an answer nobody asked for" (ENG-96571 review 3). Passed as one list rather than
+    // as a second parameter so the exemption applies to BOTH key forms for free — `askedKeys` already indexes each
+    // descriptor under its `id` and its `kind`+`item`, and the two loops inside stay symmetric by construction.
+    resolutionsUnmatched: unmatchedResolutions(resIndex, [...preflight, ...closedQuestions]),
+    // ENG-96571 review 3 — the answers that target a question a disposition ALREADY CLOSED. Its own field, not
+    // folded into `resolutionsMatched`: that count means "an OPEN question got an answer" and is what tells an
+    // answers-file-arrived-late run from a run with no answers, so an entry that closes nothing must not inflate
+    // it. `[]` when the operator used one channel per question — the ordinary case.
+    resolutionsClosed: closedResolutions(resIndex, closedQuestions, preflight),
     // ENG-95503 — WAS THERE AN ANSWERS FILE AT ALL, and how much of it landed. `resolutionsUnmatched` reports answers
     // that missed a question; these two report the case it cannot see — a run where NO answers were read, which is
     // indistinguishable in every other field from a run where the operator answered nothing. A real run wrote its
@@ -5238,4 +5432,162 @@ export function encodedAsciiBytes(s) {
     n += (c >= 0x20 && c <= 0x7e) ? 1 : 6;
   }
   return n;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// THE RUN STATE, COMPUTED
+// ---------------------------------------------------------------------------------------------------------------
+
+export const isRecordObject = (x) => typeof x === "object" && x !== null && !Array.isArray(x);
+
+// The line a caller looks for to find the state on stdout, and the byte ceiling its own answer has for carrying it.
+// The workflow side holds its own copies of both — the two cannot share a module across that boundary — and
+// run-infra pins them equal.
+export const RECONCILE_STATE_MARKER = "--- RECONCILE STATE (one line follows; copy it verbatim) ---";
+export const RECONCILE_WIRE_CEILING = 16000;
+
+// A key list that came from object iteration is SORTED before it is published: the same folder must produce the
+// same bytes, and insertion order is a property of how a file was written rather than of what it holds. Lists the
+// engine orders itself (`buildOrder`, `unitKeys`, `reachability`) keep that order — it is meaning, not iteration.
+const sortedKeys = (o) => Object.keys(o || {}).sort();
+
+// One reachability key's recorded state, as one of three LITERAL STRINGS. `'unset'` is "not in the file" and is
+// distinct from `'false'` ("recorded absent"): a caller that reads them as booleans re-dispatches confirmed wiring.
+function reachabilityStateOf(built, key) {
+  const v = (built?.reachability || {})[key];
+  if (v === undefined) return "unset";
+  return v ? "true" : "false";
+}
+
+// THE RUN STATE the build executor schedules on: the plan's own published facts, the folder's two state files, and
+// the drift between them. Pure — every input is already parsed, so the golden runner calls it directly.
+// `units` is `pageUnits(result, opts)`, `verify` is `verifySummary(result, verifyRes)`, `queue` and `built` are the
+// parsed build-queue.json / built.json (`null` when the folder has neither).
+//
+// WHAT IS NOT HERE, and must not be added: the approval (free text in decisions.md, so no deterministic read) and
+// the four stand facts (package state, component and template resolution, the stand's SchemaNamePrefix). Those need
+// a live environment and stay the caller's to report.
+//
+// Field names are the executor's state contract. A rename here is a rename there.
+export function reconcileState(units, verify, queue, built) {
+  const pages = units.pages || [];
+  const main = pages.find((p) => p.key === "main") || null;
+  const q = queue || {};
+  const qUnits = isRecordObject(q.units) ? q.units : {};
+  const standWrites = isRecordObject(q.standWrites) ? q.standWrites : {};
+  const evidence = isRecordObject(built?.evidence) ? built.evidence : {};
+  const judge = isRecordObject(built?.judge) ? built.judge : {};
+  const builtPages = isRecordObject(built?.pages) ? built.pages : {};
+  const unitKeys = pages.map((p) => p.key);
+  const published = new Set(unitKeys);
+  const filed = sortedKeys(evidence).filter((id) => isRecordObject(evidence[id]));
+  const pageSchemas = {};
+  const roundOf = {};
+  const continuationOf = {};
+  for (const k of sortedKeys(qUnits)) {
+    const u = qUnits[k];
+    if (typeof u?.schemaName === "string" && u.schemaName) pageSchemas[k] = u.schemaName;
+    roundOf[k] = Number.isFinite(u?.rounds) ? u.rounds : 0;
+    continuationOf[k] = Number.isFinite(u?.continuations) ? u.continuations : 0;
+  }
+  const reachabilityState = {};
+  for (const r of units.reachability || []) {
+    if (r.appliesWhen) reachabilityState[r.key] = reachabilityStateOf(built, r.key);
+  }
+  return {
+    planVersion: units.planVersion ?? null,
+    planGaps: units.planGaps || [],
+    unitKeys,
+    buildOrder: units.buildOrder || [],
+    parents: units.parents || {},
+    reachability: units.reachability || [],
+    preflightItems: units.preflight || [],
+    evidenceIds: (units.evidenceRows || []).map((r) => r.id),
+    componentTypes: [...new Set(pages.flatMap((p) => p.componentTypes || []))].sort(),
+    templateNames: units.templateNames || [],
+    mainEntity: main?.entity ?? null,
+    targetPackage: main?.targetPackage ?? null,
+    sectionHost: units.sectionHost ?? null,
+    applicationCode: units.applicationCode ?? null,
+    resolutionsUnmatched: units.resolutionsUnmatched || [],
+    resolutionsConflicts: units.resolutionsConflicts || [],
+    runResolutions: units.runResolutions || [],
+    verify,
+    // Queue-file rows, verbatim. The counters are READ here and never moved: this state is computed before anything
+    // is attempted, and a counter charged for an unattempted unit parks a page nobody built.
+    roundOf,
+    continuationOf,
+    pageSchemas,
+    parkedUnits: sortedKeys(qUnits).filter((k) => qUnits[k]?.parked === true)
+      .map((k) => ({ key: k, parkedWhy: qUnits[k].parkedWhy ?? null, rounds: roundOf[k] })),
+    proposals: q.proposals || [],
+    blocked: q.blocked || [],
+    discrepancies: q.discrepancies || [],
+    unconsumedResolutions: q.unconsumedResolutions || [],
+    resolutionsReopened: q.resolutionsReopened || [],
+    resolutionsPending: q.resolutionsPending || [],
+    // The folder-level round record, VERBATIM, plus the four legacy ROOT keys a folder written before the fold
+    // still carries. Both are published because the reader takes `roundState` first and the root key only as a
+    // fallback: dropping either half grants a round the operator already spent.
+    roundState: isRecordObject(q.roundState) ? q.roundState : null,
+    layoutPassDone: q.layoutPassDone,
+    roundsSpent: q.roundsSpent,
+    consumedRoundAnswers: q.consumedRoundAnswers,
+    unsettledUnits: q.unsettledUnits,
+    pendingContradiction: q.pendingContradiction,
+    // Stand-write records, verbatim — including their timestamps. They say what an earlier run did; recomputing or
+    // re-stamping one turns another run's memory into this run's guess.
+    packageCreatedByRun: standWrites.packageCreated ?? null,
+    orphanedPagesOnFile: standWrites.orphanedPages || [],
+    sectionRouteByRun: standWrites.sectionRoute ?? null,
+    // Built-file rows.
+    reachabilityState,
+    pagesRecorded: sortedKeys(builtPages),
+    evidenceFiled: filed,
+    evidenceRejected: filed.filter((id) => judge[id]?.convincing === false),
+    unjudgedEvidenceIds: filed.filter((id) => !isRecordObject(judge[id])),
+    // Drift between the plan and the queue file. Reported, never resolved: a stale key gates nothing, a new key has
+    // no queue row yet, and both mean the plan was regenerated under a run that had already started.
+    staleQueueKeys: sortedKeys(qUnits).filter((k) => !published.has(k)),
+    newKeys: unitKeys.filter((k) => !(k in qUnits)),
+  };
+}
+
+// THE WIRE FORM. The file carries the whole state; the printed line carries only what the CALLER computes on, and
+// the two differ because the line crosses an answer with a byte ceiling while the file does not.
+//
+// A DENY LIST, never an allow list: every field travels unless a path below names it, so a field added to the
+// state reaches the caller by default and no new arithmetic can go dark by omission. `field[].key` drops `key`
+// from every element of an array; `field.key` drops it from an object.
+//
+// A PATH EARNS ITS PLACE ONLY BY HAVING NO READER ON THE CALLER'S SIDE, and that is a claim about the caller's
+// source, not about which prompt names the field. `preflightItems[].item` does NOT qualify: an answered Confirm
+// item's text is the QUESTION its answer answers, and the caller renders it into the builder's prompt (and into
+// the claim and unconsumed rows). Dropped, a builder reads `question: \`preflight.1\`` above an operator answer
+// and has lost what the answer is about. `requires` is the engine's own evidence rule, and `verify.planGaps`
+// duplicates the root field every caller-side reader already takes.
+// `pageKey`, `kind` and `item` are the three pieces an item's own `id` is BUILT from
+// (`<pageKey>#confirm:<kind>:<item>`), so sending them beside it states the same thing twice. The caller parses
+// them back out of the id on arrival — `confirmIdParts` there is the inverse of this composition, and a test pins
+// the two against every id this engine emits.
+export const RECONCILE_WIRE_OMIT = ["preflightItems[].requires", "preflightItems[].pageKey",
+  "preflightItems[].kind", "preflightItems[].item", "verify.planGaps"];
+const withoutKey = (o, key) => {
+  if (!isRecordObject(o) || !(key in o)) return o;
+  const copy = { ...o };
+  delete copy[key];
+  return copy;
+};
+export function reconcileWireState(state, omit = RECONCILE_WIRE_OMIT) {
+  if (!isRecordObject(state)) return state;
+  const wire = { ...state };
+  for (const path of omit) {
+    const m = /^([A-Za-z]+)(\[\])?\.([A-Za-z]+)$/.exec(path);
+    if (!m) continue;
+    const [, field, isList, key] = m;
+    if (isList) {
+      if (Array.isArray(wire[field])) wire[field] = wire[field].map((row) => withoutKey(row, key));
+    } else wire[field] = withoutKey(wire[field], key);
+  }
+  return wire;
 }

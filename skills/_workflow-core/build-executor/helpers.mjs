@@ -10,7 +10,7 @@
 // enum from these constants, and they were still in this module's temporal dead zone. `Cannot access
 // 'SHOWS_YES' before initialization`, on every import of this file. The schemas are the LEAF (they import
 // nothing), so the literals belong there and the dependency runs one way.
-import { RECONCILE_SHAPE, CARRY_TEXT_CAP, SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN,
+import { RECONCILE_SHAPE, RECONCILE_STATE_KEYS, CARRY_TEXT_CAP, SHOWS_YES, SHOWS_NO, SHOWS_UNKNOWN,
   UNCONSUMED_FROM_VERIFIER, UNCONSUMED_FROM_DISPATCH } from './schemas.mjs'
 //
 // Repair rounds per unit before it is PARKED. Three is the design value: one round to build, one to repair what
@@ -298,9 +298,9 @@ export const inContextParkableKeys = (selfCheckShort, unitFor, verify, reachStat
 // Pure: the verdict and the self-reports are handed in; `unitFor` injects the schedule lookup. It changes NO verdict
 // — it only names a discrepancy for the run's audit trail; the post-hoc verifier remains the authoritative evidence.
 // `verifierBuildComplete` reads the SAME shared `derivedBuildComplete` on the VERIFIER's side of the comparison,
-// defense-in-depth: `state.verify` reaches this function through the Reconcile agent's structured output, where
-// `RECONCILE_SHAPE.verify` REQUIRES `buildComplete` on every page entry — the shape check, not the schema, is what
-// refuses an answer without it. So `buildComplete` should always be present on a fresh verdict; the fallback covers
+// defense-in-depth: `state.verify` reaches this function from the engine's computed state, which carries
+// `buildComplete` on every page entry because `verifySummary` writes it — present by construction, not by a
+// check that refuses an answer without it. So `buildComplete` should always be present on a fresh verdict; the fallback covers
 // a verdict written before this field existed, or a payload from a caller that has not adopted it. TRI-STATE (PR review, ENG-95901 follow-up): stays `undefined` — not coerced to
 // `false` — when the verifier has NO entry for this page at all (`pageStateOf` returns null, e.g. the page has not
 // reached its first post-hoc verify pass yet). Coercing that to `false` made `selfCheckMismatches` read "the
@@ -878,7 +878,7 @@ export function mergeConsumed(current, incoming) {
 // (`--verify-summary`), `VERIFY_RESULT` is gone, and the answer is capped at `RECONCILE_ANSWER_MAX_BYTES` because
 // transcribing open rows across the Reconcile -> script boundary was itself a run-killer (21 KB of row prose
 // truncated the run's FIRST structured answer at the host's cap). `verify.pages[*]` therefore carries counts and
-// flags and NO `openRows` — `RECONCILE_SHAPE.verify` names none, the prompt forbids them — so the per-row read
+// flags and NO `openRows` — the counts-only summary carries none — so the per-row read
 // this stop used to do returned nothing on a real run, while a large open set that DID carry them is refused over
 // the ceiling and dies `reconcile-failed` instead of stopping honestly.
 //
@@ -2200,7 +2200,7 @@ export const RECONCILE_ANSWER_MAX_BYTES = 16000
 // the model runs. It is deliberately NOT an arrival fault here: an absent-key fault is indistinguishable from the
 // legitimate states that carry neither field (a plan with no gated types; the `published`-empty → gate-ALL path a
 // state predating the field relies on), so it would refuse correct answers. `[]` stays the honest no-gated-types value.
-function componentSweepFaults(state, out) {
+export function componentSweepFaults(state, out) {
   const rows = Array.isArray(state.componentResolution) ? state.componentResolution : []
   // PR #159 review (Major 2): name the offending row by INDEX, never by echoing the agent-supplied `type`. This
   // message lands in `lastShapeFaults` and is rendered into the retry prompt's `faultLines` — the answer of the very
@@ -2246,6 +2246,118 @@ function componentSweepFaults(state, out) {
   if (published.some((t) => swept.has(t))) return
   out.push('componentResolution: the plan publishes ' + published.length + ' component type(s) and this answer resolves NONE of them. Return one entry per published type with `resolvedFrom` — `catalog` on every entry if the whole sweep fell back to the bundled catalog. Do NOT omit the entries: an omitted entry reads as un-swept, and this run would then build on a round that checked nothing about the stand')
 }
+// THE ANSWER, TURNED BACK INTO RUN STATE. The engine computed the state and printed it as one line; the agent
+// copied that line into `summary` and reported the facts only a stand read can give. This grafts the two into the
+// object the rest of the run computes on, so every consumer keeps reading `state.<field>` as before.
+//
+// The stand facts WIN over anything of the same name inside the line: the line is a fact about the folder, and
+// these are facts about the environment it builds into.
+//
+// Returns `{ state }` or `{ fault }`. One fault, never a list: a copied line either parses and carries the state's
+// own keys or it does not, and re-asking for a field inside it would ask the agent to compose what it copied.
+// THE ONE ARRIVAL FAULT NO RETRY CAN CLEAR. The line is copied verbatim, so an agent told to shorten it has
+// nothing it may legally do — it can only re-send the same bytes or corrupt them. A line already over the ceiling
+// on its own is a fact about the PLAN's size, not about this answer, and the attempt budget is not spent on it.
+//
+// Returns the line's byte count when it exceeds `maxBytes`, else 0. Pass `0` to measure without judging, which is
+// how the size fault names what the line costs.
+export function oversizeStateLine(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
+  const line = typeof answer?.summary === 'string' ? answer.summary : ''
+  if (!line) return 0
+  const bytes = encodedAsciiBytes(line)
+  return bytes > maxBytes ? bytes : 0
+}
+// WHAT A RETRY MAY ASK THE AGENT TO SHORTEN. The copied line is verbatim and every stand fact is reported field by
+// field, so neither can be traded away. Free TEXT can: the top-level `notes`, and the per-entry `note` a
+// provenance row may carry. Dropping an entry's note keeps the row — and the fact — intact.
+export const RECONCILE_SHRINKABLE_FIELDS = ['notes']
+export const RECONCILE_SHRINKABLE_ENTRY_LISTS = ['componentResolution', 'templateResolution']
+const withoutEntryNotes = (rows) => (Array.isArray(rows)
+  ? rows.map((r) => (r && typeof r === 'object' && !Array.isArray(r) && 'note' in r
+    ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'note'))
+    : r))
+  : rows)
+// AN ANSWER'S FLOOR: what it weighs with the shrinkable text gone. Over the ceiling THERE, no next answer can fit,
+// so the attempt budget buys nothing and the run stops on the first one.
+//
+// THIS IS THE PREDICATE, not `oversizeStateLine` above. A line UNDER the ceiling that leaves less room than the
+// stand facts need is exactly as unwinnable as a line over it: measured on the Contracts run, the line was 15327 B
+// of a 16000 B ceiling and the facts needed 2478 B, so three attempts were spent asking for a 1805 B reduction
+// against 761 B of shortenable text \u2014 and the generic recovery text then advised re-running the same route,
+// which reproduces the same bytes.
+//
+// Returns the floor's byte count when it exceeds `maxBytes`, else 0.
+export function unshrinkableAnswerBytes(answer, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
+  if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return 0
+  const floor = { ...answer }
+  for (const k of RECONCILE_SHRINKABLE_FIELDS) delete floor[k]
+  // The per-entry notes come off too, or an answer made oversize by verbose provenance prose would be declared
+  // terminal when a "cut the free text" retry could have fit — the one case this stop must NOT claim.
+  for (const k of RECONCILE_SHRINKABLE_ENTRY_LISTS) {
+    if (Array.isArray(floor[k])) floor[k] = withoutEntryNotes(floor[k])
+  }
+  const bytes = encodedAsciiBytes(JSON.stringify(floor))
+  return bytes > maxBytes ? bytes : 0
+}
+// THE INVERSE OF THE ENGINE'S CONFIRM ID. An item's id is `<pageKey>#confirm:<kind>:<item>`, so the three fields
+// are read back out of it rather than sent beside it. Split at the FIRST `#confirm:` and take `item` as everything
+// after the kind's colon: a page key can contain `:` (`child:SpecInContract`) and so can an item text (a Classic
+// caption like `Схема детали: "…"`), while a kind never does.
+//
+// Returns null for an id that is not a confirm id (a `#quality-gates` row, say), and the caller then leaves the
+// item as it arrived.
+export function confirmIdParts(id) {
+  if (typeof id !== 'string') return null
+  const at = id.indexOf('#confirm:')
+  // A PAGE KEY IS PART OF THE SHAPE: the engine composes `<pageKey>#confirm:…` and never leaves the page empty, so
+  // an id that starts with the separator is not one of its ids and nothing is parsed out of it.
+  if (at < 1) return null
+  const rest = id.slice(at + '#confirm:'.length)
+  const colon = rest.indexOf(':')
+  if (colon < 0) return null
+  return { pageKey: id.slice(0, at), kind: rest.slice(0, colon), item: rest.slice(colon + 1) }
+}
+// Restores the fields the wire form left out, so every consumer keeps reading `p.pageKey` / `p.kind` / `p.item`
+// as before. An item that already carries them is passed through untouched — a caller on the older wire shape,
+// and the fields it sent win over anything parsed here.
+function rehydratePreflightItems(items) {
+  if (!Array.isArray(items)) return items
+  return items.map((p) => {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return p
+    const parts = confirmIdParts(p.id)
+    if (!parts) return p
+    return { pageKey: parts.pageKey, kind: parts.kind, item: parts.item, ...p }
+  })
+}
+export function stateFromAnswer(answer) {
+  const line = typeof answer?.summary === 'string' ? answer.summary.trim() : ''
+  if (!line) return { fault: 'summary: the state line is missing — the state command printed none, or it was not copied. Nothing is scheduled off a state nobody produced' }
+  let parsed
+  try { parsed = JSON.parse(line) }
+  catch (e) { return { fault: `summary: the copied state line does not parse as JSON (${e.message}). Copy the line after the marker character for character, whole` } }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { fault: `summary: the copied line parsed to ${describeValue(parsed)}, not the state object` }
+  }
+  const short = RECONCILE_STATE_KEYS.filter((k) => parsed[k] === undefined)
+  if (short.length) return { fault: `summary: the copied line is missing ${short.join(', ')} — that is not the state command's line, or only part of it was copied` }
+  return {
+    state: {
+      ...parsed,
+      // The three restated fields come back out of each item's own id (`RECONCILE_WIRE_OMIT`).
+      preflightItems: rehydratePreflightItems(parsed.preflightItems),
+      approval: answer.approval,
+      packageState: answer.packageState,
+      componentResolution: answer.componentResolution,
+      templateResolution: answer.templateResolution,
+      schemaNamePrefix: answer.schemaNamePrefix,
+      schemaNamePrefixEmpty: answer.schemaNamePrefixEmpty,
+      exitCode: answer.exitCode,
+      verifyTablePath: answer.verifyTablePath,
+      notes: answer.notes,
+    },
+  }
+}
+
 export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12, maxBytes = RECONCILE_ANSWER_MAX_BYTES) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) {
     return [`the answer is not an object (got ${describeValue(state)})`]
@@ -2261,14 +2373,20 @@ export function reconcileShapeErrors(state, shape = RECONCILE_SHAPE, limit = 12,
   if (state.schemaNamePrefixEmpty === true && typeof state.schemaNamePrefix === 'string' && state.schemaNamePrefix !== '') {
     out.push('schemaNamePrefixEmpty: `true` contradicts the non-empty `schemaNamePrefix` — an EMPTY prefix travels as { schemaNamePrefix: null, schemaNamePrefixEmpty: true }, and a non-empty prefix travels with NO companion flag')
   }
-  componentSweepFaults(state, out)
+  // THE CEILING IS SHARED WITH THE COPIED LINE, and only one side of it can be shortened by asking. `summary` is
+  // the engine's state line, copied verbatim; the remaining fields are the agent's own. So the budget named here is
+  // what is LEFT after the line, the offenders list skips `summary`, and the remedy addresses fields the agent can
+  // actually cut. A line over the ceiling on its own is NOT this fault — that is `oversizeStateLine`, which no
+  // retry can clear.
+  const lineBytes = oversizeStateLine(state, 0)
   const size = encodedAsciiBytes(JSON.stringify(state))
   if (size > maxBytes) {
-    const worst = Object.keys(state)
+    const worst = Object.keys(state).filter((k) => k !== 'summary')
       .map((k) => [k, encodedAsciiBytes(JSON.stringify(state[k]))])
       .sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([k, n]) => `${k} (${n} B)`).join(', ')
-    out.push(String.raw`the answer encodes to ${size} ASCII bytes on the wire (the \uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}. Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
+    const budget = lineBytes ? ` The copied state line takes ${lineBytes} B of that, leaving ${Math.max(maxBytes - lineBytes, 0)} B for your own fields — do NOT shorten the line.` : ''
+    out.push(String.raw`the answer encodes to ${size} ASCII bytes on the wire (the \uXXXX submission form), over the ${maxBytes}-byte ceiling this run keeps under the host's tool-input limit — largest fields: ${worst}.${budget} Return the same facts with the bulk left on disk: counts, keys and ids here, never long free text`)
   }
   for (const [key, spec] of Object.entries(shape)) {
     if (state[key] === undefined) continue
@@ -2692,7 +2810,7 @@ export const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
 // (it is a function of the id) — it already travels on the `unconsumed` row for the same pair.
 // `idKey` ON BOTH SIDES, like every id comparison in this file: `d.unit`/`d.id` come off an agent-transcribed queue
 // file on a resume, so a padded field must not silently start a second row. THAT ONLY WORKS BECAUSE THE FIELDS ARE
-// IN THE ROUND-TRIP CONTRACT (round 21 review, finding 2): `RECONCILE_SHAPE.discrepancies` types `id`/`kind` and
+// IN THE ROUND-TRIP CONTRACT (round 21 review, finding 2): the queue file's `discrepancies` rows carry `id`/`kind` and
 // the Reconcile prompt's own read step names them in the row it enumerates. `schemas.mjs` states the governing
 // rule -- "an agent reproduces the fields it is told about and drops the rest" -- so an identity the prompt does
 // not name is an identity the resume does not have, and the dedup this comment promises would hold for one process
@@ -2701,14 +2819,14 @@ export const RESOLUTION_NOT_APPLIED = 'resolution-not-applied'
 // AN EMPTY IDENTITY MATCHES NOTHING, rather than matching every id-less row on the unit (round 21 review,
 // finding 3). `idKey` folds `undefined`, `null`, `''` and whitespace-only to the SAME empty string, so a blank
 // `row.id` would otherwise key on the unit alone and OVERWRITE the first id-less `resolution-not-applied` row it
-// found -- and a blank id is reachable, not hypothetical: `RECONCILE_SHAPE.preflightItems` requires `id` only to
+// found -- and a blank id is reachable, not hypothetical: a preflight item carries `id` only to
 // be PRESENT and a string, so `id: ''` clears the gate and rides through to here. Appending is the fail-closed
 // direction for a list whose whole purpose is retention (`seedGrantPairs` takes the same posture with
 // `if (r?.unit && r.id)`): a duplicate diagnostic costs bytes, a silently merged one costs the operator a
 // disagreement nobody else records.
 // ROWS THIS SITE DID NOT CREATE ARE HELD OFF BY THE `kind` GUARD, and by that alone -- stated plainly because the
 // weaker argument is tempting and is now wrong. It used to be true that such a row "carries no `id`, so it cannot
-// match a real one"; typing `id` into `RECONCILE_SHAPE.discrepancies` for finding 2 makes an id-bearing verifier row
+// match a real one"; typing `id` on a queue-file `discrepancies` row for finding 2 makes an id-bearing verifier row
 // contract-legal, and `absorbVerifier` spreads those in unfiltered. So `kind` is what separates a
 // `component-mismatch` on the same `(unit, id)` from a refutation of it, and the suite executes exactly that case
 // rather than reasoning about it. The one row still reachable through the guard is a verifier that volunteers BOTH

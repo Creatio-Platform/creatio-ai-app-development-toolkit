@@ -12,6 +12,9 @@
 //       unit can tell the run's own debris from a page somebody else owns.
 //
 // The assertions read the run's OWN return, not an agent's prose — same rule as source-blocker-park.mjs.
+// The Reconcile answers below are written FLAT, the way the run consumes them; the shared wrapper puts them on
+// the wire in the shape a real agent submits — the engine's state as one copied line, the stand facts beside it.
+import { asReconcileAnswer, isReconcileStateAnswer } from "../classic-to-freedom/_testkit.mjs";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -95,6 +98,19 @@ const ENG96445_PENDING = [
   { n: 16, deliverable: "⚠ unplaced — Documents — related list", rowKey: "main#confirm:unplaced-documents-related-list" },
 ];
 
+// WHICH ANSWER THIS ITEM GETS. Reconcile answers may be a FUNCTION of the round index, and are put on the wire by
+// the shared wrapper; Close confirms its write; anything else comes from the scenario or is null, which drops the
+// item and stops the drive loop — so a run that unexpectedly tried to BUILD is caught rather than answered.
+function answerFor(item, reconcileAnswer, reconcileSeen, extraAnswers) {
+  if (item.phase === "Reconcile") {
+    const flat = typeof reconcileAnswer === "function" ? reconcileAnswer(reconcileSeen, item) : reconcileAnswer;
+    return isReconcileStateAnswer(item) ? asReconcileAnswer(flat) : flat;
+  }
+  if (item.phase === "Close") return { written: true };
+  if (extraAnswers[item.phase]) return extraAnswers[item.phase](item);
+  return null;
+}
+
 // Drive the run, answering the baseline Reconcile and anything the Close asks for; return the terminal result and
 // the whole log, because the operator worklist is a LOG line as well as a returned field.
 // PR #157 review (Majors on `:149` and `:197`) — `reconcileAnswer` may be a FUNCTION of the round index, and the
@@ -127,13 +143,8 @@ function driveRun(tag, reconcileAnswer, extraAnswers = {}, cap = 12) {
       if (nxt.status === "done") return { dispatched, done: nxt, log: stderr.join("\n"), state: JSON.parse(readFileSync(runFile, "utf8")) };
       const item = nxt.items[0];
       dispatched.push({ id: item.id, phase: item.phase, label: item.label, prompt: item.prompt || "" });
-      let answer = null;
-      if (item.phase === "Reconcile") {
-        answer = typeof reconcileAnswer === "function" ? reconcileAnswer(reconcileSeen, item) : reconcileAnswer;
-        reconcileSeen += 1;
-      }
-      else if (item.phase === "Close") answer = { written: true };
-      else if (extraAnswers[item.phase]) answer = extraAnswers[item.phase](item);
+      const answer = answerFor(item, reconcileAnswer, reconcileSeen, extraAnswers);
+      if (item.phase === "Reconcile") reconcileSeen += 1;
       // The RUN FILE is read on every exit, not only the done one: a scenario that stops mid-run (this file's D5
       // cases stop at the next Reconcile on purpose — the judge has already spoken by then) still has to be able to
       // assert on what the run LOGGED, and the log lives in the run file.

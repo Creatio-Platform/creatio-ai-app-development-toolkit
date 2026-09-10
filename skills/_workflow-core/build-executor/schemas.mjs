@@ -79,349 +79,77 @@ export const RECONCILE_TEXT_CAP = 400
 
 export const RECONCILE_SCHEMA = {
   type: 'object',
-  required: ['approval', 'planVersion', 'unitKeys', 'buildOrder', 'reachabilityState', 'verify', 'planGaps', 'roundOf',
-    // Both package facts are REQUIRED. A schema-valid result that simply omitted `packageState` left it `undefined`,
-    // which was neither 'unknown' (so nothing stopped) nor 'exists' (so an app unit was scheduled) — i.e. `create-app`
-    // against what may be a live application, on a run that never established whether the package was there.
-    // `evidenceIds` is REQUIRED for the same reason: the UI-guidelines close row keys off it, and a result that
-    // omitted it left the row inert — the gate silently off on the run that needs it. `evidenceFiled` and
-    // `evidenceRejected` are required because the close row's overwrite guard reads them: absent, it cannot tell
-    // an unfiled id from an earned one, and it then fails closed on every honest `ran: false`.
-    // `preflightItems` is REQUIRED (PR #128 review, N1): the two reconciles filter `unconsumed` against
-    // `owedResolutionPairs(state.preflightItems, …)`, and the routing helper on an `undefined` list returns `[]`
-    // rather than throwing — so an OMITTED list yields an empty owed set and silently ERASES every unconsumed
-    // answer, which then reports `complete: true` over a lost answer. `resolutionsReopened`/`resolutionsPending`
-    // are REQUIRED (N2) so a dropped repair-grant set cannot silently re-grant a spent round.
-    // `unconsumedResolutions` is REQUIRED (round 17) — the one field whose omission is DESTRUCTIVE rather than
-    // merely lossy, because its carry block is the one written EVEN WHEN EMPTY: an omitted key seeds `[]` and the
-    // next close persists that `[]` OVER the stored rows.
-    // ENG-96204 (PR review F7) — `runResolutions` is REQUIRED, not merely declared. This file's own convention,
-    // stated on `buildComplete` above, is that a DECLARED-but-optional property does not force an LLM to
-    // populate it and only `required` does; and this field's own comment below says an omitted field here is
-    // "an operator's recorded answer that silently did nothing, which is the single failure mode this whole
-    // channel exists to remove". Both statements were already written down and the field was optional anyway: a
-    // Reconcile that dropped it was schema-valid, and the run then resolved no mode from the answer file and
-    // read every round as unauthorised. The prompt already instructs `[]` when the engine published none, so
-    // nothing regresses by demanding it — `[]` and "field absent" were the two states that had to stop being
-    // indistinguishable, exactly as they did for `evidenceFiled`.
-    'runResolutions',
-    // ENG-96204 (ENG-96455) — `roundState` is REQUIRED for the reason `consumedRoundAnswers` was, and it is the
-    // object that list now travels inside: `[]` and "field absent" must not be indistinguishable on the list that
-    // decides whether a recorded `go` is still live. An answer that dropped it would read every spent answer as
-    // unspent, which is the one failure the list exists to remove.
-    // THE REQUIREMENT MOVED UP A LEVEL, not away (DR-7). The three round-record keys became one object because the
-    // merge with PR #128's answers channel put this schema 118 bytes over the host's HARD 4096-byte cap, and a
-    // per-key `required` cannot be expressed on a bare object. So the SCHEMA requires the object and
-    // `RECONCILE_SHAPE.roundState` requires `consumedRoundAnswers` INSIDE it: a `roundState` that omits the list
-    // is still a refused answer. The guarantee is unchanged; only which of the two checkers states it moved.
-    'roundState',
-    'targetPackage', 'packageState', 'evidenceIds', 'evidenceFiled', 'evidenceRejected',
-    // The empty-prefix flag is REQUIRED so it can never be silently dropped: `{ schemaNamePrefix: null }` alone is
-    // also the legal "could not read it" answer, so an answer missing the flag must be a refused answer (host- and
-    // CLI-enforced), never an empty prefix quietly decoding as unreadable and switching the identity gate off.
-    'schemaNamePrefixEmpty',
-    // ENG-95468 (PR #159 review, RC-4) — `componentTypes` is REQUIRED so it can never be dropped. It is what the
-    // component gate reads to know what the plan published, and `componentResolution` is the sweep against it; an
-    // answer that omitted BOTH switched the whole gate off by absence (FAULT 2 could not fire — it had nothing to
-    // count against), which is the ST_2 failure one field along. `[]` is the honest answer for a plan with no gated
-    // types (the prompt says so), so requiring the KEY costs a correct run nothing while closing the omit-both door
-    // at the host, before the model runs. Host-enforced, so it does not need — and could not have — a
-    // `componentSweepFaults` arrival fault, which would refuse the legitimate no-gated-types state. Room for it was
-    // made by dropping `sectionRouteByRun`'s superfluous per-string `maxLength` (its four short identifier fields are
-    // shape-checked by `RECONCILE_SHAPE` and bounded by the answer's total-size check) — see its property below.
-    'componentTypes',
-    'preflightItems', 'resolutionsReopened', 'resolutionsPending', 'unconsumedResolutions'],
+  // Three things, and only things nothing else can produce: the copied state line, the approval (free text), and
+  // the stand facts. Everything the engine computed travels inside `summary` and is NOT a field here — a second
+  // field for a value the line already carries is a second answer to one question.
+  required: ['summary', 'approval', 'packageState'],
   properties: {
-    // The APPROVAL PRECONDITION, as data. Prose in a prompt preamble is advisory; this is what
-    // the script hard-stops on, and it stops on a VERSION MISMATCH too — an approval of plan v2
-    // does not authorise building v3.
-    // `{ found, version, date, who, recordedIn, quote }` — `found` required; `quote` is the entry VERBATIM, so the
-    // caller can check the script's arithmetic rather than take its word.
-    approval: { type: 'object' },
-    // VERBATIM from `--units.planVersion` — the engine's own deterministic hash over the manifest inputs that
-    // define the plan. NOT read out of `plan.md`, and never composed: `plan.md` is ENGINE-WRITTEN and presented
-    // verbatim, so it carries whatever `--plan` printed and nothing an agent could add would survive a re-run.
-    planVersion: { type: 'string' },
-    unitKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },        // `--units.pages[].key`, verbatim
-    buildOrder: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },      // `--units.buildOrder`, verbatim (post-order)
-    // THE TARGET PACKAGE, and whether it EXISTS. Nothing in the run used to ask, and the omission cost a whole
-    // run: on a migration into a NEW application every page unit is unbuildable until the package exists, and
-    // `create-app` — the only way to obtain it — also mints the starter pages that are `main`'s deliverable, which
-    // a child-page builder must not create. Leaf-first puts every child BEFORE `main`, so each one correctly
-    // refused and reported blocked, three rounds each, and the run wrote nothing at all. Measured: 12 agents,
-    // 1.9M tokens, `built.json.pages` empty. So the state is now DATA the script schedules on.
-    targetPackage: { type: ['string', 'null'] },   // `--units.pages[].targetPackage` for `main`, VERBATIM
-    // 'exists' — confirmed present on the stand · 'absent' — confirmed not there · 'unknown' — could not tell.
-    // Three states, not a boolean: 'unknown' must not read as "go ahead and create it" (a second `create-app`
-    // over an existing app is not a no-op) nor as "it is there" (which puts every unit back in the loop that
-    // wasted the run). It stops the run and says which check was inconclusive.
+    // THE RUN STATE, VERBATIM: the one JSON line the state command printed. Copied, not composed — so the failure
+    // mode is a line that does not parse, not a field quietly short of its contents.
+    summary: { type: 'string' },
+    // The APPROVAL PRECONDITION, as data. It lives in free-text decisions.md, so no command can read it
+    // deterministically and it stays reported. The script hard-stops on it, version mismatch included: an approval
+    // of plan v2 does not authorise building v3.
+    approval: {
+      type: 'object',
+      required: ['found'],
+      properties: {
+        found: { type: 'boolean' },
+        version: { type: 'string' },
+        date: { type: 'string' },
+        who: { type: 'string' },
+        recordedIn: { type: 'string' },
+        quote: { type: 'string' },   // the entry verbatim, so the caller can check the script's arithmetic
+      },
+    },
+    // Three states, not a boolean: 'unknown' must not read as "go ahead and create it" (a second `create-app` over
+    // an existing app is not a no-op) nor as "it is there" (which leaves every unit unbuildable). It stops the run
+    // and says which check was inconclusive.
     packageState: { type: 'string', enum: ['exists', 'absent', 'unknown'] },
-    // ENG-95850 (A2) — THE ONE STAND WRITE THIS RUN'S OWN STATE FILE CARRIES ACROSS ROUTES AND SESSIONS: the
-    // application/package the app unit created, read off `build-queue.json`.`standWrites.packageCreated`. It is what
-    // lets the `new-app` placement stop tell a package SOMEONE ELSE owns (a plan-vs-stand mismatch, still a stop) from
-    // the package THIS migration created (a resume, which continues). `null`/absent on a folder written before the
-    // field, which keeps the old behaviour exactly — a stop — so absence is never read as ownership.
-    // NOT REQUIRED, deliberately: an agent that cannot read the file must be able to say nothing rather than guess,
-    // and the safe side of "nothing" here is the stop.
-    // `{ package, appUnitComplete, planVersion, sectionPage }`, the first two required WHEN THE OBJECT IS PRESENT.
-    // `null` is a first-class answer: an agent that cannot read the file says nothing rather than guessing.
-    packageCreatedByRun: { type: ['object', 'null'] },
-    // ENG-95850 (B4/C3) — the orphans an EARLIER run or the other route recorded, read off
-    // `build-queue.json`.`standWrites.orphanedPages`. Required for the record to do the job it exists for: the
-    // incident it comes from was a LATER diagnosis reading a dead page, so a list this run writes but never reads
-    // back is write-only and helps nobody. Merged as a UNION with what this process records (an orphan a previous
-    // session found is still an orphan), never overwritten by it.
-    // Each entry `{ schema, orphanedBy, at }`, `schema` required.
-    orphanedPagesOnFile: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // ENG-96147 — WHERE THE SECTION THIS RUN BUILT ACTUALLY OPENS, read off `build-queue.json`.`standWrites.sectionRoute`.
-    // NOT REQUIRED, for the same reason `packageCreatedByRun` is not: an agent that cannot read the file must be able
-    // to say nothing rather than guess, and the safe side of "nothing" is a reader falling back to reporting an
-    // unresolved route instead of composing one. `null`/absent on a folder written before this field existed, or on a
-    // run that has not yet registered a section — both read identically, and both are the correct "nothing to report".
-    // Declared bare, with its inner shape in `RECONCILE_SHAPE` — the convention this file adopted when the
-    // schema was shrunk under the host's 4096-byte refusal: no property is dropped, only its nested SHAPE
-    // description, which `reconcileShapeErrors` then checks on arrival. Spelling the four keys out here cost
-    // ~150 bytes on the run's FIRST agent's schema, whose refusal costs the whole run.
-    // NO per-string `maxLength` here (PR #159 review, RC-4): its four fields are short identifiers
-    // (`route` / `schemaName` / `sectionHost` / `planVersion`), `RECONCILE_SHAPE.sectionRouteByRun` already requires
-    // and types them, and the answer's TOTAL size is bounded by `reconcileShapeErrors` (the real cap, per the header
-    // above). Dropping the ~41-byte cap that added nothing those two layers do not is what made room for
-    // `componentTypes` in `required` above, keeping this schema under the host's 4096-byte cap.
-    sectionRouteByRun: { type: ['object', 'null'] },
-    // The object the MIGRATION is about — `--units.pages[]` for `main`, its `entity`. The app unit binds the
-    // section it creates to THIS, and the gate compares every built page against the same string.
-    mainEntity: { type: ['string', 'null'] },
-    // WHERE THE SECTION IS REGISTERED, as the approved plan decided it — `--units.sectionHost`, verbatim.
-    // NOT required: a plan written before placement was gated publishes none, and `null` must keep this run
-    // behaving exactly as it did then. What it changes when present: `new-app` over an EXISTING package is a
-    // stop (create-app cannot mint a package that is already there), and `pages-only-no-menu` means no section
-    // is registered at all — an executor that "helpfully" registers one has built what the plan dropped.
-    sectionHost: { type: ['string', 'null'], enum: ['existing-app', 'new-app', 'pages-only-no-menu', null] },
-    // The application the section belongs in — `--units.applicationCode`, verbatim. `null` under `new-app`
-    // (it does not exist yet) and `pages-only-no-menu` (nothing is registered). It exists so the unit doing the
-    // registration READS the approved app: in the run this field comes from, the agent had none in front of it,
-    // resolved one off the stand by name, and registered against an app that could not host a section at all.
-    applicationCode: { type: ['string', 'null'] },
-    // The union of `--units.pages[].componentTypes` — every `crt.*` type this plan's gate will look for. The Refs
-    // step caches each one's documentation once, instead of every fresh-context builder fetching the same six.
-    // REQUIRED (PR #159 review, RC-4 — see the `required` list above): it and `componentResolution` are the two
-    // plan-derived halves of the component gate, and an answer omitting BOTH switched the gate off by absence. `[]`
-    // is the honest value for a plan with no gated types; the host refuses an answer that omits the key entirely.
-    componentTypes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // ENG-95468 — the Reconcile agent's read-only `get-component-info` result for each `componentTypes` entry,
-    // resolved against the TARGET stand: `{ type, resolved, resolvedFrom, note }`. This is what the pre-build component gate
-    // (`componentTypeMismatches`) stops on — a type reported `resolved: false` is a plan assertion untrue of the
-    // stand (a fabricated name, or a composite/component whose package/feature is not installed here). OPTIONAL TO
-    // THE ARITHMETIC: a type with no entry produces no component gate on it — a partial or absent sweep is left
-    // alone (absence is not evidence), so `standUnconfirmedComponents` / `componentTypeMismatches` behave over a
-    // provenance-less or partial sweep exactly as they did before this field. The ONE carve-out is a shape check,
-    // not the arithmetic (PR #159 review, Minor): a plan that PUBLISHED component types and swept NONE of them is
-    // refused by `componentSweepFaults` (FAULT 2) and retried, because a wholly-absent sweep would otherwise clear
-    // the gate by absence — the door the residual scope exists to close. A PARTIAL sweep stays un-faulted.
-    // ENG-95683 DELIVERED the by-kind branch this comment used to defer: a `resolved: false` type carrying a
-    // well-formed gated composite (`kind: 'composite'` + an `id` of gate-name shape) makes the stop say 'install
-    // `id` (+enable `feature`) and re-run the BUILD' instead of the generic re-plan text. What is STILL open is
-    // narrower: nothing here confirms the `id` is the RIGHT package for the type — that needs the engine's
-    // `gateForComponentType` table, unreachable from a module inlined into the workflow script (see `helpers.mjs`
-    // `gatedComposite`). Absent or malformed ⇒ the generic clause stands, so an older plan behaves as it did.
-    // One `{ type, resolved, resolvedFrom, note }` per entry, `type`/`resolved`/`resolvedFrom` required, plus ENG-95683's OPTIONAL typed gate on a
-    // gated composite: `kind` ('composite'), the gating package `id`, and the gating `feature` when there is one.
-    // ENG-95468 (residual) — `resolvedFrom` says WHERE the answer came from: `'stand'` (this environment answered)
-    // or `'catalog'` (it did not — `get-component-info` could not probe the environment and answered from its
-    // bundled `latest` catalog instead). Only `'stand'` is a confirmation; a catalog answer STOPS the round
-    // (`plan-unvalidated-against-stand`) rather than passing the gate on a round where nothing about the stand was
-    // checked. VOCABULARY (PR #159 review, Major 7): this toolkit-side field REUSES clio's field name `resolvedFrom`
-    // with a DIFFERENT two-word vocabulary — clio's own `resolvedFrom` is `latest-fallback` (etc.), which the agent
-    // reads out of the `get-component-info` note and CLASSIFIES into `stand`/`catalog` here. Because the gate rests on
-    // that classification, `componentSweepFaults` FAULT 3 cross-checks it against clio's machine tokens in the same
-    // entry's `note` (`probe-error` / `latest-fallback`): a `stand` claim over such a note is refused as a bundled-
-    // catalog answer, so the model cannot re-open the tool-side false positive this axis closed.
-    // REQUIRED — enforced in `RECONCILE_SHAPE`, which is not byte-capped, so the field cannot be dropped. NOTE on
-    // RESUME (PR #159 review, Major 4): requiring it means a run JOURNAL recorded before this field existed carries
-    // `componentResolution` entries without `resolvedFrom`, so a resume that REPLAYS such an answer re-validates it,
-    // faults, and the driver stops with `run journal drifted … Start a fresh run` — cross-version journal replay is
-    // not supported (it never was; the driver's drift check already declares it). The ARITHMETIC half is unaffected —
-    // `standUnconfirmedComponents`/`componentTypeMismatches` leave a provenance-less entry alone — so a fresh run off
-    // the same folder behaves exactly as before; it is only mid-flight RESUME across the upgrade that starts over.
-    // Those three are NOT re-declared as `properties` here and that is deliberate (ENG-95930, mode A): the expanded
-    // per-property form serializes over the host's 4096-byte classifier cap, which is what refused the schema before
-    // the model ever ran. `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` carries them — a string cap does not constrain
-    // the boolean `resolved` — and `RECONCILE_SHAPE.componentResolution` below enforces the insides on arrival.
-    componentResolution: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // `--units.templateNames`, VERBATIM — the deduped page TEMPLATE schema names this plan asserts (ENG-95468).
-    // The plan's own published set, so it plays exactly the role `componentTypes` plays for components: only a name
-    // the PLAN named may gate, and a resolution naming something else cannot manufacture a stop no re-plan can act on.
-    templateNames: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // ENG-95468 — the Reconcile agent's read-only resolution of each `templateNames` entry against the TARGET stand:
-    // `{ name, resolved, note }`. Same shape, same rules and the same absence rule as `componentResolution`: only an
-    // explicit `resolved: false` gates, an unreported name is not a failure, and a plan predating the field behaves
-    // exactly as it did before. This is the axis the third Applicant run failed on — the plan named
-    // `ListPageV2FreedomTemplate`, the page was built on `ListPageV3Template`, and nothing in between asked the stand.
-    // One `{ name, resolved, note }` per entry, `name`/`resolved` required.
-    templateResolution: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // The environment's `SchemaNamePrefix`, read off the stand (ENG-95468). Load-bearing for the app/package
-    // identity check: clio derives a new app's package as `SchemaNamePrefix + code`, so this is the ONLY thing that
-    // makes "the plan's target package is producible here, and by exactly this code" decidable BEFORE `create-app`
-    // writes. THE EMPTY STRING IS A REAL VALUE and is NOT the same as absence — a stand with no prefix is exactly
-    // the case the third Applicant run hit (package == app code) — so `''` gates and `null`/absent does not.
+    // Read-only `get-component-info` per published component type, resolved against the TARGET stand.
+    // `resolvedFrom` separates an answer about THIS stand from one the tool gave off its bundled catalog; a catalog
+    // answer stops the round instead of passing as a confirmation. `kind`/`id`/`feature` carry a gated composite's
+    // required package, and only when the tool named one.
+    componentResolution: {
+      type: 'array',
+      maxItems: RECONCILE_LIST_CAP,
+      items: {
+        type: 'object',
+        required: ['type', 'resolved', 'resolvedFrom'],
+        properties: {
+          type: { type: 'string' },
+          resolved: { type: 'boolean' },
+          resolvedFrom: { type: 'string' },
+          note: { type: 'string' },
+          kind: { type: 'string' },
+          id: { type: 'string' },
+          feature: { type: 'string' },
+        },
+      },
+    },
+    // One entry per published template name. An entry is present only when the stand ANSWERED: a name whose read
+    // failed is omitted and reported un-swept, because a `false` nobody can stand behind stops a correct plan.
+    templateResolution: {
+      type: 'array',
+      maxItems: RECONCILE_LIST_CAP,
+      items: {
+        type: 'object',
+        required: ['name', 'resolved'],
+        properties: {
+          name: { type: 'string' },
+          resolved: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+    },
+    // The stand's own `SchemaNamePrefix`. The EMPTY prefix is a real answer and travels as
+    // { schemaNamePrefix: null, schemaNamePrefixEmpty: true } — a bare empty string is the value that gets dropped
+    // in transit and then decodes as unreadable. The flag is required on every answer for that reason.
     schemaNamePrefix: { type: ['string', 'null'] },
-    // The EMPTY prefix's wire form: `{ schemaNamePrefix: null, schemaNamePrefixEmpty: true }`. A bare `""` value is
-    // the token observed dropped from large submissions of this answer (which then fail to parse at the host), so
-    // the empty answer travels as this boolean and `reconcileAgent` decodes the pair back to `''` on acceptance —
-    // every consumer still reads the string contract above. `""` itself remains legal for compatibility. REQUIRED
-    // on every answer (`false` when the prefix is non-empty or unreadable): a flag that must always be present
-    // cannot be dropped without the whole answer being refused and retried.
     schemaNamePrefixEmpty: { type: 'boolean' },
-    // The FREEDOM schema each page key resolves to — the one thing `--units` cannot publish (its
-    // `pages[].schema` is the CLASSIC source, and it is `null` for `main` and for an unfolded child).
-    // Without it nothing can `get-page` the page a key names, so the queue file is where a builder's
-    // answer is kept: this is read from `units[<key>].schemaName` there, and it is what makes a build
-    // started in an earlier session verifiable in this one.
-    pageSchemas: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
-    // The parent edge `--units` does NOT publish. Supplied when the plan's nested Child page
-    // mappings make it derivable; `null` per key when it is not. Without it the park arithmetic
-    // below degrades to an APPROXIMATION and says so in the return.
-    parents: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
-    // Each `{ key, appliesWhen, pages, what, miss }`, `key`/`appliesWhen` required: the run schedules on
-    // `appliesWhen`, so a missing or non-boolean one is a rejected answer, never a default. `appliesWhen: false`
-    // does NOT mean the row is empty — a verifier-only row (`noOrphanScaffold`) carries real `what`/`miss` text
-    // with it; see the compacted declaration's own note below.
-    reachability: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // What the built file currently records for each reachability key: 'true' | 'false' | 'unset'.
-    // Strings, not booleans, because the tri-state is the whole point (absent ≠ false).
-    reachabilityState: { type: 'object', additionalProperties: { type: 'string' } },
-    // ENG-95930 (mode A) — `preflightItems` takes the compacted form like every other object array on this
-    // contract: the expanded per-property declaration is what pushed this schema past the host's 4096-byte
-    // classifier cap. Its insides are enforced by `RECONCILE_SHAPE.preflightItems` on arrival instead.
-    preflightItems: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // The two answer-channel repair-grant sets, read back off the queue file (PR #128 review, N2). Persisted
-    // directly rather than derived from `unconsumedResolutions`, because the `!res` path files an unconsumed row
-    // WITHOUT spending the grant, so the derivation mis-marked exactly those units and denied them their repair.
-    // `resolutionsReopened` is per `(unit, id)` and therefore an OBJECT array: the grant is per ANSWER, because the
-    // "a second round is a loop" bound is about the question, not the page. `resolutionsPending` stays a UNIT-key
-    // array — it feeds `reopenKeys()`, and what a round re-opens is a unit.
-    // COMPACTED for the ENG-95930 reason above; `RECONCILE_SHAPE` carries the required keys and the types.
-    resolutionsReopened: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    resolutionsPending: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // ANSWERS THAT MATCHED NO QUESTION, and questions answered TWICE through the two key forms. Carried because the
-    // engine's stderr warnings are emitted inside this subagent and reach nobody, and either silence loses an answer
-    // the operator believes is applied.
-    // IDENTIFIERS ONLY — no `answer` text. An agent retypes every field of this into a tool call each round, and the
-    // text is already in the operator's own file; naming which answer missed is the whole job.
-    // Both carry `{ id, kind, item }` per entry — identifiers only, no `answer` text.
-    resolutionsUnmatched: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    resolutionsConflicts: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // ENG-96204 — THE RUN-LEVEL ANSWERS, from `--units.runResolutions`. Unlike `resolutionsUnmatched` above these
-    // carry their `answer` TEXT, because the text IS the decision this script computes on: `item: "control-mode"`
-    // names the mode the run executes in, and `item: "round-<N>"` authorises round N. There is no other route from
-    // the operator's `resolutions.json` into these two decisions — a workflow script has no filesystem — so an
-    // omitted field here is an operator's recorded answer that silently did nothing, which is the single failure
-    // mode this whole channel exists to remove. `[]` when the file records none, which is the normal first run.
-    // Declared in ENG-95930's LOOSENED form — a bare array-of-object with the two size caps — for the mode-A reason
-    // that governs every nested object here: the per-property expansion serializes over the host's 4096-byte
-    // classifier cap (and past this file's own 3500-byte working budget), and a refused schema costs the run its
-    // first agent. `item`/`answer` are REQUIRED all the same; the requirement lives in `RECONCILE_SHAPE`
-    // .runResolutions below and is checked when the answer arrives, exactly like `preflightItems`' resolution.
-    runResolutions: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD, read off the queue file's own `roundState` object. THREE
-    // facts, and each one is why the gate can be trusted:
-    //   `layoutPassDone`       — has the LAYOUT-ONLY first pass of a `layout-first` run already happened? It is
-    //                            what makes the two-pass build resume into the LOGIC pass instead of laying out
-    //                            pages that already have their layout: the marker is the only thing that can tell
-    //                            "round 1 of a layout-first run" from "round 2 of one", since both see the same
-    //                            open logic rows. Absent/`false` means no layout pass is on record, which is the
-    //                            correct reading for a fresh run.
-    //   `roundsSpent`          — how many build rounds this migration FOLDER has been through. The per-unit
-    //                            `roundOf` counters below are the REPAIR budget and answer a different question: a
-    //                            `layout-first` layout pass deliberately charges none of them, so a folder one
-    //                            full round deep legitimately shows `rounds: 0` on every unit — and the resume
-    //                            gate, keyed on those counters, read that as a folder nobody had built in and
-    //                            authorised itself. This is the number the gate reads now. `0`/absent is correct
-    //                            for a fresh folder, and `roundsSpentOnFile` falls back to the per-unit counters.
-    //   `consumedRoundAnswers` — the `round-<N>` items whose answer has ALREADY authorised the round it names. The
-    //                            resume gate refuses one of these by RECORD, whatever `roundsSpent` says, so one
-    //                            recorded answer authorises exactly one round even against a hand-lowered count.
-    //
-    // ONE BARE OBJECT rather than three root properties, and that is measured rather than preferred: the three
-    // separate declarations plus the `required` entry cost 173 bytes, and the merge with PR #128's answers channel
-    // (`unconsumedResolutions` / `resolutionsReopened` / `resolutionsPending`, +495) landed this schema at 4214 —
-    // 118 bytes OVER the host's HARD 4096-byte cap, which refuses the run's FIRST agent before the model runs.
-    // Folding them takes it to 4085. This is this file's standing shrink convention applied once more: no property
-    // is dropped, only its nested SHAPE description, which `RECONCILE_SHAPE.roundState` now carries and
-    // `reconcileShapeErrors` checks when the answer arrives. DR-7 records the decision and the rejected
-    // alternative. REQUIRED (see above) — and `consumedRoundAnswers` is required INSIDE it, which is the half of
-    // the guarantee a bare object cannot state here.
-    // BACKWARD-TOLERANT ON READ: a folder written before this change holds the three keys at the ROOT and no
-    // `roundState` at all. `roundStateOf` reads `roundState` first and falls back to the root key PER KEY, so an
-    // in-flight migration folder keeps working — see its own comment in `helpers.mjs`.
-    roundState: { type: 'object' },
-    evidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // Evidence ids with a filed record in `built.json` and NO `judge` entry — including records filed
-    // in an earlier session or by the preflight phase. An unjudged record keeps its page open, and the
-    // judge is only ever handed ids, so a record nobody names is a page that can never close.
-    unjudgedEvidenceIds: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // WHAT IS ALREADY ANSWERED, so Preflight does not re-derive it. `--units.preflight` is the plan's list of open
-    // questions and says nothing about which have been resolved; without these two a resumed run re-ran the whole
-    // fan-out over records that were already on file, and the merge would overwrite each one with the second
-    // answer. Both are read off the built file, and both may be empty on a first run.
-    evidenceFiled: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },     // ids whose `evidence[id]` is a RECORD object
-    evidenceRejected: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },  // ids the judge ruled `convincing: false`
-    // Keys whose `pages` entry already exists in `built.json` — a recorded object, or `false` for "checked,
-    // genuinely not built". Absent or empty fetches every key. This is a REPORT, not a verified fact, and the only
-    // thing that makes an over-report survivable is Reconcile's own all-keys sweep running every round regardless of
-    // what Verify skipped: a wrongly-skipped page is re-read there, and its unit stays open until it is.
-    pagesRecorded: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // Parks already recorded in the queue file, WITH the reason each was parked for. A park is
-    // terminal for the run that made it; a resumed run must not re-dispatch a full stand-writing
-    // round for a unit its predecessor already gave up on and asked the user about.
-    // Each `{ key, parkedWhy, rounds }`, `key` required.
-    parkedUnits: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // Plan deviations, blockers and builder-vs-stand disagreements already in the queue file from an
-    // earlier session. They seed this run's lists so a kill does not erase what a previous one recorded.
-    // Each `{ unit, deviation, why, applied }`, `deviation`/`why` required.
-    proposals: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // Each `{ unit, what, why }`, `what`/`why` required.
-    blocked: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // Each `{ unit, claim, found, round }`, `unit`/`claim`/`found` required.
-    discrepancies: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // ENG-95503 / PR #128 review — ANSWERS AN EARLIER SESSION SAW REACH A BUILDER AND PRODUCE NOTHING. Read back
-    // for the same reason `blocked` and `discrepancies` are, and it matters MORE than either: a well-formed decline
-    // is the one outcome that leaves no row in either of those, so without this the record died with its process and
-    // a resumed run reported `complete: true` over a dropped answer.
-    // Each `{ unit, id, kind, answer, why, source }`, `unit`/`id`/`source` required — enforced by
-    // `RECONCILE_SHAPE.unconsumedResolutions`. `source` is typed but no longer ENUM-constrained here — see the note
-    // on that entry for why, and for what enforces it instead. `item` and `how` are deliberately NOT part of this
-    // contract: nothing in the
-    // run decides on them (`item` is recoverable from `id`, and a refuted builder's `how` is preserved in its
-    // `discrepancies` row), so they stay in the queue file rather than being transcribed back through an agent.
-    unconsumedResolutions: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'object', additionalProperties: { maxLength: RECONCILE_TEXT_CAP } } },
-    // Queue drift. A key in the queue and not in `--units` means the plan was regenerated under
-    // the run; trusting it silently builds a page nothing gates.
-    staleQueueKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    newKeys: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    // ENG-95930 (mode B) — the COUNTS-ONLY `--verify-summary`, copied verbatim: `{ complete, missing, unverified,
-    // planGaps, buildMissing, rejected, pages["<key>"] = { complete, buildComplete, builderOpen, missing,
-    // buildMissing, unverified, openCorrectness, openFidelity } }`, NO `openRows` (the last two are ENG-96204's
-    // per-page severity counts — integers, so the summary stays counts-only). The FILE also carries its own
-    // `planGaps`; this channel deliberately does NOT transcribe it (ENG-95857 — the plan-level verdict has ONE
-    // home, `--units.planGaps` below, and this channel is the BUILD verdict), which is why
-    // `RECONCILE_SHAPE.verify` names no `planGaps` either and the step-4 prompt says so in as many words.
-    // The reconcile agent COPIES that file: it does not read the Markdown table, does not re-derive a
-    // number, and does not transcribe per-row prose — that prose was ~21 KB on a fresh stand and truncated this,
-    // the run's FIRST agent's, structured answer at the host's tool-input cap. Each build agent reads its OWN page's
-    // open rows from its own scoped `--verify --page` gate instead. `RECONCILE_SHAPE.verify` REQUIRES `buildComplete`
-    // per page — the `missing`-only axis the park/close arithmetic reads, not interchangeable with the combined
-    // `complete`, which folds in unfiled evidence a builder cannot clear.
-    verify: { type: 'object' },
-    exitCode: { type: 'integer' },
-    // D12 — the PLAN-level legs of exit 2: `--units.planGaps` copied VERBATIM (ENG-95857), all FOUR checks the
-    // engine performs. A machine verdict, NOT a set an agent assembled from stderr lines it retyped. Empty means
-    // the only problem (if any) is `VERIFY INCOMPLETE`, which IS repairable on-stand.
-    planGaps: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string' } },
-    roundOf: { type: 'object', additionalProperties: { type: 'integer' } },
-    continuationOf: { type: 'object', additionalProperties: { type: 'integer' } },
+    exitCode: { type: 'number' },
     verifyTablePath: { type: 'string' },
-    notes: { type: 'string' },
+    notes: { type: 'array', maxItems: RECONCILE_LIST_CAP, items: { type: 'string', maxLength: RECONCILE_TEXT_CAP } },
   },
 }
 
@@ -443,30 +171,8 @@ export const RECONCILE_SCHEMA = {
 export const RECONCILE_SHAPE = {
   approval: { kind: 'object', required: ['found'],
     types: { found: 'boolean', version: 'string', date: 'string', who: 'string', recordedIn: 'string', quote: 'string' } },
-  packageCreatedByRun: { kind: 'object-or-null', required: ['package', 'appUnitComplete'],
-    types: { package: 'string', appUnitComplete: 'boolean', planVersion: 'string-or-null', sectionPage: 'string-or-null' } },
-  orphanedPagesOnFile: { kind: 'array', required: ['schema'],
-    types: { schema: 'string', orphanedBy: 'string-or-null', at: 'string-or-null' } },
-  // ENG-96147 — the route the section this run built actually opens at. `route` and `schemaName` are required
-  // because a record with neither is not a route; `sectionRouteByRun: null` is the legal "nothing to report".
-  sectionRouteByRun: { kind: 'object-or-null', required: ['route', 'schemaName'],
-    types: { route: 'string', schemaName: 'string', sectionHost: 'string-or-null', planVersion: 'string-or-null' } },
-  // ENG-95683 — `kind`/`id`/`feature` are the OPTIONAL typed gate on a `resolved: false` composite; the by-kind
-  // stop (`helpers.mjs` `GATE_COMPOSITE`) reads them. Declared here rather than in `RECONCILE_SCHEMA` for the mode-A
-  // reason given above; absent/malformed still falls back to the generic re-plan clause.
-  // ENG-95468 (residual) — `resolvedFrom` is REQUIRED, and THIS table is where that requirement costs nothing:
-  // `RECONCILE_SCHEMA` is bounded by the host's 4096-byte classifier cap and this checker is not, so the one field
-  // that must never be silently droppable rides here rather than there. An answer missing it spends an attempt and
-  // the informed retry names it (`reconcileAttempt`) — the same fail-closed treatment `schemaNamePrefixEmpty` earns
-  // for the same reason: a provenance field an agent may quietly omit is a gate that is switched off on exactly the
-  // round that needs it, and the round it was needed on cost five agents and 18 minutes for zero stand writes.
   componentResolution: { kind: 'array', required: ['type', 'resolved', 'resolvedFrom'],
     types: { type: 'string', resolved: 'boolean', resolvedFrom: 'string', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
-  // NO provenance field here, deliberately. The template sweep reads schemas (`get-schema` / `get-page` /
-  // `list-pages`), and those have no bundled-catalog substitute to fall back TO: a failed read is a failed read, and
-  // the prompt already orders it OMITTED rather than reported as `false`. The component axis needs a value because
-  // its tool answers from a catalog when the stand cannot be probed — that is a false POSITIVE, which omission
-  // cannot express (see `helpers.mjs` `standUnconfirmedComponents`).
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
   // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: an ORDINARY non-applicable key
@@ -616,6 +322,14 @@ export const RECONCILE_SHAPE = {
       types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer',
         openCorrectness: 'integer', openFidelity: 'integer', pending: 'integer', accepted: 'integer', pendingMore: 'integer' } } } },
 }
+
+// The state line's own top-level fields. `stateFromAnswer` checks for them and nothing deeper: the line came from
+// one command that computes it, so a line that parses and carries these keys is the state — there is no partial
+// transcription left to police. A key added to `reconcileState` in the engine is added here.
+export const RECONCILE_STATE_KEYS = ['planVersion', 'planGaps', 'unitKeys', 'buildOrder', 'verify', 'roundOf', 'targetPackage']
+
+// The engine prints this line before the state; the engine holds its own copy and run-infra pins the two equal.
+export const RECONCILE_STATE_MARKER = '--- RECONCILE STATE (one line follows; copy it verbatim) ---'
 
 export const PREFLIGHT_SCHEMA = {
   type: 'object',

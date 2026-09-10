@@ -30,7 +30,11 @@
 // ENG-95930's counts-plus-pointer pattern and `openRanked` left the return shape (DR-4 in the executor's decision
 // records) — and a THIRD time, still in ENG-96204, when the engine began publishing per-page severity counts the
 // stop tallies (AC 2), spent round answers became a queue-file record the gate refuses by (`consumedRoundAnswers`,
-// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. It therefore says nothing
+// DR-5), and the scenarios below were widened to drive the control-mode stops themselves. Replaced a FOURTH time,
+// in ENG-96776: the Reconcile answer became a copied state line plus the four stand facts, so every Reconcile
+// prompt diverged on purpose and no single scripted answer can drive both copies — the old script cannot read the
+// new wire shape, and the new one refuses the old. The same replacement also carries that change's persist-prompt
+// addition (the settle-window list, which the carry held and no instruction asked for). It therefore says nothing
 // about the change that replaced it — that change's own coverage is the executed suites in `run-infra.mjs` and
 // `run-workflow-core.mjs` — and everything about the NEXT one: the whole prompt text and return shape of the
 // current behaviour is now pinned byte for byte. The value of this file is always forward-looking, which is why
@@ -145,6 +149,7 @@
 // already pinned as unchanged; only the frozen SOURCE was lagging, and this replacement catches it up.
 //
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
+import { asReconcileAnswer, isReconcileStateAnswer } from "./_testkit.mjs";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -532,7 +537,7 @@ function buildScenarios() {
   const makeHost = ({ reconciles, build = BUILT, verifyRes = VERIFIED, judge = JUDGED, refs = REFS, persist = PERSISTED, preflight }) => {
     let r = 0;
     return ({ phase, label, prompt }) => {
-      if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r++; return typeof a === "function" ? a() : a }
+      if (phase === "Reconcile") { const a = reconciles[Math.min(r, reconciles.length - 1)]; r++; const v = typeof a === "function" ? a() : a; return isReconcileStateAnswer({ phase, label }) ? asReconcileAnswer(v) : v }
       if (phase === "Refs") return refs;
       // Preflight is now the FAN-OUT and nothing else: the dedicated `preflight:merge` writer is gone (ENG-95474) —
       // agents return structured records and the existing Judge/Reconcile sequence performs the single write.

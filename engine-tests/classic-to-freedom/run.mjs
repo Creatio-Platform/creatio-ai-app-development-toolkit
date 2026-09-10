@@ -764,30 +764,43 @@ const okDrift = enumDriftIssues(okVocab);
 check("A4: STRING:1 and Guid:0 from manifest.enumVocabulary produce no diagnostics",
   okDrift.mismatches.length === 0 && okDrift.newMembers.length === 0 && okDrift.spellingDrift.length === 0, () => okDrift);
 
-// 2) STRING:2 disagrees with pinned TEXT:1 — but ACROSS SPELLINGS (review 1, finding K). The engine reads a body
-//    by exact property name, so it never reads a pinned `STRING`; there is no element the wrong number could be
-//    applied to, and blocking every migration on it would be blocking on a fact that cannot bite. It is advisory,
-//    and the text names BOTH spellings — the old message said "DataValueType.STRING: engine 1", naming a member
-//    the pinned table does not carry and sending the repair hunt after a `STRING` entry that does not exist.
+// 2) STRING:2 disagrees with pinned TEXT:1 and MUST BLOCK (review 2, finding 1 — this reverses the alias half of
+//    review 1's finding K). `STRING` is an EXACT-CASE ALIAS: `resolveEnumTerminal` answers a body's
+//    `Terrasoft.DataValueType.STRING` with pinned `TEXT`'s 1, so if this stand's `STRING` is 2 then every
+//    attribute declared with that spelling is read as the wrong data type — the same damage as a same-name
+//    mismatch, so the same severity. What review 1 fixed and this keeps is the TEXT: it names both spellings,
+//    because "DataValueType.STRING: engine 1" asserted a pinned `STRING` whose value is 1 and sent the repair
+//    hunt after an entry that does not exist.
 const badVocab = { DataValueType: { STRING: 2 } };
 const badDrift = enumDriftIssues(badVocab);
-check("A4 (review 1, K): STRING:2 against pinned TEXT:1 is ADVISORY, not blocking — it resolved by ALIAS, so the engine reads no member called `STRING` and no element can be mis-read",
-  badDrift.mismatches.length === 0 && badDrift.spellingDrift.length === 1,
+check("A4 (review 2, finding 1): STRING:2 against pinned TEXT:1 BLOCKS — `STRING` is an exact-case alias the runtime read really does resolve, so a wrong number IS applied to every element declared with it",
+  badDrift.mismatches.length === 1 && badDrift.spellingDrift.length === 0 && badDrift.newMembers.length === 0,
   () => badDrift);
-check("A4 (review 1, K): a cross-SPELLING disagreement is its OWN list, never `newMembers` — `newMembers` has one remedy sentence ('add the member to the pinned table') and every clause of it is false here: the engine DOES pin the member, under `TEXT`, and it DOES have a number",
-  badDrift.newMembers.length === 0,
-  () => badDrift);
-check("A4 (review 1, K): the advisory entry names BOTH spellings and both numbers — 'stand STRING (engine TEXT): engine 1, stand 2' — instead of asserting a pinned member called `STRING` whose value is 1",
-  /DataValueType: stand STRING \(engine TEXT\): engine 1, stand 2/.test(badDrift.spellingDrift[0] || ""),
+check("A4 (review 2, finding 1): the blocking entry names BOTH spellings and both numbers — 'DataValueType.STRING (alias of TEXT): engine 1, stand 2' — instead of asserting a pinned member called `STRING` whose value is 1",
+  /^DataValueType\.STRING \(alias of TEXT\): engine 1, stand 2$/.test(badDrift.mismatches[0] || ""),
   () => badDrift);
 
-// 2b) A CASE variant that disagrees is the same category — advisory, not blocking. `Guid: 5` used to block the
-//     whole migration on a member the engine never reads (it reads `GUID`).
+// 2b) A CASE variant that disagrees is the ADVISORY category — `Guid: 5` names no member the engine ever reads
+//     (it reads `GUID`), so no element of the run can carry the wrong number. This is also the standing guard
+//     against broadening the blocking predicate past exact-case: widen it and this assertion fails.
 const caseDrift = enumDriftIssues({ DataValueType: { Guid: 5 } });
-check("A4 (review 1, K): a CASE-variant key with a different value is advisory too — `Guid: 5` names no member the engine reads, so it cannot block",
+check("A4 (review 1, K; kept by review 2, finding 1): a CASE-variant key with a different value stays ADVISORY — `Guid: 5` names no member the engine reads, so it cannot block",
   caseDrift.mismatches.length === 0 && caseDrift.newMembers.length === 0
   && /DataValueType: stand Guid \(engine GUID\): engine 0, stand 5/.test(caseDrift.spellingDrift[0] || ""),
   () => caseDrift);
+check("A4 (review 1, K): a CASE-variant disagreement is its OWN list, never `newMembers` — `newMembers` has one remedy sentence ('add the member to the pinned table') and every clause of it is false here: the engine DOES pin the member, under `GUID`, and it DOES have a number",
+  caseDrift.newMembers.length === 0 && caseDrift.spellingDrift.length === 1,
+  () => caseDrift);
+
+// 2b-bis) THE BOUNDARY the new rule turns on: the alias is EXACT-CASE, so `String` is not it. The runtime reads
+//     `Terrasoft.DataValueType.String` as `undefined` (the alias map carries `STRING`, not `String`), therefore a
+//     disagreement on `String` can mis-read nothing and stays advisory. Without this case, "exact-case alias"
+//     would be indistinguishable from a case-insensitive "alias-aware" rule that over-blocks.
+const aliasCaseDrift = enumDriftIssues({ DataValueType: { String: 2 } });
+check("A4 (review 2, finding 1) BOUNDARY: the alias is EXACT-CASE — `String: 2` is a mere case variant of the alias, the runtime read returns `undefined` for it, so it is ADVISORY while `STRING: 2` blocks",
+  aliasCaseDrift.mismatches.length === 0 && aliasCaseDrift.newMembers.length === 0
+  && /DataValueType: stand String \(engine TEXT\): engine 1, stand 2/.test(aliasCaseDrift.spellingDrift[0] || ""),
+  () => aliasCaseDrift);
 
 // 2c) ANTI-VACUITY — a mismatch on the SAME spelling still BLOCKS. This is the case where the engine's number
 //     really is the number applied to every element the body names, and there is no safe partial reading.
@@ -813,6 +826,34 @@ const isBusy = stringAttrRes.attributeDefs.find(a => a.name === "IsBusy");
 check("A4: a virtual attribute declared with dataValueType: Terrasoft.DataValueType.STRING resolves to TEXT (1), no unknown-enum-member",
   !!isBusy && isBusy.dataValueType === 1 && !stringAttrRes.astDiagnostics.some(d => d.kind === "unknown-enum-member"),
   () => ({ isBusy, diagnostics: stringAttrRes.astDiagnostics }));
+
+// 4b) ENG-96571 review 3 — THE TWO SIDES ARE ONE READ, ASSERTED ACROSS BOTH PATHS. The drift guard's severity and
+//     the body-side terminal read used to be two hand-written copies of the same two `Object.hasOwn` lookups (plus
+//     two independent derivations of the alias map, from `t:dvt` and from `DataValueType`), held together only by a
+//     comment claiming they mirrored each other — and they had already drifted apart once, which is why `STRING`
+//     was mis-classified. Both now call `runtimeRead` with the map from `aliasesFor`, so the checks above and the
+//     body-side ones here cannot disagree by construction. This drives BOTH paths on the SAME two spellings and
+//     asserts they agree, which is the property the old comment could only promise: an alias the body read
+//     RESOLVES must be the spelling the guard BLOCKS on, and a spelling the body read leaves UNRESOLVED must be
+//     the one the guard keeps ADVISORY.
+const a4Body = (member) => {
+  const res = parseSchema(`define("VA1b",[],function(){return{entitySchemaName:"E",diff:[],attributes:{Probe:{dataValueType:Terrasoft.DataValueType.${member},value:""}}};});`, "VA1b");
+  const probe = res.attributeDefs.find((a) => a.name === "Probe");
+  return { value: probe?.dataValueType ?? null, unknown: res.astDiagnostics.some((d) => d.kind === "unknown-enum-member") };
+};
+const a4Guard = (member, value) => enumDriftIssues({ DataValueType: { [member]: value } });
+check("A4 (review 3): the body-side read and the drift guard's severity AGREE on the exact-case alias — a body's `DataValueType.STRING` resolves to TEXT's 1, and a stand disagreeing on `STRING` BLOCKS; one `runtimeRead`, so the two cannot drift apart the way they did before",
+  (() => { const b = a4Body("STRING"); const g = a4Guard("STRING", 2);
+    return b.value === 1 && !b.unknown && g.mismatches.length === 1 && g.spellingDrift.length === 0; })(),
+  () => ({ body: a4Body("STRING"), guard: a4Guard("STRING", 2) }));
+check("A4 (review 3): …and they AGREE on the case variant too — a body's `DataValueType.String` resolves to NOTHING (advisory `unknown-enum-member`, null value), and a stand disagreeing on `String` stays ADVISORY rather than blocking",
+  (() => { const b = a4Body("String"); const g = a4Guard("String", 2);
+    return b.value === null && b.unknown && g.mismatches.length === 0 && g.spellingDrift.length === 1; })(),
+  () => ({ body: a4Body("String"), guard: a4Guard("String", 2) }));
+check("A4 (review 3) ANTI-VACUITY: the agreement is not trivial — the two spellings differ from each other on BOTH paths, so a rule that collapsed them (case-insensitive on either side) would fail one of the checks above",
+  a4Body("STRING").value !== a4Body("String").value
+  && a4Guard("STRING", 2).mismatches.length !== a4Guard("String", 2).mismatches.length,
+  () => ({ exact: a4Body("STRING"), variant: a4Body("String") }));
 
 // 5) THE CASE VARIANT IN A BODY IS NOT RESOLVED (review 1, finding B). `this.Terrasoft.DataValueType.Guid` reads
 //    `undefined` in the browser — the member is `GUID` — so the engine must NOT hand back 0. It stays an advisory
@@ -1055,6 +1096,30 @@ check("ENG-96571 A3 (review): a `conditions` value that is neither array nor obj
 const a3None = a3Rule(`[]`);
 check("ENG-96571 A3: a rule that declares NO conditions is 0 declared — the only shape a renderer may call `always`",
   a3None.conditionsDeclared === 0 && a3None.conditions.length === 0, () => JSON.stringify(a3None));
+
+/* --- ENG-94714: `unmodelledProps` — the declared `values` keys the engine models on no field, so a section's
+   `merge DataGrid` (`controlColumnName` and its family) can be NAMED instead of vanishing at parse time. --- */
+const upMk = (pkg, diff) => parseSchema(`define("S",[],function(){return{entitySchemaName:"X",diff:${diff}};});`, pkg);
+const upEff = mergeHierarchy([
+  upMk("CoreLead", `[{"operation":"merge","name":"DataGrid","values":{"controlColumnName":"QualifyStatus","controlCellClass":"c","caption":"x"}}]`),
+], { seedTemplate: [upMk("Base", `[{"operation":"insert","name":"DataGrid","values":{"itemType":13,"collection":"GridData"}}]`)] });
+const upGrid = upEff.items.find((i) => i.name === "DataGrid");
+check("ENG-94714: an unmodelled `values` key survives the fold as a NAMED key instead of being dropped by the parser's fixed field set",
+  upGrid.unmodelledProps.includes("controlColumnName") && upGrid.unmodelledProps.includes("controlCellClass"),
+  () => upGrid.unmodelledProps);
+check("ENG-94714: a key the engine DOES model (`caption`) is not reported as unmodelled — the set is the difference, not every key",
+  !upGrid.unmodelledProps.includes("caption"), () => upGrid.unmodelledProps);
+check("ENG-94714: a SEED layer's keys are excluded — measured on the real LeadSectionV2 bundle, counting them put 30 keys on the grid where only 3 came from the section, and 30 open items would bury the 3",
+  !upGrid.unmodelledProps.includes("collection"), () => upGrid.unmodelledProps);
+// A `remove` of an item nothing defined records a TOMBSTONE, and classic's remove-then-restate idiom then merges
+// onto that same name. The tombstone is built from its own object literal, not by `makeItem`, so it needs the
+// field too — without it this fold throws `cur.unmodelledProps.add is not a function` on a real body.
+check("ENG-94714: a merge onto a TOMBSTONE does not throw — every item record in the fold carries the same shape, stub or not",
+  () => { const eff = mergeHierarchy([
+      upMk("A", `[{"operation":"remove","name":"Ghost"}]`),
+      upMk("B", `[{"operation":"merge","name":"Ghost","values":{"controlColumnName":"Q"}}]`)]);
+    return Array.isArray(eff.items); },
+  () => "threw");
 
 console.log(`\n=================\nGOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

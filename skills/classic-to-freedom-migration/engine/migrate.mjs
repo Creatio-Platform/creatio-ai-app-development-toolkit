@@ -72,14 +72,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView } from "./mapper.mjs";
 import { resolveRunIndex, validateRun, runTypes } from "./mapping-registry.mjs";
 import { GATE_KIND, gateForComponentType, APPROVALS_SIGNAL, resolveFeatureRow } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
-  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
+  planGaps, pageUnits, verifyReport, verifyDigest, verifySummary, reconcileState, reconcileWireState, RECONCILE_STATE_MARKER, RECONCILE_WIRE_CEILING, isRecordObject, encodedAsciiBytes, isTabOp, subPageNodes, buildResolutionIndex,
   pageUnitsSlice, builtSlice, verifyUnit, IMPERATIVE_MEMBER_KINDS, renderPlanNotes,
-  boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS, PLAN_AUTHORING_NOTE } from "./designspec.mjs";
+  boundaryChild, SHOWN_ELSEWHERE, confirmKeyOf, CONFIRM_DISPOSITIONS } from "./designspec.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -262,7 +262,7 @@ const normalizeWarningText = (t) => String(t ?? "").trim().replace(/\s+/g, " ");
 // names the fact, it BLOCKS, and a disposition can be written against it verbatim. `""`, `null` and `{}` name no
 // fact at all and still fall through to being skipped.
 const bundleWarningFallbackText = (w) => (w && typeof w === "object" && Object.keys(w).length ? JSON.stringify(w) : "");
-export const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
+const bundleWarningKey = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.code || w?.message || ""));
 const bundleWarningText = (w) => normalizeWarningText(typeof w === "string" ? w : (w?.message || w?.code || ""));
 // The only dispositions a bundle warning may carry — the same validated-enum rule as `WARNING_DISPOSITIONS` and
 // `MEMBER_DISPOSITIONS`, and for the same reason (a truthy `resolved` with a typo'd disposition would close a
@@ -399,11 +399,15 @@ function confirmDispositionsInput(manifest, opts) {
 // in their own advisory line, so the operator learns the answer belongs in the worklist that DOES carry the row
 // (`⚠ Imperative logic` / `⚠ Imperative members`, closed via `memberDispositions`) instead of believing it landed.
 // Returns `{ closed, invalid, notApplicable }` (arrays of keys) so a caller/test can see what the manifest did.
+// `seen` (ENG-96571 review 2, finding 3) is every BARE key this scope actually has a row for — the input the
+// unmatched report needs. It is collected here rather than re-derived by the caller so "what a key could have
+// matched" is read off the same loop that matches them, and the two cannot disagree.
 function applyConfirmDispositions(changeSet, declared, scopeSchema) {
-  const closed = [], invalid = [], notApplicable = [];
-  if (!Object.keys(declared).length) return { closed, invalid, notApplicable };
+  const closed = [], invalid = [], notApplicable = [], seen = [];
+  if (!Object.keys(declared).length) return { closed, invalid, notApplicable, seen };
   for (const n of changeSet?.needsDecision || []) {
     const key = confirmKeyOf(n);
+    seen.push(key);
     const dec = plainObject((scopeSchema ? declared[`${scopeSchema}::${key}`] : undefined) ?? declared[key]);
     if (dec.resolved !== true) continue;
     if (SHOWN_ELSEWHERE.has(n.kind)) { notApplicable.push(key); continue; }
@@ -417,16 +421,71 @@ function applyConfirmDispositions(changeSet, declared, scopeSchema) {
     n.note = typeof dec.note === "string" ? dec.note : null;
     closed.push(key);
   }
-  return { closed, invalid, notApplicable };
+  return { closed, invalid, notApplicable, seen };
+}
+
+// ENG-96571 review 2 (finding 4) — the FORM page's ChangeSet and the LIST page's are two scopes with ONE answer
+// map, and the renderers treat them alike (`renderListPage` calls `renderConfirmWorklist(result.listChangeSet)`).
+// The disposition pass ran over the form's rows only, so a `list-columns:…` / `list-add-routing:…` answer closed
+// nothing and was reported in none of `closed`/`invalid`/`notApplicable` — the operator's answer landed nowhere and
+// nothing said so. Merged into ONE result rather than published as a second field: `result.confirmDispositions` is
+// the run's report of what the manifest did, and a caller asking "was my key applied?" must not have to know which
+// of the two pages raised the row. `listChangeSet` is null in mini/child scope, which `applyConfirmDispositions`
+// already tolerates.
+function mergeConfirmResults(a, b) {
+  return {
+    closed: [...a.closed, ...b.closed], invalid: [...a.invalid, ...b.invalid],
+    notApplicable: [...a.notApplicable, ...b.notApplicable], seen: [...a.seen, ...b.seen],
+  };
+}
+
+// ENG-96571 review 2 (finding 3) — recorded keys that matched NO row ANYWHERE ON THIS SURFACE: a typo in the kind
+// or the item. They closed nothing and appear in none of the three reported arrays (each of those needs a row to
+// attach to), so without this the answer is simply absent from the plan while the question still reads as open.
+//
+// ENG-96571 review 3 (BLOCKER) — this is judged ONCE, AT THE ROOT, over the union of every scope's `seen`. It used
+// to be judged per scope, with a `hasNested` suppression standing in for "a bare key may still close a row in a
+// fold that has not run yet". That suppression disabled the report on virtually every real run: `hasNested` was
+// true whenever `enumerateChildPages` returned an entry — one per custom detail WITH AN ENTITY, whether or not a
+// child schema was supplied and whether or not the child ever folds — so a page with any custom detail (the normal
+// case) reported no bare key at all, while a fold never reports one either (`scopeSchema` is set there, so a bare
+// key is not that scope's). A mistyped bare key was therefore reported by NO scope: the exact silent swallow the
+// report exists to remove. The second hole was a scoped key naming the ROOT's own schema — never `mine` at the root
+// (`opts.scopeSchema` is undefined there) and never `mine` in a fold either.
+//
+// This mirrors the proven `behaviourIndex.unmatched` pattern in this same file: `stubIndex` is "assembled once
+// every scope has folded, so a key can be checked against the WHOLE surface before it is reported as matching
+// nothing". `seenAll` is that union for ⚠ Confirm rows — each scope contributes the keys it has a row for, in BOTH
+// forms it can be addressed by (the bare `<kind>:<item>`, and `<scopeSchema>::<kind>:<item>` where the scope has a
+// schema). So a bare key matches if ANY page of the surface raised that row, and a scoped key matches only on the
+// page it names. A key whose scope prefix names no page of this surface matched nothing and IS reported — the run
+// looked at every scope, so "not addressed to me" is no longer an answer it can give.
+function unmatchedConfirmKeys(declared, seenAll) {
+  const matched = seenAll instanceof Set ? seenAll : new Set(seenAll);
+  const out = [];
+  for (const [k, v] of Object.entries(plainObject(declared))) {
+    if (plainObject(v).resolved !== true) continue;
+    if (!matched.has(k)) out.push(k);
+  }
+  return out;
+}
+
+// The key forms one scope's rows can be addressed by. A scope WITH a schema answers both the bare pair and its own
+// `<schema>::<pair>` form — `applyConfirmDispositions` tries the scoped form first and falls back to the bare one,
+// so both are legitimately "matched here" and the union has to carry both or a working key reads as a typo.
+function confirmSeenForms(scopeSchema, seen) {
+  return scopeSchema ? seen.flatMap((k) => [k, `${scopeSchema}::${k}`]) : [...seen];
 }
 
 // The `enum-drift-advisory` row's reason, or null when there is nothing advisory to say. Own fn (Sonar CC 15 in
 // `runMigration`, which has none to spare) and, more to the point, because the TWO advisory categories have
 // DIFFERENT remedies and must never share one sentence (ENG-96571 review 1, K):
 //   · a member only the STAND carries  → add it to the pinned table in engine.mjs;
-//   · a member the engine pins under ANOTHER SPELLING with a different number → do NOT add the stand's spelling;
-//     the engine reads a body by exact property name, so it never reads that spelling and no element of this run
-//     can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling still holds.
+//   · a member the engine pins under a DIFFERENT CASE only, with a different number → do NOT add the stand's
+//     spelling; the engine reads a body by exact property name, so it never reads that case variant and no element
+//     of this run can be mis-read by it. What is open is whether the number pinned for the engine's OWN spelling
+//     still holds. (An EXACT-CASE ALIAS such as `STRING` is NOT here — the runtime read answers it, so a
+//     disagreement on it lands in `mismatches` and BLOCKS; ENG-96571 review 2, finding 1.)
 // The old single sentence said "identified by name but has no numeric value, so add the member(s) to the pinned
 // table" over both, and every clause of it is false for the second category. Since an `enum-drift-advisory` row
 // can be CLOSED by a recorded disposition, this is the text an operator reads to decide — it has to be true.
@@ -435,7 +494,7 @@ function enumDriftAdvisoryReason(drift) {
   if (drift.newMembers.length)
     clauses.push(`the stand carries enum member(s) this engine does not pin: ${drift.newMembers.join("; ")}. An element of one of these kinds is identified by name but has no numeric value, so add the member(s) to the pinned table in engine.mjs from this platform version's \`sysenums.js\``);
   if (drift.spellingDrift.length)
-    clauses.push(`the stand echoes a member this engine pins under ANOTHER SPELLING, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that spelling and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
+    clauses.push(`the stand echoes a member this engine pins under a DIFFERENT CASE only, with a DIFFERENT number: ${drift.spellingDrift.join("; ")}. Do NOT add the stand's spelling to the pinned table — the engine reads a page body by exact property name, so it never reads that case variant and no element of this run can be mis-read by it. What is unanswered is whether the number the engine pins for its OWN spelling is right on this stand: re-read that member in this platform version's \`sysenums.js\` and, if it moved, fix the pinned value (which WOULD then block, as a same-spelling mismatch)`);
   if (!clauses.length) return null;
   return `${clauses.join(" — and separately: ")}. What the engine DOES know is still correct — this does not block.`;
 }
@@ -482,7 +541,40 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   // of that kind, with no partially-correct reading to fall back to. A member only the stand carries is advisory.
   const drift = enumDriftIssues(manifest.enumVocabulary);
   if (drift.mismatches.length)
-    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning.`);
+    reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning. Where a row reads \`X (alias of Y)\`, fix the value pinned for Y — do NOT add an X entry beside it, or the engine would then read the two spellings as two different numbers.`);
+  return { blocked: reasons.length > 0, reasons };
+}
+
+// THE LIST GATE (ENG-94714). `computeGate` above answers for the RECORD page and deliberately excludes everything
+// tagged `role: "section"` — a filter added because a section body that would not parse used to block a form-page
+// plan that never consumed its `diff` (the spurious block recorded further down at the `sectionParseErrors` note).
+// That exclusion was right then and is wrong now for HALF its scope: since the section `diff` IS folded and mapped,
+// a structural gap in it means the LIST page is built from an incomplete reading — while the form page is still
+// perfectly fine.
+//
+// So the answer is scoped, not moved: this gate blocks the LIST deliverable and leaves `gate.blocked` alone. The
+// form-page plan stays approvable, the list page says it is not, and neither statement is made on the other's
+// evidence. `blocked: false` with no section at all is the normal case for a mini/child fold.
+function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
+  const reasons = [];
+  if (sectionParseErrors.length) {
+    reasons.push(`the section schema body failed to parse (${sectionParseErrors.map((e) => e.pkg).join(", ")}) — every element the section declares in its view \`diff\` is unreadable, so the list page below is built from the method-body signals alone. Fix the body (or re-collect the section bundle) and re-run`);
+  }
+  const sectionStruct = parseDiagnostics.filter((d) => d.role === "section" && isStructuralDiag(d));
+  if (sectionStruct.length) {
+    const fields = [...new Set(sectionStruct.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
+    reasons.push(`the section's parse could not statically resolve structural field(s): ${fields} — its \`diff\` may be INCOMPLETE, so an element the Classic list shows can be missing from the ChangeSet below with nothing to name it`);
+  }
+  // The fold's own correctness warnings — a section op that hit a missing item, or a seed that is not a real
+  // fetched body. Both mean the reading of the section is wrong, not merely unrepresented, which is exactly the
+  // `correctness` severity's own definition.
+  const foldBad = (sectionEff?.warnings || []).filter((w) => w.severity === "correctness");
+  if (foldBad.length) {
+    reasons.push(`the section fold reported ${foldBad.length} correctness warning(s): ${[...new Set(foldBad.map((w) => w.hint))].join(" | ").slice(0, 400)}`);
+  }
+  if ((sectionEff?.unresolvedParents || []).length) {
+    reasons.push(`the section fold could not resolve parent(s): ${sectionEff.unresolvedParents.join(", ")} — supply the section's own template chain as \`section.seed\` (a second \`get-classic-page-sources\` rooted at the *Section schema), or its elements cannot be placed on a list region`);
+  }
   return { blocked: reasons.length > 0, reasons };
 }
 
@@ -721,14 +813,34 @@ function memberDigestOf(changeSet, scopeSchema) {
 // Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
 // so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
 // `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
-function sectionStubScopes(manifest, opts, sectionSchemas) {
-  if (opts.scopeSchema || !sectionSchemas.length) return [];
-  const changeSet = mapToFreedom(mergeHierarchy(sectionSchemas), {
+function sectionStubScopes(manifest, opts, sectionEff) {
+  if (opts.scopeSchema || !sectionEff) return [];
+  const changeSet = mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},
   });
   const schema = manifest.planMeta?.sectionSchema || "Section";
   return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+
+// THE SECTION VIEW (ENG-94714). The *Section chain folded over its OWN parent-template seed — the same
+// `mergeHierarchy` the record page uses, given the section's own `BaseDataView` chain instead of the page's
+// `BaseModulePageV2` one. `null` when no section chain was supplied, so every consumer has one thing to test.
+//
+// ONE fold, TWO consumers, on purpose. It used to be computed inside `sectionStubScopes` and thrown away with
+// that function's ChangeSet; the list page could not see it, which is why every element a section declared in its
+// `diff` was dropped. Folding it twice would be the other way to share it, and would let the two readings of the
+// same chain drift apart — the exact failure `mapping-table.mjs` was created to end.
+//
+// SEEDED, unlike the call this replaces. Without `seedTemplate` the fold has no `DataGrid`, no
+// `CombinedModeActionButtonsCardLeftContainer` and no `activeRowActions` to merge onto, so `templateOwned` is
+// false for the entire tree and base chrome is indistinguishable from what the section itself declares. The seed
+// is not polish here: it is what makes the section-owned/inherited split (and therefore a readable ⚠ worklist)
+// possible at all. A run whose manifest carries no `section.seed` still folds — it just reports the missing base
+// through the fold's own merge-onto-nothing warnings, which name the cause precisely.
+function foldSectionView(sectionSchemas, sectionSeed) {
+  if (!sectionSchemas.length) return null;
+  return mergeHierarchy(sectionSchemas, { seedTemplate: sectionSeed });
 }
 
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
@@ -1299,6 +1411,17 @@ function publishPage(node, baseKey, alt, dedupeId, rowsFor) {
   node.pageKey = baseKey;
   node.pageRows = rowsFor(baseKey);
 }
+// ENG-96571 review 3 — THE ⚠ Confirm QUESTIONS THIS FOLDED SCOPE CLOSED, published on the node.
+// A folded sub-page node exposes `pageRows` (rendered under its own key) but NOT its `changeSet`: the rows were
+// built inside the fold and the ChangeSet stays there. `confirmWorklistRows` therefore already dropped the closed
+// rows before the parent ever saw them, so `pageUnits` — which reconciles `resolutions.json` against the whole
+// tree — had no way to know a sub-page question had been asked and answered by a disposition. Without this an
+// operator who used BOTH channels on a CHILD page's row got the same "an answer nobody asked for" ⚠ the root-level
+// defect produced. The RAW `kind`/`item` pair, never the joined key: `item` carries colons.
+// Per node and NOT aggregated upward — `subPageNodes` recurses through `childPages`, so every grandchild is
+// visited on its own and an aggregate here would double-count.
+const closedConfirmPairs = (cs) => (cs?.needsDecision || [])
+  .filter((n) => n.closed === true).map((n) => ({ kind: n.kind, item: n.item }));
 // Fold each child page (recursive sub-migration) via foldSubPage, writing the mapping onto each childPages entry.
 // isChildPage → child-scoped rendering (few-fields modal nudge, no section-level Print/Process). Extracted for CC.
 function foldChildPages(childPages, childSchemas, foldCtx) {
@@ -1370,6 +1493,11 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // satisfy names the very schema the recommendation banner told it to build on. Dedupe on the RESOLVED schema
   // key: the memo hands the same `res` to every parent referencing this page.
   const childTpl = CHILD_TEMPLATE_SCHEMA[childTemplateChoice(c.fieldCount, c.hasTabs, c.nDetails)] || null;
+  c.confirmClosed = closedConfirmPairs(res.changeSet);
+  // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+  // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+  // nested run over its own descendants.
+  c.confirmSeenAll = res.confirmSeenAll || [];
   publishPage(c, pageKey, key, `child::${key}`,
     (k) => checklistGroups(res, subPageOpts(foldCtx, k, childTpl, { isChildPage: true })));
 }
@@ -1399,6 +1527,11 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     // …and its own page-scoped checklist rows. The expected template is whatever the manifest declared for THIS
     // typed page (there is no per-type template rule to derive one from); with none declared the page emits no
     // template row rather than one pinned to the parent's template, which a per-type form need not share.
+    t.confirmClosed = closedConfirmPairs(res.changeSet);
+    // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+    // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+    // nested run over its own descendants.
+    t.confirmSeenAll = res.confirmSeenAll || [];
     publishPage(t, `typed:${t.schema}`, tkey, `typed::${tkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, t.template || null)));
   }
@@ -1431,6 +1564,11 @@ function foldMiniPage(mpName, mpDecl, miniPageSchemas, foldCtx) {
     miniPage.stubScope = stubScope("mini page", mkey, res.changeSet, res.changeSet?.standardMethodsFiltered);
     // The mini page's own rows. Its template is not a choice — a quick-add shell IS the mini-page template — so it
     // comes from the same shared mapping the child rule uses, and its layout stops being a single boolean row.
+    miniPage.confirmClosed = closedConfirmPairs(res.changeSet);
+    // ENG-96571 review 3 (BLOCKER) — and the keys this subtree HAS a row for, so the root can check a recorded key
+    // against the whole surface instead of suppressing the report whenever a fold exists. Already unioned by the
+    // nested run over its own descendants.
+    miniPage.confirmSeenAll = res.confirmSeenAll || [];
     publishPage(miniPage, `mini:${miniPage.schema}`, mkey, `mini::${mkey}`,
       (k) => checklistGroups(res, subPageOpts(foldCtx, k, CHILD_TEMPLATE_SCHEMA.mini, { isMiniPage: true })));
   }
@@ -1756,24 +1894,36 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
 // instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
 // own cause + remedy — a gate reason, not an abort.
 // `rowActions` — one entry per `DataGridActiveRow…` item the section declares, `{ name, caption?, condition?, package? }`.
-// Supplied on the manifest for the same reason a resolved list-column read is: it is evidence the layer parse does not
-// produce yet (the section view `diff` is not folded), and the plan must be able to carry it the moment someone reads
-// it off the section. Unioned with anything the layers do produce, so the automated source supersedes nothing.
+// Still accepted after ENG-94714 taught the fold to produce these itself: a run that collected no section bundle
+// (no `section.schemas`/`section.seed`) has no fold to read them from, and a row action read by hand off a stand must
+// still reach the plan. Unioned with the fold's own entries, and the FOLD wins — see `mergeRowActions`.
 function suppliedRowActions(section) {
   const list = Array.isArray(section?.rowActions) ? section.rowActions : [];
   return list.filter((ra) => ra && typeof ra === "object" && typeof ra.name === "string" && ra.name.trim());
 }
+// `seed` — the section's OWN parent-template chain (ENG-94714), the same shape as the top-level `manifest.seed`
+// and collected the same way: a SECOND `get-classic-page-sources` call rooted at the *Section schema, whose
+// `seed` block is copied here. It is what defines `CombinedModeActionButtonsCardLeftContainer`, `DataGrid` and
+// `activeRowActions` (`BaseDataView` [`CrtUIPlatform7x`]), so without it every section element merges onto
+// nothing and `templateOwned` is false for the whole tree — base chrome then reads as section-declared, which is
+// exactly the distinction the acceptance criteria turn on. OPTIONAL, and deliberately not a fail-loud key like
+// `listColumns`: a manifest authored before this existed must keep producing a plan (the fold then reports the
+// missing seed through its own `unresolvedParents` / merge-onto-nothing warnings, which say far more than an
+// abort would).
+const sectionSeedEntries = (section) => (Array.isArray(section?.seed) ? section.seed : []);
 function sectionInput(section, manifest) {
-  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
-  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
+  const empty = { schemas: [], seed: [], resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
+  if (Array.isArray(section)) return { ...empty, schemas: section };
+  if (!section || typeof section !== "object") return empty;
   if (!Object.hasOwn(section, "listColumns")) {
     throw new Error("object-shaped section requires listColumns evidence; use a bare array only for the legacy manifest shape");
   }
   const schemas = Array.isArray(section.schemas) ? section.schemas : [];
+  const seed = sectionSeedEntries(section);
   const rowActions = suppliedRowActions(section);
   const resolved = normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema);
-  if (resolved.error) return { schemas, resolvedListColumns: null, listColumnIssue: resolved.error, rowActions };
-  return { schemas, resolvedListColumns: resolved, listColumnIssue: null, rowActions };
+  if (resolved.error) return { schemas, seed, resolvedListColumns: null, listColumnIssue: resolved.error, rowActions };
+  return { schemas, seed, resolvedListColumns: resolved, listColumnIssue: null, rowActions };
 }
 
 // Provenance of the columns the plan will actually RENDER: the resolver's own `source` when its set is the one
@@ -1857,8 +2007,9 @@ export function mergeSectionActions(fromLayers = []) {
 
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
-// EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
-// precedence rule would ship with no way to test it.
+// EXPORTED as the seam this precedence rule is asserted through. Since ENG-94714 the fold arm is live (it carries
+// the `activeRowActions` items `mapSectionView` read), so the rule now decides a real collision rather than a
+// hypothetical one.
 export function mergeRowActions(fromLayers = [], fromManifest = []) {
   const byName = new Map();
   for (const ra of [...fromLayers, ...fromManifest]) {
@@ -1873,7 +2024,26 @@ export function mergeRowActions(fromLayers = [], fromManifest = []) {
   }
   return [...byName.values()];
 }
-function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = []) {
+// A diff-declared command-bar button in the shape `mergeSectionActions` and the command-bar table already speak.
+// `condition` stays a single method name because that is the field every existing renderer and golden reads;
+// `conditionProperty` and the full `conditions` list ride alongside it, because WHICH property a condition binds
+// (`visible` vs `enabled`) is the difference between a faithful port and an always-enabled button. The real
+// Opportunity section carries a button with BOTH, so a single-field shape cannot represent it.
+function diffActionAsSectionAction(a) {
+  const primary = a.conditions?.[0] || null;
+  return {
+    name: a.name, caption: a.caption ?? null, icon: null,
+    condition: primary?.method ?? null, conditionProperty: primary?.property ?? null,
+    conditions: a.conditions || [],
+    group: null, parent: a.parent ?? null, package: a.package ?? null,
+    source: a.source || "sectionDiff",
+  };
+}
+// `sectionView` (ENG-94714) — what the section declares in its OWN `diff`, read off the folded section view by
+// `mapSectionView`. Unioned with the method-body signals below rather than replacing them: the two sources see
+// different halves of the same list. `getSectionActions` reads the menu the section builds imperatively; the
+// `diff` declares the buttons it inserts into the command bar, and until now only the first half reached the plan.
+function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = [], sectionView = null) {
   if (!sectionSchemas.length && !resolvedListColumns && !listColumnReadRejected) return null;
   const quickFilters = unionQuickFilters(sectionSchemas);
   const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
@@ -1891,7 +2061,14 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     schemaGathered: sectionSchemas.length > 0,
     listColumnReadRejected,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
-    sectionActions: mergeSectionActions(sectionSchemas.flatMap((l) => l.sectionActions || [])),
+    // Diff-declared buttons come LAST so that, when one name arrives from both surfaces, the `diff` wins field by
+    // field: it is the section's own structural declaration (parent container, index, the property each condition
+    // binds), while `getSectionActions` is read out of a method body. Neither entry is dropped — `mergeSectionActions`
+    // merges rather than replaces, so a caption only the imperative surface knows still survives.
+    sectionActions: mergeSectionActions([
+      ...sectionSchemas.flatMap((l) => l.sectionActions || []),
+      ...(sectionView?.commandBarActions || []).map(diffActionAsSectionAction),
+    ]),
     // Menu helpers no layer in the chain defines. Collected across layers, then cleared by any layer that resolved
     // one: a layer's parse sees only its own src, so the chain resolves what a single src cannot. What survives is a
     // completeness gap and rides into the command-bar decision.
@@ -1906,7 +2083,17 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
     quickFilters,
-    rowActions: mergeRowActions(sectionSchemas.flatMap((l) => l.rowActions || []), suppliedRows),
+    // The fold's own row actions now exist (they are the `activeRowActions` items the section declares), and they
+    // are passed as the LAYER arm — the arm `mergeRowActions` already documents as winning over a manifest entry,
+    // for exactly this moment: a hand-supplied row action must not mask the real one once the engine can read it.
+    rowActions: mergeRowActions([
+      ...sectionSchemas.flatMap((l) => l.rowActions || []),
+      ...(sectionView?.rowActions || []),
+    ], suppliedRows),
+    // The whole folded reading, carried so the ChangeSet can raise what the surfaces above do not absorb: the
+    // declared-but-unmodelled configuration (`controlColumnName` and its family) and any section-declared element
+    // the list vocabulary has no reading for. `null` when no section chain was folded.
+    sectionView,
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   };
@@ -2607,9 +2794,13 @@ export function runMigration(manifest, opts = {}) {
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionData = sectionInput(manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
+  // ENG-94714 — the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
+  // digest below and the list-page mapping further down. See `foldSectionView`.
+  const sectionSeed = parse(sectionData.seed);
+  const sectionEff = foldSectionView(sectionSchemas, sectionSeed);
   // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
   // guard, the never-null schema label, and why it is a function rather than inline here.
-  const sectionScopes = sectionStubScopes(manifest, opts, sectionSchemas);
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionEff);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -2709,7 +2900,7 @@ export function runMigration(manifest, opts = {}) {
   const resolvedGates = reportRegistryFindings(changeSet, manifest, baseDir);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
+  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions, mapSectionView(sectionEff));
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
   // so the list page is a deliverable on the same footing as the form page. Signals alone render only as prose, which
   // no build step can consume. `null` when the run has no section (mini/child scope).
@@ -2740,10 +2931,17 @@ export function runMigration(manifest, opts = {}) {
   // `closed` / `invalid` / `notApplicable` — so an operator who answered one saw the row come back unchanged on
   // every regenerate with nothing saying why. Still applied after `applyBehaviourIndex` for the reason it always
   // was: both annotate the SAME rows, and a row that is described AND answered must carry both facts.
-  const confirmDispositions = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  const formConfirm = applyConfirmDispositions(changeSet, confirmDispositionsIn, opts.scopeSchema);
+  // …and the LIST page's own rows, from the SAME map (finding 4 — see `mergeConfirmResults`).
+  const listConfirm = applyConfirmDispositions(listChangeSet, confirmDispositionsIn, opts.scopeSchema);
+  const confirmDispositions = mergeConfirmResults(formConfirm, listConfirm);
   // Published on the ChangeSet so `renderConfirmWorklist` can name the not-applicable keys without a second
   // argument — the same channel `featureSignals` uses, and the only place the renderer sees this run's answers.
-  changeSet.confirmNotApplicable = confirmDispositions.notApplicable;
+  // Per PAGE, not merged: each worklist names the keys aimed at rows IT prints.
+  changeSet.confirmNotApplicable = formConfirm.notApplicable;
+  if (listChangeSet) listChangeSet.confirmNotApplicable = listConfirm.notApplicable;
+  // The unmatched report is NOT computed here — it needs every fold's rows first, so it is judged once at the root
+  // after the folds (see `confirmSeenAll` below, next to `behaviourIndex.unmatched`, which is judged the same way).
   // RECURSION — if the agent supplied a child edit-page's own schema (keyed by its editPage name or child
   // entity), map it here so its FULL design spec is nested in the plan, not just listed. This is the tree:
   // parent page + one real sub-mapping per related list. A CYCLE (a page reachable from itself) is what must
@@ -2815,6 +3013,22 @@ export function runMigration(manifest, opts = {}) {
   ];
   // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
   // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
+  // ENG-96571 review 3 (BLOCKER) — the ⚠ Confirm equivalent of `stubIndex`, and judged the same way: assembled once
+  // every scope has folded, so a recorded key is checked against the WHOLE surface before it is called a typo. Each
+  // fold publishes the union it computed for its own subtree (`confirmSeenAll` on the node), so a grandchild's rows
+  // reach the root through its parent rather than needing a second traversal here.
+  const confirmSeenAll = [
+    ...confirmSeenForms(opts.scopeSchema, confirmDispositions.seen),
+    ...(miniPage?.confirmSeenAll || []),
+    ...typedPages.flatMap((t) => t.confirmSeenAll || []),
+    ...childPages.flatMap((c) => c.confirmSeenAll || []),
+  ];
+  // Only the ROOT run judges it, for the same reason it alone judges `behaviourIndex.unmatched`: a fold sees one
+  // page's rows, so every answer aimed at a sibling page would read as unmatched there.
+  const confirmUnmatched = opts.scopeSchema ? [] : unmatchedConfirmKeys(confirmDispositionsIn, confirmSeenAll);
+  // Published on the form page's ChangeSet — the ⚠ line is about the manifest, not about one of the two grids, and
+  // the form worklist is the one every scope renders. The render happens after this point (`out.designSpec` below).
+  changeSet.confirmUnmatched = confirmUnmatched;
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
@@ -2828,6 +3042,9 @@ export function runMigration(manifest, opts = {}) {
   // one annotated array is what every surface reports (ENG-95862 item 5).
   eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
+  // …and the LIST page's own verdict, on the section's evidence alone (ENG-94714). Separate from `gate` on purpose:
+  // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
+  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
@@ -2897,6 +3114,7 @@ export function runMigration(manifest, opts = {}) {
     resolvedGates,
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
+    listGate,        // the LIST page's own gate — blocked when the SECTION's evidence is incomplete, independently of `gate`
     listChangeSet,   // the LIST page's own ChangeSet: positioned grid columns / quick filters / command-bar actions
     childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
     typedPages,      // per-type Classic edit-page family (typed entity) — first-class scope + precedence trap
@@ -2909,7 +3127,15 @@ export function runMigration(manifest, opts = {}) {
     behaviourIndex,
     // ENG-96571 C1 — what `manifest.confirmDispositions` actually did on this run: the keys it CLOSED and the ones
     // whose disposition word was not one of the four (recorded, never silently ignored).
-    confirmDispositions,
+    // ENG-96571 review 3 (finding 6) — built EXPLICITLY, in one place, instead of publishing the internal accumulator
+    // and then bolting `unmatched` onto it by mutation. `seen` is a matching accumulator, not part of the caller's
+    // report: it used to ride along in every serialized result. `confirmSeenAll` is the parent-facing channel and is
+    // published beside the report, not inside it.
+    confirmDispositions: {
+      closed: confirmDispositions.closed, invalid: confirmDispositions.invalid,
+      notApplicable: confirmDispositions.notApplicable, unmatched: confirmUnmatched,
+    },
+    confirmSeenAll,
   };
   // Generated artifacts the agent presents VERBATIM (it only ever paraphrased when left to author them):
   //   designSpec = the design spec alone (## Design spec — Layout/Section/Logic/Confirm)
@@ -3006,7 +3232,7 @@ function provenanceIssue(pages) {
 // `--out --plan` swallowed the next flag), and the value must be excluded from the positional-manifest search
 // (otherwise the OUTPUT path is read as the manifest and the run dies on a misleading JSON error). MODE flags
 // (`--plan`, `--units`, `--verify`, …) take no value and belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices", "--resolved-gates"]);
+const VALUE_FLAGS = new Set(["--out", "--built", "--verify-json", "--verify-digest", "--verify-summary", "--page", "--resolutions", "--slices", "--resolved-gates", "--reconcile", "--queue"]);
 // The value of a value-taking flag, or `null` when the flag is absent. `onBad` (the CLI's `fail`) is called with a
 // diagnosable message when the flag is there but its value is missing or is itself a flag. Own fn so each new
 // value flag reuses the guard instead of re-implementing it (and so the CLI block does not grow another branch).
@@ -3126,6 +3352,16 @@ function unmatchedResolutionsNote(unmatched) {
   const named = unmatched.map((u) => u.id || `${u.kind}:${u.item}`).slice(0, 5).join(" | ");
   const more = unmatched.length > 5 ? ` | …and ${unmatched.length - 5} more` : "";
   return `migrate.mjs: ⚠ ${unmatched.length} --resolutions entr${unmatched.length === 1 ? "y" : "ies"} matched NO ⚠ Confirm question this plan asks: ${named}${more}. Check kind/item against \`preflight[]\` in this output — an answer nobody asked for reaches no builder.\n`;
+}
+// ENG-96571 review 3 — an answer whose question a `manifest.confirmDispositions` entry had ALREADY CLOSED. NOT a
+// miss (the note above must not claim it is: the question was asked, and the documentation tells the operator to
+// fill both channels) and NOT work either — the row is closed, so nothing in `preflight[]` carries the answer to a
+// builder. Stated ℹ rather than ⚠ for exactly that reason: this is the documented double-channel answer, and the
+// only thing worth saying about it is which channel the run acted on.
+function closedResolutionsNote(closed) {
+  const named = closed.map((c) => `${c.kind}:${c.item}`).slice(0, 5).join(" | ");
+  const more = closed.length > 5 ? ` | …and ${closed.length - 5} more` : "";
+  return `migrate.mjs: ℹ ${closed.length} --resolutions answer(s) target questions already CLOSED by a disposition: ${named}${more}. The recorded disposition is what closed the row; the answer is kept in \`resolutionsClosed\` and is NOT counted in \`resolutionsMatched\`.\n`;
 }
 
 // An unknown `--page` key FAILS: a caller that asked for one page must never be handed the whole artifact as
@@ -3329,6 +3565,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifySummaryFile = valueFlagArg(argv, "--verify-summary", "--verify-summary verify-summary.json", fail);
   if (verifySummaryFile && !verifyMode)
     fail("`--verify-summary <file>` only applies to `--verify` — it writes THAT run's counts-only verdict. Add `--verify --built <file>`, or drop `--verify-summary`.");
+  // `--reconcile <file>` — the RUN STATE the build executor schedules on, computed here instead of transcribed by an
+  // agent: the plan's published facts, the two state files, and the drift between them, in ONE file plus one stdout
+  // line the caller copies verbatim. Everything in it is a pure function of the folder, so two runs over an unchanged
+  // folder produce the same bytes. What it CANNOT compute — the approval (free text) and the four stand facts — stays
+  // the caller's to report.
+  // `--verify --built <file>` is required: the state carries this run's verdict, and a state without one would send a
+  // caller to schedule on counts nobody produced. `--out <file>` is required too — the table would otherwise share
+  // stdout with the state line.
+  const reconcileFile = valueFlagArg(argv, "--reconcile", "--reconcile reconcile.json", fail);
+  if (reconcileFile && !verifyMode)
+    fail("`--reconcile <file>` needs the verdict it carries: add `--verify --built <file>`, or drop `--reconcile`.");
+  if (reconcileFile && !outFile)
+    fail("`--reconcile <file>` needs `--out <file>` for the verification table — stdout carries the state line, and one file cannot be both.");
+  // `--queue <file>` — the executor's build-queue.json, READ. Its rows (schema names, parks, proposals, blockers,
+  // round counters, stand-write records) are republished verbatim; nothing here writes or moves them.
+  const queueFile = valueFlagArg(argv, "--queue", "--queue build-queue.json", fail);
+  if (queueFile && !reconcileFile)
+    fail("`--queue <file>` only applies to `--reconcile` — no other mode reads the queue. Add `--reconcile <file>`, or drop `--queue`.");
   // `--resolutions <file>` — the operator's ANSWERS to this plan's ⚠ Confirm questions, matched onto the queue items
   // that asked them (`--units.preflight[].resolution`). An INPUT to the build: it closes no `--verify` row, which
   // still needs a filed evidence record and a judge verdict.
@@ -3426,6 +3680,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const planUnits = pageUnits(result, { ...checklistOpts(manifest), resolutions: resolutionIndex });
       if (planUnits.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(planUnits.resolutionsUnmatched));
       if (planUnits.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(planUnits.resolutionsConflicts));
+      if (planUnits.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(planUnits.resolutionsClosed));
     }
   }
   else if (specMode) output = pageScopedSpec(result, pageArg, fail) + "\n";
@@ -3493,6 +3748,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = JSON.stringify(requested, null, 2) + "\n";
     if (units.resolutionsUnmatched?.length) process.stderr.write(unmatchedResolutionsNote(units.resolutionsUnmatched));
     if (units.resolutionsConflicts?.length) process.stderr.write(conflictingResolutionsNote(units.resolutionsConflicts));
+    if (units.resolutionsClosed?.length) process.stderr.write(closedResolutionsNote(units.resolutionsClosed));
   }
   else if (verifyMode) {
     // ENG-96458 D3 — the SAME opts `--checklist` renders with (so the two produce the same row set), plus the
@@ -3561,15 +3817,47 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const summary = verifySummary(result, verifyRes);
       try { fs.writeFileSync(verifySummaryFile, JSON.stringify(summary, null, 2) + "\n"); }
       catch (e) { fail(`cannot write --verify-summary '${verifySummaryFile}': ${e.message}`); }
-      // The summary is bounded PER PAGE but linear in page count, and the Reconcile agent transcribes it whole into
-      // an answer whose wire ceiling is 16000 bytes (the workflow's RECONCILE_ANSWER_MAX_BYTES; run-infra.mjs pins
-      // the two numbers equal). A plan large enough to approach that ceiling on counts alone cannot fit its verify
-      // verdict through the answer at all — SAY it here, at the producer, instead of letting the run discover it as
-      // a shape fault the retry cannot shrink. The unbounded-scale close (counts on disk, per-unit reads) is
-      // follow-up work, not this warning's job. Measured in ENCODED wire bytes, the form the ceiling is stated in:
-      // a raw `.length` undercounts localized page keys six-fold and would warn only after the ceiling is crossed.
-      const summaryBytes = encodedAsciiBytes(JSON.stringify(summary));
-      if (summaryBytes > 16000 * 0.75) process.stderr.write(`migrate.mjs: ⚠ the verify SUMMARY alone is ${summaryBytes} B against the Reconcile answer's 16000-byte wire ceiling (${Object.keys(summary.pages || {}).length} pages). A plan this size is at or past what the counts-only answer can carry; splitting the run (or the ENG-96071 answer-slimming) is needed before the ceiling, not after.\n`);
+    }
+    if (reconcileFile) {
+      // The queue file is OPTIONAL and its absence is a state, not a fault: no queue ⇒ the run is starting fresh and
+      // every queue-derived list is empty. A queue that exists and does not parse IS a fault — proceeding would
+      // publish that same empty state and silently re-open every park the file records.
+      let queue = null;
+      if (queueFile) {
+        // ABSENT AND UNPARSEABLE ARE DIFFERENT FAULTS, and one of them is not a fault. The caller always passes
+        // this flag, and the file's first writer is a later step of the same run, so a first run in a folder
+        // reaches here with nothing on disk: failing would leave that run with no state at all, which is the
+        // failure this command exists to remove. A file that EXISTS and does not parse still fails hard.
+        let raw = null;
+        try { raw = fs.readFileSync(queueFile, "utf8"); }
+        catch (e) { if (e?.code !== "ENOENT") fail(`cannot read --queue '${queueFile}': ${e.message}`); }
+        if (raw !== null) {
+          try { queue = JSON.parse(raw); }
+          catch (e) { fail(`cannot parse --queue '${queueFile}': ${e.message}`); }
+          if (!isRecordObject(queue)) fail(`--queue '${queueFile}' must be a JSON object keyed by the executor's queue keys (units, proposals, blocked, discrepancies, standWrites).`);
+        }
+      }
+      // `planCompleteness` so the state's `planGaps` carries all four plan-level legs, the same set `--units`
+      // publishes: the executor stops on that field before its first stand write.
+      const state = reconcileState(pageUnits(result, { ...verifyOpts(), planCompleteness: true }), verifySummary(result, verifyRes), queue, built);
+      try { fs.writeFileSync(reconcileFile, JSON.stringify(state, null, 2) + "\n"); }
+      catch (e) { fail(`cannot write --reconcile '${reconcileFile}': ${e.message}`); }
+      // ONE LINE, after a fixed marker: a caller whose only route from a file into its own arithmetic is copying
+      // needs one token to find and one token to copy. Compact, so the copy carries no reformatting choices.
+      // The FILE above holds the whole state; the line holds the wire form, which drops the fields only the file's
+      // own readers use. The line grows with the plan and has a ceiling; the file has none.
+      const wire = JSON.stringify(reconcileWireState(state));
+      process.stdout.write(RECONCILE_STATE_MARKER + "\n" + wire + "\n");
+      // The state still crosses a caller's answer, and that answer has a wire ceiling. Said at the producer, where
+      // the size is known, rather than left for the caller to discover as a truncated payload it cannot shrink.
+      const wireBytes = encodedAsciiBytes(wire);
+      // Over the ceiling the caller stops on the line's size, so the number and the unit count are what the
+      // operator needs — a copy cannot be made smaller by re-asking for it.
+      const units = state.unitKeys.length;
+      if (wireBytes > RECONCILE_WIRE_CEILING) process.stderr.write(`migrate.mjs: ✖ the reconcile state is ${wireBytes} B, OVER the ${RECONCILE_WIRE_CEILING}-byte answer ceiling (${units} units). The caller refuses a line this size and cannot shrink it: build this plan in smaller slices. The full state is still in '${reconcileFile}'.
+`);
+      else if (wireBytes > RECONCILE_WIRE_CEILING * 0.75) process.stderr.write(`migrate.mjs: ⚠ the reconcile state is ${wireBytes} B against a ${RECONCILE_WIRE_CEILING}-byte answer ceiling (${units} units). A plan this size is at or past what one copied line can carry.
+`);
     }
     if (verifyDigestFile) {
       try { fs.writeFileSync(verifyDigestFile, JSON.stringify(verifyDigest(result, verifyRes), null, 2) + "\n"); }
@@ -3685,11 +3973,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; return them to the caller instead of re-verifying against them.\n`);
   }
-  // ENG-96457 (item 6) — the authoring rule reaches the AGENT here, on stderr, instead of being the last line of
-  // `plan.md`. It is generator guidance, not plan content: a delivered plan must not end by telling its reader to
-  // fill `manifest.planMeta`. Printed on every `--plan` run (complete or not) because the "do not hand-edit the
+  // ENG-96457 (item 6) — the authoring rule reaches the AGENT on stderr, never as the last line of `plan.md`: it
+  // is generator guidance, not plan content, and a delivered plan must not end by telling its reader to fill
+  // `manifest.planMeta`. It is stated on every `--plan` run (complete or not), because the "do not hand-edit the
   // generated tables" half applies to a COMPLETE plan too — that is the rule agents break.
-  if (planMode) process.stderr.write("migrate.mjs: ℹ " + PLAN_AUTHORING_NOTE + "\n");
+  // ENG-96571 review 3 (finding 9) — but NOT from a standalone write here, on EITHER path. Both branches already
+  // deliver the two sentences exactly once: `--out` writes them into `plan.notes.md` (and stdout points the agent
+  // at that file), and without `--out` the `plan notes` block echoed above IS `renderPlanNotes(...)`, which renders
+  // the same `PLAN_AUTHORING_SENTENCES` as its two bullets. Review 2 removed this write only from the `--out` path,
+  // which left the non-`--out` run stating the rule TWICE on ONE stream — the worse of the two shapes, and the way
+  // an agent learns to read neither. One copy of the text (`PLAN_AUTHORING_SENTENCES`), one statement of it per run.
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
