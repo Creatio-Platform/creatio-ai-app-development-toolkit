@@ -277,6 +277,12 @@ const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature
 // PREREQUISITE / decision, which the short note keeps.
 const COMMS_NOTE = "Native Communication-options component — requires the CrtCustomer360App package + CommonCommunicationsBehavior feature on-stand; confirm, or raise adding it.";
 const FEATURE_ROWS = [
+  // ENG-96327 — these rows carry the HUMAN classification only (which feature a detail IS); the build RECIPE was
+  // deliberately dropped from the row `notes` and lives ONCE in `references/classic-to-freedom-mapping.md`, which the
+  // build agent is handed (context.mjs REF_MAPPING) — the same relocation the COMMS_NOTE / DCM_*_NOTE siblings state.
+  // Approvals = TWO components (module ABOVE the profile island + `crt.ApprovalList`): mapping doc "Approvals = TWO
+  // components" (~:160). Activities / Emails are FILTERED RELATED LISTS, NOT a `crt.Timeline`: mapping doc
+  // "Activities / Emails" (~:120) + the Timeline counter-example. Nothing build-critical is lost, only re-homed.
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
   // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.

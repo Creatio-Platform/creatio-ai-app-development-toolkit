@@ -8385,6 +8385,22 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         && plan.stderr.includes("looked the three details up by hand")
         && !plan.stdout.includes("CLOSED by a recorded disposition"),
       () => ({ status: plan.status, line: (plan.stderr.split("\n").find((l) => l.includes("bundle warning")) || "(none)").slice(0, 200), leakedToStdout: plan.stdout.includes("CLOSED by a recorded disposition") }));
+    // Kravchuk review — the OTHER branch the title names: with `--out plan.md` the SAME CLOSED line lands in
+    // `plan.notes.md` beside the plan (not stderr), and NOT in the approver's plan.md.
+    {
+      const outDir = mkdtempSync(path.join(os.tmpdir(), "a5-notes-"));
+      const planFile = path.join(outDir, "plan.md");
+      runEngine(closed, ["--plan", "--out", planFile]);
+      const notesFile = path.join(outDir, "plan.notes.md");
+      const notes = existsSync(notesFile) ? readFileSync(notesFile, "utf8") : "";
+      const planMd = existsSync(planFile) ? readFileSync(planFile, "utf8") : "";
+      check("ENG-96571 A5 (--out branch): with `--out plan.md` the CLOSED bundle-warning is written to `plan.notes.md` beside it — NOT to the approver's plan.md — the second destination this row's title names",
+        () => /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(notes)
+          && notes.includes("looked the three details up by hand")
+          && !planMd.includes("CLOSED by a recorded disposition"),
+        () => ({ notesHasLine: /CLOSED by a recorded disposition/.test(notes), planMdHasLine: planMd.includes("CLOSED by a recorded disposition") }));
+      rmSync(outDir, { recursive: true, force: true });
+    }
     // GUARD-CAN-FAIL: the disposition is load-bearing. Drop the disposition MAP alone and the same manifest blocks
     // again — so the check above passes because the answer was read, not because the fixture cannot block.
     const noDisp = { ...closed }; delete noDisp.bundleWarningDispositions;

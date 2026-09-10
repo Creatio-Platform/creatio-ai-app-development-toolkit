@@ -6543,6 +6543,18 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     && crow[3] === "⚠ not described" && crow[4] === "⚠ not described"
     && /main\/C01/.test(crow[6]),
     () => ({ banner: cardOnlyPlan.split("\n").find((l) => /could not identify and describe/.test(l)), row: crow }));
+  // ENG-96534 (Kravchuk review, AC-5): ONE prose field filled and the other empty STILL counts undescribed — the
+  // banner (an AND over both fields) and the per-cell markers must agree, so a row whose Use case is blank flags the
+  // banner even though its What-it-does is authored.
+  const oneFieldRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: { recalcAmount: { whatItDoes: "Recomputes the total." } } }, { baseDir: FIX });
+  const oneFieldPlan = renderPlan(oneFieldRun, {});
+  const ofRow = (oneFieldPlan.split("\n").find((l) => l.startsWith("| recalcAmount |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (Kravchuk review): a row with whatItDoes but EMPTY useCase still flags the banner (AND, not OR) — What-it-does shows the prose while Use case reads `⚠ not described`, and the banner counts it",
+    /could not identify and describe the logic of \d+ of \d+ method\(s\)/.test(oneFieldPlan)
+    && ofRow[3] === "Recomputes the total." && ofRow[4] === "⚠ not described",
+    () => ({ banner: oneFieldPlan.split("\n").find((l) => /could not identify and describe/.test(l)), row: ofRow }));
 }
 
 // ---- method body EVIDENCE replaces name-guessing ----

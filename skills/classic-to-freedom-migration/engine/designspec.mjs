@@ -1414,13 +1414,17 @@ const describedField = (x, key) => {
 };
 const whatItDoesText = (x) => describedField(x, "whatItDoes");
 const useCaseText = (x) => describedField(x, "useCase");
-// ENG-96534 (Rita review) — a row is "described" for the warning banner iff it carries PLAIN-LANGUAGE prose
-// (whatItDoes / useCase), the SAME thing the two cells mark `⚠ not described`. Counting off `describedIn` truthiness
-// (a card / ac) instead let a pre-ENG-96534 index — a card with no prose, the default state of every analysis on
-// disk — read `0 undescribed` (no banner) while every What-it-does / Use-case cell said `⚠ not described`. The
-// `Described in` column still cites the card: "a card exists" and "plain-language logic was authored" are different
-// facts, and this banner (and these cells) are about the second.
-const hasPlainLanguage = (x) => !!(x.describedIn?.whatItDoes || x.describedIn?.useCase);
+// ENG-96534 (Rita + Kravchuk review) — a row is "described" for the warning banner iff BOTH plain-language cells
+// carry prose, because both `whatItDoes` and `useCase` render `⚠ not described` INDEPENDENTLY: a row with one filled
+// and one empty still shows a `⚠ not described` cell, so it must count as undescribed or the banner and the cells
+// disagree (ENG-96534 AC-5). `&&`, not `||`. Counting off `describedIn` truthiness (a card / ac) was wronger still —
+// a card with no prose, the default state of every analysis on disk, read `0 undescribed` while every cell said
+// not-described. The `Described in` column still cites the card: "a card exists" and "plain-language logic was
+// authored" are different facts, and this banner (and these two cells) are about the second.
+const hasPlainLanguage = (x) => {
+  const t = (v) => typeof v === "string" && v.trim();
+  return !!(t(x.describedIn?.whatItDoes) && t(x.describedIn?.useCase));
+};
 
 // ENG-96327 — no worklist-mechanics preamble in the plan (ported/dropped/blocked, `↳` fold, `⚠ unresolved`,
 // `Described in`): those semantics are agent-facing and live in the build-executor references, which the build agent
