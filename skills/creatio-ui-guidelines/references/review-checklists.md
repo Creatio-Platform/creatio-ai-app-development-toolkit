@@ -37,6 +37,7 @@ Answer these from the user's perspective before the detailed checks:
 ### Layout and structure
 
 - [ ] Ready templates are reused where possible.
+- [ ] The page was created from the template its composition needs (resolved via `list-page-templates`) — a staged/DCM record uses the progress-bar template, not the default form page with a bar hand-placed into it.
 - [ ] Header is not overloaded.
 - [ ] Important fields fit in the header/profile area.
 - [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
@@ -46,9 +47,12 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
 - [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
 - [ ] Each related list has a **working** add affordance. Default: a quick-add **mini page** wired to "+ Add" plus the full record page for editing; **inline / editable-grid add** only for simple line-item lists or when explicitly requested. For a section-less child the add/edit pages are registered so "+ Add" resolves. No related list is read-only, and no add button is wired to an unregistered page.
+- [ ] **Every related list is assembled from the "Expanded list" composite — never hand-built from raw component types.** Resolve the recipe with `get-component-info composite='Expanded list'` (the caption is `Expanded list`, NOT "Expandable list") and emit its full structure: the `crt.ExpansionPanel` host, the inner `crt.GridContainer` → `crt.DataGrid`, the `tools` toolbar (add / refresh / import-export menu / search), AND the DataGrid data wiring (`crt.EntityDataSource` in `modelConfigDiff` + the `isCollection` collection attribute in `viewModelConfigDiff`) — the composite drop leaves an empty grid without the last part. A panel-with-a-grid stitched together by hand, or one missing the toolbar/data wiring, does NOT match the composite and is a defect. Verify every `crt.*` type and request name against clio (`get-component-info`), never from memory.
+- [ ] The Expanded list's host `crt.ExpansionPanel` keeps `fullWidthHeader: false` (the component's own default) by default — do not carry over a `fullWidthHeader: true` from an older composite recipe. With `false` the header shrinks to `titleWidth` and the toolbar fills the remaining width; only set `true` when a specific layout genuinely needs the header to span the full panel width.
 - [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
 - [ ] Empty space is not created by an oversized side island with too little content.
 - [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
+- [ ] Page content actually reads as proper **islands (white cards with rounded corners and padding)**, not fields/widgets dropped into bare structural containers. Every group of fields, every profile/metric block, and every related list sits inside a real card island (or an `ExpansionPanel` styled to match) — a transparent/chrome-less container holding content directly on the page background is a defect. Judge this on the RENDERED page, not the schema: a group that looks like loose fields on grey with no card edge fails even if the schema "has containers".
 - [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
 - [ ] One-column/two-column mixes do not break reading flow.
 - [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
@@ -87,6 +91,9 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
 - [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
 - [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
+- [ ] Every money/quantity field the user reasons about (typed or calculated — amount, total, price, hours, …) has useful analytics on its value nearby — rollup, comparison, or trend as an XS/S island metric or an Analytics-tab chart — not a bare number and not a widget repeating the field. (A bare line-item quantity the user does not reason about — e.g. a qty on a mini page — is out of scope.)
+- [ ] Every deadline/due-date/SLA field has a timer beside it showing time left/overdue, in the same block, with the date itself still visible (not hidden or replaced by the timer; a read-only/calculated SLA date is fine) — or, where the target version's catalog has no timer component, the closest native alternative was offered instead of a hand-built process-maintained countdown.
+- [ ] Every business-relationship Contact/Account lookup (responsible, primary contact, customer, supplier, owner — someone the user needs to reach) has a read-only related-record profile island — identity plus communication options, captioned for the relationship, visible only when the lookup is filled; multiple profiles stack vertically. Pure audit lookups (Created by / Modified by) are out of scope.
 
 ### Buttons, actions, and dialogs
 
