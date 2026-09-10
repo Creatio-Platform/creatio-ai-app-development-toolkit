@@ -175,6 +175,152 @@ export const RECONCILE_SHAPE = {
     types: { type: 'string', resolved: 'boolean', resolvedFrom: 'string', note: 'string', kind: 'string', id: 'string', feature: 'string' } },
   templateResolution: { kind: 'array', required: ['name', 'resolved'],
     types: { name: 'string', resolved: 'boolean', note: 'string' } },
+  // `what`/`miss` are string-or-null because that is what `--units` PUBLISHES: an ORDINARY non-applicable key
+  // (`appliesWhen: false`) carries `what: null, miss: null`, the prompt orders a verbatim copy, and a string-only
+  // rule rejected that copy on the FIRST attempt of every Reconcile.
+  // AND `appliesWhen: false` DOES NOT IMPLY THE NULLS (PR #157 follow-up review — this comment used to claim
+  // "applicable rows always carry real strings", which reads as the converse and is false). `noOrphanScaffold`
+  // (ENG-96458 D6) is published `appliesWhen: false, verifierOnly: true, emitted: true` WITH a real `what`/`miss`:
+  // it schedules no build unit, and its text is exactly what the VERIFIER is told to check. So the four
+  // combinations are all legal here and the shape cannot express the correlation — `string-or-null` on both
+  // fields is the accurate declaration, not a concession. Anything that reads `what`/`miss` must therefore
+  // handle a null on an emitted row and a string on a non-applicable one (see `reachKindBlock`'s fallbacks).
+  // ENG-96458 D6 — `verifierOnly`/`emitted` are TYPED, NOT required. `--units` publishes them only on a row that has
+  // no build unit of its own (`noOrphanScaffold`: the verifier reads it, the app unit does the removal), so a plan
+  // whose reachability rows are all schedulable legitimately carries neither, and requiring them would reject an
+  // honest answer. The run schedules on `appliesWhen` alone; `verifierOnly && emitted` only widens the set of keys
+  // the VERIFIER is told to write a boolean for.
+  reachability: { kind: 'array', required: ['key', 'appliesWhen'],
+    types: { key: 'string', appliesWhen: 'boolean', pages: 'string[]', what: 'string-or-null', miss: 'string-or-null',
+      verifierOnly: 'boolean', emitted: 'boolean' } },
+  // `resolution: null` is a LEGAL answer and is checked as such — the engine publishes it on every unanswered item.
+  preflightItems: { kind: 'array', required: ['id', 'pageKey'],
+    types: { id: 'string', pageKey: 'string', kind: 'string', item: 'string', requires: 'string[]' },
+    nested: { resolution: { kind: 'object-or-null', required: ['answer'],
+      types: { answer: 'string', decidedBy: 'string', date: 'string' } } } },
+  // No required keys, matching the old schema exactly: these two were declared with properties and no `required`.
+  resolutionsUnmatched: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  resolutionsConflicts: { kind: 'array', required: [], types: { id: 'string', kind: 'string', item: 'string' } },
+  // ENG-96204 — the RUN-level answers. `item`/`answer` are REQUIRED: the text IS the decision this script computes
+  // on (`control-mode` names the mode, `round-<N>` authorises round N), and an entry missing either is an operator's
+  // recorded answer that would silently do nothing. Enforced here rather than in `RECONCILE_SCHEMA` for the mode-A
+  // byte reason stated there — the schema declares the property loosened, this table checks its insides on arrival.
+  runResolutions: { kind: 'array', required: ['item', 'answer'],
+    types: { item: 'string', answer: 'string', decidedBy: 'string', date: 'string' } },
+  // ENG-96204 (ENG-96455) — THE FOLDER'S ROUND RECORD's insides, moved here when the three root properties became
+  // one bare object under the host's 4096-byte cap (see `RECONCILE_SCHEMA.roundState` above, and DR-7).
+  // `consumedRoundAnswers` is REQUIRED: it is the list that decides whether a recorded `go` is still live, and `[]`
+  // versus "key absent" had to stop being the same answer. That requirement was a `RECONCILE_SCHEMA.required`
+  // entry until this change; a bare object cannot carry a per-key `required`, so it is enforced HERE, on arrival —
+  // the same trade every other compacted property on this contract already makes.
+  // `layoutPassDone` and `roundsSpent` are TYPED, NOT required, deliberately: absent/`false`/`0` is the correct
+  // reading for a fresh folder and for every folder written before these keys existed, so requiring them would
+  // reject a well-formed answer about a folder that has nothing to report.
+  // ENG-96458 D4 (PR #157 follow-up review) — `pendingContradiction` is TYPED AND OPTIONAL like the two above, and
+  // for the same reason: the overwhelming majority of folders have no ☐-count contradiction to remember, and
+  // requiring the key would reject a well-formed answer about a healthy folder. When it IS present both its
+  // fields are required — a record with no signature cannot be compared and one with no round count cannot be
+  // counted, and either half missing would silently reset the counter that stops an unclosable run.
+  // `unsettledUnits` (PR #157 review, round 2, Minor 5) — TYPED, NOT REQUIRED, and free: `RECONCILE_SCHEMA`
+  // declares `roundState` as a bare `{ type: 'object' }`, so a new nested key costs the 4096-byte serialized
+  // ceiling nothing (it sits at 4061). A folder written before the field simply has no list, which reads as
+  // the empty set — the state every unit starts in.
+  roundState: { kind: 'object', required: ['consumedRoundAnswers'],
+    types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]', unsettledUnits: 'string[]' },
+    nested: { pendingContradiction: { kind: 'object-or-null', required: ['signature', 'rounds'],
+      types: { signature: 'string', rounds: 'integer' } },
+      // ENG-96778 (PR #171 scope expansion) — THE FOLDER'S MEMORY THAT THE STAND WAS DOWN, and whether the operator
+      // has confirmed it is back. TYPED AND OPTIONAL like `pendingContradiction`, and for the same reason: almost no
+      // folder has one. When it IS present both `n` and `open` are required — the gate that refuses the next build
+      // reads `open`, and the one-shot item it asks for is numbered by `n`; either half missing would be a record
+      // the gate cannot act on. Costs `RECONCILE_SCHEMA` ZERO bytes: `roundState` is a bare `{ type: 'object' }`
+      // there, so the record rides inside it and the schema stays where the 4085-byte pin holds it. It is named
+      // in the Reconcile read step for the rule stated at the top of this file — a field the copying agent is not
+      // told about is a field it drops, and a dropped record here is a disarmed gate.
+      environmentFault: { kind: 'object-or-null', required: ['n', 'open'],
+        types: { n: 'integer', open: 'boolean', unit: 'string', round: 'integer', where: 'string', what: 'string' } } } },
+  parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
+  proposals: { kind: 'array', required: ['deviation', 'why'],
+    types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },
+  // `subject` (ENG-96458 / PR #157 review, round 2) — the producer's own answer to "which artefact failed",
+  // `'source'` or `'builder'`. TYPED BUT NOT REQUIRED, exactly like `verifierOnly` / `emitted`: the terminal
+  // park verdict used to be re-derived downstream from free prose by `gate.mjs`, and five separate regex
+  // repairs in one review cycle is the evidence that prose was the wrong channel for it. `classifyBlocker`
+  // prefers this field and falls back to the patterns when it is absent, so an agent that cannot tell simply
+  // omits it and nothing changes. It costs the byte-capped `RECONCILE_SCHEMA` nothing — `blocked` items are
+  // already a loose `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object there, so the value is
+  // carried and capped without a new `properties` entry (the same reason `resolvedFrom` was free).
+  blocked: { kind: 'array', required: ['what', 'why'], types: { unit: 'string', what: 'string', why: 'string', subject: 'string' } },
+  // `id`/`kind` are TYPED BUT NOT REQUIRED, and the asymmetry is the whole point (round 21 review, finding 2).
+  // They are the identity `upsertResolutionDiscrepancy` dedups a refuted-answer row on, so a resume that arrives
+  // without them re-files the row the previous session already refreshed — ~900 bytes per resume into a list
+  // nothing prunes, rendered whole into every close prompt. Typing them puts them in the field set this table
+  // binds, which is what obliges `reconcilePrompt` to name them (see the rule stated at the top of this file).
+  // NOT required, because two of the three sites that append to `discrepancies` legitimately carry neither: the
+  // verifier's own rows (`absorbVerifier`) and the self-check mismatches (`foldSelfCheckMismatches`) are keyed on
+  // `unit` alone. Requiring them would reject a well-formed answer over rows that never had an identity to lose.
+  discrepancies: { kind: 'array', required: ['unit', 'claim', 'found'],
+    types: { unit: 'string', id: 'string', kind: 'string', claim: 'string', found: 'string', round: 'integer' } },
+  // ENG-95503 — the answers channel's three round-trip fields. Their insides moved here with everyone else's when
+  // ENG-95930 compacted the schema; the required keys and types are unchanged.
+  // WHAT THIS TABLE CANNOT CARRY, stated rather than lost: `source` used to be a JSON Schema `enum` of the two
+  // tags, because it decides whether a row survives the next dispatch — as a free string, a transcription slip made
+  // a verifier-confirmed contradiction read as dispatch-sourced. The compacted form cannot express a per-property
+  // enum (`additionalProperties` applies one rule to every key), and this table's vocabulary is CLOSED to
+  // `kind`/`required`/`types`/`nested`/`map` — an invented `enums` key would be silently ignored, which is worse
+  // than no check because it reads as one. The constraint is instead enforced by FAIL-CLOSED behaviour at the
+  // reconcile: only the literal `UNCONSUMED_FROM_VERIFIER` opens the reasoned-`unknown` release, so a garbled tag
+  // means the row is RETAINED, never released on a claim nobody confirmed. Widening `SHAPE_TYPES` to carry enums is
+  // the real fix and is bigger than this merge.
+  // `item`/`how` are absent by design — see `RECONCILE_SCHEMA` above.
+  unconsumedResolutions: { kind: 'array', required: ['unit', 'id', 'source'],
+    types: { unit: 'string', id: 'string', kind: 'string', answer: 'string', why: 'string', source: 'string' } },
+  resolutionsReopened: { kind: 'array', required: ['unit', 'id'], types: { unit: 'string', id: 'string' } },
+  // ENG-95930 (mode B) — COUNTS-ONLY. The central verify Reconcile carries used to nest each page's full `openRows`
+  // prose (`deliverable`/`status`/`evidence` for every open row); on a fresh stand nothing is complete, so that was
+  // ~21 KB the run's FIRST agent had to transcribe into ONE structured answer, which truncated at the host's ~20 KB
+  // tool-input cap and failed the run before it built anything. The rows no longer cross this boundary at all: each
+  // build agent reads its OWN page's open rows from its own scoped `--verify --page` gate, in its own context. Per
+  // page only the counts and the two axes remain; `buildComplete` stays REQUIRED (the `missing`-only axis the park/
+  // close arithmetic reads — an answer missing it is rejected, never silently sent to the combined `complete`).
+  // ENG-95901 (reopened) — `buildMissing` is the builder-owned half of `missing` (rationale: designspec.mjs
+  // `verifyTally`), REQUIRED per page for the same reason `buildComplete` is: an agent drops a field nothing asks
+  // for, and a dropped one sends the arithmetic back to the conflated `missing`. `rejected` stays an optional total —
+  // derivable (`missing - buildMissing`, both top-level), so an old answer degrades to arithmetic rather than to a
+  // wrong number.
+  //
+  // PR review — `buildMissing` is REQUIRED at the TOP LEVEL too, and that is the level the run's own close line reads:
+  // `shortfallText(state.verify)` feeds `completionLine` and the after-preflight log, and `verdictOf` fills the
+  // returned `buildMissing`/`rejected` from the same object. `reconcileShapeErrors` faults only on `required` and
+  // skips any key that is `undefined`, so an answer copying the summary faithfully except for this one field was
+  // ACCEPTED, `shortfallOf` fell back to `missing`, and the run closed with the conflated `3 MISSING` — the exact
+  // defect this ticket was reopened for, on the exact sentence the close report presents. This is the PR's own
+  // argument one level up: the contract only holds when the asker (the prompt) and the refuser (this shape) both
+  // carry the field. Zero wire cost — `verifySummary` already publishes it and the prompt already orders it copied.
+  //
+  // PR review — `unfiled` is gone from `types` and from the prompt's copy list. Nothing in `skills/**` read it, and
+  // the "derivable, so it degrades to arithmetic" justification that covers `rejected` does NOT cover it: its stated
+  // derivation (`unverified - (builderOpen - buildMissing)`) needs a top-level `builderOpen` that this channel
+  // deliberately does not carry. It was one more field name the Reconcile agent had to transcribe with the right type
+  // on the run's largest structured answer — a type fault away from a full retry — for a number nothing reads.
+  // ENG-96458 D4 — `pending` is REQUIRED for the same reason `evidenceIds` and `buildComplete` are: it is what the
+  // close reads to decide whether the RUN may call itself done, and an answer that omitted it would leave the hold
+  // inert — the gate silently off on exactly the run that needs it. Per-page `pending`/`pendingRows`/`pendingMore`
+  // are typed but not required: the top-level count is what holds the run, the per-page rows are what NAME it, and
+  // a page entry that predates this field must not fail an otherwise honest answer.
+  verify: { kind: 'object', required: ['complete', 'missing', 'unverified', 'buildMissing', 'pending', 'pages'],
+    // No top-level `builderOpen`: `verifySummary` (like `verifyDigest`) publishes it PER PAGE only, so a `types`
+    // entry for it here could never fire and would describe a field this channel does not carry (ENG-95930 review).
+    types: { complete: 'boolean', missing: 'integer', unverified: 'integer', buildMissing: 'integer', rejected: 'integer', pending: 'integer', accepted: 'integer' },
+    // ENG-96204 (AC 2) — `openCorrectness` / `openFidelity`: the page's open rows counted per severity band, off the
+    // engine's own `rowSeverity` stamp. Typed, NOT required: a summary written by an engine older than the field
+    // legitimately lacks them, and the executor then tallies that page as `unstamped` rather than refusing the answer.
+    // ENG-96458 D4 — per-page `pending`/`pendingRows`/`pendingMore`/`accepted` are typed for the same reason and on
+    // the same terms: the top-level count is what holds the run, the per-page rows are what NAME it, and a page entry
+    // that predates the field must not fail an otherwise honest answer.
+    map: { pages: { required: ['complete', 'buildComplete', 'buildMissing'],
+      types: { complete: 'boolean', buildComplete: 'boolean', builderOpen: 'integer', missing: 'integer', buildMissing: 'integer', unverified: 'integer',
+        openCorrectness: 'integer', openFidelity: 'integer', pending: 'integer', accepted: 'integer', pendingMore: 'integer' } } } },
 }
 
 // The state line's own top-level fields. `stateFromAnswer` checks for them and nothing deeper: the line came from

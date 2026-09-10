@@ -203,8 +203,9 @@ export function blockerKey(b) {
   return (b && (b.unit ?? b.key)) || null
 }
 
-// One blocker → { class, reason }. `class` is 'source' | 'unknown' (a non-source blocker is retryable, so it
-// needs no separate 'builder' label to act on — the caller retries everything that is not 'source').
+// One blocker → { class, reason }. `class` is 'source' | 'environment' | 'unknown' (a non-source, non-environment
+// blocker is retryable, so it needs no separate 'builder' label to act on — the caller retries everything that is
+// neither 'source' nor 'environment'; 'environment' halts the round, see the ENVIRONMENT FAULT section).
 // `ownRoutes` — the `#Section/...` route(s) the run recorded for the section IT BUILT (route strings or
 // `{ route }` records, one or many). Passing none keeps the classifier's pre-route behaviour exactly.
 // THE PRODUCER'S OWN ANSWER. PR #157 review (round 2) — the root issue is upstream of every regex above: the most
@@ -218,18 +219,111 @@ export function blockerKey(b) {
 // a loose `additionalProperties: { maxLength: RECONCILE_TEXT_CAP }` object on both the build-answer schema and
 // `RECONCILE_SHAPE`, so `RECONCILE_SCHEMA` stays at its size (it has ~35 bytes of headroom under the 4096-byte
 // serialized-schema ceiling, and ENG-95468 already had to trim it once to fit).
-// A value outside the two words is IGNORED rather than read as a third state — the same rule the prose test keeps:
-// what is not positively source stays retryable. `subject: 'builder'` can never be parked as source, however the
-// blocker is phrased, which closes both false-park holes this header admits to.
-const DECLARED_SUBJECTS = new Set(['source', 'builder'])
+// A value outside the declared words is IGNORED rather than read as a further state — the same rule the prose test
+// keeps: what is not positively source stays retryable. `subject: 'builder'` can never be parked as source, however
+// the blocker is phrased, which closes both false-park holes this header admits to.
+// ENG-96778 (PR #171 scope expansion) — `'environment'` is the THIRD word: the stand itself did not answer. See
+// "ENVIRONMENT FAULT" below for what it does and why neither of the other two could express it.
+const DECLARED_SUBJECTS = new Set(['source', 'builder', 'environment'])
 function declaredSubject(blocker) {
   const v = typeof blocker?.subject === 'string' ? blocker.subject.trim().toLowerCase() : ''
   return DECLARED_SUBJECTS.has(v) ? v : null
 }
 
+// ---------------------------------------------------------------------------
+// ENVIRONMENT FAULT — the stand itself did not answer (ENG-96778, PR #171 scope expansion)
+// ---------------------------------------------------------------------------
+// The third class, and the one neither of the other two can express. A measured run (migration `UsrAwesome`,
+// session ce23724f) had its stand killed mid-Build: the app unit's builder returned a STRUCTURED blocker naming the
+// outage, and because a structured answer is a valid answer every later unit — `list`, `main`, `reach` — was still
+// dispatched, each spending 2–3 minutes rediscovering that the port refused connections, and Verify, Judge and the
+// round-tail Reconcile all ran against a dead stand. Nothing in the core read a blocker's CONTENT before the round
+// tail, and there the only classifier was this file's source-vs-builder split, under which "connection refused" is
+// `unknown` → retryable → burns `MAX_ROUNDS`.
+// So a blocker can now name the ENVIRONMENT as the failing party — declared through `subject: 'environment'`, or
+// inferred from a deliberately tight, corpus-checked pattern set — and the core stops the round on the first one
+// (`environmentFaultRow` below is what it reads). TWO TIERS, because they deserve different standing against a
+// declared subject:
+//   · Tier A — a stand-alone SOCKET / DNS token (`ECONNREFUSED`, "connection refused", "actively refusing",
+//     `getaddrinfo`, "nodename nor servname"). Nothing an agent writes about a page produces these; they are the
+//     transport's own words for "nobody is listening". Tier A OVERRIDES a declared `'source'` — a socket error
+//     contradicts "the Classic artefact failed", and a wrong `'source'` is a TERMINAL park (the incident's `list`
+//     row, declared `source`, would park terminally on the next run of that folder) — but NOT a declared
+//     `'builder'`: `ECONNREFUSED 127.0.0.1:9222` is a builder's own headless-Chrome check failing, and the agent
+//     that said so knows better than a regex.
+//   · Tier B — a STAND NOUN next to a DOWN verb ("the stand went down", "Environment unreachable", "cannot reach the
+//     instance"). Read only on rows with NO declared subject: the words are ordinary English, and an agent that
+//     declared the artefact has already answered the question.
+// DELIBERATELY EXCLUDED, each with a shipped counter-example: bare `unreachable` ("verification surface unreachable"
+// is the run's own render check; "a section in no workplace is unreachable from the menu"; "built pages stay
+// unreachable"), bare `timed out` ("get-page timed out after 120s" is a TRANSPORT fault the policy tells agents to
+// switch transport on — `03-failure-and-park-policy.md`, `context.mjs`), bare `environment fault`, and the nouns
+// `host`, `surface`, `section`, `page`, `menu`, `workplace`. "Environment version could not be probed" stays
+// `unknown` too — a probe that could not run is not a stand that is down.
+const ENVIRONMENT_SOCKET_PATTERNS = [
+  /\bECONN(?:REFUSED|RESET|ABORTED)\b/,
+  /\bE(?:TIMEDOUT|NOTFOUND|HOSTUNREACH|NETUNREACH|AI_AGAIN)\b/,
+  /\bconnection\s+(?:was\s+|is\s+|being\s+)?refused\b/i,
+  /\bactively\s+refus(?:ed|es|ing)\b/i,
+  /\brefus(?:ed|es|ing)\s+(?:all\s+)?connections?\b/i,
+  /\bgetaddrinfo\b/i,
+  /\bnodename\s+nor\s+servname\b/i,
+]
+// The stand NOUN and the DOWN state as source strings, so the four phrasings below are built from ONE noun list — a
+// noun added to one phrasing and forgotten in another is how a class like this drifts.
+const STAND_NOUN = String.raw`(?:stand|environment|instance|site|server|application\s+server)`
+const DOWN_STATE = String.raw`(?:down|unreachable|offline|not\s+reachable|not\s+responding)`
+const ENVIRONMENT_STAND_PATTERNS = [
+  // "the stand dev-local (port 40010) went down", "the environment is still not responding" — the noun, at most
+  // four plain words later a state verb, then the down state. Bounded on purpose: a sentence that leaves the stand
+  // and goes on about a page ("the stand is fine, but the page … is not responding") runs past the window.
+  new RegExp(String.raw`\b${STAND_NOUN}\b(?:\s+[^\s.,;:]+){0,4}?\s+(?:is|was|went|remains?|stays?|still|now)\s+(?:still\s+|now\s+)?${DOWN_STATE}\b`, 'i'),
+  // "Environment unreachable — dev-local", "stand down", "the instance is offline".
+  new RegExp(String.raw`\b${STAND_NOUN}\s+(?:is\s+)?(?:unreachable|down|offline)\b`, 'i'),
+  // "an unreachable environment", "the dead stand".
+  new RegExp(String.raw`\b(?:unreachable|dead|offline)\s+${STAND_NOUN}\b`, 'i'),
+  // "cannot connect to the stand", "cannot reach the dev-local instance".
+  new RegExp(String.raw`\bcannot\s+(?:connect|reach)\b(?:\s+[^\s.,;:]+){0,4}?\s+${STAND_NOUN}\b`, 'i'),
+  /\bcannot\s+connect\s+to\s+the\s+application\b/i,
+]
+// The environment verdict, or `null` when this blocker is not one — its own function so `classifyBlocker` stays
+// under the complexity ceiling and the precedence rules above read in one place, in order:
+//   declared `environment` → environment · declared `builder` → not this class · Tier A → environment (over a
+//   declared `source` too) · any other declared subject → not this class · Tier B → environment · else `null`.
+function environmentClass(text, declared) {
+  if (declared === 'environment') {
+    return { class: 'environment', reason: 'the agent that hit this blocker DECLARED the stand itself did not answer (`subject: "environment"`) — nobody\'s artefact failed, so the run stops the round and asks the operator to restore the stand before anything else is dispatched at it' }
+  }
+  if (declared === 'builder') return null
+  if (ENVIRONMENT_SOCKET_PATTERNS.some((re) => re.test(text))) {
+    return { class: 'environment', reason: declared === 'source'
+      ? 'blocker text carries the transport\'s own socket/DNS error, which contradicts the declared `subject: "source"` — a stand that refuses connections is not a Classic artefact failing, and reading it as `source` would park the unit TERMINALLY on an outage'
+      : 'blocker text carries the transport\'s own socket/DNS error (connection refused, ECONNREFUSED, getaddrinfo) — the stand itself did not answer, so no rebuild and no retry against it can help until it is restored' }
+  }
+  if (declared) return null
+  if (ENVIRONMENT_STAND_PATTERNS.some((re) => re.test(text))) {
+    return { class: 'environment', reason: 'blocker text says the stand/environment/instance itself is down or unreachable — an environment fault, not a page defect; the run stops the round and asks the operator to restore it' }
+  }
+  return null
+}
+
+// The FIRST blocker in a list that names the environment as the failing party, or `null`. This is the read the
+// core makes at the two sites where an agent can actually declare a blocker — the fresh `res.blocked` of a build
+// answer, and the Preflight `unresolved[]` fold — so the round halts on the first sighting instead of dispatching
+// every remaining unit at a stand that is not there. Deliberately NOT run over the carried `blockedItems`: those
+// rows are the folder's history, and the folder's memory of an outage is `roundState.environmentFault`, not a row.
+export function environmentFaultRow(blocked, ownRoutes = []) {
+  for (const b of blocked || []) {
+    if (b && classifyBlocker(b, ownRoutes).class === 'environment') return b
+  }
+  return null
+}
+
 export function classifyBlocker(blocker, ownRoutes = []) {
   const text = `${blocker?.what || ''} ${blocker?.why || ''}`.trim()
   const declared = declaredSubject(blocker)
+  const environment = environmentClass(text, declared)
+  if (environment) return environment
   if (declared === 'builder') {
     return { class: 'unknown', reason: 'the agent that hit this blocker DECLARED the failing artefact is the page it just wrote (`subject: "builder"`), so it stays retryable — a declared subject outranks the prose patterns' }
   }

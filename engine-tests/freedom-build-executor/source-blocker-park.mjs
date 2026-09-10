@@ -187,5 +187,24 @@ check("ENG-96147 control: the SAME blocker with no recorded route still parks `l
   () => !!noRoute.done && (noRoute.done?.result?.parked || []).some((p) => p.key === "list"),
   () => JSON.stringify({ done: !!noRoute.done, parked: noRoute.done?.result?.parked, dispatched: noRoute.dispatched }).slice(0, 400));
 
+console.log("\n===== ENG-96778 scope expansion: a MISDECLARED environment row does not park (G14) =====");
+
+/* The measured incident's `list` row — "Environment unreachable — dev-local (port 40010) actively refusing
+   connections" — was filed with `subject: 'source'`. Under the two-class split a declared `source` parked TERMINALLY,
+   so the next run of that folder would have dropped `list` for good on the strength of an outage. Tier A of the
+   environment class overrides the declared `source` (a socket error contradicts "the Classic artefact failed"), and
+   this leg proves that override reaches the park decision through the real core: the unit stays OPEN and the run
+   proceeds past the baseline, exactly like the builder-blocker leg above. */
+const ENV_MISDECLARED = {
+  unit: "list",
+  what: "Environment unreachable — dev-local (port 40010) actively refusing connections",
+  why: "",
+  subject: "source",
+};
+const misdeclared = driveRun("env-misdeclared", reconcileWith(ENV_MISDECLARED));
+check("G14: the incident's misdeclared row (`subject: \"source\"` on a connection-refused text) does NOT park `list` — the run proceeds past the baseline instead of zero-work closing on a terminal park (mutant: remove the Tier A override → parks, today's behaviour)",
+  () => !misdeclared.done && misdeclared.dispatched.some((d) => d.phase !== "Reconcile" && d.phase !== "Close"),
+  () => JSON.stringify({ done: !!misdeclared.done, dispatched: misdeclared.dispatched, parked: misdeclared.done?.result?.parked }).slice(0, 400));
+
 console.log(`\n=================\nSOURCE-BLOCKER-PARK GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

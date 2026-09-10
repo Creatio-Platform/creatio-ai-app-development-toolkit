@@ -41,6 +41,11 @@ export const TARGETS = [
     template: 'behaviour-analysis/claude-template.js',
     out: 'skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js',
     modules: [
+      // FIRST, AHEAD OF EVERY CORE THAT CALLS IT. `stage-gate.mjs` is a LEAF (it imports nothing) and both cores
+      // call `stageGate` / `makePhaseOutcomes` from inside `run`. In ONE inlined scope a `const` is not hoisted,
+      // so a declaration placed after its caller is a temporal-dead-zone THROW at run time, not a build error —
+      // the same trap the `schemas before helpers` note on the executor target below records.
+      'stage-gate.mjs',
       'work-item.mjs',
       'capabilities.mjs',
       'run-state.mjs',
@@ -61,6 +66,9 @@ export const TARGETS = [
     template: 'build-executor/claude-template.js',
     out: 'skills/freedom-build-executor/freedom-build-executor.workflow.js',
     modules: [
+      // FIRST, for the reason given on the analysis target above: a leaf module whose `stageGate` /
+      // `makePhaseOutcomes` are called from inside `build-executor/core.mjs`'s `run`.
+      'stage-gate.mjs',
       'work-item.mjs',
       'capabilities.mjs',
       'run-state.mjs',

@@ -184,7 +184,13 @@ const H_CONTROL_MODE = ["buildModes", "offeredModes", "modeLabel", "buildModeMen
   "mergeConsumed", "roundStateOf", "roundsSpentOnFile",
   // ENG-96458 D4 (PR #157 follow-up review) — the ☐-count contradiction's memory, filed with the other
   // queue-file round record because that is where it lives and what it is compared across.
-  "pendingContradictionSignature", "pendingContradictionRecord", "pendingContradictionHalts"];
+  "pendingContradictionSignature", "pendingContradictionRecord", "pendingContradictionHalts",
+  // ENG-96778 (PR #171 scope expansion) — the environment fault's record, its one-shot resume item, and the
+  // verdict-only open counts the two pre-schedule stops render their status document from.
+  "environmentRestoredItem", "environmentFaultRecord", "openCountsFromVerify",
+  // ...and the checked round-answer vocabulary the environment gate reads its answer through — the same function
+  // `roundDecisionStop` uses, executed here so the `refused`/`unrecognised` verdicts are measured, not described.
+  "roundAuthorised"];
 // The pre-build question in three axes: the app/package identity, the component types, and the templates the plan names.
 const H_PRECONDITIONS = ["appUnitFor", "isOpenApp", "packagePreconditionStop", "ownPackageRecord", "resolvePackageState", "sectionRouteFrom", "preflightToRun", "componentTypeMismatches",
   "templateMismatches", "requiredAppCode", "appIdentityMismatch", "appCodeInstruction",
@@ -1379,10 +1385,17 @@ check("findingKeySet / findingsFor: findings are indexed by unit, and a malforme
 // declarations hoisted above it (`claimFor` … `dispatchUnit`). A window that reaches only one of them passes on half
 // the mechanism — and one anchored on a single function would go EMPTY the moment another helper is extracted.
 const buildRoundSrc = wfSrc.slice(wfSrc.indexOf("function claimFor(unit, res, routed)"), wfSrc.indexOf("// The read-only VERIFIER."));
-check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built — it does not keep dispatching and it does not drop them silently",
-  wfSrc.includes("function* buildRound(open)") && /if \(r\.pausedAfter\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+// ENG-96778 widened the guard with a SECOND deferral reason — an app unit that did not complete (AC 12) — and the
+// PR #171 scope expansion with a THIRD: a builder that reported the stand itself unreachable. The three terms now live
+// in ONE named predicate (`roundHalted`), and the pin names that predicate's terms EXACTLY: a fourth term appearing
+// there still fails it, which is the point — this guard decides whether an open unit is dispatched against a live
+// stand or held back, and it must not grow by accident. The loop must read the predicate, not a re-typed copy.
+check("workflow: `buildRound` DEFERS the rest of the round once a checkpoint unit is built, once the app unit has failed, or once a builder reported the stand unreachable — through the one `roundHalted` predicate, and it does not keep dispatching or drop them silently",
+  wfSrc.includes("function* buildRound(open)") && /if \(roundHalted\(r\)\) \{ r\.deferred\.push\(unit\.key\); continue \}/.test(buildRoundSrc)
+    && /const roundHalted = \(r\) => Boolean\(r\.pausedAfter \|\| r\.appUnitIncomplete \|\| r\.environmentFault\)/.test(buildRoundSrc)
+    && !/if \(r\.pausedAfter \|\| r\.appUnitIncomplete\) \{ r\.deferred\.push/.test(buildRoundSrc)
     && /!continuation && shouldPauseAfter\(mode, CHECKPOINT_SET, unit\.key\)/.test(buildRoundSrc),
-  () => buildRoundSrc.split("\n").filter((l) => /paused|deferred/.test(l)).join("\n"));
+  () => buildRoundSrc.split("\n").filter((l) => /paused|deferred|roundHalted/.test(l)).join("\n"));
 // ONLY a checkpoint terminates the round. A continuation in that guard truncated the round and deferred every other
 // open unit, buying a full extra Verify + Judge + Reconcile cycle for units that do not depend on the continued one.
 check("ENG-95474 review: a CONTINUATION does not terminate the round — the deferral guard names `pausedAfter` alone, so the remaining independent units still get their build",
@@ -1873,9 +1886,12 @@ check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or
 check("behaviour analysis: a Context agent that returned NOTHING is a failed run, not a surface with nothing to describe",
   /stopped: 'context-failed'/.test(bhSrc) && /if \(!ctx\) \{/.test(bhSrc));
 check("behaviour analysis: completion requires a Merge that actually produced the report and the index — coverage alone left the run claiming done with fallback paths that may not exist",
-  // Optional chaining now (the null-guard was spelled out longhand); the GUARANTEE is unchanged — the verdict
-  // requires a Merge that produced BOTH deliverables, not merely a coverage count.
-  /const mergeOk = !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
+  // THE TEST MOVED OUT OF `reportVerdict`, THE GUARANTEE DID NOT (PR #171 review, finding 3). The two-path test is
+  // now `mergeDeliverables` and `run` asks it ONCE, because the merge GATE needs the same answer the verdict does:
+  // while the verdict owned it privately, a Merge that answered without either path failed the verdict and slipped
+  // past the gate. Optional chaining, as before; the verdict still requires BOTH deliverables, not a coverage count.
+  /const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(bhSrc)
+    && /const mergeOk = mergeDeliverables\(merged\)/.test(bhSrc)
     && /const complete = mergeOk && isComplete\(/.test(bhSrc));
 check("behaviour analysis: a BLANK card is not coverage — the schema sets no minLength and the engine reads an empty card as absent",
   /const hasCard = \(e\) =>/.test(bhSrc) && /entriesOf\(rs\)\.filter\(hasCard\)/.test(bhSrc));
@@ -2267,6 +2283,68 @@ check("ENG-96458 D4 (follow-up review): and only the SECOND sighting halts — o
     && wf.pendingContradictionHalts({ signature: "s1", rounds: 2 })
     && !wf.pendingContradictionHalts(null),
   () => wf.PENDING_CONTRADICTION_STOP_AT);
+// ENG-96778 (PR #171 SCOPE EXPANSION) — THE ENVIRONMENT FAULT'S RECORD, and the gate it arms. The measured incident
+// (migration `UsrAwesome`, session ce23724f): the stand was killed mid-Build, the builders answered with structured
+// blockers naming the outage, and the run kept dispatching at the dead port for fourteen hours. The core now halts the
+// round on the first such blocker and REFUSES the next run until the operator records `environment-restored-<n>`; the
+// record that arms the refusal lives in `roundState.environmentFault`, so its shape, its reader and its prompt line
+// are pinned here beside the round record's other keys. The behaviour itself is driven end to end in
+// `engine-tests/freedom-build-executor/stage-gates.mjs` (G1–G13) and `source-blocker-park.mjs` (G14).
+check("ENG-96778 (scope expansion): `RECONCILE_SHAPE.roundState` checks the environment-fault record's INSIDES when present — `n` and `open` required and typed — and still accepts a `roundState` without the key, which is every folder that never lost its stand",
+  () => wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], environmentFault: { n: 1, open: true, unit: "list", round: 1, where: "build", what: "x" } } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], environmentFault: { n: 1, open: false, clearedBy: "environment-restored-1" } } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [] } }).length === 0
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], environmentFault: { n: 1 } } })
+      .some((e) => /environmentFault\.open: required/.test(e))
+    && wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], environmentFault: { n: "1", open: true } } })
+      .some((e) => /environmentFault\.n: expected integer/.test(e))
+    && wf.RECONCILE_SHAPE?.roundState?.nested?.environmentFault?.kind === "object-or-null"
+    && JSON.stringify(wf.RECONCILE_SHAPE?.roundState?.nested?.environmentFault?.required) === JSON.stringify(["n", "open"]),
+  () => JSON.stringify(wf.reconcileShapeErrors({ roundState: { consumedRoundAnswers: [], environmentFault: { n: 1 } } })));
+check("ENG-96778 (scope expansion): the record costs the byte-capped RECONCILE_SCHEMA NOTHING — `roundState` is not a property of the on-wire schema at all (it travels inside the `summary` string, computed by the CLI), and `environmentFault` never appears in the schema text",
+  () => !wf.RECONCILE_SCHEMA?.properties?.roundState
+    && !JSON.stringify(wf.RECONCILE_SCHEMA).includes("environmentFault"),
+  () => JSON.stringify(Object.keys(wf.RECONCILE_SCHEMA?.properties || {})));
+check("ENG-96778 (scope expansion): `environmentFaultRecord` reads FAIL-CLOSED — a missing, mistyped or string `open` reads OPEN (still gates), a non-integer `n` reads 1, a closed record stays closed with its other keys intact, and anything that is not an object is `null` (no record) — so garbage on file can only hold the run, never wave it through",
+  () => wf.environmentFaultRecord({ n: 1 }).open === true
+    && wf.environmentFaultRecord({ n: "1" }).open === true && wf.environmentFaultRecord({ n: "1" }).n === 1
+    && wf.environmentFaultRecord({ n: 0, open: "false" }).open === true && wf.environmentFaultRecord({ n: 0, open: "false" }).n === 1
+    && wf.environmentFaultRecord({ n: 3, open: false, unit: "list", clearedBy: "environment-restored-3" }).open === false
+    && wf.environmentFaultRecord({ n: 3, open: false, unit: "list", clearedBy: "environment-restored-3" }).n === 3
+    && wf.environmentFaultRecord({ n: 3, open: false, unit: "list", clearedBy: "environment-restored-3" }).clearedBy === "environment-restored-3"
+    && wf.environmentFaultRecord(null) === null && wf.environmentFaultRecord(undefined) === null
+    && wf.environmentFaultRecord("nonsense") === null && wf.environmentFaultRecord([1]) === null,
+  () => JSON.stringify([wf.environmentFaultRecord({ n: "1" }), wf.environmentFaultRecord({ n: 0, open: "false" })]));
+check("ENG-96778 (scope expansion): the resume item is NUMBERED — `environment-restored-<n>` — so an answer is one-shot by construction and never routed through `consumedRoundAnswers`: consumption is the record's `open: false`",
+  () => wf.environmentRestoredItem(1) === "environment-restored-1" && wf.environmentRestoredItem(2) === "environment-restored-2"
+    && wf.roundAuthorised(wf.runResolutionAnswer([{ item: "environment-restored-1", answer: "go" }], "environment-restored-1")).verdict === "authorised"
+    && wf.roundAuthorised(wf.runResolutionAnswer([{ item: "environment-restored-1", answer: "go" }], "environment-restored-2")).verdict === "absent",
+  () => wf.environmentRestoredItem(1));
+check("ENG-96778 (scope expansion): `openCountsFromVerify` tallies the open PAGE units off the verdict alone — the two stops that fire before the run's own `openCountsNow` exists render their status from it — complete pages and a missing summary contribute nothing",
+  () => { const c = wf.openCountsFromVerify({ pages: { main: { complete: false, missing: 2, unverified: 1, openCorrectness: 2, openFidelity: 1 }, list: { complete: true } } });
+    return c.unitsOpen === 1 && c.open === 3 && c.correctness === 2 && c.fidelity === 1 && c.units[0].unit === "main" && c.units[0].kind === "page"
+      && wf.openCountsFromVerify(undefined).unitsOpen === 0 && wf.openCountsFromVerify({ pages: {} }).open === 0; },
+  () => JSON.stringify(wf.openCountsFromVerify({ pages: { main: { complete: false, missing: 2, unverified: 1 } } })));
+// THE PROMPT LINES, pinned by wording: the parity runner's `declared()` is substring-lenient (it accepts any line that
+// CONTAINS the declared halves), so parity alone would stay green if one of these sentences were removed again.
+check("ENG-96778 (scope expansion): the CLI computes the state (ENG-96776), but the persist carry still names `environmentFault` as a REPLACE instruction so the queue-file writer cannot silently drop the record — a dropped record here is a disarmed gate",
+  wfSrc.includes(String.raw`ENVIRONMENT FAULT — set \`roundState.environmentFault\` to this JSON EXACTLY`)
+    && /do NOT recompute, renumber, reopen or close it yourself/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("ENVIRONMENT FAULT — set"), wfSrc.indexOf("ENVIRONMENT FAULT — set") + 300));
+check("ENG-96778 (scope expansion): `classifyBlocker` returns `environment` on a DECLARED subject and says the run stops the round — the gate classifier is the code path that actually fires the stop, so the environment class must exist and its reason must name the consequence",
+  wfSrc.includes("return { class: 'environment', reason: 'the agent that hit this blocker DECLARED the stand itself did not answer")
+    && /the run stops the round and asks the operator to restore the stand/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("class: 'environment'"), wfSrc.indexOf("class: 'environment'") + 200));
+check("ENG-96778 (scope expansion): `BLOCKER_SUBJECT_RULE` ASKS the build agents for `'environment'` — when the STAND ITSELF did not answer — and tells them a transport-only timeout is NOT it (switch transport per the policy), so the declared channel is not inert and a slow MCP is not read as a dead stand",
+  wfSrc.includes(String.raw`\`'environment'\` when the STAND ITSELF did not answer (connection refused, \`clio ping\` and the MCP both failing, DNS gone)`)
+    && /a transport-only failure \(the MCP timed out while the shell \\`clio\\` still answers\) is NOT this — switch transport per the policy/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("when the STAND ITSELF did not answer"), wfSrc.indexOf("when the STAND ITSELF did not answer") + 300));
+check("ENG-96778 (scope expansion): the persistence prompt's carry writes the record as a REPLACE (`roundState.environmentFault`, verbatim JSON), names the one-shot item the next run waits for, and forbids the writer reopening or closing it itself — a record the writer 'tidies' is a gate that opens by transcription",
+  wfSrc.includes(String.raw`ENVIRONMENT FAULT — set \`roundState.environmentFault\` to this JSON EXACTLY (create the ROOT \`roundState\` object if absent), REPLACING whatever the key holds:`)
+    && /The next invocation reads this record and REFUSES to dispatch a build until/.test(wfSrc)
+    && /do NOT recompute, renumber, reopen or close it yourself/.test(wfSrc)
+    && /\.\.\.\(environmentFault === undefined \? \{\} : \{ environmentFault \}\),/.test(wfSrc),
+  () => wfSrc.slice(wfSrc.indexOf("ENVIRONMENT FAULT — set"), wfSrc.indexOf("ENVIRONMENT FAULT — set") + 300));
 check("ENG-96204 (ENG-96474): `mergeConsumed` is a UNION — deduplicated, order kept, non-strings and blanks dropped, and NOTHING is ever removed — so a spent answer stays spent whichever of the file and the process learned of it first",
   () => JSON.stringify(wf.mergeConsumed(["round-2"], ["round-3", "round-2", "", null, 4, " Round-4 "])) === JSON.stringify(["round-2", "round-3", "round-4"])
     && JSON.stringify(wf.mergeConsumed(undefined, undefined)) === "[]"
@@ -3238,11 +3316,18 @@ check("ENG-95503 review fix: the answer channel's repair round is consumed BELOW
   // open quantifiers backtrack super-linearly): the sole `resolutionsPending.delete(idKey(unit.key))` must sit below
   // an `if (!res) {` guard, and the reverse order (a delete shortly ABOVE a guard) must not appear. The host-neutral
   // core (ENG-95770) nests this inside `buildRound`, so the guard is no longer top-level — `lastIndexOf` finds it.
+  // ENG-96778 (PR #171 scope expansion) — the delete moved into `consumeRepairGrants`, the one function that spends
+  // every one-shot grant (so the environment halt can skip them all with one omitted call). The ORDER is still what
+  // this pins, on both levels: the helper's body sits below the guard in the source, and the CALL that spends the
+  // grants sits below the guard inside `dispatchUnit` — a call hoisted above `if (!res) {` would re-open RC-3 exactly.
   () => { const deleteAt = wfSrc.indexOf("if (resolutionsPending.delete(idKey(unit.key)))");
     const guardAt = deleteAt === -1 ? -1 : wfSrc.lastIndexOf("if (!res) {", deleteAt);
-    return deleteAt !== -1 && guardAt !== -1
+    const callAt = wfSrc.indexOf("consumeRepairGrants(unit, res, routed, r)");
+    const callGuardAt = callAt === -1 ? -1 : wfSrc.lastIndexOf("if (!res) {", callAt);
+    return deleteAt !== -1 && guardAt !== -1 && callAt !== -1 && callGuardAt !== -1
+      && wfSrc.indexOf("function* dispatchUnit(unit, r)") < callGuardAt && callGuardAt < callAt
       && !/if \(resolutionsPending\.delete\(idKey\(unit\.key\)\)\)[\s\S]{0,400}?if \(!res\) \{/.test(wfSrc); },
-  () => ({ deleteAt: wfSrc.indexOf("if (resolutionsPending.delete(idKey(unit.key)))") }));
+  () => ({ deleteAt: wfSrc.indexOf("if (resolutionsPending.delete(idKey(unit.key)))"), callAt: wfSrc.indexOf("consumeRepairGrants(unit, res, routed, r)") }));
 check("ENG-95503 wiring: the verifier is told an answer closes NO row and files NO evidence — the invariant this ticket must not break in the other direction, stated where the agent that files records reads it",
   /You file NO evidence record for these and you close NO row with them/.test(wfSrc));
 
@@ -6448,6 +6533,13 @@ const runChain = (verifierSays, seed = {}, keepOpen = false) => {
   const agentStub = async (prompt, opts = {}) => {
     const label = opts.label || "";
     if (label === "reconcile:baseline") return asReconcileAnswer({ ...baseline });
+    // ENG-96778 — THIS FIXTURE NOW HAS TO ANSWER PREFLIGHT. `chainItem` is a ⚠ Confirm item with an operator answer
+    // and no evidence record, so the run dispatches a preflight agent for it; the stub used to fall through to the
+    // `return null` below, and the run walked on to Build against a worklist nobody had resolved. That is exactly
+    // the transition AC 9 now stops (`preflight-produced-nothing`). An EMPTY-but-present record is what the run
+    // always effectively got here, so answering with one leaves every assertion in this chain measuring what it
+    // measured before — the answers channel, not the preflight gate.
+    if (label.startsWith("preflight:")) return { resolved: [], unresolved: [] };
     if (label.startsWith("build:")) {
       builds += 1;
       // THE FALSE CLAIM. `applied: true` with a `how` that reads plausibly, and no page effect anywhere — the exact
@@ -6597,6 +6689,11 @@ const runCheckpointPause = (verifierSays, seed = {}) => {
       persisted.push(prompt);
       return { written: true, evidenceWritten: [], unconsumedWritten: [{ unit: "main", id: CHAIN_ID }] };
     }
+    // ENG-96778 — same as the contradiction chain above: `chainItem` is an unresolved ⚠ Confirm item, so a
+    // preflight agent is dispatched for it and a stub that answers nothing there now trips AC 9's
+    // `preflight-produced-nothing` before the checkpoint pause this seam is about. An empty-but-present record
+    // leaves the run behaving exactly as it did.
+    if (label.startsWith("preflight:")) return { resolved: [], unresolved: [] };
     if (label.startsWith("build:")) {
       // The same false claim the contradiction chain uses: `applied: true` with no page effect anywhere.
       return { ...buildAnswer(false), resolutionsApplied: [{ id: CHAIN_ID, applied: true, how: "set the lookup filter on Department" }] };
@@ -6971,6 +7068,18 @@ check("executor SKILL.md (PR #128 review, round 18): the ONE signal on the answe
     // ...and the reader is told what it costs: non-gating, so a reset can never change a build verdict.
     && /non-gating/i.test(execSkill),
   () => execSkill.split("\n").filter((l) => /unsettledResolutionClaims|single process lifetime/i.test(l)).slice(0, 4).join("\n"));
+
+// ENG-96778 (PR #171 SCOPE EXPANSION) — BOTH SKILL DOCS CARRY THE ASK. The core cannot ask anyone anything; the two
+// stops it returns are only useful if the calling skill puts ONE question to the user and does not re-run on its own.
+// Pinned by the three strings an operator and a driving agent must be able to find: the two stop codes and the exact
+// answer line (`"item":"environment-restored-`, numbered — a stale `go` for #1 never clears #2).
+const migSkillForEnv = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+for (const [name, doc] of [["executor SKILL.md", execSkill], ["migration SKILL.md", migSkillForEnv]]) {
+  check(`ENG-96778 (scope expansion): ${name} names both environment stops, the exact resolutions line that clears the gate, and tells the calling agent to ASK rather than re-run on its own`,
+    /environment-unreachable/.test(doc) && /awaiting-environment-restored/.test(doc) && /"item":\s*"environment-restored-/.test(doc)
+      && /Ask, do not re-run on your own\./.test(doc) && /clio ping -e/.test(doc),
+    () => doc.split("\n").filter((l) => /environment-(unreachable|restored)/.test(l)).slice(0, 4).join("\n"));
+}
 
 // ENG-95468 (residual) - the SKILL doc has to distinguish the two stops, because they ask an operator for opposite
 // things: `plan-invalid-against-stand` is a re-plan, `plan-unvalidated-against-stand` is 'make the environment
@@ -7518,11 +7627,28 @@ check("cba workflow: the flagged rows are carried to the CRITIQUE and MERGE prom
 // block — a pure move, no text changed — would leave all of them green while `complete` ruled on the ROUND-1
 // counts and reported a run finished that the repair round had not finished. That is the one mutation source-level
 // pinning cannot see unless position is asserted outright.
+//
+// THE ANCHOR MOVED, THE RULE DID NOT (PR #171 review — Sonar S3776 measured `run` over the limit and the closing
+// verdict block came out of it). The arithmetic now lives in `reportVerdict()`, hoisted above `run` so `run` reads
+// as the phase sequence it is. Where that DEFINITION sits says nothing about the rule; what decides which counts
+// the verdict reads is where the CALL sits, so the call is what this pin measures now. The second check binds the
+// arithmetic to that helper, so the call cannot quietly become a call to something that decides completion another
+// way — the two together say what the single anchor used to say alone.
 const cbaRepairAt = cbaSrc.indexOf("if (toRepair.length) {");
-const cbaVerdictAt = cbaSrc.indexOf("const complete = mergeOk && isComplete(");
-check("cba workflow: the verdict is computed AFTER the repair round — hoisting it above would read the stale round-1 counts and pass every pin above",
+const cbaVerdictAt = cbaSrc.indexOf("const complete = reportVerdict(log, {");
+check("cba workflow: the verdict is computed AFTER the repair round — hoisting the CALL above it would read the stale round-1 counts and pass every pin above",
   cbaRepairAt > 0 && cbaVerdictAt > cbaRepairAt,
-  () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
+  () => `repair block at ${cbaRepairAt}, verdict call at ${cbaVerdictAt}`);
+// The deliverable test itself is `mergeDeliverables`, computed once in `run` and passed in — the same boolean the
+// merge GATE is fed, so the verdict and the gate cannot disagree about whether the phase produced anything (PR #171
+// review, finding 3). Pinned here as three parts because that is what the rule now is: the test, the single call
+// that answers it, and the verdict that requires it beside the coverage arithmetic.
+check("cba workflow: and the arithmetic behind that call is `mergeOk && isComplete(...)` inside `reportVerdict`, over the ONE `mergeDeliverables` answer `run` computes — coverage alone is not completion, the report and the index are the deliverables",
+  /function reportVerdict\(log, \{/.test(cbaSrc)
+    && /const complete = mergeOk && isComplete\(allKeys\.size, uncoveredKeys, wiringOnly\)/.test(cbaSrc)
+    && /const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath && merged\?\.indexPath\)/.test(cbaSrc)
+    && /const mergeOk = mergeDeliverables\(merged\)/.test(cbaSrc),
+  () => `reportVerdict:${/function reportVerdict\(log, \{/.test(cbaSrc)} complete:${/const complete = mergeOk && isComplete\(/.test(cbaSrc)} test:${/const mergeDeliverables = \(merged\) => !!\(merged\?\.reportPath/.test(cbaSrc)} asked:${/const mergeOk = mergeDeliverables\(merged\)/.test(cbaSrc)}`);
 
 
 // ---------------------------------------------------------------------------

@@ -157,6 +157,75 @@ very different facts, so the source is reported on every return.
 file; that resume path is the same one contract rule 7 already guarantees for a session killed by a
 usage limit. In a round-boundary mode the re-run also needs the operator's word — see below.
 
+
+### When a phase produced nothing
+
+A stop above is a BOUNDARY the operator asked for. These are the other kind: a phase whose predecessor
+returned nothing, refusing to run on empty input. Each carries `stopped`, a `reason`, a `next`, and
+`agentsExpected` / `agentsReturned` — the last two separate "one agent of four died" from "all four did",
+which is the difference between a retry and a host problem.
+
+| `stopped` | What happened | What you do |
+|---|---|---|
+| `preflight-produced-nothing` | Every ⚠ Confirm resolver returned nothing. The run stops at its last read-only point — **before the first stand write** — instead of building against the pre-preflight verdict with the whole worklist still open. | Fix what killed the agents and start a fresh run. Nothing was written and nothing needs undoing. |
+| `nothing-built` | A round had open units and dispatched none of them. Verify would have re-published the previous verdict as though this round had produced it. | `remainingOpen` names the units nobody attempted. Work out why the round scheduled none of them before re-running. |
+| `app-unit-incomplete` | The app unit returned nothing, or created its application under a package the plan does not target. Every unit behind it in that round is **deferred, not dispatched** — they all build into that package. | `deferred` lists them. Settle the application on the stand, or re-plan against a package that can be produced; the deferred units are untouched. |
+| `environment-unreachable` | A builder — or a ⚠ Confirm resolver in Preflight — reported that the **stand itself did not answer** (connection refused, `clio ping` and the MCP both failing, DNS gone), as a `blocked` row with `subject: 'environment'` or a text that says so. The round stops on the **first** such report: the units behind it are **deferred, not dispatched**, Verify, Judge and the round-tail Reconcile are skipped, and **no unit is charged a round or a repair grant**. The fault is written to the queue file as `roundState.environmentFault` and the status document names the answer the next run waits for. | **Ask, do not re-run on your own.** `awaitingEnvironment` names the one-shot entry (`environment-restored-<n>`); see the paragraph below. What the faulting unit wrote before the fault is on the stand and in the queue file — look before undoing it. |
+| `awaiting-environment-restored` | The folder records an environment fault the operator has **not** confirmed restored, so this run dispatched **nothing but the baseline Reconcile** — no Preflight, no stand read, no build — in **every** mode, `auto` included. `environmentAnswerVerdict` says why: `absent` (no answer on file), `refused` (an explicit decline), `unrecognised` (an answer the gate will not read as consent). | Same question, same answer line. Do not re-run "to see if it is back" — check the stand yourself first (`clio ping -e <env>`), then record the answer. |
+
+**Resuming does not clear any of them.** The run journal records a death, so a resumed run replays it and
+stops in the same place. Fix the host (quota, an expired token, a role it cannot bind) and start a fresh run.
+
+**Two of the three say so in the stop itself; `app-unit-incomplete` deliberately does not.** The first two are
+host failures — no agent answered, nothing was written — so their `next` names both resume paths and tells you
+they will not help. `app-unit-incomplete` also fires when the app builder **answered** and created its
+application under a package the plan does not target: that run wrote to a live stand and persisted what it
+learned before stopping, so its `next` sends you to the stand instead. Read `deferred`, `packageState` and
+`targetPackage` there, not a resume command — and do not undo what the app unit created before you have looked
+at it.
+
+**The two environment stops are the operator's to clear, and only theirs (ENG-96778, PR #171 scope expansion).**
+The core cannot ask anyone anything, so the calling skill asks — **once**. Relay which step saw the fault (by its
+NAME, not its key — `environmentFault.unit` / `environmentFault.where`), that the rest of the round was deferred
+untouched, and that nothing was charged a round; then put **one** question: *"I restored the stand — continue"* or
+*"stop here"*. **Continue** = append `{ "kind": "run", "item": "<awaitingEnvironment from the stop>", "answer": "go" }`
+— for the folder's first outage that is `{ "kind": "run", "item": "environment-restored-1", "answer": "go" }` — to
+`resolutions.json` and re-run with the **same args** — the run does one baseline Reconcile, reads the answer,
+closes the record (`open: false`) and builds. **Stop** = record the decision in `decisions.md`; the folder keeps the
+open record and every later run refuses until it is answered. The answer is **one-shot and numbered**: a later outage
+records `n + 1` and asks for `environment-restored-<n+1>`, and a stale `go` for an earlier number clears nothing.
+`auto` does not bypass it (`auto` says nobody is watching, not that the stand is back), and in Round-by-round /
+Layout-first the re-run also needs the ordinary `round-<N>` entry. **Check the stand yourself first** —
+`clio ping -e <env>` — before you ask or record anything. **Must not:** re-run "to see if it is back"; switch routes;
+register or point the run at a *different* environment (the incident's `main` builder saw a stand on another port
+under another name and correctly refused); edit `resolutions.json`'s earlier lines or the queue file's
+`environmentFault` record by hand; or relay the environment `blocked[]` rows as page defects — they are the outage,
+not the pages. A transport-only failure (the MCP timed out while the shell `clio` still answers) is **not** this
+stop and never should be reported as one: switch transport per `./references/03-failure-and-park-policy.md`.
+
+Two related degradations are **recorded rather than stopped**, because the run still has work worth doing:
+
+- **Every builder in a round returned nothing.** Verify still runs, exactly once — a builder can write to the
+  stand and then die, so the read-back is what keeps the verdict honest. **Judge is skipped**: it rules on
+  claims and no claim was filed. The units are named in `buildersReturnedNothing`.
+- **A Judge returned nothing.** Its evidence stays UNJUDGED and its ids stay queued for the next Judge, and
+  **no unit is charged a repair round** for a verdict that never arrived. A page waiting on an evidence row
+  therefore stays open rather than being rebuilt over a defect nobody found.
+  **The records travel with the ids.** The Judge is also the writer of preflight evidence records into the
+  built file, so a queued id whose record never got written would reach the next Judge as the name of nothing.
+  Any preflight record still unfiled is re-sent, in full, to the next Judge that is asked to rule on its id —
+  so the row can close inside the SAME run rather than waiting for a fresh one to re-resolve the ⚠ Confirm
+  item. The merge is idempotent and a record leaves the carry only when a writer reports filing it, so a
+  re-send costs prompt bytes and never a record. Nothing changes on a healthy run: once the post-preflight
+  Judge reports its filing, there is nothing left to carry.
+
+**`phaseOutcomes` is on every return, stop or not** — one entry per phase (`ok` · `partial` · `none` ·
+`skipped`) with the arithmetic behind it. A run can close green and still have had a phase limp; this is the
+only place that shows. A phase entered more than once in a run — `Judge` runs after Preflight AND at every
+round tail, and `Build`, `Verify` and `Reconcile` run once per round — reports its WORST entry, never its
+last, and carries `occurrences` with every entry in order and the `where`/`round` it belongs to. So a Judge
+that died after Preflight still reads `none` even when a later round's Judge answered.
+
 **Why the pause is a page and not a single row.** Imperative rows are ported INSIDE the page unit,
 so stopping mid-unit would mean telling a builder to deliver less than the plan — which rule 6
 makes a proposal, not an action. The page that carries the row is built in full, and the run stops

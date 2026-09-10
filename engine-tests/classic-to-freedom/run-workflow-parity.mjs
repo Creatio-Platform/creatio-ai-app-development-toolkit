@@ -71,6 +71,83 @@
 // inputs and the comparison is deterministic. What is NOT here: the two bundle-size checks (`run-infra.mjs`) and
 // any scenario that depends on a real filesystem — the host has none, and neither do these.
 //
+// BOTH BASELINES WERE REPLACED AGAIN IN ENG-96778 (the stage gates), and this is the record of why — the reviewed,
+// deliberate act this file's own rule above prescribes, not a refresh from the working tree.
+//
+// WHAT MADE IT UNAVOIDABLE. This runner compares the RETURN VALUE WHOLE and has no per-field waiver. ENG-96778 adds
+// `phaseOutcomes` to every return of both cores (AC 3 is exactly that: a run must say what each phase did, on every
+// exit path, not only on the one that stopped it) and `buildersReturnedNothing` to every return of the executor. Both
+// are additions to the object EVERY scenario returns, so every scenario diverged on the return leg — 31 of them —
+// and there is no waiver to write for a field that is supposed to be there.
+//
+// THREE SCENARIOS ALSO DIVERGED BEYOND THE RETURN, and those are the behaviour changes themselves, listed here so a
+// reviewer diffing the new baselines knows exactly which prompt/dispatch differences are intended:
+//   · `REJECTING Describe agent in a single-item parallel batch` — the rejection is absorbed as a null hole, so the
+//     Describe phase produced nothing, and the run now STOPS `describe-produced-nothing` instead of dispatching a
+//     Critique that would adversarially check an empty card set and a Merge that would write a report over it (AC 5).
+//   · `a build agent returns nothing` — the round's only builder died, so Verify still runs (a builder can write and
+//     then die) and JUDGE IS SKIPPED: it rules on claims, and no claim was filed (AC 11).
+//   · `the app unit produces a DIFFERENT package` — the units behind the app unit are DEFERRED rather than dispatched
+//     into a package the plan does not target, and the run returns `app-unit-incomplete` (AC 12).
+// Every other scenario's phase sequence, agent dispatch order and prompt text are byte-identical across the
+// replacement; only the return object grew. The differential evidence for ENG-96778's own change is therefore the
+// review of its diff plus the executed suites — `run-workflow-core.mjs` (the gate's decision table and the analysis
+// goldens) and `engine-tests/freedom-build-executor/stage-gates.mjs` (the build goldens) — exactly as the two earlier
+// replacements recorded. What these baselines give from here on is the forward-looking half: the whole prompt text
+// and return shape of the CURRENT behaviour, pinned byte for byte, so the NEXT change cannot move them unnoticed.
+//
+// AND REPLACED A SECOND TIME WITHIN ENG-96778, by the PR review of this same change (finding F1). Recorded here
+// for the same reason as every replacement above: this is a reviewed, deliberate act, not a refresh from the tree.
+//
+// WHAT THE REVIEW FOUND. `makePhaseOutcomes` keyed its report by phase NAME and OVERWROTE, so a phase entered more
+// than once in a run reported only its LAST entry. The build core enters `Judge` from the post-preflight site and
+// again at every round tail, and `Build`, `Verify` and `Reconcile` once per round — so a dead post-preflight Judge
+// followed by a healthy round Judge reported `Judge: { state: 'ok' }`. That is precisely the degradation AC 13
+// exists to surface and that both SKILL.md files now point the operator at. The recorder is therefore DEGRADE-STICKY:
+// the headline entry is the WORST occurrence (`skipped` < `ok` < `partial` < `none`, last winning a tie so a healthy
+// multi-round run still reports its most recent round), and a phase entered more than once also carries
+// `occurrences` — every entry in order, with the `where`/`round` discriminator the caller passed.
+//
+// WHAT DIVERGED, measured against the baselines this ticket had already replaced (the parity run was 481/41):
+//   · 40 scenarios on `result.phaseOutcomes.Reconcile.occurrences` alone — Reconcile is recorded at the baseline and
+//     again at each round tail, so the new key appears on essentially every run that gets past Reconcile.
+//   · 1 scenario on `result.phaseOutcomes.Judge.why` — review finding F3: `buildRoundEndedEarly` wrote one shared
+//     reason, 'no build claim was filed this round', BEFORE branching, and on the package-mismatch path that is false
+//     (the app builder answered and a real claim was filed). Each branch now states its own true reason.
+// NOTHING ELSE MOVED: no phase sequence, no agent dispatch, no prompt byte, and no other return field. The generated
+// artifacts' whole diff for this replacement is the recorder plus those two reason strings.
+//
+// AND REPLACED A THIRD TIME WITHIN ENG-96778, by the SECOND PR review round (PR #171: m-dymytrova and
+// Alexandr-Kravchuk, both `CHANGES_REQUESTED`). Same rule, same reason it is written down: a reviewed, deliberate
+// act rather than a refresh from the working tree.
+//
+// WHAT CHANGED IN THE PRODUCT. `gateStop` appended `RESUME_CLAUSE` UNCONDITIONALLY, and that clause narrates a host
+// failure — "nothing after this phase ran, and nothing it would have written exists". It is true of the
+// `<phase>-produced-nothing` family and of `nothing-built`. It is FALSE of `app-unit-incomplete` on its
+// package-MISMATCH leg, where the app builder answered, created an application and a package on a live stand, and
+// `persistPending('stopping on an incomplete app unit')` ran immediately before the stop was composed precisely so
+// that state would survive. The composed `next` therefore told the operator to go and inspect what the unit created
+// and then that nothing it would have written exists — two mutually exclusive instructions in one string, and
+// following the second discards recoverable stand state. The clause is now a `resumeClause` switch that rides by
+// DEFAULT and is opted out of at that one site, which keeps the accurate recovery sentence the phase already owns.
+// The same stop also reported `agentsExpected: dispatched.length` — a healthy `1 expected / 1 returned` attached to
+// a stop — and now counts the round's OPEN units, the same denominator `nothing-built` beside it already used.
+//
+// WHAT DIVERGED, measured: ONE scenario and TWO top-level return fields, enumerated rather than sampled.
+//   · `the app unit produces a DIFFERENT package — it stays open` — `result.next` (the resume clause no longer
+//     appended, plus a sentence saying what the app unit itself wrote WAS persisted) and `result.agentsExpected`
+//     (1 -> 2, the deferral denominator). The parity run was 521/1.
+// NOTHING ELSE MOVED anywhere: no phase sequence, no agent dispatch, no prompt byte, no log line and no other return
+// field, on any of the 31 scenarios. The other work in this round — extracting `describeStopReturn`,
+// `reportDeadBatches`, `recordRepairOutcome`, `skipPhasesFrom` and `judgeOrSkipAfterBuild` to bring Sonar S3776 back
+// under 15, and `...mergeStop` for S7744 — is behaviour-preserving by construction and measured to be so here.
+//
+// ONE MORE THING THIS COPY FOLDS IN, stated so a reviewer diffing the baselines is not surprised by it: the source
+// of `judgeIfWaiting` now carries the F4 change from commit 4cc1a42 (`unfiledEvidenceFor`, the carried evidence
+// block, the `evidenceWritten` receipt). That commit deliberately did NOT replace these baselines, because an empty
+// carry renders the identical prompt and the parity run stayed 522/0 through it. The behaviour it adds is therefore
+// already pinned as unchanged; only the frozen SOURCE was lagging, and this replacement catches it up.
+//
 // Zero dependencies (node built-ins only); exits 1 on any failed check.
 import { asReconcileAnswer, isReconcileStateAnswer } from "./_testkit.mjs";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -262,6 +339,37 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       baseline: "plus `pendingContradiction` when the file has one.",
       shipped: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
       why: "`unsettledUnits` is the folder's memory of which units have already spent D7's settle window; a field the Reconcile read step does not name does not survive a resume, and the waste it prevents is per-resume",
+    },
+    // ENG-96778 (PR #171 SCOPE EXPANSION) — THE ENVIRONMENT FAULT: the stand itself did not answer. Three prompt lines
+    // changed, every one SUBSTITUTED or APPENDED (never inserted — `promptDiff` compares line counts first), and each
+    // is declared against the text the FROZEN BASELINE actually carries. That matters here more than usual: the
+    // baseline was replaced during ENG-96778 and already carries `subject` and `unsettledUnits`, so the three older
+    // entries above it (written against the pre-ENG-96778 baseline) no longer match a baseline line and cannot cover
+    // these edits — `declared()` needs BOTH halves to match. A FOURTH change — the `ENVIRONMENT FAULT — set
+    // `roundState.environmentFault`` block in the persistence prompt — is deliberately NOT declared: it is emitted only
+    // once a run has seen a fault or read the operator's answer to one, no scenario in this runner drives either, and a
+    // declaration for a line the baseline never emits would be dead text. Its wording is pinned in `run-infra.mjs`.
+    {
+      // The Reconcile read step's `blocked` row: the producer's subject gains its THIRD word, and the consequence the
+      // agent is warned about gains the run-level stop. Anchored on the parenthesis, which is the part that changed.
+      baseline: "(`subject` is `'source'` or `'builder'` — the build agent's own answer to which artefact failed",
+      shipped: "(`subject` is `'source'`, `'builder'` or `'environment'` — the build agent's own answer to which artefact failed",
+      why: "`'environment'` is the declared form of the third blocker class; the read step must name it or a declared outage is transcribed as an undeclared row and re-classified from prose",
+    },
+    {
+      // The Reconcile read step's `roundState` bullet names the new record, for the rule `schemas.mjs` states: a
+      // `roundState` sub-key the read step does not name is dropped by the transcription — and a dropped
+      // `environmentFault` is a disarmed gate on the very next run of that folder.
+      baseline: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
+      shipped: "plus `pendingContradiction`, `unsettledUnits` and `environmentFault` when the file has them",
+      why: "`environmentFault` is the folder's memory that the stand was down and whether the operator confirmed it back; a record the read step does not name does not survive a resume, and the gate it arms exists only on file",
+    },
+    {
+      // `BLOCKER_SUBJECT_RULE` gains its third sentence — appended, so the same tail rides on the page, reach and app
+      // arms alike, and one entry anchored on the sentence before it covers all three lines.
+      baseline: "is a BUILDER subject, not a source one.",
+      shipped: "is a BUILDER subject, not a source one. `'environment'` when the STAND ITSELF did not answer",
+      why: "the build agent is the producer of the declared `'environment'` subject; without the ask the declared channel is inert and every outage is read from prose",
     },
   ],
 }

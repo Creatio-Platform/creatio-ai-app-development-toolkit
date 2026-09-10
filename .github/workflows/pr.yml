@@ -148,3 +148,11 @@ jobs:
         if: always()
         working-directory: engine-tests/freedom-build-executor
         run: node pending-and-findings.mjs
+      # ENG-96778 — the BUILD-side stage gates: a preflight fan-out that died whole, a round whose builders all
+      # returned nothing, an app unit that did not complete, and a dead Judge. Driven through the real core on the
+      # CLI adapter with the faulted phase submitted `--death`. Its own step because every runner here is wired
+      # individually — a golden nothing runs is a golden nobody is warned by.
+      - name: Run freedom-build-executor stage-gates golden
+        if: always()
+        working-directory: engine-tests/freedom-build-executor
+        run: node stage-gates.mjs
