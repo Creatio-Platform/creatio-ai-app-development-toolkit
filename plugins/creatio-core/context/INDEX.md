@@ -1,16 +1,27 @@
 # Context Navigation Index
 
 Read this file first.
-Use it to choose the smallest set of repository documents for the current task.
+Use it to choose the smallest set of toolkit documents for the current task.
 
 Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
-This repository is authoritative for orchestration, approvals, BA structure, and business invariants.
+The toolkit is authoritative for orchestration, approvals, BA structure, and business invariants.
 
-## Quick Capability Map
+## What This Plugin Holds
 
-This repository drives BA-style Business Plans for Creatio apps and the approved clio MCP implementation flow.
+`creatio-core` is the shared foundation every other Creatio plugin depends on: this `plugins/creatio-core/context/`
+directory (platform basics, naming policy, clio CLI reference, the DataForge evidence contract, product telemetry), the
+`creatio-schema-naming` and `creatio-ui-guidelines` skills, the clio MCP declaration (`.mcp.json`) and the
+product-telemetry hook (`plugins/creatio-core/hooks/telemetry-routing.mjs`).
 
-Start with `AGENTS.md`, then follow the current stage runbook in `runbooks/`.
+The app-creation workflow (Gate P -> Business Plan -> Gate R -> implementation) is not part of this plugin. It is the
+`creatio-app-orchestrator` skill of the `creatio-app-builder` plugin. That skill's `references/` directory holds the
+orchestration policy (`orchestration-policy.md`: approvals, the Business Plan format, routing, support mode), the three
+stage runbooks (`01-environment-setup.md`, `02-requirements-gathering.md`, `03-app-implementation.md`) and the
+`business-checklist.md`. Repository-wide rules (source of truth, clio coupling, required workflow) stay in the root
+`AGENTS.md`.
+
+Paths to another plugin below are written from the toolkit root, which is the same path in a checkout, an extracted
+release and a Cursor local install. Where `creatio-core` is installed on its own, load the named skill instead.
 
 ## Executable Contract
 
@@ -23,23 +34,24 @@ When you need exact tool names, required fields, aliases, defaults, response sha
 
 ## Reading Strategy
 
-1. Read `AGENTS.md` for orchestration rules.
-2. Load only the stage runbook that matches the current task.
-3. Read only the supporting context files needed for that stage.
+1. Read the root `AGENTS.md` for the repository-wide rules, then the orchestration policy of the
+   `creatio-app-orchestrator` skill (`plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`) for the app-workflow contract.
+2. Load only the stage runbook that matches the current task from that skill's `references/` (table below).
+3. Read only the core context files needed for that stage.
 4. Resolve executable MCP details through `get-tool-contract` instead of searching docs for payload syntax.
 
 ## Business Plan Generation Reads
 
 | Phase | Must Read (repo) | clio MCP Guide (on-demand) | What It Covers |
 |------|------------------|----------------------------|----------------|
-| Gate P | `AGENTS.md` | — | UX contract, routing, Gate P, global invariants |
+| Gate P | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`, `plugins/creatio-core/context/essentials.md` (Global Invariants) | — | UX contract, routing, Gate P, global invariants |
 | Agent 1 | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md`, `plugins/creatio-core/context/essentials.md` | `docs://mcp/guides/agent-execution` | environment setup, local runtime rules, DataForge availability check |
 | Agent 2 | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md`, `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md`, `plugins/creatio-core/context/model-discovery-evidence.md` | — | BA discovery, pre-analysis, Gate R approval, Technical Implementation Handoff |
 | Agent 3 | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md`, `plugins/creatio-core/context/essentials.md` | `docs://mcp/guides/app-modeling` | post-Gate-R scaffolding, transient section-creation failure playbook, entity/page/data modeling |
-| Support run | `AGENTS.md` (Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
+| Support run | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` (Task Classification and Support Mode sections) | `docs://mcp/guides/support-mode` | diagnostic-first behavior, severity routing, fail-fast evidence |
 
 Reading rules:
-- Each repo file in this table is the static stage runbook. Read it once per stage as needed; do not pre-load every supporting reference up front.
+- Each repo file in this table is the static stage reference. Read it once per stage as needed; do not pre-load every supporting reference up front. The runbooks and the policy belong to the `creatio-app-orchestrator` skill; the context files belong to this plugin.
 - Each clio MCP guide is on-demand. Fetch it through `ReadMcpResourceTool` only when its scope matches the current step.
 - Do not invent local copies of clio MCP guide content. The clio guide is the source of truth for execution order and support-mode mechanics.
 
@@ -47,7 +59,9 @@ Reading rules:
 
 | Topic | File | Notes |
 |------|------|-------|
-| Orchestration, approvals, business invariants | `AGENTS.md` | primary policy document |
+| Orchestration, approvals, Business Plan format, routing, support mode | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md` | the app-workflow contract, owned by the `creatio-app-orchestrator` skill |
+| Repository-wide rules: source of truth, clio coupling, required workflow | `AGENTS.md` | root policy document |
+| Global business invariants | `plugins/creatio-core/context/essentials.md` | "Global Invariants" section |
 | BA checklist | `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` | required business plan shape and completeness |
 | Platform basics and canonical flows | `plugins/creatio-core/context/essentials.md` | high-level workflow only |
 | `Usr` prefixes, casing, GUIDs, binding naming | `plugins/creatio-core/context/naming-conventions.md` | naming policy |

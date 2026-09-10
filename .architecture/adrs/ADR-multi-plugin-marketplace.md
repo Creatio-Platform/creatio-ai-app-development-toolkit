@@ -49,7 +49,7 @@ and so a user installs only the profile they need on Claude Code, Codex CLI, Git
 | ---------------------- | ------ | ----------- | ---------- |
 | Assumptions & Concerns | HIGH   | Codex CLI has no non-interactive plugin install: `codex plugin add`/`install` do not exist. Enabling a plugin in `config.toml` does not load its skills; only the `/plugins` browser's install cache does. | The installer performs the two steps the browser does (copy into `plugins/cache/<marketplace>/<plugin>/<version>/`, write `[plugins."<plugin>@<marketplace>"] enabled = true`) — PR #168. |
 | Assumptions & Concerns | HIGH   | Double installation: the same plugin from two marketplaces, or the same skill name from two plugins, coexists and both skill bodies are shown to the model on Claude and Copilot. | A downstream marketplace does not re-export CAADT plugins; it deletes its copies in the release that starts depending on `creatio-core`; its installer refuses a name already installed from another marketplace. |
-| Assumptions & Concerns | Medium | Copilot CLI reads a marketplace only from the repository's default branch and accepts no ref; a relative `./plugins/<n>` entry on `main` installs unreleased content. | Catalog entries pin the payload with `github` + `ref: release` + `path` objects; `main` keeps a valid catalog at all times. |
+| Assumptions & Concerns | Medium | Copilot CLI reads a marketplace only from the repository's default branch and accepts no ref; a relative `./plugins/<n>` entry on `main` installs unreleased content. | Today only the Claude meta-plugin entry is pinned (`url` + `ref: release`); the per-plugin Codex and Copilot entries are relative sources. The release-tooling follow-up switches them to `github` + `ref: release` + `path` objects; until it ships, `main` is not announced as released and keeps a valid catalog at all times. |
 | Assumptions & Concerns | Medium | A plugin rooted at the repository root auto-discovers a root `skills/` directory, recreating the duplication the split removes. | The meta-plugin lives at the root only once root `skills/` is gone (PR #169); during the spike it lived in `plugins/creatio-ai-app-development-toolkit/`. |
 | Assumptions & Concerns | Medium | Plugin dependencies exist only in Claude Code; Codex and Copilot have no dependency or meta-plugin mechanism. | "A consumer requires CAADT plugins" is enforced by the consumer's installer on every host; `dependencies` is a Claude-only convenience. |
 | Assumptions & Concerns | Medium | The telemetry hook moves into `creatio-core` and therefore runs for every consumer of the core, including ones that previously removed it. | Decision pending (§9); if unacceptable, split `creatio-core` and `creatio-telemetry`. The hook is non-blocking and consent-gated. |
@@ -144,7 +144,7 @@ sequenceDiagram
     C->>C: resolve dependencies → creatio-core (tags <plugin>--v<ver>)
     U->>X: plugin marketplace add <repo>
     U->>X: copy plugins/<n> → $CODEX_HOME/plugins/cache/creatio/<n>/<ver>/; config.toml [plugins."<n>@creatio"] enabled=true
-    U->>G: plugin marketplace add <repo> (default branch catalog); plugin install <n>@creatio (payload pinned to release)
+    U->>G: plugin marketplace add <repo> (default branch catalog); plugin install <n>@creatio (payload pinned to release once the release tooling lands)
 ```
 
 ---
@@ -155,7 +155,9 @@ The change affects the **software supply chain of the toolkit**, not Creatio app
 STRIDE analysis was performed; the relevant observations are recorded here:
 
 - Copilot CLI reads the catalog from the default branch, so an unpinned catalog entry would install unreleased
-  `main` content into a user's agent. Mitigated by `ref: release` pinning in every catalog entry.
+  `main` content into a user's agent. Mitigation: `ref: release` pinning of every per-plugin catalog entry, which the
+  release-tooling follow-up adds; at the time of this decision only the Claude meta-plugin entry is pinned, and `main`
+  is not released until that follow-up ships.
 - Two installs of the same skill name reach the model; a malicious or stale duplicate could shadow the
   canonical one. Mitigated by the no-re-export rule and by installers refusing duplicates.
 - Installer paths derived from environment variables were flagged as untrusted input (S2083); the installer

@@ -58,6 +58,7 @@ SETUP_WIZARD_AGENT_DISPLAY_NAMES = {
 }
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
     "plugins/creatio-core/context/product-telemetry.md",
     "plugins/creatio-core/context/INDEX.md",
     "plugins/creatio-core/context/essentials.md",
@@ -326,21 +327,33 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
 
 MCP_CONFIG_RELATIVE = "plugins/creatio-core/.mcp.json"
 PLUGINS_DIR_NAME = "plugins"
+# The telemetry floor hook ships inside the core plugin; the Cursor install registers this file
+# (copied under the local plugin dir by copy_plugin_runtime_surface) in hooks.json.
+TELEMETRY_HOOK_RELATIVE = "plugins/creatio-core/hooks/telemetry-routing.mjs"
 
 
 def mcp_config_path(repo_root: Path) -> Path:
-    """The clio MCP declaration: shipped by the core plugin; a root `.mcp.json` (pre-plugin-split
-    layouts and single-plugin fixtures) is still honoured."""
+    """The clio MCP declaration, owned by the core plugin. A root `.mcp.json` is honoured only when
+    the core copy is absent (a tree from before the plugin split); when both exist the core copy
+    wins, the same precedence workflow_manifest_names applies to its manifest."""
+    core_level = repo_root / MCP_CONFIG_RELATIVE
     root_level = repo_root / ".mcp.json"
-    return root_level if root_level.exists() else repo_root / MCP_CONFIG_RELATIVE
+    return core_level if core_level.exists() or not root_level.exists() else root_level
 
 
 def is_plugin_checkout(path: Path) -> bool:
+    """A checkout or extracted release of this toolkit: the root meta-plugin manifest plus the
+    `plugins/` tree with the core plugin's clio declaration.
+
+    Deliberately NOT a single-plugin tree: install.py installs from a checkout of this version,
+    whose required references (REQUIRED_REFERENCE_PATHS) all live under `plugins/`, so admitting a
+    pre-split tree here would only move the failure to ensure_required_references. The pre-split
+    layout is accepted where it genuinely occurs - a cached plugin version that update.py mirrors
+    workflows from - by discover_workflow_scripts and workflow_manifest_names.
+    """
     if not (path / ".claude-plugin" / "plugin.json").exists():
         return False
-    multi_plugin = (path / PLUGINS_DIR_NAME).is_dir() and (path / MCP_CONFIG_RELATIVE).exists()
-    single_plugin = (path / ".mcp.json").exists() and (path / "skills").is_dir()
-    return multi_plugin or single_plugin
+    return (path / PLUGINS_DIR_NAME).is_dir() and (path / MCP_CONFIG_RELATIVE).exists()
 
 
 def current_checkout_root() -> Path | None:
@@ -380,25 +393,6 @@ def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
     if not isinstance(servers, dict):
         raise RuntimeError(f"MCP config must contain a server map: {source}")
     return servers
-
-
-def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
-    source_skills_dir = repo_root / "skills"
-    if not source_skills_dir.exists():
-        raise RuntimeError(f"Skills directory not found: {source_skills_dir}")
-
-    target_skills_dir.mkdir(parents=True, exist_ok=True)
-    for source_skill_dir in source_skills_dir.iterdir():
-        if not source_skill_dir.is_dir() or not (source_skill_dir / "SKILL.md").exists():
-            continue
-        target_skill_dir = target_skills_dir / source_skill_dir.name
-        if target_skill_dir.exists():
-            shutil.rmtree(target_skill_dir)
-        shutil.copytree(
-            source_skill_dir,
-            target_skill_dir,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
 
 
 def workflow_manifest_names(source_root: Path) -> dict[str, str]:
@@ -868,7 +862,7 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         "## Core Rules\n"
         "\n"
         "- Pages are separate for web and mobile: before any page edit, read `plugins/creatio-core/context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
-        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
+        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`.\n"
         "- Follow `plugins/creatio-core/context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
@@ -991,12 +985,12 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
     remove_tree_if_exists(local_plugin_dir, "Cursor")
     copy_plugin_runtime_surface(repo_root, local_plugin_dir)
-    mcp_config_path = cursor_home / "mcp.json"
-    merge_mcp_config(repo_root, mcp_config_path)
+    cursor_mcp_config_path = cursor_home / "mcp.json"
+    merge_mcp_config(repo_root, cursor_mcp_config_path)
     rules_dir = cursor_home / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
-    rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    rule_path.write_text(render_cursor_rule(local_plugin_dir, cursor_mcp_config_path), encoding="utf-8")
     # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
     # this rule is what reaches a session that never loads a CAADT skill.
     telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
@@ -1016,7 +1010,7 @@ def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> No
     Merged rather than overwritten: a developer's other hooks must survive a reinstall.
     """
     hooks_path = cursor_home / "hooks.json"
-    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    command = f'node "{(local_plugin_dir / TELEMETRY_HOOK_RELATIVE).as_posix()}"'
     entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
 
     config: dict = {}

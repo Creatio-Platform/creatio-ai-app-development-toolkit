@@ -6,18 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
-# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
-# Contract assertions read the union so a rule can live in whichever file owns it.
-_AGENTS_CONTRACT_FILES = (
-    ROOT / "AGENTS.md",
-    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
-    ROOT / "plugins/creatio-core/context/essentials.md",
-)
-
-
-def agents_contract_text() -> str:
-    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
 
 # Bind the ENG-92985 doc-token assertions to the gate script's own constants so a
 # rename in clio_mcp_preflight.py cannot pass both this suite and the behavioral suite
@@ -93,7 +83,7 @@ STDIO_ONLY_DOCS = existing([
     ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
     ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
     ROOT / "README.md",
-    ROOT / "skills/README.md",
+    ROOT / "plugins/README.md",
 ])
 
 DOT_STYLE_APPLICATION_TOOL_DOCS = [
@@ -477,8 +467,9 @@ class DefaultContractDocsTests(unittest.TestCase):
 
     def test_docs_require_env_name_slug_sanitization(self):
         # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
-        # sanitized to a safe slug before reaching reg-web-app, and the canonical
-        # AGENTS.md contract must state it (not only the runbook).
+        # sanitized to a safe slug before reaching reg-web-app, and the orchestration
+        # contract (the AGENTS.md + orchestration-policy.md + essentials.md union, see
+        # tests/_contract_docs.py) must state it (not only the runbook).
         agents = agents_contract_text().lower()
         runbook = read_text(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md").lower()
         for content in (agents, runbook):
@@ -764,6 +755,64 @@ class DefaultContractDocsTests(unittest.TestCase):
         # the validator pins the same literal value in DASHBOARD_ACCESS_RIGHTS_RE
         validator = read_text(ROOT / "plugins/creatio-app-builder/runtime/scripts/workflow_validators.py")
         self.assertRegex(validator, r"DASHBOARD_ACCESS_RIGHTS_RE\s*=.*All Employees")
+
+
+
+class ContractSplitCompletenessTests(unittest.TestCase):
+    """The union the contract tests read cannot see a dropped or duplicated section by itself
+    (every probe is `assertIn` on a token). These pin the split at the section level."""
+
+    POLICY = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md"
+
+    # The app-workflow sections that moved out of the root AGENTS.md, in order (Plan Mode Override
+    # through Orchestration Checklist). A section vanishing from, or being renamed in, the policy
+    # file fails here rather than through a confusing missing-token assertion elsewhere.
+    EXPECTED_POLICY_SECTIONS = [
+        "Plan Mode Override",
+        "1. Business Outcome",
+        "2. Roles and Permissions",
+        "3. Object Model",
+        "4. Lifecycle and Statuses",
+        "5. Business Logic",
+        "6. UX Expectations",
+        "7. Analytics",
+        "8. Edge Cases and Exceptions",
+        "Format Compliance Rule",
+        "Operating Model",
+        "Product Telemetry",
+        "Task Classification",
+        "Support Mode (Troubleshooting)",
+        "UX Contract",
+        "Execution UX and Effort Budget",
+        "Workflow Routing",
+        "Agent Responsibilities",
+        "Gate Rules",
+        "Orchestration Checklist",
+    ]
+
+    @staticmethod
+    def _sections(path):
+        return [line[3:].strip() for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("## ")]
+
+    def test_every_contract_file_exists(self):
+        for path in AGENTS_CONTRACT_FILES:
+            self.assertTrue(path.is_file(), path)
+
+    def test_orchestration_policy_carries_every_moved_section_exactly_once(self):
+        self.assertEqual(self._sections(self.POLICY), self.EXPECTED_POLICY_SECTIONS)
+
+    def test_no_section_is_duplicated_across_the_contract_files(self):
+        seen = {}
+        for path in AGENTS_CONTRACT_FILES:
+            for section in self._sections(path):
+                self.assertNotIn(
+                    section, seen,
+                    f"section `{section}` lives in both {seen.get(section)} and {path.name}: a rule must have one owner",
+                )
+                seen[section] = path.name
+        # The thin root keeps only repository-wide rules; the app-workflow contract is the policy's.
+        self.assertNotIn("Gate Rules", self._sections(ROOT / "AGENTS.md"))
+        self.assertIn("Global Invariants", self._sections(ROOT / "plugins/creatio-core/context/essentials.md"))
 
 
 if __name__ == "__main__":

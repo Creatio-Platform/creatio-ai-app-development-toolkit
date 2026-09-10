@@ -44,10 +44,16 @@ from pathlib import Path
 
 # Allow running as `python installer/update.py` from a checkout, an extracted
 # release, or an installed plugin directory. The installer dir holds agent_cli
-# (shared with install.py); the runtime dir holds version_check.
+# (shared with install.py); the runtime dir holds version_check. Since the plugin
+# split the runtime ships inside the app-builder plugin; a tree from before the
+# split (one cached plugin version) still carries it at the root.
 _INSTALLER_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _INSTALLER_DIR.parent
-_RUNTIME_DIR = _REPO_ROOT / "runtime"
+_RUNTIME_DIR_CANDIDATES = (
+    _REPO_ROOT / "plugins" / "creatio-app-builder" / "runtime",
+    _REPO_ROOT / "runtime",
+)
+_RUNTIME_DIR = next((d for d in _RUNTIME_DIR_CANDIDATES if d.is_dir()), _RUNTIME_DIR_CANDIDATES[0])
 
 for _dir in (_INSTALLER_DIR, _RUNTIME_DIR):
     if str(_dir) not in sys.path:

@@ -9,18 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# Plugin split: the orchestration contract that used to be one file is now the thin root AGENTS.md plus the
-# orchestrator's `references/orchestration-policy.md` (and the global invariants in the core essentials).
-# Contract assertions read the union so a rule can live in whichever file owns it.
-_AGENTS_CONTRACT_FILES = (
-    ROOT / "AGENTS.md",
-    ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
-    ROOT / "plugins/creatio-core/context/essentials.md",
-)
-
-
-def agents_contract_text() -> str:
-    return "\n\n".join(p.read_text(encoding="utf-8") for p in _AGENTS_CONTRACT_FILES if p.exists())
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
 
 # GitHub Copilot's skill loader drops any skill whose `description` exceeds this
 # limit; Claude Code / Codex do not enforce it. ENG-92957: the
@@ -100,11 +90,25 @@ def skill_dirs():
 
 PLUGINS = ("creatio-core", "creatio-app-builder", "creatio-ui", "creatio-migration")
 
+# Skill -> the plugin that ships it. The placement IS the deliverable of the plugin split, so it is
+# asserted explicitly; a skill moved to another plugin, or shipped by two, fails here.
+SKILL_OWNER = {
+    "creatio-schema-naming": "creatio-core",
+    "creatio-ui-guidelines": "creatio-core",
+    "creatio-app-orchestrator": "creatio-app-builder",
+    "creatio-branding-orchestrator": "creatio-ui",
+    "creatio-mobile-page-conversion": "creatio-ui",
+    "classic-to-freedom-migration": "creatio-migration",
+    "classic-ui-expert": "creatio-migration",
+    # `_workflow-core` (creatio-migration) is a support directory without a SKILL.md, so it is not a skill here.
+}
+
 
 def skill_path(name):
-    """The shipped SKILL.md of a skill, whichever plugin ships it."""
-    matches = list((ROOT / "plugins").glob(f"*/skills/{name}/SKILL.md"))
-    return matches[0] if matches else ROOT / "plugins" / "missing" / "skills" / name / "SKILL.md"
+    """The shipped SKILL.md of a skill, at the path its owning plugin dictates."""
+    if name not in SKILL_OWNER:
+        raise AssertionError(f"skill `{name}` is not shipped by any plugin (add it to SKILL_OWNER if it is new)")
+    return ROOT / "plugins" / SKILL_OWNER[name] / "skills" / name / "SKILL.md"
 
 
 def parse_fenced_flat_mapping(text):
@@ -153,22 +157,50 @@ def looks_like_path(token):
     return bool(name) and bool(dot) and ext.isalnum() and not ext.isdigit()
 
 
-# References the plugin split left pointing across plugin roots on purpose. A follow-up change turns each into a
-# skill name or a clio `get-guidance` article and deletes the entry here; a NEW unresolved path is a bug.
+# References the plugin split left pointing across plugin roots on purpose, keyed by the entry file that
+# carries them. Each maps the reference as written to the repository file it is meant to reach: the test
+# asserts the reference does NOT resolve from the entry file (it crosses a plugin root) AND that the
+# intended target exists, so a typo here cannot pass as "known". A follow-up change turns each into a skill
+# name or a clio `get-guidance` article and deletes the entry; a NEW unresolved path is a bug.
+CORE_CONTEXT = "plugins/creatio-core/context"
+ORCHESTRATOR_REFERENCES = "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references"
+CORE_CONTEXT_FILES = (
+    "INDEX.md", "clio-cli-reference.md", "essentials.md", "model-discovery-evidence.md",
+    "naming-conventions.md", "product-telemetry.md",
+)
+
+
+def _core_context_refs(anchor):
+    return {f"{anchor}context/{name}": f"{CORE_CONTEXT}/{name}" for name in CORE_CONTEXT_FILES}
+
+
 CROSS_PLUGIN_REFS_PENDING_CLEANUP = {
-    "skill": {
-        "../../.mcp.json", "../../README.md", "../../docs/install.md",
-        "../../context/INDEX.md", "../../context/clio-cli-reference.md", "../../context/essentials.md",
-        "../../context/model-discovery-evidence.md", "../../context/naming-conventions.md",
-        "../../context/product-telemetry.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md": {
+        **_core_context_refs("../../"),
+        "../../.mcp.json": "plugins/creatio-core/.mcp.json",
+        "../../README.md": "README.md",
+        "../../docs/install.md": "docs/install.md",
     },
-    "rule": {
-        "../.mcp.json",
-        "../context/INDEX.md", "../context/clio-cli-reference.md", "../context/essentials.md",
-        "../context/model-discovery-evidence.md", "../context/naming-conventions.md",
-        "../context/product-telemetry.md",
+    "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc": {
+        **_core_context_refs("../"),
+        "../.mcp.json": "plugins/creatio-core/.mcp.json",
+    },
+    "plugins/creatio-ui/skills/creatio-branding-orchestrator/SKILL.md": {
+        "../../context/product-telemetry.md": f"{CORE_CONTEXT}/product-telemetry.md",
+        "../../runbooks/01-environment-setup.md": f"{ORCHESTRATOR_REFERENCES}/01-environment-setup.md",
+    },
+    "plugins/creatio-ui/skills/creatio-mobile-page-conversion/SKILL.md": {
+        "../../context/essentials.md": f"{CORE_CONTEXT}/essentials.md",
+        "../../context/product-telemetry.md": f"{CORE_CONTEXT}/product-telemetry.md",
+    },
+    "plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md": {
+        "../../context/product-telemetry.md": f"{CORE_CONTEXT}/product-telemetry.md",
     },
 }
+
+
+def known_cross_plugin_refs(entry_path):
+    return CROSS_PLUGIN_REFS_PENDING_CLEANUP.get(entry_path.relative_to(ROOT).as_posix(), {})
 
 
 class ReleaseStructureTests(unittest.TestCase):
@@ -247,7 +279,7 @@ class ReleaseStructureTests(unittest.TestCase):
         # path must be anchored with `../` and resolve to a real file when
         # joined to the rule's own directory (how a host resolves it at
         # runtime), not when joined to the repo root.
-        self._assert_anchored_paths_resolve(rule_path, "../", known_cross_plugin=CROSS_PLUGIN_REFS_PENDING_CLEANUP["rule"])
+        self._assert_anchored_paths_resolve(rule_path, "../", known_cross_plugin=known_cross_plugin_refs(rule_path))
 
     def test_marketplace_catalogs_list_every_plugin(self):
         claude = read_json(".claude-plugin/marketplace.json")
@@ -284,7 +316,7 @@ class ReleaseStructureTests(unittest.TestCase):
         for plugin in PLUGINS:
             self.assertEqual(read_json(f"plugins/{plugin}/.cursor-plugin/plugin.json")["version"], canonical_version)
 
-    def _assert_anchored_paths_resolve(self, entry_path, anchor_prefix, known_cross_plugin=()):
+    def _assert_anchored_paths_resolve(self, entry_path, anchor_prefix, known_cross_plugin=None):
         """Every backticked path reference in an entry file must be anchored
         with ``anchor_prefix`` and resolve to a real file when joined to the
         entry file's own directory.
@@ -307,6 +339,7 @@ class ReleaseStructureTests(unittest.TestCase):
         # `mcp_client.py` (already anchored where it is actually read, in the
         # Load Order) and non-path tokens like `get-tool-contract`.
         root_read_files = {"AGENTS.md", ".mcp.json"}
+        known_cross_plugin = known_cross_plugin or {}
 
         def is_read_path(ref):
             if ref.endswith("/"):
@@ -334,8 +367,10 @@ class ReleaseStructureTests(unittest.TestCase):
             if ref in known_cross_plugin:
                 # The plugin split moved the file into another plugin; a follow-up change replaces the path with a
                 # skill name / get-guidance. Until then the reference is a known, listed break —
-                # a NEW unresolved reference is still a failure.
+                # a NEW unresolved reference is still a failure — and the file it is meant to reach must exist.
                 self.assertFalse(resolved.exists(), f"{entry_path.name}: `{ref}` resolves again — drop it from CROSS_PLUGIN_REFS_PENDING_CLEANUP")
+                intended = ROOT / known_cross_plugin[ref]
+                self.assertTrue(intended.is_file(), f"{entry_path.name}: `{ref}` is meant to reach {intended}, which does not exist")
                 continue
             self.assertTrue(resolved.exists(), f"{entry_path.name}: `{ref}` -> {resolved}")
 
@@ -349,7 +384,7 @@ class ReleaseStructureTests(unittest.TestCase):
 
         # The skill sits two levels below its plugin root, so paths anchor
         # with `../../` and must resolve from the skill's own directory.
-        self._assert_anchored_paths_resolve(skill, "../../", known_cross_plugin=CROSS_PLUGIN_REFS_PENDING_CLEANUP["skill"])
+        self._assert_anchored_paths_resolve(skill, "../../", known_cross_plugin=known_cross_plugin_refs(skill))
 
     def test_orchestrator_entry_files_carry_root_anchor_and_fail_loud(self):
         """Both entry files must tell the agent where the toolkit root is and
@@ -513,9 +548,27 @@ class ReleaseStructureTests(unittest.TestCase):
                 r for r in (backtick + md_links)
                 if "://" not in r and not r.startswith(("#", "/")) and looks_like_path(r)
             ]
+            known = known_cross_plugin_refs(skill_dir / "SKILL.md")
             for ref in refs:
                 if ref.startswith("../"):
-                    # toolkit-root link — covered by _assert_anchored_paths_resolve
+                    # A link that goes UP out of the skill: since the plugin split `../../` is the PLUGIN
+                    # root, not the toolkit root, so a `../../context/…` in a non-core skill crosses a
+                    # plugin boundary and cannot resolve. Only the listed, pending-cleanup references may
+                    # be unresolved (and each must name an existing target); any other must resolve.
+                    resolved = (skill_dir / ref).resolve()
+                    if ref in known:
+                        self.assertFalse(
+                            resolved.exists(),
+                            f"{skill_dir.name}: `{ref}` resolves again — drop it from CROSS_PLUGIN_REFS_PENDING_CLEANUP",
+                        )
+                        self.assertTrue((ROOT / known[ref]).is_file(), f"{skill_dir.name}: `{ref}` -> intended {known[ref]} is missing")
+                    else:
+                        self.assertTrue(
+                            resolved.exists(),
+                            f"{skill_dir.name}: `{ref}` -> {resolved} does not exist (a cross-plugin path "
+                            f"must be listed in CROSS_PLUGIN_REFS_PENDING_CLEANUP or replaced by a skill name)",
+                        )
+                    checked += 1
                     continue
                 self.assertTrue(
                     ref.startswith("./"),
@@ -533,6 +586,89 @@ class ReleaseStructureTests(unittest.TestCase):
             "no ./-anchored skill-relative references were checked — extraction may match nothing",
         )
 
+
+    def test_every_skill_is_shipped_by_exactly_its_owning_plugin(self):
+        # The placement is what the plugin split delivers; assert it rather than "some plugin".
+        on_disk = {}
+        for path in (ROOT / "plugins").glob("*/skills/*/SKILL.md"):
+            on_disk.setdefault(path.parent.name, []).append(path.parents[2].name)
+        for name, owner in SKILL_OWNER.items():
+            self.assertEqual(on_disk.get(name), [owner], f"skill `{name}` must be shipped by `{owner}` only")
+            self.assertTrue(skill_path(name).is_file(), name)
+        self.assertEqual(set(on_disk), set(SKILL_OWNER), "a skill on disk is missing from SKILL_OWNER (or vice versa)")
+        with self.assertRaisesRegex(AssertionError, "not shipped by any plugin"):
+            skill_path("no-such-skill")
+
+    def test_cross_plugin_allow_list_matches_the_entry_files(self):
+        # The allow-list cannot rot: every entry file exists, every listed reference is actually written
+        # in it, and every intended target exists. Removing a reference from a file without dropping it
+        # here fails, as does listing a file that no longer ships.
+        for entry, refs in CROSS_PLUGIN_REFS_PENDING_CLEANUP.items():
+            entry_path = ROOT / entry
+            self.assertTrue(entry_path.is_file(), entry)
+            content = entry_path.read_text(encoding="utf-8")
+            for ref, target in refs.items():
+                self.assertIn(f"`{ref}`", content, f"{entry}: `{ref}` is listed as pending cleanup but not referenced")
+                self.assertTrue((ROOT / target).is_file(), f"{entry}: `{ref}` -> {target} missing")
+
+    def test_orchestration_policy_references_resolve_from_the_repository_root(self):
+        # The policy moved three levels below the plugin root. Its file references are written
+        # repository-relative (`plugins/...`): each must exist, and none may still carry a bare
+        # pre-split `context/`, `runbooks/` or `runtime/` path or an up-level anchor.
+        policy = ROOT / ORCHESTRATOR_REFERENCES / "orchestration-policy.md"
+        refs = [r for r in re.findall(r"`([^`]+)`", policy.read_text(encoding="utf-8")) if looks_like_path(r) and "://" not in r]
+        self.assertTrue(refs)
+        for ref in refs:
+            if ref.startswith("plugins/"):
+                self.assertTrue((ROOT / ref).is_file(), f"orchestration-policy.md: `{ref}` does not exist")
+                continue
+            self.assertFalse(ref.startswith(("../", "./")), f"orchestration-policy.md: `{ref}` must not be anchored relative to the policy file")
+            self.assertFalse(
+                ref.startswith(("context/", "runbooks/", "runtime/", "skills/")),
+                f"orchestration-policy.md: `{ref}` is a pre-split bare path",
+            )
+        self.assertTrue(any(ref.startswith("plugins/") for ref in refs))
+
+    def test_plugin_hook_commands_resolve_inside_their_plugin(self):
+        # The telemetry hooks moved from the root manifest into the core plugin's. A stale
+        # `${CLAUDE_PLUGIN_ROOT}/…` path would fail silently at runtime (telemetry simply stops), so
+        # every registered command must name a file that ships inside that plugin, and only the core
+        # plugin registers hooks.
+        with_hooks = []
+        for plugin in PLUGINS:
+            manifest = read_json(f"plugins/{plugin}/.claude-plugin/plugin.json")
+            if "hooks" not in manifest:
+                continue
+            with_hooks.append(plugin)
+            commands = [hook["command"] for entries in manifest["hooks"].values() for entry in entries for hook in entry["hooks"]]
+            self.assertTrue(commands, plugin)
+            for command in commands:
+                match = re.fullmatch(r'node "\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', command)
+                self.assertIsNotNone(match, f"{plugin}: hook command must be `node \"${{CLAUDE_PLUGIN_ROOT}}/<file>\"`: {command}")
+                self.assertTrue((ROOT / "plugins" / plugin / match.group(1)).is_file(), f"{plugin}: {command} -> missing file")
+        self.assertEqual(with_hooks, ["creatio-core"])
+        self.assertNotIn("hooks", read_json(".claude-plugin/plugin.json"))
+
+    def test_core_context_index_describes_the_core_and_routes_to_existing_files(self):
+        # INDEX.md is step 3 of the installer-rendered Load Order (the "read this first" navigation
+        # hub). Every file it routes to must exist, nothing may point at the deleted pre-split
+        # directories, and the app-workflow contract it names must be the orchestrator's policy file.
+        index = ROOT / CORE_CONTEXT / "INDEX.md"
+        content = index.read_text(encoding="utf-8")
+        for stale in ("`runbooks/`", "runbooks/0", "`context/", "`runtime/", "`skills/", "`hooks/", "../"):
+            self.assertNotIn(stale, content, f"INDEX.md still carries the pre-split token {stale}")
+        refs = [r for r in re.findall(r"`([^`]+)`", content) if looks_like_path(r) and "://" not in r]
+        self.assertTrue(refs)
+        for ref in refs:
+            self.assertTrue((ROOT / ref).is_file(), f"INDEX.md: `{ref}` does not exist")
+        for required in ("orchestration-policy.md", "creatio-app-orchestrator", f"{CORE_CONTEXT}/essentials.md"):
+            self.assertIn(required, content)
+        # AGENTS.md is no longer where the Business Plan / Gate P / Support Mode contract lives.
+        for line in content.splitlines():
+            if line.startswith("| Gate P") or line.startswith("| Support run"):
+                self.assertNotIn("`AGENTS.md`", line, line)
+                self.assertIn("orchestration-policy.md", line, line)
+
     def test_no_mcp_registry_or_custom_mcp_package_in_v1(self):
         self.assertFalse((ROOT / "server.json").exists())
         self.assertFalse((ROOT / "packages/caadt-mcp").exists())
@@ -540,7 +676,7 @@ class ReleaseStructureTests(unittest.TestCase):
     def test_docs_and_runbooks_do_not_reference_deleted_runtime_helper_paths(self):
         docs = [
             *Path(ROOT / "docs").glob("*.md"),
-            *Path(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references").glob("0*.md"),
+            *Path(ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references").glob("*.md"),
             *Path(ROOT / "plugins" / "creatio-app-builder" / "runtime" / "scripts").glob("find_python.*"),
             ROOT / "README.md",
         ]
