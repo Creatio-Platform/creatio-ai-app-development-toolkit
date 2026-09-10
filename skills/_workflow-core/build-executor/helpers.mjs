@@ -565,6 +565,38 @@ export function buildModeMenu() {
 // its own meaning (re-open a unit the gate called complete).
 export const CONTROL_MODE_ITEM = 'control-mode'
 export const roundDecisionItem = (roundNo) => `round-${roundNo}`
+// ENG-96778 (PR #171 scope expansion) — THE THIRD RUN-LEVEL ITEM, and the one that gates a build on a stand that was
+// reported DOWN. Numbered, so the answer is ONE-SHOT: `environment-restored-1` clears the first recorded outage and
+// nothing else — a second outage writes `n: 2` and asks for `-2`, so a stale `go` never authorises a build against a
+// stand that went down again. It is NOT routed through `consumedRoundAnswers`: consumption IS the record's
+// `open: false`, written by the run that read the answer.
+export const environmentRestoredItem = (n) => `environment-restored-${n}`
+// THE FOLDER'S RECORD OF THE OUTAGE, read FAIL-CLOSED. `open !== false` reads OPEN — a record whose flag is missing,
+// mistyped or a string still gates the next run, which is the safe direction; `n` is a positive integer or 1;
+// anything that is not an object is `null`, no record at all. The same division of labour `pendingContradictionRecord`
+// makes: garbage on file can only HOLD the run, never wave it through.
+export function environmentFaultRecord(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const n = Number.isInteger(raw.n) && raw.n > 0 ? raw.n : 1
+  return { ...raw, n, open: raw.open !== false }
+}
+// The open PAGE units of a verify summary as `openCountsOf` units, from the VERDICT ALONE (ENG-96778 scope
+// expansion). For the two stops that fire before the run's own `openCountsNow()` closure exists — the environment
+// gate inside `baselineGates` and the Preflight environment stop — so their status document can still say what is
+// open without re-deriving the schedule. Page units only: a non-page unit's openness needs the schedule, which those
+// two stops do not have; the document names the verify table for the rest.
+export function openCountsFromVerify(verify) {
+  const units = Object.entries(verify?.pages || {})
+    .filter(([, st]) => st && typeof st === 'object' && st.complete !== true)
+    .map(([key, st]) => {
+      const missing = Number.isInteger(st.missing) ? st.missing : 0
+      const unverified = Number.isInteger(st.unverified) ? st.unverified : 0
+      const correctness = Number.isInteger(st.openCorrectness) ? st.openCorrectness : null
+      const fidelity = Number.isInteger(st.openFidelity) ? st.openFidelity : null
+      return { unit: key, kind: 'page', open: missing + unverified, missing, unverified, correctness, fidelity, severity: null, why: null }
+    })
+  return openCountsOf(units)
+}
 // One run-scoped answer, read off `--units.runResolutions`. Matched on the normalised item the engine publishes;
 // a blank answer is NOT an answer (same rule the resolutions index applies to a ⚠ Confirm entry).
 export function runResolutionAnswer(runResolutions, item) {
@@ -761,6 +793,11 @@ export function roundStateOf(state) {
     // Read RAW and normalised by the caller, the same division of labour as `pendingContradiction`: garbage
     // on file can only make a unit re-spend the window (the safe direction), never skip a first attempt.
     unsettledUnits: pick('unsettledUnits'),
+    // ENG-96778 (PR #171 scope expansion) — THE FOLDER'S MEMORY THAT THE STAND WAS DOWN. Returned RAW for
+    // `environmentFaultRecord` to shape-check, the same division of labour as the two above: garbage on file reads as
+    // an OPEN fault, which HOLDS the run (the safe direction). This reader is the ONLY path from the queue file to the
+    // gate — a key not picked here is a gate that never arms, which is what the stage-gates golden G6 measures.
+    environmentFault: pick('environmentFault'),
   }
 }
 

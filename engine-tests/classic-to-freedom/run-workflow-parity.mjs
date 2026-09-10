@@ -335,6 +335,37 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       shipped: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
       why: "`unsettledUnits` is the folder's memory of which units have already spent D7's settle window; a field the Reconcile read step does not name does not survive a resume, and the waste it prevents is per-resume",
     },
+    // ENG-96778 (PR #171 SCOPE EXPANSION) — THE ENVIRONMENT FAULT: the stand itself did not answer. Three prompt lines
+    // changed, every one SUBSTITUTED or APPENDED (never inserted — `promptDiff` compares line counts first), and each
+    // is declared against the text the FROZEN BASELINE actually carries. That matters here more than usual: the
+    // baseline was replaced during ENG-96778 and already carries `subject` and `unsettledUnits`, so the three older
+    // entries above it (written against the pre-ENG-96778 baseline) no longer match a baseline line and cannot cover
+    // these edits — `declared()` needs BOTH halves to match. A FOURTH change — the `ENVIRONMENT FAULT — set
+    // `roundState.environmentFault`` block in the persistence prompt — is deliberately NOT declared: it is emitted only
+    // once a run has seen a fault or read the operator's answer to one, no scenario in this runner drives either, and a
+    // declaration for a line the baseline never emits would be dead text. Its wording is pinned in `run-infra.mjs`.
+    {
+      // The Reconcile read step's `blocked` row: the producer's subject gains its THIRD word, and the consequence the
+      // agent is warned about gains the run-level stop. Anchored on the parenthesis, which is the part that changed.
+      baseline: "(`subject` is `'source'` or `'builder'` — the build agent's own answer to which artefact failed",
+      shipped: "(`subject` is `'source'`, `'builder'` or `'environment'` — the build agent's own answer to which artefact failed",
+      why: "`'environment'` is the declared form of the third blocker class; the read step must name it or a declared outage is transcribed as an undeclared row and re-classified from prose",
+    },
+    {
+      // The Reconcile read step's `roundState` bullet names the new record, for the rule `schemas.mjs` states: a
+      // `roundState` sub-key the read step does not name is dropped by the transcription — and a dropped
+      // `environmentFault` is a disarmed gate on the very next run of that folder.
+      baseline: "plus `pendingContradiction` and `unsettledUnits` when the file has them",
+      shipped: "plus `pendingContradiction`, `unsettledUnits` and `environmentFault` when the file has them",
+      why: "`environmentFault` is the folder's memory that the stand was down and whether the operator confirmed it back; a record the read step does not name does not survive a resume, and the gate it arms exists only on file",
+    },
+    {
+      // `BLOCKER_SUBJECT_RULE` gains its third sentence — appended, so the same tail rides on the page, reach and app
+      // arms alike, and one entry anchored on the sentence before it covers all three lines.
+      baseline: "is a BUILDER subject, not a source one.",
+      shipped: "is a BUILDER subject, not a source one. `'environment'` when the STAND ITSELF did not answer",
+      why: "the build agent is the producer of the declared `'environment'` subject; without the ask the declared channel is inert and every outage is read from prose",
+    },
   ],
 }
 

@@ -522,7 +522,17 @@ export const RECONCILE_SHAPE = {
   roundState: { kind: 'object', required: ['consumedRoundAnswers'],
     types: { layoutPassDone: 'boolean', roundsSpent: 'integer', consumedRoundAnswers: 'string[]', unsettledUnits: 'string[]' },
     nested: { pendingContradiction: { kind: 'object-or-null', required: ['signature', 'rounds'],
-      types: { signature: 'string', rounds: 'integer' } } } },
+      types: { signature: 'string', rounds: 'integer' } },
+      // ENG-96778 (PR #171 scope expansion) — THE FOLDER'S MEMORY THAT THE STAND WAS DOWN, and whether the operator
+      // has confirmed it is back. TYPED AND OPTIONAL like `pendingContradiction`, and for the same reason: almost no
+      // folder has one. When it IS present both `n` and `open` are required — the gate that refuses the next build
+      // reads `open`, and the one-shot item it asks for is numbered by `n`; either half missing would be a record
+      // the gate cannot act on. Costs `RECONCILE_SCHEMA` ZERO bytes: `roundState` is a bare `{ type: 'object' }`
+      // there, so the record rides inside it and the schema stays where the 4085-byte pin holds it. It is named
+      // in the Reconcile read step for the rule stated at the top of this file — a field the copying agent is not
+      // told about is a field it drops, and a dropped record here is a disarmed gate.
+      environmentFault: { kind: 'object-or-null', required: ['n', 'open'],
+        types: { n: 'integer', open: 'boolean', unit: 'string', round: 'integer', where: 'string', what: 'string' } } } },
   parkedUnits: { kind: 'array', required: ['key'], types: { key: 'string', parkedWhy: 'string', rounds: 'integer' } },
   proposals: { kind: 'array', required: ['deviation', 'why'],
     types: { unit: 'string', deviation: 'string', why: 'string', applied: 'boolean' } },

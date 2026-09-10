@@ -429,5 +429,300 @@ check("F4 (control): once a Judge REPORTS filing the record it stops travelling 
   () => JSON.stringify({ judges: judgeItems(judgeFiledEvidence).map((j) => j.id),
     hasBlock: judgeItems(judgeFiledEvidence).map((j) => j.prompt.includes("PREFLIGHT EVIDENCE TO FILE BEFORE JUDGING")) }));
 
+/* ===========================================================================
+   ENG-96778 (PR #171 SCOPE EXPANSION) — THE STAND ITSELF DID NOT ANSWER.
+
+   The measured incident (migration `UsrAwesome`, session ce23724f): the stand was killed mid-Build. The app unit's
+   builder returned a STRUCTURED blocker naming the outage; because a structured answer is a valid answer,
+   `applyAppUnitResult` took the partial branch, `buildRound` kept dispatching, and `list`, `main` and `reach` each
+   spent 2–3 minutes rediscovering the dead port before Verify, Judge and the round-tail Reconcile ran against it — and
+   the host re-spawned that stalled Reconcile four times over fourteen hours. Nothing in the core read a blocker's
+   CONTENT before the round tail.
+
+   WHAT THESE LEGS PROVE, and why the pure `gate.mjs` goldens cannot: the WIRING. That the first environment blocker
+   halts the round (the rest deferred, never dispatched); that the stop fires BEFORE Verify, Judge and the round-tail
+   Reconcile; that the fault is written to the queue file as `roundState.environmentFault` and the status document
+   names the one-shot answer; that the NEXT run refuses inside the baseline gates — one Reconcile, one Close, nothing
+   at the stand — until `environment-restored-<n>` reads `go`; that a `go` closes the record and a second outage asks
+   for `-2`; and that no round and no repair grant is charged for an outage. Every assertion reads the run's own
+   return or dispatch sequence, never prose, and EVERY ONE WAS MUTATION-TESTED before push — this PR shipped vacuous
+   assertions twice, so each leg names the mutant that kills it.
+   =========================================================================== */
+console.log("\n===== ENG-96778 scope expansion: the first environment fault halts the round =====");
+
+// TWO UNITS, `list` first — so "the rest of the round is deferred" has a rest to defer.
+const TWO_UNITS = {
+  unitKeys: ["list", "main"], buildOrder: ["list", "main"],
+  pageSchemas: { list: "UsrApplicant_ListPage", main: "UsrApplicant_FormPage" },
+  verify: {
+    complete: false, missing: 2, buildMissing: 2, unverified: 0, pending: 0, planGaps: [],
+    pages: {
+      list: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, builderOpen: 1,
+        openRows: [{ deliverable: "Column `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage", outcome: "missing", owner: "builder" }] },
+      main: { complete: false, buildComplete: false, missing: 1, buildMissing: 1, unverified: 0, builderOpen: 1,
+        openRows: [{ deliverable: "Field `UsrStage`", status: "❌ MISSING", evidence: "missing: UsrStage", outcome: "missing", owner: "builder" }] },
+    },
+  },
+};
+const LIST_BUILT = { ...PAGE_BUILT, unit: "list", schemaName: "UsrApplicant_ListPage" };
+// The four blocker rows the legs are built from.
+const ENV_DECLARED = { what: "the stand did not answer", why: "`clio ping` failed and every MCP call errored the same way", subject: "environment" };
+const ENV_TEXT = { what: "Environment unreachable — dev-local (port 40010) actively refusing connections", why: "" };
+const ENV_MISDECLARED = { ...ENV_TEXT, subject: "source" };
+const APP_PARTIAL_ENV = { ...APP_OK, starterFormPage: "", blocked: [
+  { what: "Stand dev-local (port 40010) went down mid-build", why: "create-app-section never answered and every later call got connection refused" }] };
+// The healthy control every leg is measured against: same two units, `list` answers cleanly.
+const HEALTHY_TWO = {
+  Reconcile: () => reconcile(TWO_UNITS),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? LIST_BUILT : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+};
+const envRun = (listAnswer, extra = {}) => driveRun("env", { ...HEALTHY_TWO, ...extra,
+  Build: (item) => (/build\.list/.test(item.id) ? listAnswer : PAGE_BUILT) }, 24);
+const closePrompts = (run) => run.dispatched.filter((d) => d.phase === "Close").map((d) => d.prompt);
+const verifyPrompts = (run) => run.dispatched.filter((d) => d.phase === "Verify").map((d) => d.prompt);
+const countPhase = (run, phase) => phasesOf(run).filter((p) => p === phase).length;
+
+/* G1 — a DECLARED environment blocker. */
+const g1 = envRun({ ...LIST_BUILT, blocked: [ENV_DECLARED] });
+check("G1: a builder that DECLARES `subject: \"environment\"` stops the run `environment-unreachable` (mutant: drop `r.environmentFault` from `roundHalted` → `main` is dispatched and the run finishes)",
+  () => resultOf(g1)?.stopped === "environment-unreachable",
+  () => JSON.stringify({ stopped: resultOf(g1)?.stopped, phases: phasesOf(g1) }));
+check("G1: ONLY `list` was dispatched — `main` is DEFERRED and named, never sent at a stand that did not answer",
+  () => buildIds(g1).length === 1 && /build\.list/.test(buildIds(g1)[0]) && (resultOf(g1)?.deferred || []).includes("main"),
+  () => JSON.stringify({ builds: buildIds(g1), deferred: resultOf(g1)?.deferred }));
+check("G1: NO Verify, NO Judge, and exactly ONE Reconcile — the stop is taken before the read-back, the ruling and the round-tail Reconcile the incident's host re-spawned for fourteen hours (mutant: move the stop after Verify → a Verify appears)",
+  () => verifiesIn(g1).length === 0 && countPhase(g1, "Judge") === 0 && countPhase(g1, "Reconcile") === 1,
+  () => phasesOf(g1).join(" -> "));
+check("G1: the stop names the one-shot answer it waits for — `awaitingEnvironment` is `environment-restored-1` on the folder's first outage",
+  () => resultOf(g1)?.awaitingEnvironment === "environment-restored-1",
+  () => JSON.stringify(resultOf(g1)?.awaitingEnvironment));
+check("G1: `phaseOutcomes` records Verify and Judge `skipped` and Build `partial` — the deferral is a limp, not a clean round (mutant: drop either `outcomes.skipped` → red)",
+  () => resultOf(g1)?.phaseOutcomes?.Verify?.state === "skipped" && resultOf(g1)?.phaseOutcomes?.Judge?.state === "skipped"
+    && resultOf(g1)?.phaseOutcomes?.Build?.state === "partial",
+  () => JSON.stringify(resultOf(g1)?.phaseOutcomes));
+check("G1: the stop WRITES the status document — a Close prompt carries `RUN STATUS BEGIN` and names `environment-restored-1` as the awaited entry, and the return says `statusWritten: true` (mutant: pass no `status` to `persistPending` → red)",
+  () => closePrompts(g1).some((p) => /RUN STATUS BEGIN/.test(p) && /awaiting: `environment-restored-1`/.test(p)) && resultOf(g1)?.statusWritten === true,
+  () => closePrompts(g1).map((p) => p.slice(p.indexOf("RUN STATUS BEGIN"), p.indexOf("RUN STATUS BEGIN") + 400)).join(" | "));
+check("G1: the fault is PERSISTED as `roundState.environmentFault`, OPEN, numbered 1 and naming `list` — the record that arms the next run's gate exists only on file (mutant: leave `environmentFault` out of `carryNow().roundState` → red)",
+  () => closePrompts(g1).some((p) => /ENVIRONMENT FAULT — set `roundState\.environmentFault` to this JSON EXACTLY/.test(p)
+    && p.includes(JSON.stringify({ n: 1, open: true, unit: "list", round: 1, where: "build", what: ENV_DECLARED.what }))),
+  () => closePrompts(g1).map((p) => p.slice(p.indexOf("ENVIRONMENT FAULT"), p.indexOf("ENVIRONMENT FAULT") + 300)).join(" | "));
+check("G1: the return carries the record and the gate's arithmetic — `environmentFault` open at #1, `agentsExpected` the round's OPEN count (2) and `agentsReturned` the one builder that answered, and `next` carries the exact resolutions line and NO agent-death resume clause (nothing died)",
+  () => { const r = resultOf(g1); return r?.environmentFault?.n === 1 && r.environmentFault.open === true && r.environmentFault.unit === "list"
+    && r.agentsExpected === 2 && r.agentsReturned === 1
+    && r.next.includes('{"kind":"run","item":"environment-restored-1","answer":"go"}') && !/resumeFromRunId/.test(r.next) && /clio ping -e/.test(r.next); },
+  () => JSON.stringify({ fault: resultOf(g1)?.environmentFault, expected: resultOf(g1)?.agentsExpected, returned: resultOf(g1)?.agentsReturned, next: resultOf(g1)?.next }));
+
+/* G2 — the INCIDENT TEXT, no declared subject: inferred, and the carried row is stamped. */
+const g2 = envRun({ ...LIST_BUILT, blocked: [ENV_TEXT] });
+check("G2: the incident's own text — \"Environment unreachable — … actively refusing connections\" — with NO declared subject takes the same stop (mutant: delete Tier B / Tier A → `main` dispatched)",
+  () => resultOf(g2)?.stopped === "environment-unreachable" && (resultOf(g2)?.deferred || []).includes("main"),
+  () => JSON.stringify({ stopped: resultOf(g2)?.stopped, deferred: resultOf(g2)?.deferred }));
+check("G2: the carried row is STAMPED `subject: \"environment\"` in the queue-file carry, so what this run decided about the row is on file rather than re-derived from prose on the next resume (mutant: drop the stamping → red)",
+  () => (resultOf(g2)?.blocked || []).some((b) => b.unit === "list" && b.what === ENV_TEXT.what && b.subject === "environment")
+    && closePrompts(g2).some((p) => p.includes(JSON.stringify({ unit: "list", what: ENV_TEXT.what, why: "", subject: "environment" }))),
+  () => JSON.stringify(resultOf(g2)?.blocked));
+
+/* G3 — the INCIDENT's app unit: the package WAS created, then the stand died. */
+const g3 = driveRun("env-app", {
+  Reconcile: () => reconcileNewApp(),
+  Refs: () => REFS_OK,
+  Build: (item) => (/app/.test(item.id) ? APP_PARTIAL_ENV : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+check("G3: the incident's app unit — planned package created, then \"Stand … went down … connection refused\" — stops `environment-unreachable`, NOT `app-unit-incomplete` and NOT a partial that keeps dispatching; `main` is deferred (mutant: return before `applyUnitResultByKind` or invert the precedence → red)",
+  () => resultOf(g3)?.stopped === "environment-unreachable" && (resultOf(g3)?.deferred || []).includes("main") && buildIds(g3).length === 1,
+  () => JSON.stringify({ stopped: resultOf(g3)?.stopped, deferred: resultOf(g3)?.deferred, builds: buildIds(g3) }));
+check("G3: what the app unit DID write is still recorded — `packageCreatedByRun.appUnitComplete === false` — and persisted before the stop (a Close prompt is the app-unit write's own `recording the package the app unit created`), so the next run does not stop `new-app-over-existing-package` on this migration's own work",
+  () => resultOf(g3)?.packageCreatedByRun?.appUnitComplete === false && resultOf(g3)?.packageCreatedByRun?.package === "UsrApplicantsFreedom"
+    && g3.dispatched.some((d) => d.phase === "Close" && /recording the package the app unit created/.test(d.prompt)),
+  () => JSON.stringify({ pkg: resultOf(g3)?.packageCreatedByRun, closes: closePrompts(g3).map((p) => p.slice(0, 120)) }));
+
+/* G4 — THE CONTROLS: every shipped phrase that must NOT halt the round. One run, five rows — any of them misread stops it. */
+const g4 = envRun({ ...LIST_BUILT, blocked: [
+  { what: "Field `UsrStage` is missing from the built list page", why: "the builder did not add it", subject: "builder" },
+  { what: "Live render check on surface automatic:3 could not be performed", why: "verification surface unreachable" },
+  { what: "get-page timed out after 120s (error-class=creatio-timeout)", why: "switched to the shell clio and continued" },
+  { what: "ECONNREFUSED 127.0.0.1:9222 — the headless Chrome check could not start", why: "", subject: "builder" },
+  { what: "a section in no workplace is unreachable from the menu", why: "" },
+] });
+check("G4 (controls): a builder blocker, the run's own \"verification surface unreachable\", a transport `timed out after 120s`, a builder-declared `ECONNREFUSED 127.0.0.1:9222` and the workplace-binding row all leave the round RUNNING — `main` is dispatched and the stop is not the environment one (mutant: bare `unreachable`/`timed out`, or Tier A overriding `builder` → red)",
+  () => resultOf(g4)?.stopped !== "environment-unreachable" && buildIds(g4).some((id) => /build\.main/.test(id)) && verifiesIn(g4).length >= 1,
+  () => JSON.stringify({ stopped: resultOf(g4)?.stopped, builds: buildIds(g4) }));
+check("G4 (control): the PARTIAL app unit from AC 12 — planned package, stub not removed, no outage in its text — still does NOT take the environment stop",
+  () => resultOf(appPartial)?.stopped !== "environment-unreachable",
+  () => JSON.stringify(resultOf(appPartial)?.stopped));
+
+/* G5 — the fault is seen in PREFLIGHT. */
+const g5 = driveRun("env-preflight", {
+  Reconcile: () => reconcile({ preflightItems: [PREFLIGHT_ITEM] }),
+  Preflight: () => ({ resolved: [], unresolved: [{ id: PREFLIGHT_ITEM.id, why: "clio ping: connection refused (ECONNREFUSED)", settlingQuery: "clio ping -e dev" }] }),
+  Refs: () => REFS_OK,
+  Build: () => PAGE_BUILT,
+  Verify: () => VERIFY_OK,
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+});
+check("G5: a preflight agent that could not resolve its item because the stand refused connections stops `environment-unreachable` BEFORE Refs, Judge and Build — the last read-only point (mutant: remove the `unresolved[]` scan → Refs and Build run)",
+  () => resultOf(g5)?.stopped === "environment-unreachable" && !phasesOf(g5).includes("Refs") && !phasesOf(g5).includes("Judge") && !phasesOf(g5).includes("Build"),
+  () => JSON.stringify({ stopped: resultOf(g5)?.stopped, phases: phasesOf(g5) }));
+check("G5: the preflight stop PERSISTS its record with the status — unlike `preflight-produced-nothing`, which persists nothing — because the gate on the next run exists only on file: a Close prompt carries `RUN STATUS BEGIN`, the open record with `where: \"preflight\"`, and the return names `environment-restored-1` (mutant: skip the persist → red)",
+  () => closePrompts(g5).some((p) => /RUN STATUS BEGIN/.test(p) && p.includes(JSON.stringify({ n: 1, open: true, round: 0, where: "preflight", what: "clio ping: connection refused (ECONNREFUSED)" })))
+    && resultOf(g5)?.awaitingEnvironment === "environment-restored-1" && resultOf(g5)?.environmentFault?.where === "preflight"
+    && resultOf(g5)?.agentsExpected === 1 && resultOf(g5)?.agentsReturned === 1 && resultOf(g5)?.rounds === 0 && resultOf(g5)?.phaseOutcomes?.Build?.state === "skipped",
+  () => JSON.stringify({ closes: closePrompts(g5).length, fault: resultOf(g5)?.environmentFault, outcomes: resultOf(g5)?.phaseOutcomes }));
+const g5control = driveRun("env-preflight-control", {
+  Reconcile: () => reconcile({ preflightItems: [PREFLIGHT_ITEM] }),
+  Preflight: () => ({ resolved: [], unresolved: [{ id: PREFLIGHT_ITEM.id, why: "DuplicatesRule query errored with 403", settlingQuery: "select from DuplicatesRule" }] }),
+  Refs: () => REFS_OK,
+  Build: () => PAGE_BUILT,
+  Verify: () => VERIFY_OK,
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+});
+check("G5 (control): an unresolved item whose reason is an ordinary query error (`errored with 403`) proceeds to Refs and Build exactly as before — an unresolved ⚠ Confirm row is not an outage",
+  () => resultOf(g5control)?.stopped !== "environment-unreachable" && phasesOf(g5control).includes("Refs") && phasesOf(g5control).includes("Build"),
+  () => JSON.stringify({ stopped: resultOf(g5control)?.stopped, phases: phasesOf(g5control) }));
+
+/* G6 — THE GATE on the next run: record open, no answer. */
+console.log("\n===== ENG-96778 scope expansion: the next run refuses until the operator's word =====");
+const FAULT_ON_FILE = { n: 1, open: true, unit: "list", round: 1, where: "build", what: ENV_DECLARED.what };
+const gateRun = (tag, roundStateExtra, runResolutions, extra = {}) => driveRun(tag, {
+  Reconcile: () => reconcile({ ...TWO_UNITS, preflightItems: [PREFLIGHT_ITEM], runResolutions,
+    roundState: { layoutPassDone: false, roundsSpent: 1, consumedRoundAnswers: [], ...roundStateExtra }, ...extra }),
+  Preflight: () => PREFLIGHT_RESOLVED,
+  Judge: () => ({ verdicts: [] }),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? LIST_BUILT : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+const g6 = gateRun("gate-absent", { environmentFault: FAULT_ON_FILE }, []);
+check("G6: a folder whose record says the stand was down and whose answer file says nothing stops `awaiting-environment-restored`, verdict `absent` (mutant: remove the gate → the run builds)",
+  () => resultOf(g6)?.stopped === "awaiting-environment-restored" && resultOf(g6)?.environmentAnswerVerdict === "absent" && resultOf(g6)?.awaitingEnvironment === "environment-restored-1",
+  () => JSON.stringify({ stopped: resultOf(g6)?.stopped, verdict: resultOf(g6)?.environmentAnswerVerdict }));
+check("G6: the phase sequence is EXACTLY `Reconcile -> Close` — nothing was dispatched at the stand, not even Preflight though ⚠ Confirm items were published (mutant: take the gate after Preflight → `Preflight` appears; remove it → `Build` appears)",
+  () => JSON.stringify(phasesOf(g6)) === JSON.stringify(["Reconcile", "Close"]),
+  () => phasesOf(g6).join(" -> "));
+check("G6: the gate holds in `auto` — the mode says nobody is watching, not that the stand is back — and the stop is written down: `RUN STATUS BEGIN`, the awaited `environment-restored-1`, `statusWritten: true`, Build `skipped`",
+  () => resultOf(g6)?.mode === "auto" && resultOf(g6)?.statusWritten === true && resultOf(g6)?.phaseOutcomes?.Build?.state === "skipped"
+    && closePrompts(g6).some((p) => /RUN STATUS BEGIN/.test(p) && /awaiting: `environment-restored-1`/.test(p) && /awaiting-environment-restored/.test(p)),
+  () => JSON.stringify({ mode: resultOf(g6)?.mode, statusWritten: resultOf(g6)?.statusWritten, closes: closePrompts(g6).map((p) => p.slice(p.indexOf("RUN STATUS BEGIN"), p.indexOf("RUN STATUS BEGIN") + 300)) }));
+check("G6: the record is returned UNCHANGED (still open, still #1) and NOT rewritten — the refusing run touches nothing on file, so a Close prompt here carries no ENVIRONMENT FAULT replace line",
+  () => resultOf(g6)?.environmentFault?.open === true && resultOf(g6)?.environmentFault?.n === 1
+    && !closePrompts(g6).some((p) => /ENVIRONMENT FAULT — set/.test(p)),
+  () => JSON.stringify(resultOf(g6)?.environmentFault));
+
+/* G7 — the operator said `go`. */
+const g7 = gateRun("gate-go", { environmentFault: FAULT_ON_FILE }, [{ item: "environment-restored-1", answer: "go" }]);
+check("G7: with `environment-restored-1` = `go` on file the run BUILDS — Preflight and Build are dispatched and the stop is not the environment one (mutant: never authorise → G6 repeats)",
+  () => resultOf(g7)?.stopped !== "awaiting-environment-restored" && phasesOf(g7).includes("Preflight") && buildIds(g7).length >= 1,
+  () => JSON.stringify({ stopped: resultOf(g7)?.stopped, phases: phasesOf(g7) }));
+check("G7: the record is CLOSED by the next carry — the Verify prompt's REPLACE line writes `roundState.environmentFault` as `{\"n\":1,\"open\":false,…` with `clearedBy` naming the answer and says the record is CLOSED, so the answer is spent by record and a later outage is numbered #2 (mutant: not closing → G6 repeats; dropping the key from `carryNow` → no REPLACE line at all)",
+  () => verifyPrompts(g7).some((p) => /ENVIRONMENT FAULT — set `roundState\.environmentFault` to this JSON EXACTLY[^\n]*REPLACING whatever the key holds: \{"n":1,"open":false,/.test(p)
+    && p.includes('"clearedBy":"environment-restored-1"') && /so the record is CLOSED/.test(p)),
+  () => verifyPrompts(g7).map((p) => p.slice(p.indexOf("ENVIRONMENT FAULT — set"), p.indexOf("ENVIRONMENT FAULT — set") + 400)).join(" | ") || phasesOf(g7).join(" -> "));
+
+/* G8 — ONE-SHOT and NUMBERED. */
+const g8a = gateRun("gate-stale", { environmentFault: { ...FAULT_ON_FILE, n: 2 } }, [{ item: "environment-restored-1", answer: "go" }]);
+check("G8a: a `go` for #1 does NOT clear outage #2 — the gate asks for `environment-restored-2` and reads the file as `absent` (mutant: a constant item name → the stale answer opens the gate)",
+  () => resultOf(g8a)?.stopped === "awaiting-environment-restored" && resultOf(g8a)?.awaitingEnvironment === "environment-restored-2" && resultOf(g8a)?.environmentAnswerVerdict === "absent",
+  () => JSON.stringify({ stopped: resultOf(g8a)?.stopped, awaiting: resultOf(g8a)?.awaitingEnvironment }));
+const g8b = driveRun("gate-second-outage", {
+  Reconcile: () => reconcile({ ...TWO_UNITS, runResolutions: [{ item: "environment-restored-1", answer: "go" }],
+    roundState: { layoutPassDone: false, roundsSpent: 1, consumedRoundAnswers: [], environmentFault: { ...FAULT_ON_FILE, open: false, clearedBy: "environment-restored-1" } } }),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? { ...LIST_BUILT, blocked: [ENV_DECLARED] } : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+check("G8b: a folder whose first outage is CLOSED builds again, and a SECOND outage records `n: 2` and asks for `environment-restored-2` — the old `go` on file authorises nothing (mutant: `n` not incremented → asks for #1 again, which the file already answers)",
+  () => resultOf(g8b)?.stopped === "environment-unreachable" && resultOf(g8b)?.awaitingEnvironment === "environment-restored-2" && resultOf(g8b)?.environmentFault?.n === 2 && resultOf(g8b)?.environmentFault?.open === true,
+  () => JSON.stringify({ stopped: resultOf(g8b)?.stopped, fault: resultOf(g8b)?.environmentFault }));
+
+/* G9 — a DECLINE and an UNREADABLE answer both refuse, and say what they read. */
+const g9stop = gateRun("gate-refused", { environmentFault: FAULT_ON_FILE }, [{ item: "environment-restored-1", answer: "stop" }]);
+const g9vague = gateRun("gate-vague", { environmentFault: FAULT_ON_FILE }, [{ item: "environment-restored-1", answer: "maybe later" }]);
+check("G9: `stop` is read as `refused` and `maybe later` as `unrecognised` — both refuse, both quote the answer back in the reason, and neither dispatches a build (mutant: a presence test → both open the gate)",
+  () => resultOf(g9stop)?.stopped === "awaiting-environment-restored" && resultOf(g9stop)?.environmentAnswerVerdict === "refused" && resultOf(g9stop)?.environmentAnswer === "stop"
+    && /"stop"/.test(resultOf(g9stop)?.reason || "") && buildIds(g9stop).length === 0
+    && resultOf(g9vague)?.stopped === "awaiting-environment-restored" && resultOf(g9vague)?.environmentAnswerVerdict === "unrecognised" && resultOf(g9vague)?.environmentAnswer === "maybe later"
+    && /"maybe later"/.test(resultOf(g9vague)?.reason || "") && buildIds(g9vague).length === 0,
+  () => JSON.stringify({ stop: [resultOf(g9stop)?.environmentAnswerVerdict, resultOf(g9stop)?.reason], vague: [resultOf(g9vague)?.environmentAnswerVerdict, resultOf(g9vague)?.reason] }));
+
+/* G11 — NO ROUND CHARGED. */
+console.log("\n===== ENG-96778 scope expansion: an outage costs no round and no grant =====");
+check("G11: the halting run's Close prompt carries NO `ROUND COUNTERS` block naming `list` — an outage is not a failed attempt, so `roundOf` is untouched and the unit keeps its whole budget (mutant: keep calling `chargeBuildAttempt` → red)",
+  () => !closePrompts(g1).some((p) => /ROUND COUNTERS[\s\S]*?- `list`/.test(p)),
+  () => closePrompts(g1).map((p) => p.slice(p.indexOf("ROUND COUNTERS"), p.indexOf("ROUND COUNTERS") + 200)).join(" | "));
+const healthyTwo = driveRun("env-healthy-control", HEALTHY_TWO, 24);
+check("G11 (control): the healthy run's Verify prompt DOES carry a `ROUND COUNTERS` block naming `list` and `main` — which is what makes the absence above a measurement of the skip rather than of a missing block",
+  () => verifyPrompts(healthyTwo).some((p) => /ROUND COUNTERS[\s\S]*?- `list`/.test(p) && /ROUND COUNTERS[\s\S]*?- `main`/.test(p)),
+  () => verifyPrompts(healthyTwo).map((p) => p.slice(p.indexOf("ROUND COUNTERS"), p.indexOf("ROUND COUNTERS") + 200)).join(" | ") || phasesOf(healthyTwo).join(" -> "));
+
+/* G12 — NO GRANT SPENT. An answered resolution routed to `list` (its item already filed, so Preflight has nothing
+   to do), an operator finding on `list`, and an `unsettled: true` in the outage answer: none of the three one-shot
+   memories may be consumed by a builder whose stand vanished. */
+const LIST_RESOLVED_ITEM = { id: "list#confirm:filter:Applicant", pageKey: "list", kind: "confirm", item: "filter",
+  resolution: { answer: "keep the Classic default filter", decidedBy: "kamil", date: "2026-09-09" } };
+const LIST_ANSWER_NOT_BUILT = [{ id: LIST_RESOLVED_ITEM.id, applied: false, why: "the stand stopped answering before the filter could be set" }];
+const g12 = driveRun("env-grants", {
+  Reconcile: () => reconcile({ ...TWO_UNITS, preflightItems: [LIST_RESOLVED_ITEM], evidenceFiled: [LIST_RESOLVED_ITEM.id], evidenceIds: [LIST_RESOLVED_ITEM.id] }),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? { ...LIST_BUILT, unsettled: true, resolutionsApplied: LIST_ANSWER_NOT_BUILT, blocked: [ENV_DECLARED] } : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+// The same shape, healthy: the answer channel's accounting DOES fire when the builder answers normally without
+// `resolutionsApplied`, which is what makes the empty carry above a measurement of the skip.
+const g12control = driveRun("env-grants-control", {
+  Reconcile: () => reconcile({ ...TWO_UNITS, preflightItems: [LIST_RESOLVED_ITEM], evidenceFiled: [LIST_RESOLVED_ITEM.id], evidenceIds: [LIST_RESOLVED_ITEM.id] }),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? { ...LIST_BUILT, unsettled: true, resolutionsApplied: LIST_ANSWER_NOT_BUILT } : PAGE_BUILT),
+  // A verifier handed a unit's answer claims must echo a check per claim (`verifierSchemaWithChecks` requires
+  // `resolutionChecks`); `unknown` is the honest verdict for a golden that reads no stand.
+  Verify: () => ({ ...VERIFY_OK, resolutionChecks: [{ unit: "list", id: LIST_RESOLVED_ITEM.id, shows: "unknown", found: "not read in this golden" }] }),
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+check("G12 (precondition): the answered resolution IS routed to `list` — its build prompt carries the operator's answer — so the leg below measures a skipped spend and not an answer that never arrived",
+  () => g12.dispatched.some((d) => /build\.list/.test(d.id) && /keep the Classic default filter/.test(d.prompt)),
+  () => g12.dispatched.filter((d) => d.phase === "Build").map((d) => d.id).join(", "));
+check("G12: the halting run spends NO grant — the carry's repair grants read `reopened []`, its unconsumed answers `[]`, no unsettled-units memory names `list`, and no unconsumed row for `list` is returned (mutant: keep calling `consumeRepairGrants` / record `unsettled` on the outage answer → red)",
+  () => resultOf(g12)?.stopped === "environment-unreachable"
+    && closePrompts(g12).some((p) => /reopened \[\], pending \[\]/.test(p) && /UNCONSUMED OPERATOR ANSWERS[^\n]*: \[\]/.test(p))
+    && !closePrompts(g12).some((p) => /"unsettledUnits":\["list"\]/.test(p))
+    && (resultOf(g12)?.unconsumedResolutions || []).length === 0
+    && !/operator finding for `list` has had its repair round|unaccounted answers on `list` have had their repair round|settle window: `list`/.test(g12.log),
+  () => JSON.stringify({ stopped: resultOf(g12)?.stopped, phases: phasesOf(g12), pending: g12.pending?.items?.[0]?.id, submitErr: (g12.submitErr || "").slice(-300), unconsumed: resultOf(g12)?.unconsumedResolutions, grants: closePrompts(g12).map((p) => p.slice(p.indexOf("ANSWER-CHANNEL REPAIR GRANTS"), p.indexOf("ANSWER-CHANNEL REPAIR GRANTS") + 200)) }));
+check("G12 (control): the SAME answer, reported `applied: false` by a builder whose stand was fine, DOES spend the grant — the carry's reopened list names `list` and an unconsumed row is filed — and its `unsettled: true` IS remembered (the settle-window log line the halting leg asserts absent)",
+  () => resultOf(g12control)?.stopped !== "environment-unreachable"
+    && verifyPrompts(g12control).some((p) => /reopened \[\{"unit":"list"/.test(p))
+    && (resultOf(g12control)?.unconsumedResolutions || []).some((u) => u.unit === "list")
+    && /settle window: `list` reported a read that never settled/.test(g12control.log),
+  () => JSON.stringify({ stopped: resultOf(g12control)?.stopped, phases: phasesOf(g12control), pending: g12control.pending?.items?.[0]?.id, submitErr: (g12control.submitErr || "").slice(-300), unconsumed: resultOf(g12control)?.unconsumedResolutions,
+    grants: verifyPrompts(g12control).map((p) => p.slice(p.indexOf("ANSWER-CHANNEL REPAIR GRANTS"), p.indexOf("ANSWER-CHANNEL REPAIR GRANTS") + 200)) }));
+
+/* G13 — STALE ROWS on file are the folder's history, not a fault. */
+const g13 = driveRun("env-stale-row", {
+  Reconcile: () => reconcile({ ...TWO_UNITS, blocked: [{ unit: "list", ...ENV_TEXT, subject: "environment" }] }),
+  Refs: () => REFS_OK,
+  Build: (item) => (/build\.list/.test(item.id) ? LIST_BUILT : PAGE_BUILT),
+  Verify: () => VERIFY_OK,
+  Judge: () => ({ verdicts: [] }),
+  Close: () => ({ written: true, statusWritten: true }),
+}, 24);
+check("G13: an environment row CARRIED in the queue file with no fault record neither stops nor parks at baseline — the run proceeds to Build, `list` IS dispatched (so nothing parked it before its build) and no park reads as a SOURCE one; the folder's memory of an outage is `roundState.environmentFault`, never a row (mutant: scan `blockedItems` for the fault → the run stops before any Build)",
+  () => resultOf(g13)?.stopped !== "environment-unreachable" && resultOf(g13)?.stopped !== "awaiting-environment-restored"
+    && buildIds(g13).some((id) => /build\.list/.test(id)) && verifiesIn(g13).length >= 1
+    && !(resultOf(g13)?.parked || []).some((p) => /blocker is in the SOURCE/.test(p.parkedWhy)),
+  () => JSON.stringify({ stopped: resultOf(g13)?.stopped, builds: buildIds(g13), parked: (resultOf(g13)?.parked || []).map((p) => `${p.key}: ${p.parkedWhy.slice(0, 60)}`) }));
+
 console.log(`\n=================\nSTAGE-GATES GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

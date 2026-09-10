@@ -8,7 +8,7 @@
 // … `#Section/Applicant` errors at runtime with Script error" — because a blocked item is not a park and
 // nothing classified a source-side runtime error as un-buildable.
 import {
-  classifyBlocker, blockerKey, sourceBlockerParks, sourceParkWhy,
+  classifyBlocker, blockerKey, sourceBlockerParks, sourceParkWhy, environmentFaultRow,
 } from "../../skills/_workflow-core/build-executor/gate.mjs";
 
 let pass = 0, fail = 0;
@@ -302,6 +302,135 @@ check("PR #157 review (round 2): the declared field is read case- and whitespace
   () => classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: " BUILDER " }).class === "unknown"
     && classifyBlocker({ what: "x", subject: "Source" }).class === "source",
   () => JSON.stringify(classifyBlocker({ ...APPLICANT_LIST_BLOCKER, subject: " BUILDER " })));
+
+/* ---------------------------------------------------------------------------
+   ENG-96778 (PR #171 scope expansion) — THE `environment` CLASS: the stand itself did not answer.
+
+   The measured run (`migrations/UsrAwesome`, session ce23724f) had its stand killed mid-Build. The builders
+   answered with STRUCTURED blockers naming the outage, and under the two-class split every one of them was
+   `unknown` → retryable, so `list`, `main` and `reach` were each dispatched at a dead port, and Verify, Judge and
+   Reconcile ran after them. These goldens pin the third class the core now halts on, its two pattern tiers, the
+   precedence against a declared subject, and — as importantly — every shipped phrase that must NOT be read as one.
+   EVERY POSITIVE ROW BELOW IS KILLED BY DELETING EXACTLY ONE REGEX (mutation-tested before push): each text matches
+   one pattern and no other, so a pattern removed from the list turns its own row red rather than hiding behind a
+   sibling.
+   --------------------------------------------------------------------------- */
+console.log("\n===== ENG-96778: the environment class — the stand itself did not answer =====");
+
+const clsEnv = (what, why = "", subject) => classifyBlocker(subject === undefined ? { unit: "list", what, why } : { unit: "list", what, why, subject }).class;
+// The two incident texts, as the run journal carried them. The first is the row `list`/`main`/`reach` each filed;
+// the second is the app unit's, which the partial-branch of `applyAppUnitResult` accepted as a valid answer.
+const ENV_INCIDENT_LIST = { unit: "list", what: "Environment unreachable — dev-local (port 40010) actively refusing connections", why: "" };
+const ENV_INCIDENT_APP = { unit: "app", what: "Stand dev-local (port 40010) went down mid-build", why: "create-app-section never answered and every later call got connection refused" };
+
+check("ENG-96778: the incident's `list` row — \"Environment unreachable — dev-local (port 40010) actively refusing connections\" — is ENVIRONMENT, the class that used to be `unknown` and bought the next two units their own 2-3 minute rediscovery of the outage",
+  () => classifyBlocker(ENV_INCIDENT_LIST).class === "environment",
+  () => JSON.stringify(classifyBlocker(ENV_INCIDENT_LIST)));
+check("ENG-96778: the incident's APP row — \"Stand … went down … connection refused\" — is ENVIRONMENT too; this is the row the partial-app-unit branch accepted as a valid answer and kept dispatching behind",
+  () => classifyBlocker(ENV_INCIDENT_APP).class === "environment",
+  () => JSON.stringify(classifyBlocker(ENV_INCIDENT_APP)));
+
+// TIER A — one row per socket/DNS token, each matching ONE regex in `ENVIRONMENT_SOCKET_PATTERNS`.
+const TIER_A = [
+  ["connect ECONNREFUSED 127.0.0.1:40010", "ECONN(REFUSED)"],
+  ["read ECONNRESET while fetching the page", "ECONN(RESET)"],
+  ["ECONNABORTED on the second call", "ECONN(ABORTED)"],
+  ["connect ETIMEDOUT 10.0.0.5:443", "E(TIMEDOUT)"],
+  ["ENOTFOUND my-stand.example", "E(NOTFOUND)"],
+  ["EHOSTUNREACH — no route to host", "E(HOSTUNREACH)"],
+  ["ENETUNREACH from this network", "E(NETUNREACH)"],
+  ["EAI_AGAIN resolving the stand host", "E(AI_AGAIN)"],
+  ["the connection was refused by the stand port", "connection … refused"],
+  ["port 40010 is actively refusing", "actively refusing"],
+  ["the listener refused all connections", "refused … connections"],
+  ["getaddrinfo failed for the configured host", "getaddrinfo"],
+  ["nodename nor servname provided, or not known", "nodename nor servname"],
+];
+for (const [text, token] of TIER_A) {
+  check(`ENG-96778 Tier A: \`${token}\` on its own reads ENVIRONMENT — the transport's own words for "nobody is listening", which no agent writes about a page (mutant: delete that regex → this row is red)`,
+    () => clsEnv(text) === "environment", () => JSON.stringify(classifyBlocker({ what: text })));
+}
+// The Tier A tokens are the transport's UPPER-CASE codes — a lower-case look-alike in prose is not one.
+check("ENG-96778 Tier A: the socket codes are matched as the codes the transport prints — `econnrefused` in prose is not `ECONNREFUSED`, so a word that merely resembles one stays `unknown`",
+  () => clsEnv("the econnrefused wording in the doc is confusing") === "unknown");
+
+// TIER B — one row per phrasing, each matching ONE regex in `ENVIRONMENT_STAND_PATTERNS`.
+const TIER_B = [
+  ["the stand dev-local (port 40010) went down while the page was being written", "<noun> … went down"],
+  ["Environment unreachable — dev-local", "<noun> unreachable"],
+  ["an unreachable environment answered nothing for three minutes", "unreachable <noun>"],
+  ["cannot reach the dev-local instance", "cannot reach … <noun>"],
+  ["cannot connect to the application at all", "cannot connect to the application"],
+];
+for (const [text, phrase] of TIER_B) {
+  check(`ENG-96778 Tier B: "${phrase}" — a stand NOUN beside a DOWN state — reads ENVIRONMENT on an undeclared row (mutant: delete that regex → this row is red)`,
+    () => clsEnv(text) === "environment", () => JSON.stringify(classifyBlocker({ what: text })));
+}
+check("ENG-96778 Tier B: the noun list is shared by every phrasing — `instance`, `site`, `server` and `application server` all count, so a noun cannot be recognised in one phrasing and missed in another",
+  () => clsEnv("the instance is offline") === "environment" && clsEnv("the site is down") === "environment"
+    && clsEnv("the server is not responding") === "environment" && clsEnv("the application server remains unreachable") === "environment",
+  () => ["the instance is offline", "the site is down", "the server is not responding", "the application server remains unreachable"].map((t) => `${clsEnv(t)} <= ${t}`));
+
+// THE NEGATIVES — every shipped phrase the corpus check found that must KEEP its current class. Each is a real
+// string from the core, the gate or the policy doc, and each would become a false round halt if a bare token
+// (`unreachable`, `timed out`, `environment`, `surface`, `page`) were ever admitted (mutant: widen a pattern to the
+// bare word → the matching row here goes red).
+const ENV_NEGATIVES = [
+  ["Live render check on surface automatic:3 could not be performed — verification surface unreachable", "the run's OWN render check (core.mjs / gate.mjs header)"],
+  ["a section in no workplace is unreachable from the menu, which is the deliverable this unit exists for", "the workplace-binding blocker the core itself files"],
+  ["built pages stay unreachable", "the reachability `miss` text the plan publishes"],
+  ["get-page timed out", "a TRANSPORT fault agents are told to switch transport on"],
+  ["clio-run timed out after 120s (error-class=creatio-timeout)", "the policy's own timeout example — transport, not environment"],
+  ["Environment version could not be probed (resolvedFromReason=probe-error)", "a probe that could not run is not a stand that is down"],
+  ["the surface is unreachable", "`surface` is deliberately not a stand noun"],
+  ["the stand answered but the page in this section is not responding to clicks", "the sentence leaves the stand and goes on about a page — seven words past the noun, outside the four-word noun-verb window (mutant: unbounded window → red)"],
+  ["an environment fault was suspected but the page rendered", "bare `environment fault` is not admitted"],
+  ["the host was slow but answered", "`host` is deliberately not a stand noun"],
+];
+for (const [text, why] of ENV_NEGATIVES) {
+  check(`ENG-96778 negative: "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}" stays \`unknown\` — ${why}`,
+    () => clsEnv(text) === "unknown", () => JSON.stringify(classifyBlocker({ what: text })));
+}
+check("ENG-96778 negative: the ENG-94859 Applicant blocker KEEPS its `source` class — the environment tier must not cost the one case the source split was written to catch",
+  () => classifyBlocker(APPLICANT_LIST_BLOCKER).class === "source");
+
+// PRECEDENCE against a declared subject — each rule flipped is a red row.
+const SOCKET_TEXT = "connect ECONNREFUSED 127.0.0.1:40010 while opening the page";
+check("ENG-96778 precedence: a declared `subject: \"environment\"` reads ENVIRONMENT on any text — the agent that hit it answered the question directly, and the reason says it was DECLARED",
+  () => { const v = classifyBlocker({ unit: "list", what: "nothing answered", subject: "environment" }); return v.class === "environment" && /DECLARED/.test(v.reason); },
+  () => JSON.stringify(classifyBlocker({ unit: "list", what: "nothing answered", subject: "environment" })));
+check("ENG-96778 precedence: Tier A OVERRIDES a declared `source` — a socket error contradicts \"the Classic artefact failed\", and a wrong `source` is a TERMINAL park; the incident's `list` row was declared exactly that (mutant: honour the declared `source` first → red)",
+  () => classifyBlocker({ ...ENV_INCIDENT_LIST, subject: "source" }).class === "environment"
+    && classifyBlocker({ unit: "list", what: SOCKET_TEXT, subject: "source" }).class === "environment",
+  () => JSON.stringify(classifyBlocker({ ...ENV_INCIDENT_LIST, subject: "source" })));
+check("ENG-96778 precedence: and the override SAYS it contradicted the declaration, so an operator reading the row can see why the agent's own word was not taken",
+  () => /contradicts the declared/.test(classifyBlocker({ unit: "list", what: SOCKET_TEXT, subject: "source" }).reason),
+  () => classifyBlocker({ unit: "list", what: SOCKET_TEXT, subject: "source" }).reason);
+check("ENG-96778 precedence: Tier A does NOT override a declared `builder` — `ECONNREFUSED 127.0.0.1:9222` is the builder's own headless-Chrome check failing, and it stays retryable (mutant: let Tier A run before the builder check → red)",
+  () => classifyBlocker({ unit: "list", what: "ECONNREFUSED 127.0.0.1:9222 — the render check could not open Chrome", subject: "builder" }).class === "unknown",
+  () => JSON.stringify(classifyBlocker({ unit: "list", what: "ECONNREFUSED 127.0.0.1:9222", subject: "builder" })));
+check("ENG-96778 precedence: Tier B NEVER overrides a declared subject — \"the stand went down\" with `subject: \"source\"` is still SOURCE and with `subject: \"builder\"` still `unknown`; the words are ordinary English and the agent already answered (mutant: run Tier B on declared rows → red)",
+  () => classifyBlocker({ unit: "list", what: "the stand went down while I was reading the Classic page", subject: "source" }).class === "source"
+    && classifyBlocker({ unit: "list", what: "the stand went down while I was reading the Classic page", subject: "builder" }).class === "unknown",
+  () => JSON.stringify([classifyBlocker({ what: "the stand went down while I was reading the Classic page", subject: "source" }),
+    classifyBlocker({ what: "the stand went down while I was reading the Classic page", subject: "builder" })]));
+
+// NO PARK. An environment row is neither source nor builder: it must never become a terminal park record, however it
+// was declared — including the misdeclared incident row, which used to be one re-run away from parking `list`.
+check("ENG-96778: `sourceBlockerParks` parks NONE of the environment rows — not the declared one, not the inferred ones, and not the incident's row misdeclared `source` (mutant: drop the Tier A override → the misdeclared row parks terminally)",
+  () => sourceBlockerParks([ENV_INCIDENT_LIST, ENV_INCIDENT_APP, { ...ENV_INCIDENT_LIST, subject: "source" },
+    { unit: "main", what: "nothing answered", subject: "environment" }]).length === 0,
+  () => JSON.stringify(sourceBlockerParks([ENV_INCIDENT_LIST, ENV_INCIDENT_APP, { ...ENV_INCIDENT_LIST, subject: "source" }])));
+
+// THE READ THE CORE MAKES: first environment row or null.
+check("ENG-96778: `environmentFaultRow` returns the FIRST environment-classified row and nothing else — a builder row ahead of it is skipped, a list with none returns `null`, and holes are tolerated",
+  () => environmentFaultRow([{ what: "Field `UsrStage` is missing" }, ENV_INCIDENT_LIST, ENV_INCIDENT_APP]) === ENV_INCIDENT_LIST
+    && environmentFaultRow([{ what: "Field `UsrStage` is missing" }, APPLICANT_LIST_BLOCKER]) === null
+    && environmentFaultRow([null, undefined, ENV_INCIDENT_APP]) === ENV_INCIDENT_APP
+    && environmentFaultRow([]) === null && environmentFaultRow(undefined) === null,
+  () => JSON.stringify(environmentFaultRow([{ what: "Field `UsrStage` is missing" }, ENV_INCIDENT_LIST])));
+check("ENG-96778: `environmentFaultRow` threads `ownRoutes` through, so a Classic `#Section/` reference beside an environment token still reads ENVIRONMENT (the environment tier is decided before the source patterns run)",
+  () => environmentFaultRow([{ unit: "list", what: "`#Section/Applicant` could not be opened — connection refused" }], ["#Section/UsrApplicants_ListPage"]) !== null);
 
 /* --------------------------------------------------------------------------- */
 console.log(`\n=================\nGATE GOLDEN: ${pass} passed, ${fail} failed`);
