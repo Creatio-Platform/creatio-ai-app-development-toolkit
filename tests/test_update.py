@@ -168,14 +168,6 @@ class NativeUpdateCommandsTests(unittest.TestCase):
                     ["claude", "plugin", "update", "creatio-ai-app-development-toolkit@creatio"],
                 ],
             )
-            # Codex has no `plugin update`: refresh the snapshot, then re-add.
-            self.assertEqual(
-                self.upd.native_update_commands("codex"),
-                [
-                    ["codex", "plugin", "marketplace", "upgrade", "creatio"],
-                    ["codex", "plugin", "add", "creatio-ai-app-development-toolkit@creatio"],
-                ],
-            )
             self.assertEqual(
                 self.upd.native_update_commands("copilot"),
                 [
@@ -187,6 +179,15 @@ class NativeUpdateCommandsTests(unittest.TestCase):
     def test_unknown_or_copy_target_raises(self):
         with self.assertRaises(ValueError):
             self.upd.native_update_commands("cursor")
+        # Codex CLI has no `plugin add`/`plugin install`, so Codex is a
+        # COPY target reinstalled through install.py, not a native one.
+        with self.assertRaises(ValueError):
+            self.upd.native_update_commands("codex")
+
+    def test_codex_is_a_copy_target(self):
+        self.assertIn("codex", self.upd.COPY_TARGETS)
+        self.assertNotIn("codex", self.upd.NATIVE_TARGETS)
+        self.assertEqual(set(self.upd.ALL_TARGETS), set(self.upd.NATIVE_TARGETS) | set(self.upd.COPY_TARGETS))
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +267,29 @@ class UpdateAgentsTests(unittest.TestCase):
         self.assertEqual((updated, failed), ([], ["cursor"]))
         run.assert_not_called()
 
+    def test_codex_delegates_to_install_py_reinstall(self):
+        # No `codex plugin add`; the update is a reinstall from the
+        # release source, which re-registers the marketplace and re-materializes
+        # the plugin cache.
+        calls = []
+
+        def record(cmd, **kw):
+            calls.append(cmd)
+            return self._ok()
+
+        with patch.object(self.upd.subprocess, "run", side_effect=record):
+            updated, failed = self.upd.update_agents(["codex"], fresh_root=self.fresh_root, silent=True)
+
+        self.assertEqual((updated, failed), (["codex"], []))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1:], [str(self.fresh_root / "installer" / "install.py"), "--target", "codex"])
+
+    def test_codex_without_source_is_failure(self):
+        with patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:
+            updated, failed = self.upd.update_agents(["codex"], fresh_root=None, silent=True)
+        self.assertEqual((updated, failed), ([], ["codex"]))
+        run.assert_not_called()
+
     def test_updates_exactly_the_targets_handed(self):
         # update_agents no longer filters: the caller scopes the list. Passing a
         # single id must update only that id (one agent × two native steps).
@@ -277,15 +301,17 @@ class UpdateAgentsTests(unittest.TestCase):
 
     def test_failed_step_recorded_and_other_agents_continue(self):
         def side(cmd, **kw):
-            if cmd[0] == "codex" and "add" in cmd:
+            if cmd[0] == "copilot" and cmd[1:3] == ["plugin", "update"]:
                 return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
             return self._ok()
 
         r1, r2, r3 = self._patch_resolvers()
-        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side):
-            updated, failed = self.upd.update_agents(["codex", "copilot"], silent=True)
-        self.assertEqual(updated, ["copilot"])
-        self.assertEqual(failed, ["codex"])
+        with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side), patch.object(
+            self.upd, "refresh_claude_named_workflows", return_value=[]
+        ):
+            updated, failed = self.upd.update_agents(["copilot", "claude"], silent=True, home=self.home)
+        self.assertEqual(updated, ["claude"])
+        self.assertEqual(failed, ["copilot"])
 
     def test_step_passes_timeout_and_blocks_stdin(self):
         seen: dict = {}
@@ -296,7 +322,7 @@ class UpdateAgentsTests(unittest.TestCase):
 
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=record):
-            self.upd.update_agents(["codex"], silent=True)
+            self.upd.update_agents(["copilot"], silent=True)
 
         self.assertEqual(seen.get("timeout"), self.upd._STEP_TIMEOUT_SECONDS)
         self.assertEqual(seen.get("stdin"), subprocess.DEVNULL)
@@ -307,8 +333,8 @@ class UpdateAgentsTests(unittest.TestCase):
 
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=side):
-            updated, failed = self.upd.update_agents(["codex"], silent=True)
-        self.assertEqual((updated, failed), ([], ["codex"]))
+            updated, failed = self.upd.update_agents(["copilot"], silent=True)
+        self.assertEqual((updated, failed), ([], ["copilot"]))
 
     def test_resolver_failure_recorded(self):
         # CLI not on PATH → resolve raises RuntimeError → that agent fails.
@@ -433,9 +459,9 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         with patch.object(
-            self.upd.agent_cli, "resolve_codex_command", return_value=["codex"]
+            self.upd.agent_cli, "resolve_copilot_command", return_value=["copilot"]
         ), patch.object(self.upd.subprocess, "run", side_effect=ok):
-            self.upd.update_agents(["codex"], silent=True, home=self.home)
+            self.upd.update_agents(["copilot"], silent=True, home=self.home)
 
         self.assertFalse((self.home / ".claude" / "workflows").exists())
 
@@ -471,12 +497,12 @@ class UpdateMainTests(unittest.TestCase):
         self.assertEqual(result, 0)
 
     def test_native_only_skips_download(self):
-        # No Cursor → no release source needed; report version via the light API.
+        # No Cursor/Codex → no release source needed; report version via the light API.
         with (
-            patch.object(self.upd, "detect_installed_target_ids", return_value=["codex", "claude", "copilot"]),
+            patch.object(self.upd, "detect_installed_target_ids", return_value=["claude", "copilot"]),
             patch.object(self.upd, "acquire_source") as acquire,
             patch.object(self.upd.version_check, "latest_release_version", return_value="0.2.0"),
-            patch.object(self.upd, "update_agents", return_value=(["codex", "claude", "copilot"], [])),
+            patch.object(self.upd, "update_agents", return_value=(["claude", "copilot"], [])),
             patch.object(self.upd.os, "chdir") as chdir,
             patch("builtins.print") as mock_print,
         ):

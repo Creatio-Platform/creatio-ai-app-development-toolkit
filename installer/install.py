@@ -226,6 +226,7 @@ def register_remote_marketplace_and_install_plugin(
     marketplace_remove_flags: list[str] | None = None,
     install_verb: str = "install",
     pre_remove_marketplace: bool = False,
+    install_plugin: bool = True,
 ) -> None:
     """Register the remote marketplace and install the plugin via the host CLI.
 
@@ -245,11 +246,13 @@ def register_remote_marketplace_and_install_plugin(
       Codex CLI also produces the conflict error on Windows path round-trips
       that the upstream cleanup did not normalize.
 
-    `install_verb` is `"install"` for Claude/Copilot and `"add"` for Codex,
-    matching each CLI's plugin-install subcommand name. `pre_remove_marketplace`
-    converts the conflict-driven retry into an unconditional remove-then-add
-    sequence — Claude and Codex both pass True so cleanup of legacy state is
-    exhaustive.
+    `install_verb` is `"install"` for Claude/Copilot. `install_plugin=False` skips
+    the plugin-install step: Codex CLI has no non-interactive plugin-install
+    subcommand (`codex plugin` offers only `marketplace`), so install_codex only
+    registers the marketplace here and materializes the plugin itself — see
+    materialize_codex_plugin. `pre_remove_marketplace` converts the
+    conflict-driven retry into an unconditional remove-then-add sequence — Claude
+    and Codex both pass True so cleanup of legacy state is exhaustive.
     """
     marketplace_subcmd = [*cli_command, "plugin", "marketplace"]
     add_command = [*marketplace_subcmd, "add", MARKETPLACE_GIT_URL]
@@ -269,7 +272,8 @@ def register_remote_marketplace_and_install_plugin(
             if not _marketplace_not_found(remove_error):
                 raise
         run_checked(add_command)
-        run_checked(install_command)
+        if install_plugin:
+            run_checked(install_command)
         return
 
     # Conflict-driven retry path. Through install_codex, pre_remove_marketplace
@@ -286,7 +290,8 @@ def register_remote_marketplace_and_install_plugin(
         except RuntimeError as remove_error:
             print(f"Could not remove existing '{MARKETPLACE_NAME}' marketplace: {remove_error}")
         run_checked(add_command)
-    run_checked(install_command)
+    if install_plugin:
+        run_checked(install_command)
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
@@ -614,7 +619,7 @@ def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_na
     The old file-copy install_codex wrote a personal-marketplace catalog at this
     path so Codex could resolve the local-path plugin source. Codex CLI prefers
     that file over the freshly-cloned git marketplace of the same name, which
-    breaks `codex plugin add`. We strip the plugin entry; if no plugin entries
+    shadows the git marketplace of the same name at install time. We strip the plugin entry; if no plugin entries
     remain and the catalog still self-identifies as the installer-managed
     `creatio` catalog (`name == marketplace_name`), the whole file is deleted —
     any top-level keys the user customized on the installer-managed catalog
@@ -897,8 +902,69 @@ nothing. Telemetry must never gate or delay the task.
 """
 
 
+def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: str) -> None:
+    """Write the `[plugins."<plugin>@<marketplace>"] enabled = true` block Codex reads at startup.
+
+    Idempotent: an existing block for the same key is dropped first so a re-run never
+    leaves two tables behind. The block alone does not load a plugin — Codex also needs
+    the install cache written by materialize_codex_plugin.
+    """
+    remove_codex_plugin_section(config_path, plugin_name, marketplace_name)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    needs_newline = bool(existing) and not existing.endswith("\n")
+    plugin_key = f"{plugin_name}@{marketplace_name}"
+    block = (
+        "\n"
+        "# Added by CAADT installer.\n"
+        f"[plugins.{toml_quote(plugin_key)}]\n"
+        "enabled = true\n"
+    )
+    # Append only the installer-owned block instead of rewriting the whole file:
+    # the user's existing config never flows into the write.
+    with config_path.open("a", encoding="utf-8") as handle:
+        if needs_newline:
+            handle.write("\n")
+        handle.write(block)
+
+
+def materialize_codex_plugin(
+    repo_root: Path,
+    codex_home: Path,
+    plugin_name: str = PLUGIN_NAME,
+    marketplace_name: str = MARKETPLACE_NAME,
+) -> Path:
+    """Install the plugin the way Codex's interactive `/plugins` browser does.
+
+    Codex CLI has no non-interactive install command, and it loads plugin skills
+    only from `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/` —
+    enabling the plugin in config.toml is not enough on its own. The
+    installer therefore copies the plugin runtime surface (the same
+    `.release-manifest.json` `plugin_runtime` list the Cursor install copies) into
+    that directory and enables the plugin. Older cached versions of this plugin
+    are removed so exactly one version remains. Returns the version directory.
+
+    One plugin per call so a multi-plugin installer can run it once
+    per catalog entry.
+    """
+    version = plugin_version(repo_root)
+    plugin_cache_root = codex_home / "plugins" / "cache" / marketplace_name / plugin_name
+    remove_tree_if_exists(plugin_cache_root, "Codex")
+    target = plugin_cache_root / version
+    copy_plugin_runtime_surface(repo_root, target)
+    enable_codex_plugin(codex_home / "config.toml", plugin_name, marketplace_name)
+    return target
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
-    """Install Codex via the remote marketplace (parity with install_claude).
+    """Install Codex: register the remote marketplace, then materialize the plugin.
+
+    Codex CLI has no non-interactive `plugin install` / `plugin add` subcommand —
+    the only documented install path is the interactive `/plugins` browser, which
+    (a) copies the plugin into `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/`
+    and (b) writes `[plugins."<plugin>@<marketplace>"] enabled = true` into
+    config.toml. Skills load only when both exist, so after registering the
+    marketplace the installer performs both steps itself.
 
     Migration cleanup runs first so users coming from the legacy file-copy install
     end up in the same state as a fresh install. The clio MCP block stays in
@@ -906,9 +972,14 @@ def install_codex(repo_root: Path, home: Path) -> None:
     declarations to user-level `[mcp_servers.*]` entries.
     """
     ensure_required_references(repo_root)
+    # `<home>/.codex` is also what detect_targets keys on; a `$CODEX_HOME` override
+    # is deliberately not read here (an environment-derived path would be an
+    # untrusted input to every write below).
     codex_home = home / ".codex"
 
-    # On-disk artifacts left by the old file-copy install_codex.
+    # On-disk artifacts left by the old file-copy install_codex. The marketplace
+    # cache is wiped as a whole because the legacy layout put files directly under
+    # it; materialize_codex_plugin re-creates the per-plugin version dir below.
     remove_tree_if_exists(codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME, "Codex")
     remove_tree_if_exists(codex_home / "plugins" / "cache" / MARKETPLACE_NAME, "Codex")
     remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "Codex")
@@ -921,7 +992,12 @@ def install_codex(repo_root: Path, home: Path) -> None:
     )
 
     # config.toml leftovers from the file-copy install. Leave [mcp_servers.clio]
-    # alone — merge_codex_mcp_config re-merges it below.
+    # alone — merge_codex_mcp_config re-merges it below. The plugin block is
+    # removed HERE, next to the cache wipe above, and re-added only by
+    # enable_codex_plugin once the cache exists again: if anything between the two
+    # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
+    # the run exits non-zero without leaving `enabled = true` pointing at a version
+    # directory that no longer exists.
     config_path = codex_home / "config.toml"
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
     remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
@@ -930,10 +1006,11 @@ def install_codex(repo_root: Path, home: Path) -> None:
     register_remote_marketplace_and_install_plugin(
         resolve_codex_command(),
         marketplace_remove_flags=[],
-        install_verb="add",
         pre_remove_marketplace=True,
+        install_plugin=False,
     )
 
+    materialize_codex_plugin(repo_root, codex_home)
     merge_codex_mcp_config(repo_root, config_path)
 
 

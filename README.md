@@ -34,10 +34,20 @@ claude plugin install creatio-ai-app-development-toolkit@creatio
 
 **Codex CLI**
 
+Codex CLI has no non-interactive plugin-install command (`codex plugin` offers only `marketplace`), so
+use the installer — it registers the marketplace, materializes the plugin into Codex's plugin cache,
+enables it in `~/.codex/config.toml` and adds the `clio` MCP server:
+
 ```bash
-codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
-codex plugin add creatio-ai-app-development-toolkit@creatio
+python installer/install.py --target codex
 ```
+
+Supported Codex CLI: 0.130 or newer (verified on 0.130.0 and 0.153.4). Older releases that still
+offered `codex plugin add` are not supported by this installer path.
+
+Or register the marketplace and install interactively: `codex plugin marketplace add <repository URL>`,
+then `/plugins` inside Codex and pick `creatio-ai-app-development-toolkit`; run the installer once anyway
+to add the `clio` MCP server.
 
 **GitHub Copilot CLI**
 
@@ -46,9 +56,7 @@ copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-ap
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
 
-Codex additionally needs the `clio` MCP server registered in `~/.codex/config.toml` — run
-`python installer/install.py --target codex` once to add it. See [docs/install.md](docs/install.md)
-for release-zip installation and agent-specific install details.
+See [docs/install.md](docs/install.md) for release-zip installation and agent-specific install details.
 
 ### Install from a local checkout (developers)
 
@@ -75,10 +83,9 @@ claude plugin update creatio-ai-app-development-toolkit@creatio
 
 **Codex CLI**
 
-```bash
-codex plugin marketplace upgrade creatio
-codex plugin add creatio-ai-app-development-toolkit@creatio
-```
+Codex has no native plugin update command — update it with the manual updater below (`--target codex`
+limits the run to Codex). It re-registers the marketplace and re-materializes the plugin from the latest
+release.
 
 **GitHub Copilot CLI**
 
@@ -87,7 +94,7 @@ copilot plugin marketplace update creatio
 copilot plugin update creatio-ai-app-development-toolkit@creatio
 ```
 
-Cursor has no native update command — update it with the manual updater below (use `--target cursor` to limit the run to Cursor).
+Cursor has no native update command either — update it with the manual updater below (use `--target cursor` to limit the run to Cursor).
 
 ### Update every agent in one shot
 
