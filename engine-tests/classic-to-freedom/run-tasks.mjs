@@ -318,6 +318,21 @@ check("unreadable file: a file with NO readable `id` is refused the same way —
     const m = mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "built already", malformed: "no front matter", meta: {} }]);
     return (m.blocked || []).some((b) => b.file === "task-hand-edited.md") && renderTaskIndex(m).includes("task-hand-edited.md");
   }, () => mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "x", malformed: "no front matter", meta: {} }]).blocked);
+check("unreadable file: its QUEUE ROW says `⚠ unread`, never the fresh task's default `todo` — the refused file may record `done`, and reading `todo` off the queue is how a sub-agent gets dispatched onto a page that is already built",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const m = mergeTaskSet(SET, [{ file: t.file, notes: "built already", malformed: "no front matter", meta: {} , }]);
+    const broken = mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]);
+    const idx = renderTaskIndex(broken);
+    const row = idx.split("\n").find((l) => l.includes(t.file) && l.startsWith("|"));
+    return m.blocked.length === 1 && /⚠ unread/.test(row) && !/☐ todo/.test(row);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }])));
+check("unreadable file: it counts as `Other`, not as an OPEN task — the queue must not claim to know a status nobody recorded",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const idx = renderTaskIndex(mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]));
+    return /\*\*Other:\*\* 1/.test(idx) && new RegExp(`\\*\\*Open:\\*\\* ${SET.tasks.length - 1}`).test(idx);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }])).split("\n")[2]);
 check("duplicate id: when two files claim one `id` the engine can no longer tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
   () => {
     const t = taskAt(SET, "main", "Pages");

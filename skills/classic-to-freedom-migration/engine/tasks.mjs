@@ -264,13 +264,15 @@ function indexRows(tasks) {
   const L = ["| Step | Task | Page | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
     const rows = `${t.rows.length}${t.gatedRows ? ` (${t.gatedRows} gated)` : ""}`;
-    L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${statusMark(t.status)} | ${rows} | [${t.file}](${t.file}) |`);
+    const mark = t.unread ? "⚠ unread" : statusMark(t.status);
+    L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
 
 function taskAttention(t) {
   const out = [];
+  if (t.unread) return out;   // its own refusal line already names the file; nothing here was recorded by anyone
   if (!TASK_STATUSES.includes(t.status)) {
     out.push(`- \`${t.file}\` — unrecognised status \`${t.status}\`: use one of ${TASK_STATUSES.join(" / ")}`);
   } else if (t.drifted) {
@@ -300,7 +302,8 @@ function attentionLines(set) {
 function countStatuses(tasks) {
   const counts = { done: 0, open: 0, other: 0 };
   for (const t of tasks) {
-    if (t.status === S_DONE) counts.done++;
+    if (t.unread) counts.other++;
+    else if (t.status === S_DONE) counts.done++;
     else if (OPEN_STATUSES.has(t.status)) counts.open++;
     else counts.other++;
   }
@@ -347,7 +350,17 @@ export function mergeTaskSet(fresh, existing = []) {
   const orchestrated = extra.filter((e) => e.meta.origin === TASK_ORIGIN_ORCHESTRATOR).map(adoptOrchestrated);
   const stale = extra.filter((e) => e.meta.origin !== TASK_ORIGIN_ORCHESTRATOR).map((e) => ({ file: e.file, id: e.meta.id }));
   const ordered = [...tasks, ...orchestrated].sort((a, b) => a.order - b.order);
-  return { ...fresh, tasks: ordered.map((t, i) => ({ ...t, step: i + 1 })), stale, blocked };
+  // A task whose file was refused must not appear in the queue as `todo`. It got the fresh task's default status
+  // because nothing readable could be carried over — and that file may record `done`. Reading `todo` there is how
+  // a sub-agent gets dispatched onto a page that is already built, which is the whole reason the status vocabulary
+  // is checked in the first place.
+  const refused = new Set(blocked.map((b) => b.file));
+  return {
+    ...fresh,
+    tasks: ordered.map((t, i) => ({ ...t, step: i + 1, unread: refused.has(t.file) })),
+    stale,
+    blocked,
+  };
 }
 
 // An ENGINE task is matched only against an ENGINE file. An orchestrator file that carries an engine task's `id` —

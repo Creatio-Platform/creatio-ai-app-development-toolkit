@@ -368,9 +368,13 @@ in one context it had one machine check, at the very end. A session that hit a u
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
-1. **One task at a time, in the `order` its file carries.** The order is leaf-first and it is a build
+1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
    requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
-   before the parent list that opens it, and the list page comes after the form page it is gated off.
+   before the parent list that opens it, and the list page comes after the form page it is gated off. Two
+   deliberate exceptions: the run's FIRST task is `main · Pages` — the app, package, section and page shells that
+   every other task needs to exist — and within each page its `⚠ Confirm worklist` precedes that page's own build
+   groups, so a page is never built against an unanswered question. (A question that could change WHICH pages
+   exist blocks the plan at the structure gate instead, so it never reaches a task.)
 2. **One sub-agent per task, in a fresh context.** The stand is a shared mutable resource: reads parallelise,
    writes do not. Never run two build sub-agents at once.
 3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
