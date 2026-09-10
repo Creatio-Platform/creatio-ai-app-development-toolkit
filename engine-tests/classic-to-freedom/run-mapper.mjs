@@ -13786,6 +13786,37 @@ check("ENG-96327 (item 5): `--plan --resolutions` REMOVES each answered ⚠ Conf
     } finally { fs.rmSync(f, { force: true }); }
   },
   () => "see --plan --resolutions on the fixture");
+// ---- item 5, the NON-VACUOUS forced-negative (Tanya's review) -------------------------------------------------
+// The `--plan --resolutions` golden above answers only `list-columns`/`list-add-routing` (LIST_PAGE_NOISE) and
+// `layout-type` (BUILDER_ONLY) — kinds the `confirm` filter (designspec.mjs ~1053) already drops via a denylist
+// clause that SHORT-CIRCUITS `&&` before `!isAnswered(d)` is ever reached. So deleting `!isAnswered(d)` would leave
+// that golden green: it never exercises the resolution-aware drop it claims to pin, and it has no forced-negative.
+// This golden uses TWO GENUINELY-RENDERED confirm decisions (`component` is in no denylist), answers ONLY the first,
+// and asserts all three facts the drop is made of — so removing `!isAnswered(d)` turns assertion (1) RED.
+{
+  const cKind = "component";
+  const answered = { kind: cKind, item: "SalesFunnelChart", reason: "module 'SalesFunnelWidget' (chart/widget) — propose closest standard Freedom component, confirm with user" };
+  const open = { kind: cKind, item: "KpiGauge", reason: "module 'KpiGaugeWidget' (chart/widget) — propose closest standard Freedom component, confirm with user" };
+  const twoComp = { entity: "X", changeSet: { needsDecision: [answered, open] } };
+  const resolutions = [{ kind: cKind, item: "SalesFunnelChart", answer: "Replace with crt.PivotTable", decidedBy: "Tanya", date: "2026-09-11" }];
+  // (1) the ANSWERED `component` row is REMOVED from the human ⚠ Confirm (this is the assertion `!isAnswered(d)`
+  //     makes true — delete that clause and the answered row renders, turning this red); and
+  // (2) the OPEN `component` row is STILL rendered as its `- **[component]** …` bullet.
+  const humanSpec = renderDesignSpec(twoComp, { embedded: true, resolutions });
+  check("ENG-96327 (item 5, forced-negative): `--resolutions` drops the ANSWERED `component` row from the human ⚠ Confirm while the OPEN one still renders — deleting `!isAnswered(d)` turns this red",
+    !/\*\*\[component\]\*\* SalesFunnelChart/.test(humanSpec)   // answered → gone from the human plan
+    && /\*\*\[component\]\*\* KpiGauge/.test(humanSpec),         // open → still a bullet
+    () => humanSpec.split("\n").filter((l) => /\[component\]|Confirm before/.test(l)));
+  // (3) the MACHINE channel is UNAFFECTED: `--units.preflight` still carries BOTH — the answered one annotated with
+  //     its `resolution`, the open one with `resolution: null`. The human drop must never lose the answer the build
+  //     consumes (confirmWorklistRows filters only SHOWN_ELSEWHERE/closed, never `isAnswered`).
+  const pf = pageUnits(twoComp, { resolutions }).preflight.filter((p) => p.kind === cKind);
+  check("ENG-96327 (item 5, forced-negative): `--units.preflight` carries BOTH `component` rows regardless of the human drop — answered one with a resolution, open one with null",
+    () => pf.length === 2
+      && pf.find((p) => p.item === "SalesFunnelChart")?.resolution?.answer === "Replace with crt.PivotTable"
+      && pf.find((p) => p.item === "KpiGauge")?.resolution == null,
+    () => pf.map((p) => ({ item: p.item, resolution: p.resolution })));
+}
 
 // ---- item 6: no generator instructions in the delivered plan --------------------------------------------------
 check("ENG-96457 (item 6): the delivered plan file carries no authoring text and no `<FILL:` placeholder — a plan is what a human approves, not a note telling its reader to fill `manifest.planMeta`",
