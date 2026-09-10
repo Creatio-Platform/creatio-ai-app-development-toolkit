@@ -2013,6 +2013,10 @@ export function scopeGroups(groups, pageKey) {
 function pageGroup(pageKey, title, rows) {
   return {
     title: pageKey === "main" ? title : `${esc(pageKey)} · ${title}`,
+    // The group's own name, with no page prefix and no escaping. `title` is for RENDERING and a sub-page's is
+    // prefixed with an escaped key, so a consumer that needs to recognise the group (`tasks.mjs` orders its build
+    // phases by it) would otherwise have to unpick that prefix — many-to-one, and wrong for any key `esc` alters.
+    baseTitle: title,
     pageKey,
     rows: rows.map((r) => ({ ...r, pageKey })),
   };

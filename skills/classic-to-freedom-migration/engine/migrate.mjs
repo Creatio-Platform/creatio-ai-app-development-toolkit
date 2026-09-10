@@ -55,6 +55,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
+import { syncTaskDir, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2488,14 +2489,15 @@ function provenanceIssue(pages) {
 // The flags that TAKE A VALUE: their value must be excluded from the positional-manifest search (else
 // `--out plan.md` would read `plan.md` as the manifest). Mode flags (`--plan`, `--verify`, …) take no value and
 // belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built"]);
+const TASKS_FLAG = "--tasks";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
   const next = argv[i + 1];
   if (next === undefined || next.startsWith("--")) {
     const got = next === undefined ? "no argument" : `the flag '${next}'`;
-    onBad(`\`${flag}\` needs a file path (e.g. \`${example}\`) — got ${got}; nothing was written`);
+    onBad(`\`${flag}\` needs a path (e.g. \`${example}\`) — got ${got}; nothing was written`);
   }
   return next;
 }
@@ -2511,6 +2513,31 @@ function valueFlagArg(argv, flag, example, onBad) {
 // the run is incomplete. Telling the agent not to present it left the CLI and the skill contradicting each
 // other on the same file, with the agent free to pick either. Own fn (not another inline branch) for the same
 // reason `valueFlagArg` is one: the CLI block does not grow a branch every time a case is added.
+// `--tasks <dir>` — the approved plan as a FOLDER of one-task files plus a derived `index.md`, for a caller that
+// dispatches one sub-agent per task instead of holding every deliverable in one context. Same rows as
+// `--checklist`; see tasks.mjs for what the engine rewrites and what the caller keeps.
+//
+// A PLAN-LEVEL GAP WRITES NOTHING. `gate` / `structure` / `coverage` describe the PLAN, and no build round closes
+// one — slicing a broken plan into tasks would hand sub-agents write access to a stand against deliverables the
+// plan cannot state. So this mode refuses BEFORE it creates the folder, rather than after a builder has run.
+function runTaskMode(result, dir, opts) {
+  const gaps = planGaps(result);
+  if (gaps.length) {
+    return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
+      + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
+  }
+  const set = syncTaskDir(dir, result, opts);
+  const done = set.tasks.filter((t) => t.status === "done").length;
+  const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted || t.malformed).length
+    + (set.stale?.length || 0);
+  const lines = [
+    `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not.`,
+    `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Hand ONE task file at a time to a build sub-agent, in the \`order\` the files carry, and re-run this mode after each status change.`,
+  ];
+  if (attention) lines.push(`⚠ ${attention} item(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  return lines.join("\n") + "\n";
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (verifyMode) {
@@ -2526,6 +2553,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
+  const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
@@ -2535,8 +2563,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
     fail("`--verify` needs `--built <file>` — a JSON KEYED BY PAGE: " + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by (`main`, `list`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>`), and give each one clio `get-page`'s `bundle.viewConfig` VERBATIM (the merged page — not the page's own body, which cannot show template-provided components).");
   const builtFile = builtIdx >= 0 ? argv[builtIdx + 1] : null;
+  // `--tasks <dir>`: the DIRECTORY the task files and the index are written into. It is created if missing, and
+  // nothing already in it is deleted — see tasks.mjs.
+  const tasksDir = valueFlagArg(argv, TASKS_FLAG, `${TASKS_FLAG} ./build-tasks`, fail);
   // `--out <file>`: WRITE the output to a file so the agent presents the file, not a hand-paste.
   const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
+  // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
+  // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
+  if (tasksMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -2584,6 +2618,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scopes: result.stubIndex,
     }, null, 2) + "\n";
   }
+  else if (tasksMode) output = runTaskMode(result, tasksDir, checklistOpts(manifest));
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
@@ -2616,6 +2651,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
+  else if (tasksMode) label = "build tasks";
   else if (verifyMode) label = "verification";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.

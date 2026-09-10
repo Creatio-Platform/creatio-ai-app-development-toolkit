@@ -772,8 +772,8 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("ENG-96483 review (Major): the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
     fromCi.length > 0 && fromPkg.length === fromCi.length && fromPkg.every((r, i) => r === fromCi[i]),
     () => ({ scriptsTest: fromPkg, ciSteps: fromCi }));
-  check("ENG-96483 review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, all four runners and the drift check are all in it",
-    ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs"]
+  check("ENG-96483 review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
+    ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs", "run-tasks.mjs"]
       .every((r) => fromPkg.includes(r)),
     () => fromPkg);
   // And the README no longer states a claim nothing enforces.

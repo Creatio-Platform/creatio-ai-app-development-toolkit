@@ -13,6 +13,7 @@ node migrate.mjs <manifest.json>          # full JSON: effective page + ChangeSe
 node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
+node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
@@ -30,6 +31,28 @@ version to approve. It does NOT cover `seed`, `detailSchemas`, `childPageSchemas
 built plans share their MAIN-PAGE inputs — it is not a checksum of the whole artifact. It is the string the
 `decisions.md` approval entry names. `plan.md` is engine-WRITTEN, so nothing else can put a version in it and
 survive the next `--plan --out`.
+
+**`--tasks <dir>` — the plan as a FOLDER of one-task files (SKILL.md step 7).** Same rows as `--checklist`, cut one
+task per (page, group) so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
+context. Four properties decide its behaviour, and they are stated in full in `tasks.mjs`:
+
+- **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
+  carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
+  the index changes nothing.
+- **The engine owns the deliverable rows; the caller owns `status` and `## Notes`.** A re-run rewrites the rows from
+  the current plan (they are the plan's) and never touches the caller's two. A task whose `id` carries
+  `origin: orchestrator` is neither rewritten nor removed — it is not the engine's to author.
+- **Ids are content-derived, not positional** — a short hash over (pageKey, group) — so inserting a page renumbers
+  nothing and a recorded status stays attached to the task it was recorded for. `order` carries the build sequence
+  and is the field that moves: leaf-first, `main` after its sub-pages, `list` after `main`.
+- **Nothing is ever deleted.** A task that leaves the plan is reported as stale on the index, because deleting the
+  file is how a record of work already done on a stand disappears. Statuses are a checked vocabulary
+  (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is reported, never read as "not done".
+
+A **plan-level gap writes NOTHING and exits 2** — `gate` / `structure` / `coverage`. Slicing a plan with a gap would
+hand sub-agents write access to a stand against deliverables the plan cannot state, so this mode refuses before it
+creates the folder rather than after a builder has run. `--out` is rejected here (exit 1): the mode writes the
+folder itself, and silently ignoring `--out` would leave a caller believing the artifact went where it asked.
 
 **The build loop is `--checklist` → build → `--verify`.** `--checklist` renders one group per page the migration
 creates — `main`, `list` (when the plan gates a list-page deliverable), `child:<Entity>`, `typed:<Schema>`,
@@ -164,6 +187,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `registry/component-index.json` — the **generated** component index (205 components × 7 platform versions; version membership as a bitmask). Regenerate with `node scripts/build-registry-index.mjs --src <static-files checkout>`; it is data, never hand-edited, and excluded from Sonar for that reason.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
+- `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
 
 ## Tests & internals
