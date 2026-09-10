@@ -54,10 +54,16 @@ hard, since the user asked for exactly that agent.
   and the `creatio` entry in `~/.agents/plugins/marketplace.json`), scrubs `[marketplaces.creatio]`,
   `[plugins."creatio-ai-app-development-toolkit@creatio"]`, and any matching `[[skills.config]]`
   override out of `~/.codex/config.toml`, then runs `codex plugin marketplace remove creatio`
-  (tolerating "not found"), `codex plugin marketplace add <url>`, and
-  `codex plugin add creatio-ai-app-development-toolkit@creatio`. Finally re-merges the `clio` MCP
-  server block into `~/.codex/config.toml` — Codex CLI does not auto-promote plugin-bundled
-  `.mcp.json` entries to user-level `[mcp_servers.*]`, so the installer keeps that registration.
+  (tolerating "not found") and `codex plugin marketplace add <url>`. Codex CLI has no
+  non-interactive plugin-install command (the interactive `/plugins` browser is the only documented
+  path), so the installer performs the two steps that browser does: it copies the plugin runtime
+  surface into `~/.codex/plugins/cache/creatio/creatio-ai-app-development-toolkit/<version>/` and
+  writes `[plugins."creatio-ai-app-development-toolkit@creatio"] enabled = true` into
+  `~/.codex/config.toml` — Codex loads plugin skills only when both exist. Supported Codex CLI: 0.130 or
+  newer (verified on 0.130.0 and 0.153.4); Codex exposes no non-interactive install API the installer
+  could call instead. Finally re-merges the `clio` MCP server block into `~/.codex/config.toml` — Codex CLI
+  does not auto-promote plugin-bundled `.mcp.json` entries to user-level `[mcp_servers.*]`, so the
+  installer keeps that registration.
 - **Cursor** (`~/.cursor/`) — copies the plugin into
   `~/.cursor/plugins/local/creatio-ai-app-development-toolkit/`, installs the `clio` MCP server into
   `~/.cursor/mcp.json` (merging with any existing servers), and writes a
@@ -78,19 +84,20 @@ the marketplace and install the plugin without running [install.py](../installer
 claude plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 claude plugin install creatio-ai-app-development-toolkit@creatio
 
-# Codex CLI
+# Codex CLI — no non-interactive install verb: register the marketplace, then either pick the
+# plugin in the `/plugins` browser inside Codex or let the installer materialize it.
 codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
-codex plugin add creatio-ai-app-development-toolkit@creatio
+python installer/install.py --target codex
 
 # GitHub Copilot CLI
 copilot plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git
 copilot plugin install creatio-ai-app-development-toolkit@creatio
 ```
 
-Note that Codex still needs the `clio` MCP server in `~/.codex/config.toml` — the marketplace
-install does not register it. Run `python installer/install.py --target codex` to add the
-`[mcp_servers.clio]` block (and to apply the legacy-state cleanup the manual flow above does not
-cover).
+Note that Codex still needs the `clio` MCP server in `~/.codex/config.toml` — a marketplace
+install does not register it. `python installer/install.py --target codex` adds the
+`[mcp_servers.clio]` block, materializes the plugin cache and applies the legacy-state cleanup the
+manual flow above does not cover.
 
 The terminal commands above do not configure the Cursor rule — for that, run
 `python installer/install.py`.
@@ -140,9 +147,9 @@ The Claude, Copilot, and Codex marketplace manifests (`.claude-plugin/marketplac
 `.github/plugin/marketplace.json`, `.agents/plugins/marketplace.json`) pin the plugin payload to
 the `release` branch via `source.ref: "release"`. The `release` branch is a moving pointer that
 the release workflow force-updates to the latest released SHA after `gh release create` succeeds.
-Effect: `claude plugin install creatio-ai-app-development-toolkit@creatio`,
-`codex plugin add creatio-ai-app-development-toolkit@creatio`, and the Copilot equivalent always
-fetch the most-recent published release, never an unreleased commit on `main`.
+Effect: `claude plugin install creatio-ai-app-development-toolkit@creatio`, the Codex `/plugins`
+install, and the Copilot equivalent always fetch the most-recent published release, never an
+unreleased commit on `main`.
 
 The plugin `source.source: "url"` discriminator is the documented form for git-URL-backed
 sources — see [Claude Code's plugin marketplaces docs](https://code.claude.com/docs/en/plugin-marketplaces.md)
@@ -182,12 +189,13 @@ Cursor file-copy path), the path is per-CLI native:
   add:
   ```bash
   codex plugin marketplace add https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git --ref <your-branch>
-  codex plugin add creatio-ai-app-development-toolkit@creatio
   ```
-  The `--ref` flag overrides the marketplace clone's tracked branch; the plugin payload then
-  follows whatever `ref` is declared inside that branch's `marketplace.json`. Useful for
-  fast-iteration dev work, but Cursor (file-copy) is preferred for the inner toolkit-itself
-  loop because it picks up local edits without a commit.
+  then install the plugin from the `/plugins` browser inside Codex (Codex CLI has no
+  non-interactive install command). The `--ref` flag overrides the marketplace clone's tracked
+  branch; the plugin payload then follows whatever `ref` is declared inside that branch's
+  `marketplace.json`. For local edits without a commit, run `python installer/install.py --target codex`
+  from the branch checkout: it materializes the plugin cache from the local files, the same way the
+  Cursor file-copy install does.
 - **GitHub Copilot CLI** — there is no native escape hatch (see
   [github/copilot-cli#1296](https://github.com/github/copilot-cli/issues/1296)). To test unreleased
   changes, fall back to the Cursor file-copy install from a local checkout of the working branch
