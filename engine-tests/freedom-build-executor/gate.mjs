@@ -317,7 +317,7 @@ check("PR #157 review (round 2): the declared field is read case- and whitespace
    --------------------------------------------------------------------------- */
 console.log("\n===== ENG-96778: the environment class — the stand itself did not answer =====");
 
-const clsEnv = (what, why = "", subject) => classifyBlocker(subject === undefined ? { unit: "list", what, why } : { unit: "list", what, why, subject }).class;
+const clsEnv = (what, why = "", subject = undefined) => classifyBlocker(subject === undefined ? { unit: "list", what, why } : { unit: "list", what, why, subject }).class;
 // The two incident texts, as the run journal carried them. The first is the row `list`/`main`/`reach` each filed;
 // the second is the app unit's, which the partial-branch of `applyAppUnitResult` accepted as a valid answer.
 const ENV_INCIDENT_LIST = { unit: "list", what: "Environment unreachable — dev-local (port 40010) actively refusing connections", why: "" };

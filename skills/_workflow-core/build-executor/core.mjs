@@ -1531,7 +1531,8 @@ Return the schema. Nothing else.`
     if (!rec?.open) return null
     const item = environmentRestoredItem(rec.n)
     const decision = roundAuthorised(runResolutionAnswer(state.runResolutions, item))
-    const seenAt = `${rec.where || 'build'}${rec.unit ? `, unit \`${rec.unit}\`` : ''}`
+    const unitSuffix = rec.unit ? `, unit \`${rec.unit}\`` : ''
+    const seenAt = `${rec.where || 'build'}${unitSuffix}`
     if (decision.verdict === 'authorised') {
       environmentFault = { ...rec, open: false, clearedBy: item }
       log(`the folder records an environment fault (#${rec.n}, ${seenAt}) and the operator answered \`${item}\` = ${JSON.stringify(decision.answer)} — recording it as CLEARED and continuing; a new outage would ask for \`${environmentRestoredItem(rec.n + 1)}\``)
@@ -1765,10 +1766,12 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
   // ENG-96778 (PR #171 scope expansion) — the folder's environment-fault record, seeded ONLY if the gate above has
   // not already rewritten it (it closes the record on an authorised answer, and that closed record must not be
   // overwritten by the file's open one). Left `undefined` on a folder with no record, so the carry says nothing.
-  if (environmentFault === undefined) {
+  function seedEnvironmentFault() {
+    if (environmentFault !== undefined) return
     const faultOnFile = environmentFaultRecord(roundRecord.environmentFault)
     if (faultOnFile) environmentFault = faultOnFile
   }
+  seedEnvironmentFault()
   // WHICH OF THE TWO `layout-first` PASSES THIS INVOCATION IS, announced once. Silent in every other mode — the
   // queue file's `layoutPassDone` marker is the ONLY thing that tells the two passes apart, so the operator is
   // told which reading of it this run took.
@@ -2471,10 +2474,11 @@ AN ITEM MARKED **✔ THE OPERATOR ALREADY ANSWERED THIS** IS SETTLED. Those are 
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping on an environment fault', status)
+    const whySuffix = row.why ? ` (${row.why})` : ''
     return runReturn({
       ...gateStop({
         stopped: 'environment-unreachable',
-        reason: `Preflight: a ⚠ Confirm resolver reported an ENVIRONMENT fault — ${row.what}${row.why ? ` (${row.why})` : ''}. The stand itself did not answer, so the run stopped before Refs, Judge and Build rather than dispatching at it; no unit was charged a round.`,
+        reason: `Preflight: a ⚠ Confirm resolver reported an ENVIRONMENT fault — ${row.what}${whySuffix}. The stand itself did not answer, so the run stopped before Refs, Judge and Build rather than dispatching at it; no unit was charged a round.`,
         next, agentsExpected: batches.length, agentsReturned: results.length, resumeClause: false,
       }),
       rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet], independence,
@@ -4319,38 +4323,37 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
   })
 
-  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
-    if (!appUnitIncomplete && dispatched.length) return null
-    const common = earlyStopCommon(deferred, open)
-    if (appUnitIncomplete) {
-      // WHY THE REASON IS NOT SHARED with the branch below (ENG-96778 review, F3). Written once for both stops, the
-      // reason had to be 'no build claim was filed this round' — and on the package-mismatch path that is FALSE: the
-      // app builder answered, `dispatchUnit` pushed a real claim through `claimFor()`, and `builtThisRound` is not
-      // empty. Judge is skipped there because the run STOPS on the incomplete app unit, not because nothing filed.
-      outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
-      outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
-      yield* persistPending('stopping on an incomplete app unit')
-      return runReturn({
-        ...gateStop({
-          stopped: 'app-unit-incomplete',
-          reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
-          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
-          // NO RESUME CLAUSE HERE (PR #171 review). `gateStop` appends a host-failure narrative by default —
-          // "nothing it would have written exists" — and on the package-MISMATCH leg that is simply false: the app
-          // builder answered and created an application on a live stand, which is why `persistPending` above runs
-          // BEFORE this composition. The `next` written here is the one this failure family owns.
-          resumeClause: false,
-          // THE DEFERRAL ARITHMETIC, not the dispatch tally (PR #171 review, m-dymytrova). `dispatched.length` /
-          // `builtThisRound.length` reported `1 expected / 1 returned` on the mismatch leg — perfectly healthy
-          // numbers attached to a stop, on a stop whose two numbers `gateStop`'s own contract says are there to let
-          // a caller "learn the shape of the failure". Counted over the round's OPEN units instead, the pair says
-          // what actually happened: N units were open, only the app unit answered, the rest were never dispatched —
-          // the same denominator the `nothing-built` stop below already uses.
-          agentsExpected: open.length, agentsReturned: builtThisRound.length,
-        }),
-        ...common, builtThisRound,
-      })
-    }
+  function* appUnitIncompleteStop(appUnitIncomplete, common, open, builtThisRound) {
+    // WHY THE REASON IS NOT SHARED with `nothingBuiltStop` (ENG-96778 review, F3). Written once for both stops, the
+    // reason had to be 'no build claim was filed this round' — and on the package-mismatch path that is FALSE: the
+    // app builder answered, `dispatchUnit` pushed a real claim through `claimFor()`, and `builtThisRound` is not
+    // empty. Judge is skipped there because the run STOPS on the incomplete app unit, not because nothing filed.
+    outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
+    outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
+    yield* persistPending('stopping on an incomplete app unit')
+    return runReturn({
+      ...gateStop({
+        stopped: 'app-unit-incomplete',
+        reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
+        next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
+        // NO RESUME CLAUSE HERE (PR #171 review). `gateStop` appends a host-failure narrative by default —
+        // "nothing it would have written exists" — and on the package-MISMATCH leg that is simply false: the app
+        // builder answered and created an application on a live stand, which is why `persistPending` above runs
+        // BEFORE this composition. The `next` written here is the one this failure family owns.
+        resumeClause: false,
+        // THE DEFERRAL ARITHMETIC, not the dispatch tally (PR #171 review, m-dymytrova). `dispatched.length` /
+        // `builtThisRound.length` reported `1 expected / 1 returned` on the mismatch leg — perfectly healthy
+        // numbers attached to a stop, on a stop whose two numbers `gateStop`'s own contract says are there to let
+        // a caller "learn the shape of the failure". Counted over the round's OPEN units instead, the pair says
+        // what actually happened: N units were open, only the app unit answered, the rest were never dispatched —
+        // the same denominator the `nothing-built` stop below already uses.
+        agentsExpected: open.length, agentsReturned: builtThisRound.length,
+      }),
+      ...common, builtThisRound,
+    })
+  }
+
+  function* nothingBuiltStop(common, open) {
     outcomes.skipped('Judge', 'the round dispatched no unit, so nothing filed a claim to rule on')
     outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
     outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
@@ -4365,6 +4368,13 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }),
       ...common, builtThisRound: [],
     })
+  }
+
+  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
+    if (!appUnitIncomplete && dispatched.length) return null
+    const common = earlyStopCommon(deferred, open)
+    if (appUnitIncomplete) return yield* appUnitIncompleteStop(appUnitIncomplete, common, open, builtThisRound)
+    return yield* nothingBuiltStop(common, open)
   }
 
   // ENG-96778 (PR #171 scope expansion) — THE THIRD PRE-VERIFY ROUND ENDING: a builder reported the stand itself
@@ -4391,10 +4401,11 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping on an environment fault', status)
+    const haltWhySuffix = halt.row.why ? ` (${halt.row.why})` : ''
     return runReturn({
       ...gateStop({
         stopped: 'environment-unreachable',
-        reason: `round ${round}: the build agent for \`${halt.unit}\` reported an ENVIRONMENT fault — ${halt.row.what}${halt.row.why ? ` (${halt.row.why})` : ''}. The stand itself did not answer, so the ${deferred.length} unit(s) behind it were DEFERRED rather than dispatched at it, Verify and Judge were skipped, and no unit was charged a round.`,
+        reason: `round ${round}: the build agent for \`${halt.unit}\` reported an ENVIRONMENT fault — ${halt.row.what}${haltWhySuffix}. The stand itself did not answer, so the ${deferred.length} unit(s) behind it were DEFERRED rather than dispatched at it, Verify and Judge were skipped, and no unit was charged a round.`,
         next, agentsExpected: open.length, agentsReturned: builtThisRound.length, resumeClause: false,
       }),
       ...earlyStopCommon(deferred, open), builtThisRound,

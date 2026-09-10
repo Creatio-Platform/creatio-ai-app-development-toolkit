@@ -3336,7 +3336,8 @@ Return the schema. Nothing else.`
     if (!rec?.open) return null
     const item = environmentRestoredItem(rec.n)
     const decision = roundAuthorised(runResolutionAnswer(state.runResolutions, item))
-    const seenAt = `${rec.where || 'build'}${rec.unit ? `, unit \`${rec.unit}\`` : ''}`
+    const unitSuffix = rec.unit ? `, unit \`${rec.unit}\`` : ''
+    const seenAt = `${rec.where || 'build'}${unitSuffix}`
     if (decision.verdict === 'authorised') {
       environmentFault = { ...rec, open: false, clearedBy: item }
       log(`the folder records an environment fault (#${rec.n}, ${seenAt}) and the operator answered \`${item}\` = ${JSON.stringify(decision.answer)} — recording it as CLEARED and continuing; a new outage would ask for \`${environmentRestoredItem(rec.n + 1)}\``)
@@ -3452,10 +3453,12 @@ unconsumed = reconcileUnconsumed(state.unconsumedResolutions || [],
   roundsBefore = roundsSpentSoFar()
   consumedRoundAnswers = mergeConsumed([], roundRecord.consumedRoundAnswers)
   unsettledUnits = unsettledUnitSet(roundRecord.unsettledUnits)
-  if (environmentFault === undefined) {
+  function seedEnvironmentFault() {
+    if (environmentFault !== undefined) return
     const faultOnFile = environmentFaultRecord(roundRecord.environmentFault)
     if (faultOnFile) environmentFault = faultOnFile
   }
+  seedEnvironmentFault()
   function logLayoutPassMode() {
     if (!isLayoutPassMode(mode)) return
     log(layoutPassDone
@@ -3805,10 +3808,11 @@ AN ITEM MARKED **✔ THE OPERATOR ALREADY ANSWERED THIS** IS SETTLED. Those are 
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping on an environment fault', status)
+    const whySuffix = row.why ? ` (${row.why})` : ''
     return runReturn({
       ...gateStop({
         stopped: 'environment-unreachable',
-        reason: `Preflight: a ⚠ Confirm resolver reported an ENVIRONMENT fault — ${row.what}${row.why ? ` (${row.why})` : ''}. The stand itself did not answer, so the run stopped before Refs, Judge and Build rather than dispatching at it; no unit was charged a round.`,
+        reason: `Preflight: a ⚠ Confirm resolver reported an ENVIRONMENT fault — ${row.what}${whySuffix}. The stand itself did not answer, so the run stopped before Refs, Judge and Build rather than dispatching at it; no unit was charged a round.`,
         next, agentsExpected: batches.length, agentsReturned: results.length, resumeClause: false,
       }),
       rounds: 0, verdict: verdictOf(state.verify), parked, blockedByParked: [...blockedSet], independence,
@@ -4880,24 +4884,23 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
     staleQueueKeys: state.staleQueueKeys || [], newKeys: state.newKeys || [],
   })
 
-  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
-    if (!appUnitIncomplete && dispatched.length) return null
-    const common = earlyStopCommon(deferred, open)
-    if (appUnitIncomplete) {
-      outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
-      outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
-      yield* persistPending('stopping on an incomplete app unit')
-      return runReturn({
-        ...gateStop({
-          stopped: 'app-unit-incomplete',
-          reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
-          next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
-          resumeClause: false,
-          agentsExpected: open.length, agentsReturned: builtThisRound.length,
-        }),
-        ...common, builtThisRound,
-      })
-    }
+  function* appUnitIncompleteStop(appUnitIncomplete, common, open, builtThisRound) {
+    outcomes.skipped('Judge', 'the run stopped on an incomplete app unit before Judge')
+    outcomes.skipped('Verify', 'the app unit did not complete, so the units behind it were never dispatched')
+    yield* persistPending('stopping on an incomplete app unit')
+    return runReturn({
+      ...gateStop({
+        stopped: 'app-unit-incomplete',
+        reason: `the app unit \`${appUnitIncomplete.key}\` did not complete: ${appUnitIncomplete.why}. Every unit behind it in round ${round} builds into that package, so they were DEFERRED rather than dispatched at a package that is not there.`,
+        next: `Settle the application first — check on the stand what \`${appUnitIncomplete.key}\` actually created, and re-plan if the package the plan targets cannot be produced. The deferred units are untouched and this run wrote nothing for them; what the app unit itself wrote was persisted before this stop, so it is on the stand and in this run's queue file rather than lost.`,
+        resumeClause: false,
+        agentsExpected: open.length, agentsReturned: builtThisRound.length,
+      }),
+      ...common, builtThisRound,
+    })
+  }
+
+  function* nothingBuiltStop(common, open) {
     outcomes.skipped('Judge', 'the round dispatched no unit, so nothing filed a claim to rule on')
     outcomes.note('Build', 'none', { round, agentsExpected: 0, agentsReturned: 0, why: 'the round dispatched no unit' })
     outcomes.skipped('Verify', 'the round dispatched no unit, so nothing wrote to the stand to read back')
@@ -4912,6 +4915,13 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       }),
       ...common, builtThisRound: [],
     })
+  }
+
+  function* buildRoundEndedEarly({ appUnitIncomplete, dispatched, builtThisRound, deferred, open }) {
+    if (!appUnitIncomplete && dispatched.length) return null
+    const common = earlyStopCommon(deferred, open)
+    if (appUnitIncomplete) return yield* appUnitIncompleteStop(appUnitIncomplete, common, open, builtThisRound)
+    return yield* nothingBuiltStop(common, open)
   }
 
   function* environmentUnreachableStop({ halt, builtThisRound, deferred, open }) {
@@ -4930,10 +4940,11 @@ Return \`written\`, \`files\` (every path you wrote) and \`notes\`.`,
       verifyTable: VERIFY_TABLE, verifyJson: VERIFY_JSON, next,
     }
     const written = yield* persistPending('stopping on an environment fault', status)
+    const haltWhySuffix = halt.row.why ? ` (${halt.row.why})` : ''
     return runReturn({
       ...gateStop({
         stopped: 'environment-unreachable',
-        reason: `round ${round}: the build agent for \`${halt.unit}\` reported an ENVIRONMENT fault — ${halt.row.what}${halt.row.why ? ` (${halt.row.why})` : ''}. The stand itself did not answer, so the ${deferred.length} unit(s) behind it were DEFERRED rather than dispatched at it, Verify and Judge were skipped, and no unit was charged a round.`,
+        reason: `round ${round}: the build agent for \`${halt.unit}\` reported an ENVIRONMENT fault — ${halt.row.what}${haltWhySuffix}. The stand itself did not answer, so the ${deferred.length} unit(s) behind it were DEFERRED rather than dispatched at it, Verify and Judge were skipped, and no unit was charged a round.`,
         next, agentsExpected: open.length, agentsReturned: builtThisRound.length, resumeClause: false,
       }),
       ...earlyStopCommon(deferred, open), builtThisRound,
