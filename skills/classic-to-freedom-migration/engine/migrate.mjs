@@ -22,7 +22,7 @@
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
-//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
@@ -948,7 +948,15 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
-  return card || ac.length || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
+  // ENG-96534 — the plain-language plan columns. Free prose the step-5.1 analyst authored on the behaviour card
+  // (`whatItDoes` from the card's "What it is"; `useCase` a non-technical step-by-step it writes). Sanitized to a
+  // trimmed non-empty string here; the renderer escapes it into the cell. Either alone counts as a description, so a
+  // row carrying only these still sets `describedIn` (the `Described in` column keys off card/ac, not off these).
+  const prose = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const whatItDoes = prose(entry.whatItDoes);
+  const useCase = prose(entry.useCase);
+  return card || ac.length || bodyCard || whatItDoes || useCase
+    ? { card, ac, bodyCard, bodyAc, whatItDoes, useCase } : null;
 }
 
 // A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
@@ -974,6 +982,11 @@ function mergeDescribedIn(refs) {
     ac: uniq(refs.flatMap((r) => r.ac || [])),
     bodyCard: refs.find((r) => r.bodyCard)?.bodyCard || null,
     bodyAc: uniq(refs.flatMap((r) => r.bodyAc || [])),
+    // ENG-96534 (self-review) — the plain-language columns MUST survive the merge too: an AGGREGATED member row (2+
+    // behaviour cards) that omitted these read `⚠ not described` in the plan while the header still counted it
+    // described — the exact contradiction ENG-96534 removes. First non-null wins, like `card`/`bodyCard`.
+    whatItDoes: refs.find((r) => r.whatItDoes)?.whatItDoes || null,
+    useCase: refs.find((r) => r.useCase)?.useCase || null,
   };
 }
 
@@ -1174,7 +1187,12 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides, and plan-vs-built
+// drift on it is still caught by the checklist verify-key (ENG-95470). `formTemplate` stays required — a genuine
+// multi-way choice (top-area / progress-bar / mini / …).
+const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
+const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "formTemplate"];
 // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
 // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
 // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
@@ -1333,8 +1351,12 @@ export function placementIssues(manifest) {
 // as no row helper read the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
-  const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
+  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
+  // renderers read this normalized `pm`, so the Main-scope row and the verify-key drift guard all see the default.
+  const pm0 = manifest.planMeta || {};
+  const pm = blank(pm0.listTemplate) ? { ...pm0, listTemplate: DEFAULT_LIST_TEMPLATE } : pm0;
   // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
   // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
@@ -1344,7 +1366,7 @@ export function checklistOpts(manifest, opts = {}) {
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
-    planMeta: manifest.planMeta,
+    planMeta: pm,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
@@ -1487,6 +1509,21 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Grandchildren only. The nested run's own index opens with ITS main-page scope — the very rows just captured
   // above as `c.stubScope` — so carrying the whole array would list every child page twice.
   c.childStubScopes = (res.stubIndex || []).slice(1);
+  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is not a form PAGE: it is an
+  // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the rows, the page
+  // body only an attribute lookup-filter + column-render methods). Distinguished from a skeletal/bad-bundle fold by
+  // whether it carries behaviour (methods/members). Marked so the plan does not mislabel it `Rebuild (child) → form
+  // page` with an empty Layout; the unit still publishes below — its checklist rows ARE the logic to port.
+  if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
+    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0 || (res.changeSet?.needsDecision?.length || 0) > 0;
+    c.formless = hasBehaviour ? "inline-grid" : "empty";
+    // ENG-96327 — an inline-editable grid has NO form page, so the plan shows only its LOGIC (Business rules / ⚠
+    // Custom methods / ⚠ Other declared logic), not a form-page mapping. Render that logic-only, embedded spec here
+    // (renderPlan's inline-grid branch prefers `c.logicSpec`). `resolutions` rides along so answered ⚠ rows drop.
+    if (c.formless === "inline-grid") {
+      c.logicSpec = renderDesignSpec(res, { embedded: true, logicOnly: true, resolutions: foldCtx.resolutions });
+    }
+  }
   // This child's OWN checklist rows, derived from ITS ChangeSet — the whole point of the page-scoped gate: the
   // parent's row set never sees this page's counts, and this page's counts can never be closed by the parent's
   // components. Its expected template comes from the SHARED child-template rule, so the row the agent must
@@ -1509,7 +1546,11 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // `formOnly`: a per-type page is a FORM, not a section. Its bundle carries the section layers (same entity as the
+    // section), so without this its sub-run reads as a section migration and renders a redundant `### List page` block
+    // inside each typed form (ENG-96327). The List page is rendered ONCE by the base fold (`listPageOnly`); the typed
+    // forms show their own layout only.
+    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
@@ -2769,24 +2810,42 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   return collectResolvedGates(changeSet, reg.source);
 }
 
+// One schema entry → its body string: an inline `body`, or the contents of its `file` (read safely). Its own
+// function so `runMigration` keeps its branch count under Sonar S3776 (three guarded paths live here, not there).
+function readSchemaBody(e, baseDir) {
+  if (e?.body != null) return String(e.body);
+  // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
+  // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
+  if (!e || typeof e.file !== "string" || !e.file)
+    throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, e.file);
+  // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
+  // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
+  // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
+  // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
+  if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
+    throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
+  return fs.readFileSync(resolved, "utf8");
+}
+
+// The behaviour-index cross-scope key sets (unmatched / section-only / wiring-only) — computed only for the ROOT run
+// (a scoped sub-run leaves them empty). Own function so `runMigration` sheds these three branches (Sonar S3776).
+function populateCrossScopeKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
+  behaviourIndex.unmatched = scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.sectionOnly = scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
+  behaviourIndex.wiringOnly = scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
+}
+// needsDecision → { kind: count }. Own function so `runMigration` keeps the loop out of its own complexity budget.
+function summarizeDecisionKinds(needsDecision) {
+  const summary = {};
+  for (const d of needsDecision) summary[d.kind] = (summary[d.kind] || 0) + 1;
+  return summary;
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
-  const bodyOf = (e) => {
-    if (e?.body != null) return String(e.body);
-    // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
-    // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
-    if (!e || typeof e.file !== "string" || !e.file)
-      throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
-    const base = path.resolve(baseDir);
-    const resolved = path.resolve(base, e.file);
-    // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
-    // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
-    // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
-    // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
-    if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
-      throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
-    return fs.readFileSync(resolved, "utf8");
-  };
+  const bodyOf = (e) => readSchemaBody(e, baseDir);
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseSchema(bodyOf(e), e.pkg));
   const schemas = parse(manifest.schemas);
   const seedTemplate = parse(manifest.seed);
@@ -3029,11 +3088,10 @@ export function runMigration(manifest, opts = {}) {
   // Published on the form page's ChangeSet — the ⚠ line is about the manifest, not about one of the two grids, and
   // the form worklist is the one every scope renders. The render happens after this point (`out.designSpec` below).
   changeSet.confirmUnmatched = confirmUnmatched;
-  behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
-  const decisionSummary = {};
-  for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
+  // ENG-96327 (Sonar S3776) — the cross-scope key assignments + the decision-kind tally are extracted to helpers so
+  // `runMigration` stays under the cognitive-complexity limit; behaviour is identical to the inline form.
+  populateCrossScopeKeys(behaviourIndex, opts.scopeSchema, behaviourIndexInput, stubIndex);
+  const decisionSummary = summarizeDecisionKinds(changeSet.needsDecision);
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
@@ -3151,7 +3209,14 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan`/`pageUnits` can read it — both take it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  out.designSpec = renderDesignSpec(out, specOpts);
+  // ENG-96327 — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into the parent
+  // plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no Entity/Size
+  // preamble, no Member ledger — the parent plan owns those, and the main page in the same plan already omits them.
+  // `formOnly` is propagated for the TYPED fold (`foldTypedPages` passes it) so the per-type spec skips the List-page
+  // block — a typed page is NOT its own section; the ONE list page is rendered once by the base fold. `checklistOpts`
+  // carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
+  const isSubPageRun = opts.isChildPage || opts.isMiniPage || opts.formOnly;
+  out.designSpec = renderDesignSpec(out, isSubPageRun ? { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) } : specOpts);
   out.plan = renderPlan(out, specOpts);
   // ENG-96571 C3 — the agent-facing half of the plan, published as its OWN artifact so `plan.md` carries only what
   // the approver needs. The CLI writes it to `<out-basename>.notes.md` beside the plan (or echoes it to stderr).

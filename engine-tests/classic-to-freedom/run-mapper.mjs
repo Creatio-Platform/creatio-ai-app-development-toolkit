@@ -914,9 +914,16 @@ check("ContactCommunication: detail over the ContactCommunication entity → Com
   commcs.standardFeatures.some(s => s.feature === "Communication options" && s.uiShape === "component" && s.inferredFromEntity)
   && !commcs.details.some(d => d.entity === "ContactCommunication"),
   () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
-check("ContactCommunication: the note says use the native crt.CommunicationOptions component (NOT the fabricated crt.ContactCommunication) + do NOT downgrade to a plain grid (package/feature gap = a decision, not a silent fallback)",
-  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.CommunicationOptions/.test(n.reason) && /NOT `?crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
-  () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
+// ENG-96327 — the verbose base-component build recipes were TRIMMED out of the plan/notes; they live once in the
+// mapping DOC the build agent is handed. Assert the DOC (the source of truth the agent reads) still carries each.
+const MAPPING_DOC = fs.readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md", import.meta.url)), "utf8");
+check("ENG-96327: the mapping DOC (build agent's source) carries the base-component recipes trimmed from the plan — Approvals two-components, Activities/Emails not-a-Timeline, Communication-options crt.CommunicationOptions, DCM PageWithTabsAndProgressBarTemplate + DcmSchemaManager + flag-icon",
+  /TWO components/.test(MAPPING_DOC) && /crt\.CommunicationOptions/.test(MAPPING_DOC) && /Timeline/.test(MAPPING_DOC)
+  && /DcmSchemaManager/.test(MAPPING_DOC) && /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC),
+  () => "doc phrases present");
+check("ContactCommunication → Communication-options: the plan/decision note is the SHORT prerequisite (CrtCustomer360App + CommonCommunicationsBehavior on-stand), NOT the full recipe (which lives in the mapping doc)",
+  commcs.needsDecision.some(n => n.kind === "standard-feature" && /CrtCustomer360App/.test(n.reason) && /CommonCommunicationsBehavior/.test(n.reason) && !/do NOT downgrade/i.test(n.reason)),
+  () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication|CrtCustomer360App/.test(n.reason))?.reason);
 
 /* ---- virtual-field: a bound field whose column is NOT on the entity (auto-filled companion from a lookup)
    is flagged (build read-only + wire the handler), so it is NOT silently dropped → a lone-field island ---- */
@@ -950,8 +957,10 @@ check("#11: auto-generated detail schema name (SchemaNDetail) flagged detail-unr
 // feature labels). The engine emits the table itself; the skill presents it verbatim.
 check("design-spec: runMigration returns a Markdown design spec string",
   typeof cli.designSpec === "string" && cli.designSpec.startsWith("## Design spec"));
-check("design-spec: ONE Layout table (Region · Placement · Element · Type · Source · Rule · Additional — `Placement` added by ENG-96457: the field cell the plan used to compute and then throw away) under the form-page heading",
-  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec) && /Region \| Placement \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec));
+check("design-spec: ONE Layout table (Region · Element · Type · Source · Rule · Additional) under the form-page heading — no `Placement` column (ENG-96327 B: cells ride --units/verify, not the plan; the agent designs the 12-col layout)",
+  /#### Layout/.test(cli.designSpec) && / form page$/m.test(cli.designSpec)
+  && /Region \| Element \| Type \| Source \| Rule \| Additional/.test(cli.designSpec)
+  && !/\| Placement \|/.test(cli.designSpec));
 check("design-spec: one Layout row (PDS attribute) per effective field — nothing dropped/invented",
   cli.designSpec.split("\n").filter(l => /\| PDS\./.test(l)).length === cli.effective.fields);
 check("design-spec: legacy split tables gone (no Region map / Fields / Details & standard features)",
@@ -1036,36 +1045,38 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 // Visa=Approvals domain note must ride on the standardFeature AND surface in the Layout row (the
 // standard-feature decision is excluded from ⚠ Confirm) — so the agent doesn't wrongly downgrade it.
-check("Approvals: Visa carries the 'don't downgrade' domain note in the feature + design-spec Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && /how Approvals is stored/.test(s.note || ""))
-  && /Approvals[\s\S]*?how Approvals is stored/.test(spec));
-check("Approvals: the note says it is TWO components (get-component-info) — add the module ABOVE the profile island AND the list, not just the list",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals"
-    && /TWO components/.test(s.note || "") && /get-component-info/.test(s.note || "")
-    && /ABOVE the profile island/.test(s.note || "") && /Adding only the list is INCOMPLETE/.test(s.note || "")),
+check("Approvals: Visa is DETECTED as the Approvals feature (component); the verbose 'don't downgrade' recipe is no longer duplicated in the plan (it lives in the mapping doc)",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
+  && !/how Approvals is stored/.test(spec),
+  () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals"));
+check("Approvals: the verbose TWO-components/get-component-info/ABOVE-the-island how-to is no longer in the plan note (it lives in the mapping doc); the feature is still detected",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
+  && !/get-component-info/.test(dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note || "")
+  && !/get-component-info/.test(spec),
   () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note);
 // #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline; the 'NOT a Timeline' note must ride on
 // the standardFeature AND surface in the Layout row (a real agent rebuilt them as a crt.Timeline — wrong).
-check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
-  && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
-// A method belongs to the ⚠ Imperative logic worklist ONLY — never repeated as a Logic row.
-const dsLogicBlock = (spec.split("#### Logic")[1] || "").split("####")[0];
-check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Imperative logic only)",
-  /#### Logic/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
+check("#6: Activities is DETECTED as a filtered related list (uiShape list); the 'NOT a Timeline' domain note is no longer in the plan (it lives in the mapping doc)",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && s.uiShape === "list")
+  && !/NOT a Timeline/i.test(spec),
+  () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Activities"));
+// A method belongs to the ⚠ Custom methods worklist ONLY — never repeated as a Logic row.
+const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
+check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Custom methods only)",
+  /#### Business rules/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the Logic section points at the worklist carrying the methods",
-  /1 custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
-check("design-spec: the handler is still accounted for — it carries its own ⚠ Imperative logic row",
-  /#### ⚠ Imperative logic/.test(spec) && /\| onContactChanged \|/.test(spec));
+  /1 custom method\(s\) — see \*\*⚠ Custom methods\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
+check("design-spec: the handler is still accounted for — it carries its own ⚠ Custom methods row",
+  /#### ⚠ Custom methods/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
-// (`split("#### Logic")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
+// (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
 // worklist being moved back below the confirm list.
 const specAt = (needle) => spec.indexOf(needle);
-check("design-spec: sections run Layout → Logic → ⚠ Imperative logic → ⚠ Confirm → Member ledger",
-  specAt("#### Layout") < specAt("#### Logic") && specAt("#### Logic") < specAt("#### ⚠ Imperative logic")
-  && specAt("#### ⚠ Imperative logic") < specAt("### ⚠ Confirm"),
-  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Logic"),
-    imperative: specAt("#### ⚠ Imperative logic"), confirm: specAt("### ⚠ Confirm") }));
+check("design-spec: sections run Layout → Logic → ⚠ Custom methods → ⚠ Confirm → Member ledger",
+  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Custom methods")
+  && specAt("#### ⚠ Custom methods") < specAt("### ⚠ Confirm"),
+  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Business rules"),
+    imperative: specAt("#### ⚠ Custom methods"), confirm: specAt("### ⚠ Confirm") }));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
@@ -1166,10 +1177,11 @@ check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the
   () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
     && /read from the saved grid PROFILE/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
-check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
-  () => /profile-sourced list column set/.test(profileRun.designSpec)
-    && /confirm this is the set every user should get/.test(profileRun.designSpec),
-  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
+check("ENG-95850 (D) / ENG-96327: a profile-sourced set raises ONE `list-columns` DECISION (rides --units) and the `- **List columns:**` line carries the 'confirm this is the set every user should get' caveat — NOT duplicated in the human ⚠ Confirm",
+  () => (profileRun.listChangeSet?.needsDecision || []).some((d) => d.kind === "list-columns" && /profile-sourced/.test(d.item))
+    && /confirm this is the set every user should get/.test(profileRun.designSpec)
+    && !/\*\*\[list-columns\]\*\*/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile|list-columns/i.test(l)).join("\n"));
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
@@ -1458,18 +1470,19 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218 + ENG-94714: the command-bar set does NOT claim to be complete — ONE decision per run (never per action) names the buttons found, says it read BOTH classic surfaces, and reaches the plan through the shared ⚠ Confirm section, not a prose aside",
+check("ENG-95218 / ENG-96327 / ENG-94714: the command-bar set does NOT claim complete — ONE `list-command-bar` decision per run (rides --units, names the buttons + the read-both-surfaces hedge); the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
     && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
     && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
-    && /BOTH classic surfaces/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").reason)
-    && /#### ⚠ Confirm before I build/.test(lpRun.designSpec)
-    && /\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
+    && /- \*\*Command-bar actions:\*\* 1 found via `getSectionActions\(\)`/.test(lpRun.designSpec)
+    && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
-check("ENG-95218: the design spec renders the list page as POSITIONED tables (columns in order, filters with container+index, actions) instead of the old prose bullets",
-  () => /#### List columns \(in order\)/.test(lpRun.designSpec) && /#### Quick filters/.test(lpRun.designSpec)
+check("ENG-95218 / ENG-96327: the list page renders POSITIONED tables for filters + actions (not prose bullets); columns travel via the ChangeSet + the plain `- **List columns:**` line — the detailed columns table was dropped as a table-of-a-table",
+  () => /#### Quick filters/.test(lpRun.designSpec)
     && /#### Command-bar actions/.test(lpRun.designSpec)
-    && /\| 1 \| Name \| `PDS_Name` \| PDS\.Name \| Text \(`dataValueType` 1\) \|/.test(lpRun.designSpec)
+    && !/#### List columns \(in order\)/.test(lpRun.designSpec)                 // ENG-96327: the detailed table is gone
+    && /- \*\*List columns:\*\*[^\n]*Name/.test(lpRun.designSpec)               // the plain line still names the set
+    && lcs.columns.some((c) => c.name === "Name" && c.code === "PDS_Name")      // SOURCE the build consumes (unchanged)
     && /`LeftFilterContainerInner` · index 1/.test(lpRun.designSpec)
     && !/- \*\*Quick filters:\*\*/.test(lpRun.designSpec) && !/- \*\*Section actions:\*\*/.test(lpRun.designSpec),
   () => lpRun.designSpec.split("\n").filter((l) => /List columns|Quick filter|Command-bar|Section actions/.test(l)).slice(0, 12));
@@ -2296,15 +2309,15 @@ check("ENG-95218: a row action emits NO op and says so — every other op here r
       && /carries no op in this ChangeSet/.test(lpRowActionRun.designSpec)
       && /control and placement NOT resolved here/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.designSpec.slice(lpRowActionRun.designSpec.indexOf("#### Row actions"), lpRowActionRun.designSpec.indexOf("#### Row actions") + 700));
-check("ENG-95218: each row action raises a ⚠ Confirm decision — a declared condition must become Freedom state, and an action with none asks whether Classic gated it, because an always-enabled port is a behaviour change",
+check("ENG-95218 / ENG-96327: each row action is a `list-row-action` DECISION (rides --units, with its condition→Freedom-state / always-enabled reason) surfaced in the Row-actions TABLE — NOT a ⚠ Confirm row (binary: there is a row action or there is not)",
   () => { const nd = lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action");
     const withCond = nd.find((d) => /QualificationProcess/.test(d.item));
     const without = nd.find((d) => /PlainAction/.test(d.item));
     return nd.length === 2
       && /must become Freedom state/.test(withCond.reason) && /canQualify/.test(withCond.reason)
       && /always-enabled port is a behaviour change/.test(without.reason)
-      && /#### ⚠ Confirm before I build/.test(lpRowActionRun.designSpec)
-      && /\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
+      && /#### Row actions/.test(lpRowActionRun.designSpec)
+      && !/\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action"));
 // A SUB-BUNDLE MAY CARRY ITS OWN `section` — the engine accepts it silently, and the self-referential typed fixture
 // above shows the shape occurs. Its list-page questions must stay in the main scope: a per-type form page has no grid,
@@ -3802,9 +3815,9 @@ check("ENG-95543: a matching schema NAME beats a matching entity — the resolve
   () => resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta);
 // The derived `FEATURE_CATALOG` view must still answer for the callers and goldens that read it — the data moved,
 // the shape did not.
-check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/templateProvided)",
-  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && FEATURE_CATALOG.FileDetailV2?.templateProvided === true
-  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Approvals renders as TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.note || ""),
+check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/templateProvided)",
+  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && /TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.freedom || "")
+  && FEATURE_CATALOG.FileDetailV2?.templateProvided === true && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list",
   () => FEATURE_CATALOG);
 
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
@@ -3858,14 +3871,15 @@ check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
-check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
-  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+check("C2 / ENG-96327: a lookup-GUID rule NO LONGER prompts a [lookup-value] note in the human plan — the agent resolves GUIDs to display names itself; the decision still exists on the ChangeSet (rides --units)",
+  !/\[lookup-value\]/.test(guidCs.designSpec)
+  && (guidCs.changeSet?.needsDecision || []).some((n) => n.kind === "lookup-value"));
 /* PR #128 review (RC-8b) — and EXACTLY ONCE. The check above uses `.test()`, which cannot see a double-render: the
    item used to be pushed straight into the rendered worklist, and a re-added render-time `confirm.push` would emit
    it twice — one copy with an evidence id and one without — with this suite still green. The copy without an id is
    the original defect (a question an operator was asked and had nowhere to answer), so a count is the assertion. */
-check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACTLY ONCE — a re-added render-time push would double-render it, one copy carrying an id and one not, and `.test()` is blind to that",
-  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1,
+check("ENG-95503 / ENG-96327: the `[lookup-value]` line is rendered ZERO times in the human plan (dropped as builder work — the agent resolves GUIDs); its id lives on --units.preflight, not the human ⚠ Confirm",
+  () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 0,
   () => (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length);
 /* PR #128 review (round 15, Major) — AND THE FILTER MUST NOT SWALLOW IT. Before this PR the lookup-value prompt was
    pushed straight into the rendered `confirm` array, bypassing all filtering. It now arrives as a `needsDecision`
@@ -3878,48 +3892,49 @@ check("ENG-95503 review fix (RC-8b): the `[lookup-value]` line is rendered EXACT
    naming the cause: the surrounding goldens do go red if the Set grows, but they read as three unrelated failures.
    The accidental route is real and not hypothetical — `SHOWN_ELSEWHERE` spreads `IMPERATIVE_MEMBER_KINDS`, so
    adding a `lookup-value` entry to `MEMBER_KIND_NOTE` for its prose would silently enrol it in the filter. */
-check("PR #128 review (round 15): `lookup-value` survives the `SHOWN_ELSEWHERE` filter on BOTH surfaces — it renders in the ⚠ Confirm worklist AND publishes a `--units.preflight` row. A kind in that Set is dropped from both at once, so the operator is never asked and no id exists for an answer to bind to",
-  () => { const rendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 1
-        && /#### ⚠ Confirm before I build/.test(guidCs.designSpec);
+check("PR #128 review (round 15) / ENG-96327: `lookup-value` is DROPPED from the human ⚠ Confirm (BUILDER_ONLY — the agent resolves GUIDs) but STILL publishes a `--units.preflight` row, so the decision id exists for an answer to bind to. It must NOT be in `SHOWN_ELSEWHERE`, which would drop it from --units too",
+  () => { const notRendered = (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length === 0;
     const published = pageUnits(guidCs, checklistOpts({})).preflight.filter((r) => r.kind === "lookup-value");
-    return rendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
+    return notRendered && published.length === 1 && published[0].id.includes("#confirm:lookup-value:"); },
   () => ({ rendered: (guidCs.designSpec.match(/\[lookup-value\]/g) || []).length,
     published: pageUnits(guidCs, checklistOpts({})).preflight.map((r) => r.kind) }));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
-  /#### Logic/.test(guidCs.designSpec)
-  && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  /#### Business rules/.test(guidCs.designSpec)
+  && /\| when Stage = a specific value \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
-// #3 — NO method reaches the Logic table. Helper folding is done from the CALL GRAPH in the ⚠ Imperative logic
+// #3 — NO method reaches the Logic table. Helper folding is done from the CALL GRAPH in the ⚠ Custom methods
 // worklist (`↳`, covered below), never from a naming convention. Completeness is #3b's job: the worklist carries a
 // row for EVERY method, helpers included — `set<Lookup>Info`/`clear<Lookup>Info` silently disappearing is the
 // documented Known Trap (a companion field loaded by such a helper gets dropped, leaving a lone-field island).
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-const foldLogicTable = (foldCs.designSpec.split("#### Logic")[1] || "").split("####")[0];
-check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Imperative logic worklist's alone",
-  /#### Logic/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
+const foldLogicTable = (foldCs.designSpec.split("#### Business rules")[1] || "").split("####")[0];
+check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Custom methods worklist's alone",
+  /#### Business rules/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
-  /#### ⚠ Imperative logic/.test(foldCs.designSpec)
+  /#### ⚠ Custom methods/.test(foldCs.designSpec)
   && ["onContactChange", "setContactInfo", "clearContactInfo"].every((m) =>
-    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
+    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0])));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
-  /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
-// #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
+  /Filter · Req[^\n]*2 filters/.test(dupFilt.designSpec));
+// #5 — with no template that ships it, Next steps is the `crt.NextSteps` DESIGNER COMPOSITE (a toggle-container
+// preset you drop), NOT a hand-built tab. (ENG-96327: verified via get-component-info — "Next steps" is a
+// `crt.ExpansionPanel` preset wrapping `crt.NextSteps`.)
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("#5 widgets: Next steps is placed as a new tab (next to Feed) and flagged ADD — a new tab, not template-provided",
-  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \| Component \| ⚠ ADD — a new tab \(Next steps\) beside Feed\/Attachments/.test(wReg.designSpec));
+check("#5 widgets: Next steps is the `crt.NextSteps` composite (toggle container), NOT a hand-built tab, when no chosen template ships it",
+  /\| Tab · Next steps \| Next steps \| Component \| ⚠ ADD — the `Next steps` designer composite \(`crt\.NextSteps` in a `crt\.ExpansionPanel` toggle container\), not a hand-built tab/.test(wReg.designSpec));
 
 // #8 — Action Dashboard = TWO Freedom components (Case progress bar + Next steps); the default template ships
 // NEITHER, so each is flagged "ADD — not in the default template" and auto-populates from the object's case.
@@ -3928,20 +3943,32 @@ const dcmCs = runMigration({ entity: "X",
 check("#8 DCM: Action Dashboard emits BOTH Case progress bar and Next steps components",
   dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar")
   && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps"));
-check("#8 DCM: each component carries the 'NOT in the default template — ADD it' + auto-populate note (widget + decision)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /NOT in the default Freedom form template/.test(w.note || "") && /auto-populates/.test(w.note || ""))
-  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /NOT in the default Freedom form template/.test(n.reason)));
-check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager (the false-negative that missed the stage bar)",
-  dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
-  && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
-check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
-  /\| Tab · Next steps \(new\) \| [^|]*\| Next steps \|/.test(dcmCs.designSpec)
+check("#8 DCM: both components are emitted (Case progress bar + Next steps) and carry the SHORT auto-populate note; the 'not in the default template / how to add' recipe is trimmed from the plan (it lives in the mapping doc)",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /auto-populates/.test(w.note || ""))
+  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /auto-populates/.test(w.note || ""))
+  && !/NOT in the default Freedom form template/.test(dcmCs.designSpec),
+  () => dcmCs.changeSet.widgets.map((w) => w.note));
+check("#8 DCM: the on-stand case check (SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager) lives in the mapping doc, not the plan note",
+  /DcmSchemaManager/.test(MAPPING_DOC) && /CaseSchemaManager/.test(MAPPING_DOC)
+  && !/DcmSchemaManager/.test(dcmCs.designSpec),
+  () => "doc carries the DcmSchemaManager check; plan does not");
+check("#8 DCM: with no template chosen, Next steps is the `crt.NextSteps` composite (ADD — toggle container, not a hand-built tab); the progress bar is PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind)",
+  /\| Tab · Next steps \| Next steps \| Component \| ⚠ ADD — the `Next steps` designer composite/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
-check("#8 DCM: the notes carry the correct PLACEMENT — progress bar prefers PageWithTabsAndProgressBarTemplate (re-bind) with MainContainer fallback (not MainHeader); Next steps a tab beside Feed/Attachments (tools slot, flag-icon)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /PageWithTabsAndProgressBarTemplate/.test(w.note || "") && /RE-BIND/i.test(w.note || "") && /in `MainContainer`/.test(w.note || "") && /NOT in `MainHeader`/.test(w.note || ""))
-  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "") && /flag-icon/.test(w.note || "")),
+// ENG-96327 — and when the plan CHOOSES that template (the normal DCM case), Next steps is template CONTEXT: the
+// template ships `crt.NextSteps`, so the row reads re-bind, not ADD (it is not a hand-built tab, nor an add at all).
+const dcmCsTpl = runMigration({ entity: "X", planMeta: { formTemplate: "PageWithTabsAndProgressBarTemplate" },
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
+check("ENG-96327: on a DCM page whose chosen template ships Next steps, the row is template context / re-bind — NOT an ADD, never a hand-built tab",
+  /Next steps \| Component \| template context — `PageWithTabsAndProgressBarTemplate` ships Next steps \(measured\); re-bind it, do not rebuild/.test(dcmCsTpl.designSpec)
+  && !/Next steps \| Component \| ⚠ ADD/.test(dcmCsTpl.designSpec),
+  () => dcmCsTpl.designSpec.split("\n").filter((l) => /Next steps/.test(l)));
+check("#8 DCM: the widget PLACEMENT recipe (PageWithTabsAndProgressBarTemplate re-bind / MainContainer fallback, tools slot, flag-icon) lives in the mapping doc, not the plan note",
+  /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC) && /MainContainer/.test(MAPPING_DOC)
+  && !/flag-icon/.test(dcmCs.designSpec)
+  && !/RE-BIND to the case; hand-adding/.test(dcmCs.designSpec),
   () => dcmCs.changeSet.widgets.map((w) => w.note));
 // Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
 // `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
@@ -3985,6 +4012,30 @@ check("s48/widget-gate: DCM (progress bar + Next steps) is DROPPED without the o
   !wNames(chromeNoDcm).has("Case progress bar") && !wNames(chromeNoDcm).has("Next steps"));
 check("s48/widget-gate: DCM EMITS when signals.dcm is resolved+present, even though the classic page body has no dashboard",
   wNames(chromeDcm).has("Case progress bar") && wNames(chromeDcm).has("Next steps"));
+check("s48/widget-gate: a main page publishes `dcmActive` tracking the resolved signal (true with dcm, false without)",
+  chromeDcm.dcmActive === true && chromeNoDcm.dcmActive === false);
+// ENG-96327 — DCM is ENTITY-scoped: a CHILD edit page migrates a DIFFERENT entity, so it must NOT inherit the
+// parent's case. With the parent's dcm INHERITED (opts.signals) but the child's OWN bundle carrying none
+// (ownSignals), the case progress bar + Next steps do NOT emit — the leak that put Contract's case bar onto the
+// plain SpecInContract detail — and `dcmActive` is false so the coverage builder demands no case bar either.
+const chromeChildInherited = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isChildPage: true, ownSignals: {} });
+check("ENG-96327: a child edit page does NOT inherit the parent's DCM — no case bar / Next steps, dcmActive false",
+  !wNames(chromeChildInherited).has("Case progress bar") && !wNames(chromeChildInherited).has("Next steps")
+  && chromeChildInherited.dcmActive === false);
+// …but a child whose OWN bundle records the case DOES get them (its own entity really is case-managed).
+const chromeChildOwn = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isChildPage: true, ownSignals: { dcm: { resolved: true, present: true } } });
+check("ENG-96327: a child whose OWN bundle records dcm still emits the case bar + Next steps (its entity is case-managed)",
+  wNames(chromeChildOwn).has("Case progress bar") && wNames(chromeChildOwn).has("Next steps")
+  && chromeChildOwn.dcmActive === true);
+// ENG-96327 REGRESSION GUARD: the scoping is gated ONLY on `isChildPage`. A TYPED fold (`formOnly:true`) and a MINI
+// fold (`isMiniPage:true`) are the SAME entity as the root, carry NO own signals, and must keep inheriting the
+// root's DCM exactly as before this change — the fix must not touch the main / typed / mini record pages.
+const chromeTyped = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, formOnly: true, ownSignals: {} });
+const chromeMini = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isMiniPage: true, ownSignals: {} });
+check("ENG-96327 guard: a TYPED page (formOnly) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeTyped).has("Case progress bar") && wNames(chromeTyped).has("Next steps") && chromeTyped.dcmActive === true);
+check("ENG-96327 guard: a MINI page (isMiniPage) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeMini).has("Case progress bar") && wNames(chromeMini).has("Next steps") && chromeMini.dcmActive === true);
 
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
@@ -4035,6 +4086,49 @@ check("#7 child recursion: mapped child's design spec is NESTED in the plan (hea
   /### Child page mappings/.test(recCs.plan) && /#### Child page: ChildA/.test(recCs.plan) && /###### Layout/.test(recCs.plan));
 check("#7 child recursion: unverified child gets an explicit verify-child-page FILL slot (not just a row)",
   /#### Child page: ChildB[\s\S]*?<FILL: verify child page>/.test(recCs.plan));
+// ENG-96327: a child page that folds to 0 form fields is an INLINE-EDITABLE GRID (its body is only an attribute
+// lookup-filter + column-render methods), NOT a form page — the real defect was a Contract detail
+// (CorrespondenceLinkDetail → CorrespondenceLinkPage) shown as "Rebuild (child) → form page" with an empty Layout.
+// It must read "Inline grid" and say "no separate form page — build an editable crt.DataGrid", not mislead the agent.
+const inlineGridCs = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"IgDetail",entitySchemaName:"Ig",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "Ig", editPage: "IgPage" } },
+  childPageSchemas: { IgPage: { entity: "Ig",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"Ig",attributes:{Correspondence:{lookupListConfig:{filter:function(){return this.Ext;}}}},methods:{getLinkColumnConfig:function(){return this.x;}},diff:[]};});` }] } } },
+  { baseDir: FIX });
+const igChild = inlineGridCs.childPages.find((c) => c.entity === "Ig") || {};
+check("ENG-96327: a folded child with 0 form fields + behaviour is flagged formless:inline-grid (a form page needs fields)",
+  igChild.fieldCount === 0 && igChild.formless === "inline-grid");
+check("ENG-96327: an inline-grid child reads 'Inline grid' (NOT 'Rebuild (child)') and its mapping says no separate form page — build an editable crt.DataGrid",
+  /\| IgPage — opened by detail[^|]*\| inline-editable related list[^|]*\| Inline grid \|/.test(inlineGridCs.plan)
+  && !/IgPage[^\n]*Rebuild \(child\)/.test(inlineGridCs.plan)
+  && /No separate form page — inline-editable grid/.test(inlineGridCs.plan)
+  && /build the related list as an editable \*\*crt\.DataGrid\*\*/.test(inlineGridCs.plan),
+  () => inlineGridCs.plan.split("\n").filter((l) => /Ig|Inline grid|DataGrid/.test(l)).slice(0, 8));
+// Rita review (Major): the inline-grid verdict rests on the fold seeing 0 fields, which cannot tell "genuinely
+// fieldless" from "the fields layer was not captured" — so the line is a ⚠ that asks the agent to CONFIRM the detail
+// really is inline-editable, not a settled instruction to skip the form.
+check("Rita review: the inline-grid line is a ⚠ that asks to CONFIRM the classification (it rests on missing fields), not a settled skip-the-form assertion",
+  /> ⚠ \*\*No separate form page — inline-editable grid \(confirm on-stand\)\.\*\*/.test(inlineGridCs.plan)
+  && /if the fields layer was simply not captured .* the reading is wrong, so CONFIRM/.test(inlineGridCs.plan),
+  () => inlineGridCs.plan.split("\n").filter((l) => /inline-editable grid/.test(l)));
+// ENG-96327 (self-review Minor): the OTHER arm of the `hasBehaviour ? "inline-grid" : "empty"` split — a child that
+// folds to 0 fields/tabs/details AND carries NO behaviour is a skeletal/bad-bundle fold, marked `empty`, and renders
+// the ⚠ EMPTY-page warning (not the inline-grid "build a crt.DataGrid" mapping). Only inline-grid was covered before,
+// so the distinguishing predicate (`hasBehaviour`) was unguarded — a regression could relabel every empty fold.
+const emptyChildCs = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"EmpDetail",entitySchemaName:"Emp",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "Emp", editPage: "EmpPage" } },
+  childPageSchemas: { EmpPage: { entity: "Emp",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"Emp",diff:[]};});` }] } } },
+  { baseDir: FIX });
+const empChild = emptyChildCs.childPages.find((c) => c.entity === "Emp") || {};
+check("ENG-96327 (self-review): a folded child with 0 fields/tabs/details AND no behaviour is formless:empty — the OTHER branch of the split, NOT inline-grid",
+  empChild.fieldCount === 0 && empChild.formless === "empty");
+check("ENG-96327 (self-review): the empty child renders the ⚠ EMPTY-page warning (verify the schema, do not ship a form), never the inline-grid mapping",
+  /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(emptyChildCs.plan)
+  && !/No separate form page — inline-editable grid/.test(emptyChildCs.plan),
+  () => emptyChildCs.plan.split("\n").filter((l) => /Emp|EMPTY|Inline grid/.test(l)).slice(0, 8));
 // #7b Main-scope hygiene: child rows get a clean target that REFLECTS the template rule (< 15 flat → Mini page;
 // else Grid page) — ChildA has 1 field → Mini page — no free-text FILL, and no misleading generic "record page".
 check("#7b Main scope: a small child (1 field) row shows the Mini page template target (not a generic 'record page')",
@@ -4262,13 +4356,15 @@ check("ENG-95861: `--verify` renders that same row N/A too — and tallies it as
 check("ENG-95861: the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
   /\| InternalRequest — opened by detail "VacDetail" \| Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
   () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
-check("ENG-95861: the child section states the boundary and that NOTHING is built for it",
+check("ENG-95861/ENG-96327: the child section states the boundary concisely — the page, the owning section, and that migrating it is out of scope",
   /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
-  && /Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
-  && /publishes NO deliverable/.test(xsBoundary.plan));
-check("ENG-95861: it also states how to REVERSE the decision — a scope decision, not a defect",
-  /drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
-  && /reversible by re-planning, never a defect of this plan/.test(xsBoundary.plan));
+  && /belongs to the `Internal requests` section/.test(xsBoundary.plan)
+  && /Migrating it is that section's own job — not part of this plan/.test(xsBoundary.plan));
+check("ENG-96327: the verbose gate-mechanics and reversal recipe are GONE from the human plan — agent reassurance, not approver content",
+  !/Nothing here is folded, rebuilt or built/.test(xsBoundary.plan)
+  && !/publishes NO deliverable/.test(xsBoundary.plan)
+  && !/drop `opensClassicPage` from this detail's manifest entry/.test(xsBoundary.plan)
+  && !/reported MISSING/.test(xsBoundary.plan));
 check("ENG-95861: the Main-scope LEGEND enumerates the fourth call (a 3-call legend under a 4-call table is a gap)",
   /\*\*`Reuse \(Classic\)`\*\* = a cross-section boundary the user approved/.test(xsBoundary.plan));
 check("ENG-95861: the plan never claims the child page was mapped, and prints no `Rebuild (child)` for it",
@@ -5035,7 +5131,7 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
 // Major — a HANDLER method name with a pipe/backtick must be escaped at its rendering sink (no raw pipe breaks the
-// table). That sink is the ⚠ Imperative logic worklist alone; the Logic table renders no method at all.
+// table). That sink is the ⚠ Custom methods worklist alone; the Logic table renders no method at all.
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
@@ -5044,8 +5140,8 @@ check("Major(imperative-sink): a piped handler/helper name is escaped in the wor
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
 check("Major(imperative-sink): the Logic table renders no method name to escape in the first place",
-  /#### Logic/.test(logicSpec) && !(logicSpec.split("#### Logic")[1] || "").split("####")[0].includes("Fo"),
-  () => (logicSpec.split("#### Logic")[1] || "").split("####")[0]);
+  /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
+  () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
 // The CALL names in `Body does` are a second sink for the same hostile input — a call path comes from an untrusted
 // body, and the cell prints it verbatim so the reader can grep for it. Fed straight to the renderer, bypassing the
@@ -5058,12 +5154,6 @@ const callSinkSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: 
 // naively on "|" would cut the very cell under test in half.
 const cells = (line) => line.split(/(?<!\\)\|/);
 const callSinkCell = cells(callSinkSpec.split("\n").find((l) => l.startsWith("|") && cells(l)[1]?.trim() === "hostile") || "")[4] || "";
-check("Major(call-sink): an unclassified CALL name is escaped where it is rendered — once, and with no raw pipe left",
-  callSinkCell.includes(String.raw`this.ba\|d`)          // escaped…
-  && !/[^\\]\|d/.test(callSinkCell)                      // …no raw pipe survives
-  && !callSinkCell.includes(String.raw`\\|`)             // …and not escaped twice
-  && !callSinkCell.includes("`"),                        // backticks neutralized too
-  () => JSON.stringify(callSinkCell));
 
 // Minor 1 — ONE canonical resourceKey shared by mapper (store) + designspec (lookup): strips $/prefix/#anchor
 // uniformly, so a `Resources.Strings.Foo#en-US` caption resolves instead of leaking the raw key.
@@ -5813,6 +5903,81 @@ check("typed-page: base form spec SUPPRESSED (no general mapping) — only List 
   && /2 typed forms/.test(docFirstSize)       // the Overview (FIRST) Size line describes the typed forms…
   && !docFirstSize.includes(" fields ·"),     // …NOT the base-derived "N fields · … · 0 rules" line
   () => docFirstSize);
+// ENG-96327 — REGRESSION GUARD for the real TsService shape: a typed page's bundle carries the SECTION layers (same
+// entity as the section), so the typed sub-run is itself a "section migration". Its per-type spec must therefore be
+// rendered `formOnly` + `embedded` (migrate.mjs re-applies both for the typed fold, since `checklistOpts` drops
+// `formOnly`) — otherwise the per-type form wrongly renders its OWN `##### List page` (a typed page is not its own
+// section; the ONE list page is rendered once by the base) AND a `Member ledger` (an internal accounting block kept
+// out of the human plan). The earlier typed goldens used section-less bundles, so they never exercised this path.
+const typedSecBundle = (nm, field) => ({
+  schemas: [{ pkg: "P", body: `define("${nm}",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"${field}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${field}"}}]};});` }],
+  seed: CLEAN_SEED, section: [{ pkg: "S", body: docSecBody }] });
+const typedSecRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [{ schema: "XICPage" }, { schema: "XOCPage" }],
+  typedPageSchemas: { XICPage: typedSecBundle("XICPage", "SenderField"), XOCPage: typedSecBundle("XOCPage", "RecipientField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS });
+const typedFormsBlock = (typedSecRun.plan.split("### Typed page mappings")[1] || "");
+check("ENG-96327: a typed per-type form whose bundle carries SECTION layers renders NONE of: its own List page, a ⚠ Confirm block, the `Design spec (generated)` preamble, or a Member ledger — the base fold owns the ONE list page, and the rest are out of the embedded per-type spec",
+  /^### List page/m.test(typedSecRun.plan)                              // non-vacuous: the base fold DOES render one list page
+  && /#### Typed form:/.test(typedFormsBlock) && typedFormsBlock.includes("SenderField") // the per-type form rendered its fields
+  && !/#{4,6} List page/.test(typedFormsBlock)                          // …but NO nested List page inside the typed forms
+  && !/Confirm before I build/.test(typedFormsBlock)                    // …NO ⚠ Confirm block inside the typed forms
+  && !/Design spec — .* \(generated\)/.test(typedFormsBlock)           // …NO standalone spec preamble
+  && !/Member ledger/.test(typedFormsBlock),                           // …and NO Member ledger inside the typed forms
+  () => typedFormsBlock.split("\n").filter((l) => /List page|Member ledger|Typed form|Confirm/.test(l)).slice(0, 8));
+// ENG-96327 (point 8) — the agent no longer supplies `listTemplate` (SKILL.md dropped it); the engine DEFAULTS it to
+// ListPageV3Template, so the Main-scope list-page row shows the real template, never a `<FILL:>` and never an agent's
+// wrong guess (a real TsService run once rendered `list` there because the agent filled it). An explicit override
+// still wins (the goldens above pass one). This locks the default AT THE MAIN-SCOPE RENDER — the surface that leaked.
+const noListTplMeta = { scope: "s", environment: "e", package: "p", approach: "Rebuild", whatItDoes: "x", sectionSchema: "XSection", formTemplate: "PageWithTabsFreedomTemplate" };
+const noListTplRun = runMigration({
+  entity: "X", seed: CLEAN_SEED,
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  addRecordMiniPage: false, planMeta: noListTplMeta, signals: FULL_SIGNALS });
+check("ENG-96327 (point 8): with NO planMeta.listTemplate the Main-scope list-page row shows the DEFAULT ListPageV3Template — not a `<FILL:>`, not blank, not an agent's guess",
+  /\| XSection \(list page\) \| ListPageV3Template \| Rebuild \|/.test(noListTplRun.plan)
+  && !/<FILL: Freedom list template>/.test(noListTplRun.plan)
+  && (noListTplRun.planMetaMissing || []).indexOf("listTemplate") === -1,
+  () => noListTplRun.plan.split("\n").filter((l) => /\(list page\)/.test(l)));
+// ENG-96327 — `list-process` / `list-row-action` are BINARY, not ⚠ Confirm rows; the Section process is stated as an
+// explicit found/not bullet (like Command-bar actions). A section with no process launch shows "none found".
+check("ENG-96327: a section with no Run-process launch shows an explicit `- **Section process:** none found` bullet — not a `list-process` ⚠ Confirm; `list-row-action` is likewise not a ⚠ row",
+  /- \*\*Section process:\*\* none found/.test(noListTplRun.plan)
+  && !/\*\*\[list-process\]\*\*/.test(noListTplRun.plan)
+  && !/\*\*\[list-row-action\]\*\*/.test(noListTplRun.plan),
+  () => noListTplRun.plan.split("\n").filter((l) => /Section process|list-process|list-row-action/.test(l)));
+// ENG-96327/ENG-96553 — the Type suffix on each `#### Typed form:` heading: a resolved `typeName` shows the NAME;
+// `typeColumnDisplayValue` (the `list-entity-client-schemas` field) is accepted verbatim too; an unresolved raw
+// Type GUID shows the GUID + a ⚠ to resolve it on-stand (a bare GUID names no Type to the approver).
+const typedTypeRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [
+    { schema: "XICPage", type: "1b2f4d6e-0000-4000-8000-000000000001", typeName: "Retirement plan" },
+    { schema: "XOCPage", type: "1b2f4d6e-0000-4000-8000-000000000002" },
+    { schema: "XDVPage", type: "1b2f4d6e-0000-4000-8000-000000000003", typeColumnDisplayValue: "Tax return" },
+  ],
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField"), XDVPage: typedBundle("XDVPage", "TaxField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("ENG-96327/ENG-96553 typed type: typeName shows the NAME; typeColumnDisplayValue (the list-entity-client-schemas field) is accepted verbatim too; an unresolved Type-GUID shows the GUID + ⚠ resolve on-stand",
+  /#### Typed form: XICPage — type "Retirement plan"/.test(typedTypeRun.plan)
+  && !/Retirement plan[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XDVPage — type "Tax return"/.test(typedTypeRun.plan)
+  && !/Tax return[^\n]*⚠ resolve/.test(typedTypeRun.plan)
+  && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedTypeRun.plan),
+  () => typedTypeRun.plan.split("\n").filter((l) => /Typed form/.test(l)));
+check("ENG-96327: the MAIN SCOPE typed rows ALSO show the RESOLVED Type name (not the raw GUID) — same typedTypeSuffix as the heading; a real TsService run rendered GUIDs here because this row used raw `t.type`",
+  /\| XICPage — type "Retirement plan" \(typed form\) \|/.test(typedTypeRun.plan)
+  && /\| XDVPage — type "Tax return" \(typed form\) \|/.test(typedTypeRun.plan)
+  && /\| XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand \(typed form\) \|/.test(typedTypeRun.plan)
+  && !/\| XICPage — type "1b2f4d6e[^\n]*\(typed form\) \|/.test(typedTypeRun.plan),   // the GUID must NOT be what the Main-scope row shows for a resolved type
+  () => typedTypeRun.plan.split("\n").filter((l) => /\(typed form\)/.test(l)));
 // a typed fold's OWN business rules render in ITS per-type mapping — they live on the typed page, not the base
 // (base pageBusinessRules can be 0 while each typed form has several; the plan must show them per type).
 const docRuleRun = runMigration({
@@ -6232,35 +6397,60 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
   && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
 {
-  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows.map((r) => r.label) || [];
+  // ENG-96327 — the checklist/verify control table splits `Form — Logic` into `Form — Business rules` (the folded
+  // rule-count row, carrying the `rule` vk) + `Form — Custom methods` (one row per handler), mirroring the plan's two
+  // behaviour sections. Display-only: same rows/vks, two headings. A revert to a single `Form — Logic` group must fail.
+  const impGroupTitles = checklistGroups(impRun, {}).map((g) => g.title);
+  check("ENG-96327: the checklist splits the old Form — Logic group — methods go under Form — Custom methods, never a merged Form — Logic (mirrors the plan)",
+    !impGroupTitles.includes("Form — Logic")
+    && impGroupTitles.includes("Form — Custom methods")
+    && checklistGroups(impRun, {}).find((g) => g.title === "Form — Custom methods")?.rows.some((r) => /^Handler — /.test(r.label)),
+    () => impGroupTitles);
+  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows.map((r) => r.label) || [];
   const impPlan = renderPlan(impRun, {});
-  check("⚠ Imperative members worklist: checklist carries every member kind, including module-dep and all attribute rows",
+  check("⚠ Other declared logic worklist: checklist carries every member kind, including module-dep and all attribute rows",
     () => ["[attribute-lookup-filter] Owner", "[attribute-dependency] Amount ← Quantity, Price", "[attribute-virtual] CanEdit",
       "[attribute-imperative] Computed", "[message] CalcTotal", "[mixin] PrintUtils", "[module-dep] ConfigurationConstants, VisaHelper"]
       .every((label) => memberRows.includes(label)),
     () => memberRows);
-  check("⚠ Imperative members table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
-    () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
-      && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
-      && /^\| Computed \| attribute-imperative \| function key\(s\): value \|/m.test(impPlan)
-      && /^\| ConfigurationConstants, VisaHelper \| module-dep \| — \|/m.test(impPlan),
+  check("⚠ Other declared logic table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
+    () => /^\| Owner \| attribute-lookup-filter \|/m.test(impPlan)
+      && /^\| CanEdit \| attribute-virtual \|/m.test(impPlan)
+      && /^\| Computed \| attribute-imperative \|/m.test(impPlan)
+      && /^\| ConfigurationConstants, VisaHelper \| module-dep \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Owner|CanEdit|Computed|ConfigurationConstants/.test(l)));
-  check("⚠ Imperative members table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
+  check("⚠ Other declared logic table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
+  // ENG-96327 (shrink, F-intent): a COSMETIC/agent-only decision (a caption/label/hint to fetch on-stand) is dropped
+  // from the human ⚠ Confirm, while a GENUINE decision (map-or-drop a component) stays. The cosmetic kind still rides
+  // the machine channel, so a build agent's --units preflight is unaffected; only the human plan is shorter.
+  {
+    const shrinkCs = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+      { kind: "component", item: "FancyWidget", reason: "no clean Freedom mapping — confirm the substitute" },
+      { kind: "field-labels", item: "SomeField", reason: "fetch the caption on-stand" },
+    ] } }, { embedded: true });
+    check("ENG-96327 (F-intent): a genuine ⚠ Confirm decision (component) is shown; a cosmetic one (field-labels) is dropped to the machine channel",
+      /\*\*\[component\]\*\* FancyWidget/.test(shrinkCs) && !/\[field-labels\]/.test(shrinkCs),
+      () => shrinkCs.split("\n").filter((l) => /\[component\]|\[field-labels\]|Confirm before/.test(l)));
+  }
   // Section ORDER including the new worklist. The order is documented as prose in SKILL.md, AGENTS.md and three
-  // reference templates; without this, moving ⚠ Imperative members below ⚠ Confirm would contradict every one of
+  // reference templates; without this, moving ⚠ Other declared logic below ⚠ Confirm would contradict every one of
   // them and no assertion would notice — the older order check (above) predates the section and omits it.
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm (Member ledger is --spec-only, not in the human plan)",
     () => {
-      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Imperative members"));
+      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Logic", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
-        "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
-      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
+      // ⚠ Confirm is only present when a HUMAN-facing decision remains after the ENG-96327 shrink (this fixture's
+      // decisions are all cosmetic/agent-only, so it has none) — include it in the order check only when it renders.
+      const base = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic"];
+      const seq = page.includes("#### ⚠ Confirm before I build") ? [...base, "#### ⚠ Confirm before I build"] : base;
+      const order = seq.map((n) => page.indexOf(n));
+      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos)
+        && !page.includes("#### Member ledger");   // ENG-96327: suppressed in the human (embedded) plan
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
   // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
@@ -6269,15 +6459,15 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     schemas: [{ pkg: "P", body: `define("XPage",["CasesEstimateLabel","css!CasesEstimateLabel"],function(){return{entitySchemaName:"X",
       diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
   const refPlan = renderPlan(refRun, {});
-  check("⚠ Imperative members: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
+  check("⚠ Other declared logic: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
     () => /^\| CasesEstimateLabel \| referenced-module \|/m.test(refPlan)
-      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || [])
+      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || [])
         .some((r) => r.label === "[referenced-module] CasesEstimateLabel"),
     () => ({ rows: refPlan.split("\n").filter((l) => /CasesEstimateLabel/.test(l)),
-      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || []).map((r) => r.label) }));
+      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || []).map((r) => r.label) }));
   // Every kind the members table can render must also be requested in the step-5.1 digest, or its row prints a
   // `⚠ not described` cell no run can fill. Pinned as a set relation so a new kind cannot satisfy one and not the other.
-  check("⚠ Imperative members: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
+  check("⚠ Other declared logic: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
     () => [...IMPERATIVE_MEMBER_KINDS].every((k) => HANDOFF_MEMBER_KINDS.has(k)),
     () => ({ renderable: [...IMPERATIVE_MEMBER_KINDS], handoff: [...HANDOFF_MEMBER_KINDS] }));
 }
@@ -6288,14 +6478,83 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       attributes:{Amount:{dependencies:[{columns:["Quantity","Price"],methodName:"missingHandler"}]}},
       diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount"}}]};});` }] }, { baseDir: FIX });
   const orphanPlan = renderPlan(orphanDepRun, {});
-  check("⚠ Imperative members table: an attribute-dependency with no parsed handler row is visible in the approval plan",
+  check("⚠ Other declared logic table: an attribute-dependency with no parsed handler row is visible in the approval plan",
     () => orphanDepRun.changeSet.handlerStubs.length === 0
       && orphanDepRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && n.item === "Amount ← Quantity, Price")
-      && /^\| Amount ← Quantity, Price \| attribute-dependency \| — \| ⚠ not described \|$/m.test(orphanPlan),
+      && /^\| Amount ← Quantity, Price \| attribute-dependency \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(orphanPlan),
     () => ({ stubs: orphanDepRun.changeSet.handlerStubs, decisions: orphanDepRun.changeSet.needsDecision, lines: orphanPlan.split("\n").filter((l) => /Amount ←|attribute-dependency|Imperative members/.test(l)) }));
   check("⚠ Confirm: orphan attribute-dependency still does NOT fall back to Confirm once rendered as an imperative member",
     () => !/^- \*\*\[attribute-dependency\]\*\*/m.test(orphanPlan),
     () => orphanPlan.split("\n").filter((l) => /attribute-dependency/.test(l)));
+}
+
+// ENG-96534 (self-review Major): the HAPPY path — a behaviourIndex entry carrying whatItDoes / useCase renders those
+// strings in the plan's plain-language columns, NOT the `⚠ not described` fallback. Every other behaviourIndex
+// fixture omits these fields, so only the fallback was exercised: a regression in `describedInOf` (drop the field) or
+// `describedField` (wrong key) would render `⚠ not described` on every real row while staying green. Covers BOTH
+// tables (a handler stub → ⚠ Custom methods; a member → ⚠ Other declared logic) AND a MULTI-LINE useCase (the render
+// folds the newlines into one cell so the markdown table row stays intact).
+{
+  const descRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: {
+      recalcAmount: { whatItDoes: "Recomputes the line total from quantity and price.",
+        useCase: "Read Quantity.\nRead Price.\nWrite their product to Amount." },
+      "message:CalcTotal": { whatItDoes: "Broadcasts that the total changed so other widgets refresh.",
+        useCase: "After the amount is recomputed, publish CalcTotal." },
+    } }, { baseDir: FIX });
+  const descPlan = renderPlan(descRun, {});
+  const cellsOf = (needle) => (descPlan.split("\n").find((l) => l.startsWith("| " + needle + " |")) || "").split("|").map((s) => s.trim());
+  const mrow = cellsOf("recalcAmount");   // | name | source | whatItDoes | useCase | target | describedIn |
+  check("ENG-96534 (self-review): a populated whatItDoes/useCase renders in the ⚠ Custom methods row — the real strings, and the multi-line useCase folds to ONE cell, not `⚠ not described`",
+    mrow[3] === "Recomputes the line total from quantity and price."
+    && mrow[4] === "Read Quantity. Read Price. Write their product to Amount."
+    && mrow[3] !== "⚠ not described" && mrow[4] !== "⚠ not described",
+    () => mrow);
+  const brow = cellsOf("CalcTotal");      // | name | kind | whatItDoes | useCase | describedIn |
+  check("ENG-96534 (self-review): a populated whatItDoes/useCase renders in the ⚠ Other declared logic (member) row too — not the fallback",
+    brow[2] === "message" && brow[3] === "Broadcasts that the total changed so other widgets refresh."
+    && brow[4] === "After the amount is recomputed, publish CalcTotal." && brow[3] !== "⚠ not described",
+    () => brow);
+  // ENG-96534 (self-review Major, PR #166): the AGGREGATED-member path (2+ behaviour cards, refs.length > 1) must
+  // carry whatItDoes/useCase THROUGH `mergeDescribedIn` too. A `module-dep` row aggregating UsrModA + UsrModB,
+  // answered by a card PER module, used to build its merged describedIn from only card/ac/bodyCard/bodyAc — so the
+  // renderer read undefined and printed `⚠ not described` while the header still counted the row described.
+  const aggRun = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS,
+    schemas: [{ pkg: "MD", body: `define("MDPage",["UsrModA","UsrModB"],function(){return{entitySchemaName:"X",methods:{},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+    behaviourIndex: { "module-dep:UsrModA": { whatItDoes: "Wires module A.", useCase: "Loaded so A is available." },
+      "module-dep:UsrModB": { whatItDoes: "Wires module B." } } }, { baseDir: FIX });
+  const aggRow = (renderPlan(aggRun, {}).split("\n").find((l) => l.startsWith("| UsrModA, UsrModB |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (self-review): an AGGREGATED member row (2+ cards → mergeDescribedIn) carries the merged whatItDoes/useCase — NOT `⚠ not described` while counted described",
+    aggRow[2] === "module-dep" && aggRow[3] === "Wires module A." && aggRow[3] !== "⚠ not described"
+    && aggRow[4] === "Loaded so A is available.",
+    () => aggRow);
+  // ENG-96534 (Rita review Major): a behaviourIndex entry with a CARD but NO whatItDoes/useCase prose (the default
+  // state of every analysis authored before ENG-96534) is UNDESCRIBED for the warning banner — the banner and the
+  // `⚠ not described` cells now agree — even though the `Described in` column still cites the card. Counting off
+  // `describedIn` truthiness used to read `0 undescribed` (no banner) while every plain-language cell said not-described.
+  const cardOnlyRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: { recalcAmount: { card: "main/C01", ac: ["AC-1"] } } }, { baseDir: FIX });
+  const cardOnlyPlan = renderPlan(cardOnlyRun, {});
+  const crow = (cardOnlyPlan.split("\n").find((l) => l.startsWith("| recalcAmount |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (Rita review): a card WITHOUT whatItDoes/useCase prose flags the ⚠ Custom methods banner AND shows `⚠ not described` cells — the two no longer contradict — while `Described in` still cites the card",
+    /could not identify and describe the logic of \d+ of \d+ method\(s\)/.test(cardOnlyPlan)
+    && crow[3] === "⚠ not described" && crow[4] === "⚠ not described"
+    && /main\/C01/.test(crow[6]),
+    () => ({ banner: cardOnlyPlan.split("\n").find((l) => /could not identify and describe/.test(l)), row: crow }));
+  // ENG-96534 (Kravchuk review, AC-5): ONE prose field filled and the other empty STILL counts undescribed — the
+  // banner (an AND over both fields) and the per-cell markers must agree, so a row whose Use case is blank flags the
+  // banner even though its What-it-does is authored.
+  const oneFieldRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: { recalcAmount: { whatItDoes: "Recomputes the total." } } }, { baseDir: FIX });
+  const oneFieldPlan = renderPlan(oneFieldRun, {});
+  const ofRow = (oneFieldPlan.split("\n").find((l) => l.startsWith("| recalcAmount |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (Kravchuk review): a row with whatItDoes but EMPTY useCase still flags the banner (AND, not OR) — What-it-does shows the prose while Use case reads `⚠ not described`, and the banner counts it",
+    /could not identify and describe the logic of \d+ of \d+ method\(s\)/.test(oneFieldPlan)
+    && ofRow[3] === "Recomputes the total." && ofRow[4] === "⚠ not described",
+    () => ({ banner: oneFieldPlan.split("\n").find((l) => /could not identify and describe/.test(l)), row: ofRow }));
 }
 
 // ---- method body EVIDENCE replaces name-guessing ----
@@ -6365,11 +6624,6 @@ const evid = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: EVID_BOD
 const evStub = (m) => evid.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
 const evPlan = renderPlan(evid, {});
 // The `Body does` cell of one row, by method name. The Method cell may carry a `↳` fold marker, so match on the
-// cell's CONTENT, not on the raw line prefix — `includes` would take the first line anywhere naming the method.
-// One definition, because every reader below wants the same cell out of a different rendered plan.
-const bodyDoesCell = (md, m) => (md.split("\n").find((l) => l.startsWith("|")
-  && l.split("|")[1]?.replaceAll("↳", "").trim() === m) || "").split("|")[4]?.trim();
-const evCell = (m) => bodyDoesCell(evPlan, m);
 
 check("category: a suggestive method name (on…Changed / init…) derives no category — `unclassified`",
   evStub("onThingChanged").category === "unclassified" && evStub("initSomething").category === "unclassified",
@@ -6377,91 +6631,6 @@ check("category: a suggestive method name (on…Changed / init…) derives no ca
 check("category: an unclassified row degrades to the GENERIC Freedom target, never a named construct",
   /request handler \/ converter \/ virtual attribute/.test(evPlan.split("\n").find((l) => l.includes("| onThingChanged |")) || ""),
   () => evPlan.split("\n").find((l) => l.includes("| onThingChanged |")));
-check("body does: `callParent` alone is NOT recognition — the real unclassified call is named instead",
-  /⚠ unclassified: this\.someUnknownApi/.test(evCell("initSomething") || ""), () => evCell("initSomething"));
-check("body does: attribute writes ARE evidence — `sets values`, not a ⚠",
-  evCell("setStuff") === "sets values", () => evCell("setStuff"));
-check("body does: noise (this.get / Ext.isEmpty) is not listed as unclassified — it says nothing recognised",
-  evCell("onThingChanged") === "⚠ nothing recognised", () => evCell("onThingChanged"));
-// The two namespaces carry the same predicates and real bodies use both spellings; a call that says something about
-// the record or the user is NOT noise and must survive.
-const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-  `define("NsPage", [], function() { return { entitySchemaName: "Deal", methods: {
-    tsPredicates: function() { return Terrasoft.isEmpty(this.get("A")) || Terrasoft.isObject(this.get("B")); },
-    realCondition: function() { return Terrasoft.isCurrentUserSsp(); } },
-    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-  { baseDir: FIX });
-const nsPlan = renderPlan(nsRun, {});
-const nsCell = (m) => bodyDoesCell(nsPlan, m);
-check("body does: `Terrasoft.*` predicates are noise too, not only their `Ext.*` twins",
-  nsCell("tsPredicates") === "⚠ nothing recognised", () => nsCell("tsPredicates"));
-check("body does: a call that gates on the USER is not noise — it stays visible as unclassified",
-  /Terrasoft\.isCurrentUserSsp/.test(nsCell("realCondition") || ""), () => nsCell("realCondition"));
-// The cell caps the list to stay readable. A SILENT cap is the failure this column exists to prevent — four names
-// would read as the whole list — so the overflow is stated, the same way the CLI's gap lines state theirs.
-const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-  `define("CapPage", [], function() { return { entitySchemaName: "Deal", methods: {
-    manyUnknowns: function() { this.apiOne(); this.apiTwo(); this.apiThree(); this.apiFour(); this.apiFive(); this.apiSix(); } },
-    diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-  { baseDir: FIX });
-const capCell = bodyDoesCell(renderPlan(capRun, {}), "manyUnknowns");
-check("body does: the unclassified list states its overflow instead of truncating silently",
-  /…and 2 more/.test(capCell || "") && (capCell || "").split(",").length === 5,
-  () => capCell);
-// BOUNDARIES, so `>` cannot drift to `>=`: at the cap exactly there is no marker, one past it says "1 more".
-const capAt = (n) => {
-  const names = Array.from({ length: n }, (_, i) => `this.api${i}();`).join(" ");
-  const r = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
-    `define("BoundPage", [], function() { return { entitySchemaName: "Deal", methods: { many: function() { ${names} } },
-      diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
-    { baseDir: FIX });
-  return bodyDoesCell(renderPlan(r, {}), "many");
-};
-check("body does: exactly at the cap there is no overflow marker (a `>=` drift would print `…and 0 more`)",
-  !/…and/.test(capAt(4) || "") && (capAt(4) || "").split(",").length === 4, () => capAt(4));
-check("body does: one past the cap states `…and 1 more`",
-  (capAt(5) || "").endsWith("…and 1 more"), () => capAt(5));
-// The PARSER's own cap counts too: a body with more callee paths than it forwards must not read as if the
-// forwarded slice were the whole list. Reported APART from the unclassified names, because those calls never
-// passed the noise/sibling filters — folding them into `…and N more` claims unclassified calls nobody established.
-const cappedEvidence = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "dense",
-  category: "unclassified",
-  evidence: { kinds: [], calls: ["this.a", "this.b"], callsTotal: 12, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: calls the parser never forwarded are stated, not silently dropped",
-  bodyDoesCell(cappedEvidence, "dense") === "⚠ unclassified: this.a, this.b (+10 call(s) the parser did not forward)",
-  () => bodyDoesCell(cappedEvidence, "dense"));
-check("body does: the parser's cap is NOT folded into the unclassified overflow — those calls were never filtered",
-  !/…and 10 more/.test(cappedEvidence), () => bodyDoesCell(cappedEvidence, "dense"));
-// The failure that wording produced: every forwarded call was a SIBLING, so nothing unclassified was established
-// at all, yet the row rendered `⚠ unclassified: …and 4 more` — a warning naming nothing.
-const siblingHidden = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
-  { sourceMethod: "callsOnlySiblings", category: "unclassified",
-    evidence: { kinds: [], calls: ["this.helperOne"], callsTotal: 5, readsAttrs: [], writesAttrs: [] } },
-  { sourceMethod: "helperOne", category: "unclassified",
-    evidence: { kinds: [], calls: [], callsTotal: 0, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: a ⚠ unclassified is never raised by hidden calls alone — with only siblings forwarded the cell names the gap as unread",
-  bodyDoesCell(siblingHidden, "callsOnlySiblings") === "⚠ nothing recognised (+4 call(s) the parser did not forward)",
-  () => bodyDoesCell(siblingHidden, "callsOnlySiblings"));
-// BOTH signals are true at once for a method that writes an attribute AND makes a call nobody read. Returning only
-// the first hid the second, and an unread call is exactly what a step-5.1 resolver needs before marking the row
-// resolved (Contract rule 7) — the one signal this table exists to surface, dropped because another also held.
-const writesAndCalls = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "stampAndCall",
-  category: "set-values",
-  evidence: { kinds: [], calls: ["this.someUnknownApi"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } });
-check("body does: attribute writes do NOT swallow the unclassified call — both signals are reported",
-  bodyDoesCell(writesAndCalls, "stampAndCall") === "sets values; ⚠ also calls: this.someUnknownApi",
-  () => bodyDoesCell(writesAndCalls, "stampAndCall"));
-// The composed branch is a NEW sink for the call name, so the escaping contract has to hold on it too — a raw pipe
-// would split the row into extra columns. Default to a value CONTAINING a pipe, so a vanished row fails loudly.
-const pipedCell = bodyDoesCell(renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "piped",
-  category: "set-values",
-  evidence: { kinds: [], calls: ["this.a|b"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } }), "piped");
-check("body does: the composed cell still escapes the call name at the sink (a piped name must not break the row)",
-  !/\|/.test(pipedCell || "x|x") && /sets values; ⚠ also calls: this\.a/.test(pipedCell || ""), () => pipedCell);
-// `evCell` returns undefined when no row matches, so a negative assertion on it alone would pass vacuously if the
-// column moved or the row vanished — assert the cell EXISTS and holds the expected state, then that it is clean.
-check("body does: a call to a SIBLING row is the call graph's business, never an unclassified framework call",
-  evCell("callsSibling") === "⚠ nothing recognised", () => evCell("callsSibling"));
 check("vocabulary: `loadEntity` is a record reload → refresh (sibling of reloadEntity, which was already known)",
   evStub("reloadIt").category === "refresh", () => JSON.stringify(evStub("reloadIt").evidence?.kinds));
 check("vocabulary: `sendSaveCardModuleResponse` is a sandbox publish (per its CrtUIPlatform7x body) → message-publish",
@@ -6491,14 +6660,8 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 // what a refactor drops silently. The probe page has methods and no rules, so it renders both.
 check("empty state: a page with methods but no rules says so, and still points at the worklist",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
-  && /> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(evPlan),
+  && /> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\./.test(evPlan),
   () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
-check("preamble: the worklist names WHERE the ported/dropped/blocked mark is recorded",
-  /Plan-vs-Done checklist row/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /ported/.test(l)).slice(0, 2));
-check("preamble: the worklist says an unresolved trigger is answered by the step-5.1 run, not traced by hand",
-  /step-5\.1 `classic-ui-expert` run answers/.test(evPlan) && /replaces this cell on/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /unresolved/.test(l)).slice(0, 3));
 
 // Idioms that were being reported as "no call recognised" while doing real work. A method that BUILDS a filter is
 // doing filtering even when it creates no ESQ itself (the filter is handed to a detail); a system-setting read
@@ -6520,14 +6683,12 @@ check("method evidence: filter construction / system-setting read / data refresh
 check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression) is recognised as an ESQ query",
   idiomStub("queryIt").evidence.kinds.includes("esq") && idiomStub("queryIt").category === "query/filter");
 
-// ---- the ⚠ Imperative logic worklist: EVERY method reaches a binding list ----
-const impSpecSection = (impRun.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0];
-check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
-  /#### ⚠ Imperative logic/.test(impRun.designSpec)
+// ---- the ⚠ Custom methods worklist: EVERY method reaches a binding list ----
+const impSpecSection = (impRun.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0];
+check("⚠ Custom methods: EVERY client method has a row — the defect was methods reaching NO binding worklist",
+  /#### ⚠ Custom methods/.test(impRun.designSpec)
   && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
-check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
-  /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
 check("member ledger: rendered with per-kind dispositions AND counted zeros (a kind with no members is recorded, not omitted)",
   /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec));
 
@@ -6774,7 +6935,7 @@ check("ENG-93928 precision: the actions-dashboard module (masterColumnName under
 
 // (5) the design spec must SHOW the card as page content in the side profile (not only as a Confirm line).
 check("ENG-93928 design spec: a `Profile card` Layout row in the Side profile carries the component + referenceColumn",
-  /\| Side profile \| [^|]*\| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
+  /\| Side profile \| RequesterProfilePage \| Profile card \| crt\.ContactCompactProfile · referenceColumn/.test(pcRun.designSpec),
   () => pcRun.designSpec.split("\n").filter((l) => /Profile card/.test(l)));
 
 // (6) STRUCTURE GATE: a recognised card whose profile schema is missing blocks the plan (its contents are
@@ -6936,7 +7097,7 @@ check("typed template: Main-scope typed row names the form template (not a gener
 check("typed template: DCM present → note recommends PageWithTabsAndProgressBarTemplate (progress bar + top island) + re-bind",
   /\*\*Template:\*\*/.test(cmb.plan) && /PageWithTabsAndProgressBarTemplate/.test(cmb.plan) && /RE-BIND/i.test(cmb.plan));
 check("typed groups: field GROUPS surface in the per-type Layout Region (Tab · … › Group), not flattened to the tab",
-  /Tab · [^\n|›]*›[^\n|]*\|[^\n|]*\| Acc \|/.test(cmb.plan),
+  /Tab · [^\n|›]*›[^\n|]*\| Acc \|/.test(cmb.plan),
   () => cmb.plan.split("\n").filter((l) => /›/.test(l)).slice(0, 4));
 check("typed shared section: inherited base details/features are listed ONCE under 'Shared across all typed forms'",
   /### Shared across all typed forms/.test(cmb.plan) && /Attachments/.test(cmb.plan.slice(cmb.plan.indexOf("### Shared across all typed forms"), cmb.plan.indexOf("### Typed page mappings"))),
@@ -6973,18 +7134,18 @@ const ck = ckRun.checklist || "";
 // pinned on a fixture carrying only one of them, so nothing asserted the whole section — including that the method
 // count line CLOSES it, after the rules and before the next heading.
 {
-  const logicBlock = (ckRun.plan.split("#### Logic")[1] || "").split(/\n#### /)[0];
+  const logicBlock = (ckRun.plan.split("#### Business rules")[1] || "").split(/\n#### /)[0];
   const lines = logicBlock.split("\n").filter((l) => l.trim());
   check("Logic (canonical): the rules table comes first and the method-count line closes the section",
-    /#### Logic/.test(ckRun.plan)
-    && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
+    /#### Business rules/.test(ckRun.plan)
+    && /^\| Trigger \| Behaviour \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
-    && /^> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\.$/.test(lines[lines.length - 1] || "")
+    && /^> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\.$/.test(lines[lines.length - 1] || "")
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
     () => lines);
 }
 // The invariant is that the checklist SECTION is not rendered into the approval plan — asserted on its heading and
-// on its table rows. The plan may still NAME it (the ⚠ Imperative logic preamble points the reader at the row where
+// on its table rows. The plan may still NAME it (the ⚠ Custom methods preamble points the reader at the row where
 // a method's ported / dropped / blocked mark is recorded), so a bare mention is not the failure this guards.
 check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist), NOT part of the approval plan",
   /### ✅ Plan-vs-Done checklist/.test(ck) && !/### ✅ Plan-vs-Done checklist/.test(ckRun.plan)
@@ -7290,10 +7451,15 @@ check("detail add-mechanism: lookup + backend SERVICE (name + method) detected",
   regDetail?.addMode?.lookup === true && regDetail?.addMode?.service === "DocumentRegistryService"
   && regDetail?.addMode?.method === "AddCorrespondencesToRegistry",
   () => regDetail?.addMode);
-check("detail add-mechanism: each raised as a decision + rendered in the plan (custom Freedom add handler; verify service)",
-  dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").length === 2
-  && /NOT a plain related list/.test(dmRun.plan) && /DocumentRegistryService/.test(dmRun.plan),
-  () => dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism").map((n) => n.item));
+// ENG-96327 — `detail-add-mechanism` is a DECISION carried to the build via `needsDecision` (→ `--units.preflight`),
+// no longer duplicated in the human ⚠ Confirm list (the Layout table's `⚠ INLINE-EDITABLE` already flags it there).
+// So the guidance is asserted on the decision's OWN `reason`, not on the rendered plan prose.
+const dmAdd = dmRun.changeSet.needsDecision.filter((n) => n.kind === "detail-add-mechanism");
+check("detail add-mechanism: each raised as a decision carrying its add-flow guidance (custom Freedom add handler; verify service) — in the ChangeSet, not the human ⚠ Confirm list",
+  dmAdd.length === 2
+  && dmAdd.some((n) => /NOT a plain related list/.test(n.reason)) && dmAdd.some((n) => /DocumentRegistryService/.test(n.reason))
+  && !/\*\*\[detail-add-mechanism\]\*\*/.test(dmRun.plan),
+  () => dmAdd.map((n) => n.item));
 // review (Applicant #11, verified on-stand): the "add-disabled + custom grid action + fixed filters" pattern
 // (ApplicantRequestDetail — removes AddTypedRecordButton + emptyFn addRecordOperationsMenuItems, adds a custom
 // "attach existing" grid button, fixes the list filters) is NOW detected. It was invisible to detectAddMode before
@@ -7312,19 +7478,22 @@ check("#11 detail add-mechanism: add-disabled + custom grid action (attachReques
   && vacDetail?.addMode?.fixedFilters === true
   && ["Category", "Type", "Status"].every((c) => (vacDetail.addMode.filterCols || []).includes(c)),
   () => vacDetail?.addMode);
-check("#11 detail add-mechanism: rendered as a decision — add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns",
-  /add-new DISABLED/.test(attachRun.plan) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(attachRun.plan) && /FIXED list filters on Category, Type, Status/.test(attachRun.plan));
+const vacAdd = attachRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("#11 detail add-mechanism: the decision carries add-new DISABLED + CUSTOM grid action + FIXED filters on the named columns (in the ChangeSet reason, not the human ⚠ Confirm list)",
+  /add-new DISABLED/.test(vacAdd.reason) && /CUSTOM grid action \(.?attachRequestToApplicant.?\)/.test(vacAdd.reason) && /FIXED list filters on Category, Type, Status/.test(vacAdd.reason),
+  () => vacAdd?.reason);
 const openCardOnlyRun = runMigration({
   entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"OpenCardDetail",entitySchemaName:"OpenChild",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
   detailSchemas: { OpenCardDetail: { body: `define("OpenCardDetail",[],function(){return{entitySchemaName:"OpenChild",methods:{openCardByMode:function(){this.openCardInChain();}}};});`, editPage: false } },
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the plan",
-  () => /overrides the default add-card open/.test(openCardOnlyRun.plan)
-    && /CUSTOM add request-handler/.test(openCardOnlyRun.plan)
-    && /overridden add-card flow/.test(openCardOnlyRun.plan),
-  () => openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism")?.reason);
+const ocAdd = openCardOnlyRun.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("detail add-mechanism: openCardByMode-only detail gets end-to-end custom add-handler guidance in the decision (ChangeSet reason)",
+  () => /overrides the default add-card open/.test(ocAdd.reason)
+    && /CUSTOM add request-handler/.test(ocAdd.reason)
+    && /overridden add-card flow/.test(ocAdd.reason),
+  () => ocAdd?.reason);
 // review (Applicant #12, verified on-stand): a system-maintained detail (stage history) is read-only via
 // `getAddRecordButtonVisible: return false` — declared in the BASE replacing layer (HRApplicant), NOT the client
 // top override (WorkHrBase). Supplying the detail's full replacing CHAIN (bodies:[base→top]) lets the engine scan
@@ -7335,8 +7504,9 @@ const roPageBody = `define("XPage",[],function(){return{entitySchemaName:"X",dif
 const roChain = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { bodies: [roBaseLayer, roTopLayer], editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
 const roDetail = roChain.changeSet.details.find((d) => d.detailSchema === "StageDetail");
-check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED",
-  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roChain.plan),
+const roAdd = roChain.changeSet.needsDecision.find((n) => n.kind === "detail-add-mechanism");
+check("#12 detail chain: read-only (getAddRecordButtonVisible:false) in the BASE layer is detected via the layer UNION → add-new DISABLED (carried on the decision)",
+  roDetail?.addMode?.addDisabled === true && /add-new DISABLED/.test(roAdd?.reason || ""),
   () => roDetail?.addMode);
 const roTopOnly = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: roPageBody }],
   detailSchemas: { StageDetail: { body: roTopLayer, editPage: false } }, planMeta: docPlanMeta, signals: FULL_SIGNALS });
@@ -7353,15 +7523,18 @@ const dcmOne = renderPlan(dcmEmpty, { signals: { dcm: { resolved: true, present:
 check("#13 DCM: a single case version → NO multi-version note",
   !/multiple case versions/.test(dcmOne));
 // ENG-93929 EMISSION: an editable-grid detail is emitted as an EDITABLE list (not a read-only Expanded list),
-// carrying the editable columns + the concept-level enable directive (`features.editable.enable`, resolved via
-// get-component-info at build). A lookup+service detail WITHOUT an editable grid stays a read-only list.
-check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns + features.editable.enable directive",
+// carrying the editable columns. ENG-96327: the `crt.DataGrid features.editable.enable` build recipe is NOT in the
+// human plan — HOW to enable inline editing is builder mechanics the freedom-build-executor owns; the plan states
+// only the human fact (inline-editable + which columns). A lookup+service detail without a grid stays read-only.
+check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns, and NO agent enable-recipe",
   clDetail?.composite === "Editable list"
   && (clDetail.editable?.columns || []).join(",") === "Correspondence,Quantity,Comment"
-  && /features\.editable\.enable/.test(clDetail.editable?.enableVia || ""),
+  && clDetail.editable?.enableVia === undefined,
   () => ({ composite: clDetail?.composite, editable: clDetail?.editable }));
-check("editable-grid emission: the plan Layout renders 'Editable list' + the features.editable.enable directive (not read-only)",
-  /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan) && /features\.editable\.enable/.test(dmRun.plan));
+check("editable-grid emission: the plan Layout renders 'Editable list' + `⚠ INLINE-EDITABLE` with the editable columns, and does NOT carry the crt.DataGrid enable recipe",
+  /\| Editable list \|/.test(dmRun.plan)
+  && /INLINE-EDITABLE — editable: Correspondence · Quantity · Comment/.test(dmRun.plan)
+  && !/features\.editable\.enable/.test(dmRun.plan) && !/get-component-info/.test(dmRun.plan));
 check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
   regDetail?.composite === "Expanded list" && !regDetail?.editable);
 
@@ -7508,14 +7681,6 @@ check("inverse graph: every caller travels with the answer when there is more th
   () => JSON.stringify(invTrig("sharedHelper")));
 
 const invPlan = renderPlan(invRun, {});
-check("inverse graph: the plan distinguishes a recovered internal call from a declarative trigger",
-  /\(internal call\)/.test(invPlan) && /platform lifecycle/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /internal call|lifecycle/.test(l)).slice(0, 4));
-check("inverse graph: the worklist header counts caller-only rows apart from truly untriggered ones",
-  /know only their calling method/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /no trigger yet/.test(l)));
-check("inverse graph: a multi-caller row says so in the plan",
-  /\+1 more caller/.test(invPlan));
 // The digest must keep the two states distinguishable for the handoff prompt.
 const invDigest = invRun.stubIndex[0].counts;
 // unresolved = the three nothing calls (orphanHelper, callerOne, callerTwo); internalCallOnly = the two halves of
@@ -7570,7 +7735,7 @@ check("inverse graph: the handoff digest counts `internalCallOnly` separately fr
 // markable. These pin the fold, the two deliberate non-folds, and that the row count is unchanged.
 const foldPlan = renderPlan(invRun, {})
 const impTable = (md) => {
-  const lines = md.slice(md.indexOf('⚠ Imperative logic')).split('\n')
+  const lines = md.slice(md.indexOf('⚠ Custom methods')).split('\n')
   const out = []
   let started = false
   for (const l of lines) {
@@ -7606,9 +7771,6 @@ check("fold: a helper whose caller is a STANDARD method WITH LOGIC folds under i
   () => rowOf('syncOwner'))
 check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
   !!rowOf('pingPongA') && !!rowOf('pingPongB'))
-check("fold: the header reports PORT UNITS alongside the row count — 63 rows that are 44 things to build read differently",
-  /helpers folded under their caller/.test(foldPlan) && /port unit\(s\)/.test(foldPlan),
-  () => foldPlan.split('\n').filter((l) => /port unit/.test(l)))
 // A table with nothing to fold must look exactly as before — no marker, no port-unit clause.
 const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `define("NoFold", [], function() { return {
   entitySchemaName: "Deal",
@@ -7674,15 +7836,13 @@ check("handoff BACK: a key matching no row anywhere is reported, never swallowed
 
 // The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
 const hoPlan = renderPlan(hoBack, {});
-check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",
-  /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
+check("handoff BACK: the generated ⚠ Custom methods table carries a `Described in` cell per row",
+  /\| Method \| Source \| What the item does \| Use case \| Freedom target \| Described in \|/.test(hoPlan) &&
   /C01 AC-1, AC-2/.test(hoPlan));
-check("handoff BACK: the worklist header counts described rows, so 'nobody described these' is visible",
-  /carry a behaviour card/.test(hoPlan));
 check("handoff BACK: an undescribed row reads ⚠, not a blank",
   /⚠ not described/.test(renderPlan(ho, {})));
-check("handoff BACK: unmatched keys surface as a plan banner",
-  /matched no imperative row/.test(hoPlan));
+check("handoff BACK / ENG-96327: unmatched keys surface as an agent banner in plan.notes.md, NOT in plan.md",
+  /matched no imperative row/.test(renderPlanNotes(hoBack)) && !/matched no imperative row/.test(hoPlan));
 
 // CHAIN ROOTS: a helper resolved only to its caller is the weakest trigger the engine emits, and the header counts
 // it as still open. Once the caller is answered the helper's answer is one hop away in the same table — but the
@@ -7703,11 +7863,6 @@ const ROOTS_BODY = `define("ChainPage", [], function() { return {
 const rootsManifest = { entity: "Deal", schemas: [{ pkg: "DealPkg", body: ROOTS_BODY }] };
 const rootsBare = runMigration(rootsManifest);
 const rootsStub = (r, m) => r.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
-check("chain roots: with NO behaviour index the helper keeps the weak form and the header counts it open",
-  rootsStub(rootsBare, "setThingInfo").triggers[0].kind === "internal"
-  && !rootsStub(rootsBare, "setThingInfo").triggers[0].rootTrigger
-  && /know only their calling method/.test(renderPlan(rootsBare, {})),
-  () => JSON.stringify(rootsStub(rootsBare, "setThingInfo").triggers));
 
 const rootsRun = runMigration({ ...rootsManifest, behaviourIndex: {
   onThingChange: { trigger: "attribute", from: "attributes.Thing.onChange", card: "C01", ac: ["AC-1"] },
@@ -7717,9 +7872,6 @@ check("chain roots: a REPORTED caller trigger propagates down to the helper that
   rootsStub(rootsRun, "setThingInfo").triggers[0].root === "onThingChange"
   && rootsStub(rootsRun, "setThingInfo").triggers[0].rootTrigger.kind === "reported",
   () => JSON.stringify(rootsStub(rootsRun, "setThingInfo").triggers));
-check("chain roots: the composed cell keeps the reported provenance — a described origin still prints `— reported`",
-  /— reported → onThingChange \(internal call\)/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /setThingInfo/.test(l)));
 check("chain roots: a TRACED root is never overwritten by a reported caller trigger",
   rootsStub(rootsRun, "recalcTotals").triggers[0].rootTrigger.kind === "attribute-dependency",
   () => JSON.stringify(rootsStub(rootsRun, "recalcTotals").triggers));
@@ -7784,9 +7936,6 @@ check("chain roots: every caller still travels with the row, so the reader sees 
 // notice `(+N more caller)` being dropped here.
 const multiCell = (renderPlan(multiRun, {}).split("\n").find((l) => l.startsWith("|")
   && l.split("|")[1]?.replaceAll("↳", "").trim() === "sharedHelper") || "").split("|")[3]?.trim();
-check("chain roots: a composed trigger still renders the multi-caller provenance `(+N more caller)`",
-  /\+1 more caller/.test(multiCell || "") && /— reported → zAnsweredOne \(internal call\)/.test(multiCell || ""),
-  () => multiCell);
 check("chain roots: mutual recursion terminates and leaves both rows intact (the cycle guard)",
   !!multiStub("pingA") && !!multiStub("pingB")
   && multiStub("pingA").rootTrigger === undefined && multiStub("pingB").rootTrigger === undefined,
@@ -7824,11 +7973,6 @@ check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop 
   // finding 2: the hook the inherited root carries lives in `hook`; `from` there is the immediate caller.
   && lifeTrig("cHelper")?.rootTrigger?.hook === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
-check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
-  /onSaved \(platform lifecycle\) → internal call/.test(
-    renderPlan(lifeRun, {}).split("\n").find((l) => l.startsWith("|")
-      && l.split("|")[1]?.replaceAll("↳", "").trim() === "cHelper") || ""),
-  () => renderPlan(lifeRun, {}).split("\n").filter((l) => /cHelper/.test(l)));
 check("chain roots: the header stops counting that row as knowing only its calling method",
   !/know only their calling method/.test(renderPlan(lifeRun, {})),
   () => renderPlan(lifeRun, {}).split("\n").filter((l) => /no trigger yet/.test(l)));
@@ -7836,18 +7980,8 @@ check("chain roots: the header stops counting that row as knowing only its calli
 // The header counts EMPTY cells, so it must not call them "no TRACED trigger": a row the behaviour run answered
 // leaves that count with nothing traced for it. The described answers are counted next to it, so a reader can see
 // how much of the plan rests on description rather than body evidence.
-check("header: the open count is worded as what it measures (an empty cell), not as 'no traced trigger'",
-  /row\(s\) have no trigger yet/.test(renderPlan(rootsBare, {}))
-  && !/no traced trigger/.test(renderPlan(rootsBare, {})),
-  () => renderPlan(rootsBare, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
-check("header: rows answered by the behaviour run are counted APART from traced ones",
-  /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
 check("header: with no behaviour index the reported clause is absent entirely (no `0 answered` noise)",
   !/answered by the behaviour run/.test(renderPlan(rootsBare, {})));
-check("header: a helper that only INHERITED a reported root is not double-counted as answered",
-  rootsStub(rootsRun, "setThingInfo").triggers[0].kind === "internal"
-  && /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})));
 
 // SECTION scope: the *Section chain's imperative rows (methods, mixins) travel in the digest too — without
 // this scope, list-page behaviour structurally never reaches the step-5.1 analysis.
@@ -7889,8 +8023,8 @@ const secBack = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "D
 check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS reported as `sectionOnly`",
   !secBack.behaviourIndex.unmatched.includes("setOwner")
     && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
-check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
-  /address only the SECTION scope/.test(renderPlan(secBack, {})));
+check("handoff BACK / ENG-96327: a section-only key renders a ⚠ banner in plan.notes.md (agent-facing), NOT in plan.md — matched must not read as rendered",
+  /address only the SECTION scope/.test(renderPlanNotes(secBack)) && !/address only the SECTION scope/.test(renderPlan(secBack, {})));
 // All THREE key kinds in ONE run. `sectionOnly` and `unmatched` are computed by calling the same scope-digest
 // helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
 // filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
@@ -7950,7 +8084,7 @@ check("handoff BACK: adding the section scope leaves `coverage.complete` and the
 // (`mixin:someMixin` also appears in the member table). So render ONCE, slice the banner's own line — it is pushed
 // as a single concatenated template string — and assert the keys inside that slice. Verified by mutation: blanking
 // the banner's key list turns this check red (PR#88 review, Minor).
-const wiringPlanLines = renderPlan(wiringWithSec, {}).split("\n");
+const wiringPlanLines = renderPlanNotes(wiringWithSec).split("\n"); // ENG-96327 — behaviourIndex banners live in plan.notes.md now
 const wiringBannerLine = wiringPlanLines.find((l) => /name only a wiring card/.test(l)) || "";
 check("handoff BACK: a wiring-only row renders its ⚠ plan banner naming EVERY wiring-only key ON THAT LINE — the advisory is the ONLY signal for an `externalRef` row, which never blocks on coverage",
   !!wiringBannerLine && /`mixin:someMixin`/.test(wiringBannerLine) && /`DealSection::mixin:orderUtil`/.test(wiringBannerLine),
@@ -7977,7 +8111,7 @@ check("handoff BACK: a member described ONLY by a body card still counts as desc
 const hoBodyPlan = renderPlan(hoBody, {});
 check("handoff BACK: the plan prints BOTH cards, so the guards in the body card are named",
   /C01 AC-1 · body shared\/C09 AC-51, AC-53/.test(hoBodyPlan));
-check("handoff BACK: an ⚠ Imperative members row described ONLY by a body card cites it instead of reading ⚠ not described",
+check("handoff BACK: an ⚠ Other declared logic row described ONLY by a body card cites it instead of reading ⚠ not described",
   () => /^\| RefreshThing \| message \|.*\| body shared\/C09 AC-56 \|$/m.test(hoBodyPlan),
   () => hoBodyPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
 
@@ -8007,14 +8141,14 @@ check("wiringOnly: a `mixin:` row and an `externalRef` method carrying a wiring 
   hoWire.behaviourIndex.wiringOnly.includes("wired") &&
   hoWire.behaviourIndex.wiringOnly.length === 2,
   () => hoWire.behaviourIndex.wiringOnly);
-check("wiringOnly: the plan carries the ⚠ banner naming the keys and the fix",
-  /only a wiring card/.test(renderPlan(hoWire, {})) && /`mixin:LeadMixin`/.test(renderPlan(hoWire, {})));
+check("wiringOnly / ENG-96327: plan.notes.md carries the ⚠ banner naming the keys and the fix (agent-facing)",
+  /only a wiring card/.test(renderPlanNotes(hoWire)) && /`mixin:LeadMixin`/.test(renderPlanNotes(hoWire)));
 const hoWireOk = runMigration({ ...wireManifest, behaviourIndex: {
   "mixin:LeadMixin": { card: "main/C28", ac: ["AC-200"], bodyCard: "shared/C09", bodyAc: ["AC-51", "AC-53"] },
   wired: { bodyCard: "shared/C09", bodyAc: ["AC-51"] },
 } });
 check("wiringOnly: carrying the body card clears the flag — with or without a wiring card",
-  hoWireOk.behaviourIndex.wiringOnly.length === 0 && !/only a wiring card/.test(renderPlan(hoWireOk, {})));
+  hoWireOk.behaviourIndex.wiringOnly.length === 0 && !/only a wiring card/.test(renderPlanNotes(hoWireOk)));
 // FOLDED scopes are walked too. The check runs on the ROOT run only (a folded sub-run sees one page's rows, so
 // every sibling's answer would look wiring-only there) — which is exactly why the root has to reach INTO the folds:
 // a mixin declared on the mini page is the same silent hole as one on the record page. The mini's mixin is given a
@@ -8026,7 +8160,7 @@ const hoWireMini = runMigration({ ...wireManifest,
   behaviourIndex: { "mixin:MiniMixin": { card: "mini/C1", ac: ["AC-9"] } } });
 check("wiringOnly: a wiring-only mixin on a FOLDED scope (mini page) is flagged from the root run",
   hoWireMini.behaviourIndex.wiringOnly.includes("mixin:MiniMixin") &&
-  /`mixin:MiniMixin`/.test(renderPlan(hoWireMini, {})),
+  /`mixin:MiniMixin`/.test(renderPlanNotes(hoWireMini)),
   () => ({ wiringOnly: hoWireMini.behaviourIndex.wiringOnly,
            scopes: hoWireMini.stubIndex.map(s => s.schema || s.role) }));
 check("wiringOnly: a FOLDED sub-run reports nothing itself — the root owns the verdict, so no wall of per-scope noise",
@@ -8042,10 +8176,10 @@ for (const [label, blank] of [["empty string", ""], ["whitespace only", "   "]])
     wired: { card: "main/C28", ac: ["AC-201"], bodyCard: blank },
   } });
   const blankPlan = renderPlan(hoBlank, {});
-  check(`wiringOnly: a ${label} bodyCard is ABSENT, not present — both legs stay flagged and the ⚠ banner still fires`,
+  check(`wiringOnly: a ${label} bodyCard is ABSENT, not present — both legs stay flagged and the ⚠ banner still fires (in plan.notes.md, ENG-96327)`,
     hoBlank.behaviourIndex.wiringOnly.includes("mixin:LeadMixin") &&
     hoBlank.behaviourIndex.wiringOnly.includes("wired") &&
-    /only a wiring card/.test(blankPlan),
+    /only a wiring card/.test(renderPlanNotes(hoBlank)),
     () => hoBlank.behaviourIndex.wiringOnly);
   // Asserted on THAT row, ending where it ends: a plan-wide match would be satisfied by any other clean row.
   const blankRow = (blankPlan.split("\n").find((l) => l.startsWith("| LeadMixin | mixin |")) || "").trim();
@@ -8080,17 +8214,13 @@ check("handoff OUT: a TYPED page gets its own scope in stubIndex (it renders its
 check("handoff BACK: a `<typedSchema>::<method>` key that matched inside the typed fold is NOT reported unmatched",
   !hoTyped.behaviourIndex.unmatched.includes("DealTypedPage::typedHelper"));
 
-// ⚠ Imperative members carries the same visible-gap rule as the method table: an undescribed member is not a blank.
+// ⚠ Other declared logic carries the same visible-gap rule as the method table: an undescribed member is not a blank.
 // Members live there, NOT in ⚠ Confirm: they are work to port, not questions needing an on-stand answer.
 const hoConfirm = renderPlan(ho, {});
-check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
+check("⚠ Other declared logic: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
   () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
-check("⚠ Imperative members: the header counts how many rows carry a card",
-  () => /#### ⚠ Imperative members — account for EVERY row \(\d+\)/.test(hoConfirm)
-    && /> \d+ of \d+ carry a behaviour card/.test(hoConfirm),
-  () => hoConfirm.split("\n").filter((l) => /Imperative members|carry a behaviour card/.test(l)));
-check("⚠ Imperative members: a described member row names its card + AC",
+check("⚠ Other declared logic: a described member row names its card + AC",
   () => /^\| \S+ \| message \|.*\| .*C02 AC-1.*\|$/m.test(renderPlan(hoBack, {})),
   () => renderPlan(hoBack, {}).split("\n").filter((l) => /^\| \S+ \| message \|/.test(l)));
 // The members must NOT also appear as ⚠ Confirm bullets — that double-listing is what moving them fixed.
@@ -8143,7 +8273,7 @@ check("ENG-96571 A1: a `behaviourEstablished: false` entry renders `⚠ not desc
   !notEstablished.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper").describedIn
     && /^\| privateHelper \|.*\| ⚠ not described \|$/m.test(notEstablishedPlan),
   () => notEstablishedPlan.split("\n").filter((l) => /privateHelper/.test(l)));
-check("ENG-96571 A1: it renders `⚠ not described` on a MEMBER row too — the ⚠ Imperative members table reads the same field",
+check("ENG-96571 A1: it renders `⚠ not described` on a MEMBER row too — the ⚠ Other declared logic table reads the same field",
   !notEstablished.changeSet.needsDecision.find((n) => n.kind === "message" && n.item === "RefreshThing").describedIn
     && /^\| RefreshThing \| message \|.*\| ⚠ not described \|$/m.test(notEstablishedPlan),
   () => notEstablishedPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
@@ -8155,40 +8285,32 @@ check("ENG-96571 A1: a `behaviourEstablished: false` mixin entry is NOT counted 
   (() => { const r = runMigration({ ...wireManifest, behaviourIndex: {
       "mixin:LeadMixin": { card: "C01", behaviourEstablished: false } } });
     return r.behaviourIndex.wiringOnly.length === 0 && /⚠ not described/.test(renderPlan(r, {})); })());
-check("ENG-96571 A1: the ⚠ Imperative logic and ⚠ Imperative members headers print the LEDGER number beside the card count, and say the worklist is not a surface census",
-  (notEstablishedPlan.match(/this worklist is NOT a surface census: the member ledger for this run accounts for \d+ member\(s\)/g) || []).length === 2,
-  () => notEstablishedPlan.split("\n").filter((l) => /carry a behaviour card/.test(l)));
 
 // A2 — an invalid reported trigger is NOT filled in: the cell stays `⚠ unresolved`, the header keeps counting the
 // row open, and a fourth plan banner names it. The measured case is `"init": {"trigger":"internal","from":"init"}`.
 const badTrigger = runMigration({ ...handoffManifest, behaviourIndex: {
   privateHelper: { trigger: "internal", from: "privateHelper", card: "C01", ac: ["AC-1"] },
 } });
-const badTriggerPlan = renderPlan(badTrigger, {});
+const badTriggerPlan = renderPlanNotes(badTrigger); // ENG-96327 — the REJECTED-TRIGGER banner lives in plan.notes.md (agent-facing)
 const badTriggerStub = badTrigger.changeSet.handlerStubs.find((h) => h.sourceMethod === "privateHelper");
-check("ENG-96571 A2: a row naming ITSELF as its own origin is NOT filled — `triggers` stays empty, so the cell keeps reading ⚠ unresolved instead of `internal (from privateHelper) — reported`",
-  badTriggerStub.triggers.length === 0 && /^\| privateHelper \|[^|]*\|[^|]*⚠ unresolved[^|]*\|/m.test(badTriggerPlan),
-  () => JSON.stringify(badTriggerStub.triggers) + " | " + badTriggerPlan.split("\n").filter((l) => /privateHelper/.test(l)));
+check("ENG-96571 A2: a row naming ITSELF as its own origin is NOT filled — `triggers` stays empty (source-level; the plan's human columns no longer render a trigger cell)",
+  badTriggerStub.triggers.length === 0,
+  () => JSON.stringify(badTriggerStub.triggers));
 check("ENG-96571 A2: the run records the rejection with its REASON in `behaviourIndex.rejectedTriggers` — a silently dropped trigger is indistinguishable from one that was never reported",
   badTrigger.behaviourIndex.rejectedTriggers.length === 1
     && badTrigger.behaviourIndex.rejectedTriggers[0].key === "privateHelper"
     && /row itself/.test(badTrigger.behaviourIndex.rejectedTriggers[0].why)
     && !badTrigger.behaviourIndex.triggersFilled.includes("privateHelper"),
   () => JSON.stringify(badTrigger.behaviourIndex.rejectedTriggers));
-check("ENG-96571 A2: the plan renders the REJECTED-TRIGGER banner, naming the row and the reason, and points at the vocabulary to fix it with",
+check("ENG-96571 A2 / ENG-96327: plan.notes.md renders the REJECTED-TRIGGER banner (agent-facing), naming the row and the reason, and points at the vocabulary to fix it with",
   /reported trigger\(s\) in `manifest.behaviourIndex` were REJECTED and NOT filled in/.test(badTriggerPlan)
     && /privateHelper/.test(badTriggerPlan) && /entity-filter/.test(badTriggerPlan),
   () => badTriggerPlan.split("\n").filter((l) => /REJECTED/.test(l)));
-check("ENG-96571 A2: and the ⚠ Imperative logic header still counts the row as having NO trigger — the header count is what the reported trigger used to clear",
-  /> [1-9]\d* row\(s\) have no trigger yet/.test(badTriggerPlan)
-    && !/answered by the behaviour run/.test(badTriggerPlan),
-  () => badTriggerPlan.split("\n").filter((l) => /no trigger yet/.test(l)));
 check("ENG-96571 A2 ANTI-VACUITY: a VALID reported trigger on the same row IS filled, prints `— reported`, and raises NO banner — the rejection above is the guard firing, not the fill path being broken",
   (() => { const r = runMigration({ ...handoffManifest, behaviourIndex: {
       privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01", ac: ["AC-1"] } } });
-    const plan = renderPlan(r, {});
     return r.behaviourIndex.rejectedTriggers.length === 0 && r.behaviourIndex.triggersFilled.includes("privateHelper")
-      && /attribute \(from attributes.Contact.onChange\) — reported/.test(plan) && !/were REJECTED/.test(plan); })(),
+      && !/were REJECTED/.test(renderPlanNotes(r)); })(),
   () => JSON.stringify(runMigration({ ...handoffManifest, behaviourIndex: { privateHelper: { trigger: "attribute", from: "attributes.Contact.onChange", card: "C01" } } }).behaviourIndex));
 // PINNED, not accidental: `behaviourEstablished: false` blocks the TRIGGER fill as well as the card. The two legs
 // must read ONE entry the same way — the workflow's `entriesOf` drops the entry entirely, so it never validates
@@ -8203,9 +8325,6 @@ check("ENG-96571 A1/A2: a `behaviourEstablished: false` entry blocks the TRIGGER
     && /⚠ not described/.test(renderPlan(notEstablishedWithTrigger, {})),
   () => JSON.stringify(notEstablishedWithTrigger.behaviourIndex));
 
-check("ENG-96571 A2: the preamble states the closed vocabulary and the `from` rule, so a reader repairing the index does not have to find the engine source",
-  /closed vocabulary/.test(badTriggerPlan) && /neither blank nor the row itself/.test(badTriggerPlan),
-  () => badTriggerPlan.split("\n").filter((l) => /closed vocabulary|neither blank/.test(l)));
 
 /* ==================================================================================================
    ENG-94975 — the PAGE-SCOPED done-gate (engine contract v2). The defect this whole ticket exists to
@@ -12703,14 +12822,6 @@ check("ENG-96571 B1: a method's reason text names the declaration that triggers 
 // path that proves it, instead of falling through to `${esc(t.element)}.${esc(t.property)}` — which printed a bare
 // `.` for a kind carrying neither field, a cell that reads worse in the plan than the `⚠ unresolved` it replaced.
 const applSpecTrigRows = (appl.designSpec || "").split("\n").filter(l => /^\| (↳ )?(onContactChange|getJobFilter|getEmailDetailFilter|setContactInfo) /.test(l));
-check("ENG-96571 B1: the rendered design-spec trigger CELL prints the declaration path for each new kind — not the empty `.` the untouched triggerText fallback would produce",
-  applSpecTrigRows.length === 4
-  && /\| Contact changes \(attributes\.Contact\.onChange\) \|/.test(appl.designSpec)
-  && /\| lookup filter for Job \(attributes\.Job\.lookupListConfig\.filter\) \|/.test(appl.designSpec)
-  && /\| detail ApplicantEmailDetailV2 filterMethod \|/.test(appl.designSpec)
-  && /Contact changes \(attributes\.Contact\.onChange\) → onContactChange \(internal call\)/.test(appl.designSpec)
-  && !applSpecTrigRows.some(l => /\| \. \|/.test(l)),
-  () => applSpecTrigRows);
 // Guard-can-fail: BREAK the declaration and the named assertions above must go red, not stay green on a
 // coincidence. Re-folding a copy of the manifest with the `filterMethod` renamed is the smallest break that
 // isolates one emit path.
@@ -12749,19 +12860,21 @@ const A3_RULE = (conds) => `{ "Job": { "JobRequired": {
 const a3Run = (conds) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "A3Page", body: A3_PAGE(A3_RULE(conds)) }] });
 // The LOGIC row (`| <element> | <trigger> | <effect> | page business rule |`), not the Layout row that also
 // carries the field name — the Trigger cell under test lives only in the Logic table.
-const a3Row = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
-const a3Cell = (r) => (a3Row(r).split("|")[2] || "").trim();
+const a3Row = (r) => (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const a3Cell = (r) => (a3Row(r).split("|")[1] || "").trim();
 const a3Ruleset = (r) => r.changeSet.pageBusinessRules[0];
 const a3Gap = (r) => r.changeSet.needsDecision.filter((n) => n.kind === "rule-condition");
 
 // (i) READABLE condition → the cell names the attribute the rule watches. No gap, no worklist row.
 const a3Ok = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": 3, "rightExpression": { "type": 0, "value": "New" } }]`);
-check("ENG-96571 A3: a rule with a READABLE condition renders `when <attr>` and raises no condition gap",
-  a3Cell(a3Ok) === "when Stage"
+check("ENG-96571/ENG-96327 A3: a rule with a READABLE condition renders the WHOLE condition (`when <attr> = <value>`) and raises no condition gap",
+  a3Cell(a3Ok) === "when Stage = New"
   && !a3Ruleset(a3Ok).conditionsIncomplete && a3Gap(a3Ok).length === 0,
   () => ({ row: a3Row(a3Ok), rule: a3Ruleset(a3Ok) }));
 
-// (ii) the REAL Job.JobRequired shape — DEGENERATE sanitized condition (comparison null, no left attribute).
+// (ii) the REAL Job.JobRequired shape — DEGENERATE sanitized condition. The symbolic `Terrasoft.ComparisonType.EQUAL`
+// now RESOLVES (to 3), so what makes this a gap is the CONSTANT left expression: no attribute name to gate on, so
+// `condLeftName` is null and the cell has nothing readable to show — it stays the bare parse gap.
 const a3Deg = a3Run(`[{ "leftExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": BusinessRuleModule.enums.ValueType.CONSTANT, "value": true } }]`);
 check("ENG-96571 A3: the REAL Job.JobRequired rule renders `⚠ condition unread — parse gap` — never `conditional`, never `always`",
   a3Cell(a3Deg) === "⚠ condition unread — parse gap"
@@ -12773,8 +12886,9 @@ check("ENG-96571 A3: the ACTION is still mapped and still in the ChangeSet — o
   a3Ruleset(a3Deg).action === "make-required" && a3Ruleset(a3Deg).inverseAction === "make-optional"
   && /required \(else optional\)/.test(a3Row(a3Deg)),
   () => a3Row(a3Deg));
-check("ENG-96571 A3: the gap reaches the ⚠ Confirm worklist as its own `rule-condition` row",
-  /\*\*\[rule-condition\]\*\* Job/.test(a3Deg.designSpec), () => a3Deg.designSpec.split("\n").filter((l) => /rule-condition/.test(l)));
+check("ENG-96571 A3 / ENG-96327: the gap is a `rule-condition` DECISION in the ChangeSet (rides `--units`), and is NOT duplicated in the human ⚠ Confirm list — the Business rules table already shows `⚠ condition unread — parse gap`",
+  a3Gap(a3Deg).some((d) => d.item === "Job") && !/\*\*\[rule-condition\]\*\*/.test(a3Deg.designSpec),
+  () => ({ decisions: a3Gap(a3Deg), shownInPlan: /\*\*\[rule-condition\]\*\*/.test(a3Deg.designSpec) }));
 
 // (iii) DECLARED but DROPPED — an object-MAP `conditions`, which `sanitizeConditions` returns as `[]`. Same cell:
 // the rule declared a condition, so `always` would be a claim nobody verified.
@@ -12791,6 +12905,35 @@ check("ENG-96571 A3: a rule declaring NO conditions still renders `always` and r
   a3Cell(a3Always) === "always" && !a3Ruleset(a3Always).conditionsIncomplete && a3Gap(a3Always).length === 0,
   () => ({ row: a3Row(a3Always), rule: a3Ruleset(a3Always) }));
 
+/* ===== ENG-96327 — SYMBOLIC Terrasoft.ComparisonType.* resolves, so hand-authored legacy rules stop gapping ===== */
+// Classic bodies write the operator symbolically (`Terrasoft.ComparisonType.EQUAL`, not `3`). Before this the static
+// reader left `comparisonType` null and a rule whose ONLY unread part was the operator reported a full parse gap,
+// throwing away the attribute and value it HAD read. Now the operator resolves and these render in full.
+// (a) symbolic EQUAL against a real attribute + value → the whole condition reads, no gap.
+const a3SymEq = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0, "value": "New" } }]`);
+check("ENG-96327: a SYMBOLIC `Terrasoft.ComparisonType.EQUAL` resolves — the rule reads `when Stage = New`, no parse gap",
+  a3Cell(a3SymEq) === "when Stage = New" && !a3Ruleset(a3SymEq).conditionsIncomplete && a3Gap(a3SymEq).length === 0,
+  () => ({ row: a3Row(a3SymEq), rule: a3Ruleset(a3SymEq) }));
+// (b) a PRESENCE check (`IS_NOT_NULL`, no right operand) is COMPLETE — "when Account is filled", not a gap. The
+// symbolic operator resolves to 12 AND `conditionGap` exempts a presence check from its right-side degeneracy test.
+const a3Presence = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Account" }, "comparisonType": Terrasoft.ComparisonType.IS_NOT_NULL }]`);
+check("ENG-96327: a symbolic `IS_NOT_NULL` presence check reads `when Account is filled` and is NOT a gap (no right operand is correct for a presence check)",
+  a3Cell(a3Presence) === "when Account is filled" && !a3Ruleset(a3Presence).conditionsIncomplete && a3Gap(a3Presence).length === 0,
+  () => ({ row: a3Row(a3Presence), rule: a3Ruleset(a3Presence) }));
+// (c) operator resolves but the VALUE does not (a module constant / system setting the reader cannot execute): still
+// a gap — but the readable LEFT attribute is surfaced, `⚠ when Type — condition unread`, not a blank parse gap.
+const a3ValGap = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Type" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0 } }]`);
+check("ENG-96327: when the operator reads but the value does not, the Trigger names the readable field — `⚠ when Type — condition unread` — and still raises the gap decision",
+  a3Cell(a3ValGap) === "⚠ when Type — condition unread"
+  && a3Ruleset(a3ValGap).conditionsIncomplete === true && a3Gap(a3ValGap).length === 1,
+  () => ({ row: a3Row(a3ValGap), rule: a3Ruleset(a3ValGap), decisions: a3Gap(a3ValGap) }));
+// (d) guard: an operator the RENDERER cannot express (`CONTAIN`) stays null (soft-miss, no false resolve) → still an
+// honest gap, never a number the cell would silently drop the operator from. The readable left is still surfaced.
+const a3Exotic = a3Run(`[{ "leftExpression": { "type": 1, "attribute": "Name" }, "comparisonType": Terrasoft.ComparisonType.CONTAIN, "rightExpression": { "type": 0, "value": "x" } }]`);
+check("ENG-96327 guard: an unlisted operator (`CONTAIN`) is NOT resolved — the rule stays a gap (`⚠ when Name — condition unread`), so the partial table never invents a rendering it cannot express",
+  a3Cell(a3Exotic) === "⚠ when Name — condition unread" && a3Ruleset(a3Exotic).conditionsIncomplete === true,
+  () => ({ row: a3Row(a3Exotic), rule: a3Ruleset(a3Exotic) }));
+
 /* ================= ENG-96571 C1 — manifest.confirmDispositions closes a ⚠ Confirm row ================= */
 // The `rule-condition` row above is the subject: a real question, raised by the engine, with a key an answer can
 // bind to. Before this item the only way to answer it was a hand-written *Adjustments* entry in `plan.md`, which
@@ -12800,10 +12943,12 @@ const C1_MAN = (dispositions) => ({ entity: "HRRequest",
   ...(dispositions ? { confirmDispositions: dispositions } : {}) });
 const c1Open = runMigration(C1_MAN(null));
 const c1OpenCount = (c1Open.designSpec.match(/#### ⚠ Confirm before I build \((\d+)\)/) || [])[1];
-check("ENG-96571 C1: the SETUP — with no disposition the `rule-condition` row is OPEN and the header counts it",
-  /\*\*\[rule-condition\]\*\* Job/.test(c1Open.designSpec) && Number(c1OpenCount) >= 1
+check("ENG-96571 C1 / ENG-96327: the SETUP — with no disposition the `rule-condition` decision is OPEN in the ChangeSet (closed:[]), and is NOT shown in the human plan (bucket A: the Business rules table shows it)",
+  c1Open.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job")
+  && c1Open.confirmDispositions.closed.length === 0
+  && !/\*\*\[rule-condition\]\*\* Job/.test(c1Open.designSpec)
   && !/CLOSED by a recorded disposition/.test(c1Open.designSpec),
-  () => c1Open.designSpec.split("\n").filter((l) => /Confirm before I build|rule-condition/.test(l)));
+  () => [c1Open.confirmDispositions, c1OpenCount]);
 
 const c1Closed = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "resolved-on-stand", note: "read the rule on-stand: required only while Stage = New" } }));
 check("ENG-96571 C1: a recorded disposition CLOSES the row — it leaves the open list, the header says `(N open, M closed)`, and it is still printed with its note",
@@ -12828,18 +12973,18 @@ check("ENG-96571 C1: a SECOND render from the same manifest keeps the row closed
 // the same question on another page of the same migration.
 const c1Scoped = runMigration(C1_MAN({ "A3Page::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
 const c1WrongScope = runMigration(C1_MAN({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "scoped" } }), { scopeSchema: "A3Page" });
-check("ENG-96571 C1: the SCOPED key closes the row for its own schema and NOT for another — a per-page answer stays per-page",
+check("ENG-96571 C1: the SCOPED key closes the row for its own schema and NOT for another — a per-page answer stays per-page (the wrong-scope decision stays OPEN in the ChangeSet)",
   c1Scoped.confirmDispositions.closed.join("|") === "rule-condition:Job"
   && c1WrongScope.confirmDispositions.closed.length === 0
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1WrongScope.designSpec),
+  && c1WrongScope.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job"),
   () => JSON.stringify([c1Scoped.confirmDispositions, c1WrongScope.confirmDispositions]));
 // An INVALID disposition word does NOT close the row: a truthy `resolved` with a typo would clear a question
 // nobody answered. It is named, so the discrepancy is fixable instead of invisible.
 const c1Bad = runMigration(C1_MAN({ "rule-condition:Job": { resolved: true, disposition: "sorted-it", note: "typo" } }));
-check("ENG-96571 C1: an INVALID disposition word does not close the row, and an advisory line NAMES the word and the key",
+check("ENG-96571 C1: an INVALID disposition word does not close the row (it stays OPEN in the ChangeSet), and an advisory line NAMES the word and the key",
   c1Bad.confirmDispositions.closed.length === 0
   && c1Bad.confirmDispositions.invalid.join("|") === "rule-condition:Job"
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1Bad.designSpec)
+  && c1Bad.changeSet.needsDecision.some((d) => d.kind === "rule-condition" && d.item === "Job")
   && /recorded disposition\(s\) were NOT applied/.test(c1Bad.designSpec)
   && /`rule-condition:Job` → `sorted-it`/.test(c1Bad.designSpec)
   && !/CLOSED by a recorded disposition/.test(c1Bad.designSpec),
@@ -12869,8 +13014,8 @@ const C1_NESTED = (dispositions) => ({ entity: "PE", noParentTemplate: true,
 const c1NestSpecOf = (r) => r.childPages.find((c) => c.spec)?.spec || "";
 
 const c1NestOpen = runMigration(C1_NESTED(null));
-check("ENG-96571 C1 (review) SETUP: the CHILD page raises its own `rule-condition` row, open, so the assertions below are about a row that really exists",
-  /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestOpen))
+check("ENG-96571 C1 (review) SETUP / ENG-96327: with no disposition the child's `rule-condition` row is NOT shown in the human plan (bucket A) and NOT closed — the scoped-close test below proves the row really exists by closing it into an ℹ line",
+  !/\*\*\[rule-condition\]\*\* Job/.test(c1NestSpecOf(c1NestOpen))
   && !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestOpen)),
   () => c1NestSpecOf(c1NestOpen).split("\n").filter((l) => /rule-condition|Confirm before/.test(l)));
 
@@ -12885,9 +13030,9 @@ check("ENG-96571 C1 (review) BLOCKER: a SCOPED `<ChildSchema>::<kind>:<item>` ke
 // …and a key scoped to a DIFFERENT schema still closes nothing on the child: the inheritance carries the map, it
 // does not widen the precedence.
 const c1NestWrong = runMigration(C1_NESTED({ "OtherPage::rule-condition:Job": { resolved: true, disposition: "accepted", note: "not this page" } }));
-check("ENG-96571 C1 (review): inheriting the map does NOT widen it — a key scoped to another schema leaves the child's row OPEN",
+check("ENG-96571 C1 (review): inheriting the map does NOT widen it — a key scoped to another schema closes nothing on the child (no ℹ CLOSED line), and the row stays out of the human plan (bucket A)",
   !/CLOSED by a recorded disposition/.test(c1NestSpecOf(c1NestWrong))
-  && /\*\*\[rule-condition\]\*\* Job —/.test(c1NestSpecOf(c1NestWrong)),
+  && !/\*\*\[rule-condition\]\*\* Job/.test(c1NestSpecOf(c1NestWrong)),
   () => c1NestSpecOf(c1NestWrong).split("\n").filter((l) => /rule-condition|CLOSED/.test(l)));
 
 // PRECEDENCE, on the row itself: with BOTH forms present the SCOPED one is the answer that lands. This is what
@@ -12995,9 +13140,6 @@ check("ENG-96571 B1: a chain answered by a PLATFORM LIFECYCLE method carries kin
   () => JSON.stringify(b1Trig));
 check("ENG-96571 B1: `lifecycle` is a REPORTED_TRIGGERS kind — a traced answer and a described one stay one vocabulary",
   REPORTED_TRIGGERS.includes("lifecycle") && REPORTED_TRIGGERS.includes(b1Trig?.kind));
-check("ENG-96571 B1: the rendered cell is UNCHANGED by the rename — `<hook> (platform lifecycle) → internal call`",
-  /onEntityInitialized \(platform lifecycle\) → internal call/.test(renderPlan(b1Life, {})),
-  () => renderPlan(b1Life, {}).split("\n").filter((l) => /warmCache/.test(l)));
 check("ENG-96571 B1: a lifecycle-answered row is NOT counted as `internalCallOnly` — the platform starting the chain IS the answer",
   b1Life.stubIndex[0].counts.internalCallOnly === 0, () => JSON.stringify(b1Life.stubIndex[0].counts));
 
@@ -13212,7 +13354,7 @@ const R1_G_RULE = (right) => `define("R1GPage", ["BusinessRuleModule"], function
 }; });`;
 const r1gRun = (right) => runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1GPage", body: R1_G_RULE(right) }] });
 const r1gRule = (r) => (r.changeSet.pageBusinessRules || []).find((x) => x.element === "Job");
-const r1gRow = (r) => (r.designSpec || "").split("\n").find((l) => /^\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
+const r1gRow = (r) => (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || "";
 const r1gAttr = r1gRun('{ "type": 1, "attribute": "OtherStage" }');
 check("ENG-96571 (review 1, G): an ATTRIBUTE on the right side of a condition SURVIVES sanitizeConditions — it used to collapse to `{value:null, dataValueType:null}` and the comparison was gone from the ChangeSet entirely",
   r1gRule(r1gAttr)?.conditions?.[0]?.right?.attribute === "OtherStage",
@@ -13224,9 +13366,45 @@ check("ENG-96571 (review 1, G): a column-to-column comparison is NOT a condition
   r1gRule(r1gAttr)?.conditionsIncomplete === undefined
   && !(r1gAttr.changeSet.needsDecision || []).some((n) => n.kind === "rule-condition" && n.item === "Job"),
   () => JSON.stringify((r1gAttr.changeSet.needsDecision || []).filter((n) => n.kind === "rule-condition")));
+// ENG-96327 (self-review Major): a column-to-column comparison states the ACTUAL operator, not a hardcoded `=`. A
+// NOT_EQUAL (comparisonType 4) must read `Stage ≠ OtherStage` — showing it as `Stage = OtherStage` would invert the
+// gating semantics the approver signs off on.
+const R1_G_RULE_OP = (cmp) => `define("R1GPageOp", ["BusinessRuleModule"], function(BusinessRuleModule) { return {
+  entitySchemaName: "HRRequest",
+  rules: { "Job": { "JobVisible": { "ruleType": BusinessRuleModule.enums.RuleType.BINDPARAMETER,
+    "property": BusinessRuleModule.enums.Property.VISIBLE,
+    "conditions": [{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": ${cmp}, "rightExpression": { "type": 1, "attribute": "OtherStage" } }] } } },
+  diff: [{ "operation": "insert", "name": "Job", "parentName": "Header", "propertyName": "items", "values": { "bindTo": "Job" } }]
+}; });`;
+const r1gOpRow = (cmp) => { const r = runMigration({ entity: "HRRequest", schemas: [{ pkg: "R1GPageOp", body: R1_G_RULE_OP(cmp) }] });
+  return (r.designSpec || "").split("\n").find((l) => /^\| [^|]*\| Job \|/.test(l) && /page business rule \|$/.test(l)) || ""; };
+check("ENG-96327 (self-review): a NOT_EQUAL column-to-column condition reads `when Stage ≠ OtherStage` — the real operator, never a hardcoded `=`",
+  /when Stage ≠ OtherStage/.test(r1gOpRow(4)) && !/when Stage = OtherStage/.test(r1gOpRow(4)),
+  () => r1gOpRow(4));
+check("ENG-96327 (self-review) ANTI-VACUITY: EQUAL still reads `= OtherStage` and LESS reads `< OtherStage` (esc renders it `&lt;`) — the fix states the operator, it did not drop equality nor mangle relational ops",
+  /when Stage = OtherStage/.test(r1gOpRow(3)) && /when Stage &lt; OtherStage/.test(r1gOpRow(5)),
+  () => ({ eq: r1gOpRow(3), lt: r1gOpRow(5) }));
+// ENG-96327 (self-review, PR #166): the CONFUSABLE boundary operators — every one COMPARISON_OP defines — each pins
+// its OWN glyph, so a copy-paste transposition (≤ vs <, ≥ vs >) that inverts a rule's gating semantics fails here.
+// `<`/`>` are esc-encoded (`&lt;`/`&gt;`); `≤`/`≥` are unicode. Platform codes: IS_NULL=1, IS_NOT_NULL=2.
+check("ENG-96327 (self-review): the relational boundary ops each render their exact glyph — ≤ (6), > (7), ≥ (8) — never transposed to the adjacent `<`/`>=`",
+  /when Stage ≤ OtherStage/.test(r1gOpRow(6))
+  && /when Stage &gt; OtherStage/.test(r1gOpRow(7))
+  && /when Stage ≥ OtherStage/.test(r1gOpRow(8)),
+  () => ({ le: r1gOpRow(6), gt: r1gOpRow(7), ge: r1gOpRow(8) }));
+// Rita review (Blocker): the platform's presence-check codes are 1 (IS_NULL) / 2 (IS_NOT_NULL) — NOT 11/12, which
+// are CONTAIN / NOT_CONTAIN. IS_NULL (1) reads `is empty`; a CONTAIN (11) is NOT a presence check and, with a value,
+// states it neutrally (`vs`) rather than reading as a bare presence check — the exact inversion Rita reproduced.
+check("Rita review: numeric IS_NULL (1) reads `is empty` and IS_NOT_NULL (2) reads `is filled` — the real platform codes, not 11/12",
+  /when Stage is empty/.test(r1gOpRow(1)) && !/is filled/.test(r1gOpRow(1))
+  && /when Stage is filled/.test(r1gOpRow(2)) && !/is empty/.test(r1gOpRow(2)),
+  () => ({ isnull: r1gOpRow(1), isnotnull: r1gOpRow(2) }));
+check("Rita review: CONTAIN (11) is NOT rendered as a presence check — it keeps its operands (`Stage vs OtherStage`), never a bare `when Stage` that reads as a gap-free presence",
+  /when Stage vs OtherStage/.test(r1gOpRow(11)) && !/is empty|is filled/.test(r1gOpRow(11)),
+  () => r1gOpRow(11));
 const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
-check("ENG-96571 (review 1, G) ANTI-VACUITY: a comparison against a CONSTANT keeps the existing bare `when Stage` phrasing — this cell has never printed the constant, and nothing about that case changed",
-  /when Stage \|/.test(r1gRow(r1gConst)) && !/when Stage =/.test(r1gRow(r1gConst)),
+check("ENG-96327 (was ENG-96571 G ANTI-VACUITY): a comparison against a CONSTANT states the whole condition too — `when Stage = New`, the value the cell now prints (a readable constant is shown; a lookup GUID would read `a specific value`)",
+  /when Stage = New/.test(r1gRow(r1gConst)),
   () => r1gRow(r1gConst));
 const r1gNothing = r1gRun('{ "type": 0 }');
 check("ENG-96571 (review 1, G): a right side with NEITHER a value NOR an attribute is DEGENERATE — it names nothing to compare against, so the rule is a parse gap rather than rendering as a readable condition",
@@ -13356,17 +13534,19 @@ check("ENG-96457 fixture: `--plan` on the ENG-96445 manifest is gate-clean (exit
 // The classic `diff` DECLARES City1, Country1, City2, Country2 while PLACING them (r6,c0) (r7,c0) (r6,c12)
 // (r7,c12) — two rows of two. The Layout table used to print the declaration order with no coordinates, so a
 // faithful 2-column build produced `City1 | Country1` / `City2 | Country2`.
-const br1Grid = br1PlanOut.slice(br1PlanOut.indexOf("##### Grid of `Header`"));
-check("ENG-96457 (item 1): the Header grid's last two rows read `City1 | City2` and `Country1 | Country2` — the pairing the classic page has, which the declaration order destroys (the ticket's first acceptance criterion, verbatim)",
-  /\| 7 \| City1 \| City2 \|/.test(br1Grid) && /\| 8 \| Country1 \| Country2 \|/.test(br1Grid),
-  () => br1Grid.split("\n").slice(0, 14));
-check("ENG-96457 (item 1): the Layout table carries a `Placement` column and each header field's cell, and it is SORTED by the cell — City1 and City2 are adjacent rows, which they were not in declaration order",
-  /\| Region \| Placement \| Element \| Type \| Source \| Rule \| Additional \|/.test(br1PlanOut)
-  && /\| Header \| r7 · c1 \(span 12\) \| City1 \|/.test(br1PlanOut)
-  && /\| Header \| r7 · c13 \(span 12\) \| City2 \|/.test(br1PlanOut)
+check("ENG-96457 (item 1) / ENG-96327 B: the 'Grid of Header' placement grid is NO LONGER rendered (Freedom is 12-col; the agent designs the layout itself) — the field PAIRING is preserved instead by the Layout table's reading-order SORT: City1 then City2 then Country1 then Country2, not the declaration order",
+  !/##### Grid of `Header`/.test(br1PlanOut)
+  && br1PlanOut.indexOf("| City1 |") < br1PlanOut.indexOf("| City2 |")
+  && br1PlanOut.indexOf("| City2 |") < br1PlanOut.indexOf("| Country1 |")
+  && br1PlanOut.indexOf("| Country1 |") < br1PlanOut.indexOf("| Country2 |"),
+  () => br1PlanOut.split("\n").filter((l) => /City|Country/.test(l)).slice(0, 8));
+check("ENG-96457 (item 1) / ENG-96327 B: the Layout table has NO `Placement` column and shows no r·c coordinates — the sort keeps City1 and City2 adjacent (the pairing), and the exact cells travel only on --units/verify",
+  /\| Region \| Element \| Type \| Source \| Rule \| Additional \|/.test(br1PlanOut)
+  && !/\| Placement \|/.test(br1PlanOut)
+  && !/r7 · c1/.test(br1PlanOut) && !/r7 · c13/.test(br1PlanOut)
   && br1PlanOut.indexOf("| City2 |") - br1PlanOut.indexOf("| City1 |") > 0
   && br1PlanOut.indexOf("| City2 |") < br1PlanOut.indexOf("| Country1 |"),
-  () => br1PlanOut.split("\n").filter((l) => /\| Header \| r[678]/.test(l)));
+  () => br1PlanOut.split("\n").filter((l) => /City|Country/.test(l)).slice(0, 8));
 const br1Units = JSON.parse(br1(["--units"]).stdout || "{}");
 const br1Expect = br1Units.pages?.[0]?.expect || {};
 const br1Cell = (n) => (br1Expect.fieldLayout || []).find((e) => e.name === n);
@@ -13453,25 +13633,44 @@ check("ENG-96457 (item 2): …and it gets its own EXPECTED COUNT with a `crt.Fee
 check("ENG-96457 (item 2): the template RECOMMENDATION is checked against the template — a 2-column Classic Header against a measured ONE-column top area is stated as a decision AT the recommendation, not discovered by the build",
   /top area has 1 column\(s\) and this Classic Header has 2/.test(br1PlanOut) && /decide before building/i.test(br1PlanOut),
   () => br1PlanOut.split("\n").filter((l) => /Template recommendation|top area has/.test(l)));
-// PR #156 review (finding 2): the THIRD verdict, `provided`. Every template measured so far ships NO Feed, so this
-// arm — and the "ships … (measured); re-bind it" Source cell it renders — was reachable by no fixture at all, and
-// the first stand template that does ship Feed would have exercised it for the first time in production. Both
-// halves are pinned: the Source cell says RE-BIND (not ADD), and `templateAbsentRows` files NO extra `crt.Feed`
-// expected count for it — an element the template ships must not also be demanded as an explicit build step.
+// PR #156 review (finding 2) / ENG-96327: the THIRD verdict, `provided`. It is now reachable from a REAL measured
+// template — `PageWithTabsAndProgressBarTemplate`, the DCM case template, measured (get-page, kravchuk_0922) to ship
+// Feed + Attachments + Next steps. Both halves are pinned: the Source cell says RE-BIND (not ADD), and
+// `templateAbsentRows` files NO extra `crt.Feed` expected count — an element the template ships must not also be
+// demanded as an explicit build step.
 const br1WithTemplate = (tpl, mode) => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
   m.planMeta = { ...m.planMeta, formTemplate: tpl };
   return spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", mode], { input: JSON.stringify(m), encoding: "utf8" }); };
-check("ENG-96457 (item 2): a template MEASURED to ship Feed renders the third verdict — the Feed row reads template context / re-bind it, and it gets NO extra `crt.Feed` expected count (what the template ships must not also be demanded as a build step)",
-  () => { const out = br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "";
-    const rows = (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n");
-    return /template context — `__FixtureTemplateShippingFeed` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
+check("ENG-96457/ENG-96327: a template MEASURED to ship Feed renders the third verdict — the Feed row reads template context / re-bind it, and it gets NO extra `crt.Feed` expected count (what the template ships must not also be demanded as a build step)",
+  () => { const out = br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--checklist").stdout || "").split("\n");
+    return /template context — `PageWithTabsAndProgressBarTemplate` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
       && !/ships NO Feed/.test(out)
       && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
-  () => ({ feedRows: (br1WithTemplate("__FixtureTemplateShippingFeed", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
-    checklist: (br1WithTemplate("__FixtureTemplateShippingFeed", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
+  () => ({ feedRows: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)),
+    checklist: (br1WithTemplate("PageWithTabsAndProgressBarTemplate", "--checklist").stdout || "").split("\n").filter((l) => /Feed/.test(l)) }));
+// ENG-96327 — the recommended templates are now measured, so the plan gives a DEFINITE verdict for the templates a
+// migration is actually told to choose. The DEFAULT `PageWithTabsFreedomTemplate` ships Feed (measured) → re-bind;
+// the side/right-area template ships NONE → an explicit build with its own `crt.Feed` count. Both are real stand
+// measurements (get-page kravchuk_0922), so the common case stops hedging.
+check("ENG-96327: the DEFAULT template `PageWithTabsFreedomTemplate` is MEASURED to ship Feed — the Feed row reads template context / re-bind, no extra build count",
+  () => { const out = br1WithTemplate("PageWithTabsFreedomTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithTabsFreedomTemplate", "--checklist").stdout || "").split("\n");
+    return /template context — `PageWithTabsFreedomTemplate` ships Feed \(ESN\) \(measured\); re-bind it, do not rebuild/.test(out)
+      && !/ships NO Feed/.test(out)
+      && !rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
+  () => (br1WithTemplate("PageWithTabsFreedomTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)));
+check("ENG-96327: the side-area template `PageWithRightAreaAndTabsFreedomTemplate` is MEASURED to ship NO Feed — the Feed row is an explicit ADD with its own `crt.Feed` expected count",
+  () => { const out = br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--plan").stdout || "";
+    const rows = (br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--checklist").stdout || "").split("\n");
+    return /⚠ ADD — `PageWithRightAreaAndTabsFreedomTemplate` ships NO Feed \(ESN\) \(measured\)/.test(out)
+      && rows.some((l) => /Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
+  () => (br1WithTemplate("PageWithRightAreaAndTabsFreedomTemplate", "--plan").stdout || "").split("\n").filter((l) => /Feed/.test(l)));
 check("ENG-96457 (item 2): an UNMEASURED template is 'confirm on-stand', never a claim in either direction — the capability table's third state is what keeps it honest",
   () => { const m = JSON.parse(fs.readFileSync(BR1, "utf8"));
-    m.planMeta = { ...m.planMeta, formTemplate: "PageWithTabsFreedomTemplate" };
+    // A template NOT in FREEDOM_TEMPLATE_CAPABILITIES (the recommended ones are all measured now) — the honest
+    // third state must still hold for anything the table has never read.
+    m.planMeta = { ...m.planMeta, formTemplate: "BlankPageTemplate" };
     const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(m), encoding: "utf8" });
     const out = r.stdout || "";
     return /capabilities are NOT measured/.test(out) && !/ships NO Feed/.test(out)
@@ -13535,10 +13734,10 @@ check("ENG-96457 (item 3): an UNREAD prefix BLOCKS the plan like every other on-
   () => "prefix signal removed from the fixture manifest");
 
 // ---- item 4: the Classic side effect is stated ----------------------------------------------------------------
-check("ENG-96457 (item 4): the plan carries a ⚠ Confirm row for the Classic `Add` routing side effect — 'the Classic section stays untouched' is false, and confirmed false on the stand (Classic `ДОБАВИТЬ` began opening the Freedom page)",
-  /\*\*\[list-add-routing\]\*\*/.test(br1PlanOut) && /Classic section is NOT left untouched/.test(br1PlanOut)
-  && /ADD-purpose RelatedPage binding on the OBJECT/.test(br1PlanOut),
-  () => br1PlanOut.split("\n").filter((l) => /list-add-routing/.test(l)));
+check("ENG-96457 (item 4) / ENG-96327: the Classic `Add` routing side-effect DECISION exists and rides --units, but is DROPPED from the human ⚠ Confirm (the add page is already stated in Main scope / the `- **Add record:**` line)",
+  !/\*\*\[list-add-routing\]\*\*/.test(br1PlanOut)
+  && (br1Units.preflight || []).some((p) => p.kind === "list-add-routing"),
+  () => br1PlanOut.split("\n").filter((l) => /add-routing|Add record/i.test(l)));
 check("ENG-96457 (item 4): it is a QUESTION with a published id, not a note — `--units.preflight` carries it, so the answer has somewhere to be recorded and the row cannot be read past",
   (br1Units.preflight || []).some((p) => p.kind === "list-add-routing")
   && (br1Units.evidenceRows || []).some((e) => /#confirm:list-add-routing:/.test(e.id || "")),
@@ -13560,8 +13759,12 @@ check("ENG-96457 (item 4): the routing question is SECTION-scoped — a page wit
     .map((pf) => ({ pageKey: pf.pageKey, item: pf.item })),
     pages: (br1Units.pages || []).map((pg) => pg.key) }));
 
-// ---- item 5: plan.md is regenerated with the answers ----------------------------------------------------------
-check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row AS its answer and says how many are answered — every question could be answered and `plan.md` still showed the unanswered worklist, so the approved document and the payload the builder acted on said different things",
+// ---- item 5: plan.md drops the ⚠ Confirm rows the operator answered (ENG-96327 product decision) ---------------
+// POC's ENG-96457 rendered each answered ⚠ row AS its answer. The migration-plan branch's decision is the opposite:
+// an answered ⚠ Confirm row is REMOVED from the human plan entirely — the answer lives in `resolutions.json` (a
+// separate file) and reaches the build via `--units.preflight[].resolution`. So the worklist just gets shorter, the
+// header stops carrying an "answered" count, and a settled header decision drops its Template recommendation too.
+check("ENG-96327 (item 5): `--plan --resolutions` REMOVES each answered ⚠ Confirm row from the human plan (kept only in resolutions.json), rather than echoing the answer — the worklist shrinks and the header shows only the OPEN count",
   () => { const f = path.join(os.tmpdir(), `c2f_br1_res_${process.pid}.json`);
     try {
       fs.writeFileSync(f, JSON.stringify({ resolutions: [
@@ -13572,14 +13775,48 @@ check("ENG-96457 (item 5): `--plan --resolutions` renders each answered ⚠ row 
       const r = br1(["--plan", "--resolutions", f]);
       const out = r.stdout || "";
       return r.status === 0
-        && /⚠ Confirm before I build \(3, 2 answered\)/.test(out)          // the list page's two
-        && /⚠ Confirm before I build \(3, 1 answered\)/.test(out)          // the form page's one
-        && /\*\*\[list-add-routing\]\*\*.*\*\*✅ answered:\*\* Accepted — switch-over/.test(out)
-        // …and the unresolved COLUMN LINE is superseded by the answer rather than still reading as a fallback
-        && /\*\*List columns:\*\* \*\*✅ answered:\*\* Name, City1, Country1 _\(Alex, 2026-09-03\)_/.test(out);
+        // no header carries an "answered" count any more, and no ⚠ row is echoed back as its answer (the worklist just
+        // gets shorter). The exact remaining count is not asserted — ENG-96327 also drops list-* noise + bucket kinds
+        // from the human list, so the inventory is not fixed; the MECHANISM (answered → removed) is what this pins.
+        && !/⚠ Confirm before I build \([^)]*answered/.test(out)
+        && !/^- \*\*\[[a-z-]+\]\*\*[^\n]*✅ answered/m.test(out)   // no ⚠ Confirm ROW echoes its answer (the List-columns LINE showing ✅ answered is fine — different mechanism)
+        // the answered Header layout-type is gone AND its Template recommendation is suppressed (settled, not re-argued)
+        && !/\*\*\[layout-type\]\*\*/.test(out)
+        && !/Template recommendation — header/.test(out);
     } finally { fs.rmSync(f, { force: true }); }
   },
   () => "see --plan --resolutions on the fixture");
+// ---- item 5, the NON-VACUOUS forced-negative (Tanya's review) -------------------------------------------------
+// The `--plan --resolutions` golden above answers only `list-columns`/`list-add-routing` (LIST_PAGE_NOISE) and
+// `layout-type` (BUILDER_ONLY) — kinds the `confirm` filter (designspec.mjs ~1053) already drops via a denylist
+// clause that SHORT-CIRCUITS `&&` before `!isAnswered(d)` is ever reached. So deleting `!isAnswered(d)` would leave
+// that golden green: it never exercises the resolution-aware drop it claims to pin, and it has no forced-negative.
+// This golden uses TWO GENUINELY-RENDERED confirm decisions (`component` is in no denylist), answers ONLY the first,
+// and asserts all three facts the drop is made of — so removing `!isAnswered(d)` turns assertion (1) RED.
+{
+  const cKind = "component";
+  const answered = { kind: cKind, item: "SalesFunnelChart", reason: "module 'SalesFunnelWidget' (chart/widget) — propose closest standard Freedom component, confirm with user" };
+  const open = { kind: cKind, item: "KpiGauge", reason: "module 'KpiGaugeWidget' (chart/widget) — propose closest standard Freedom component, confirm with user" };
+  const twoComp = { entity: "X", changeSet: { needsDecision: [answered, open] } };
+  const resolutions = [{ kind: cKind, item: "SalesFunnelChart", answer: "Replace with crt.PivotTable", decidedBy: "Tanya", date: "2026-09-11" }];
+  // (1) the ANSWERED `component` row is REMOVED from the human ⚠ Confirm (this is the assertion `!isAnswered(d)`
+  //     makes true — delete that clause and the answered row renders, turning this red); and
+  // (2) the OPEN `component` row is STILL rendered as its `- **[component]** …` bullet.
+  const humanSpec = renderDesignSpec(twoComp, { embedded: true, resolutions });
+  check("ENG-96327 (item 5, forced-negative): `--resolutions` drops the ANSWERED `component` row from the human ⚠ Confirm while the OPEN one still renders — deleting `!isAnswered(d)` turns this red",
+    !/\*\*\[component\]\*\* SalesFunnelChart/.test(humanSpec)   // answered → gone from the human plan
+    && /\*\*\[component\]\*\* KpiGauge/.test(humanSpec),         // open → still a bullet
+    () => humanSpec.split("\n").filter((l) => /\[component\]|Confirm before/.test(l)));
+  // (3) the MACHINE channel is UNAFFECTED: `--units.preflight` still carries BOTH — the answered one annotated with
+  //     its `resolution`, the open one with `resolution: null`. The human drop must never lose the answer the build
+  //     consumes (confirmWorklistRows filters only SHOWN_ELSEWHERE/closed, never `isAnswered`).
+  const pf = pageUnits(twoComp, { resolutions }).preflight.filter((p) => p.kind === cKind);
+  check("ENG-96327 (item 5, forced-negative): `--units.preflight` carries BOTH `component` rows regardless of the human drop — answered one with a resolution, open one with null",
+    () => pf.length === 2
+      && pf.find((p) => p.item === "SalesFunnelChart")?.resolution?.answer === "Replace with crt.PivotTable"
+      && pf.find((p) => p.item === "KpiGauge")?.resolution == null,
+    () => pf.map((p) => ({ item: p.item, resolution: p.resolution })));
+}
 
 // ---- item 6: no generator instructions in the delivered plan --------------------------------------------------
 check("ENG-96457 (item 6): the delivered plan file carries no authoring text and no `<FILL:` placeholder — a plan is what a human approves, not a note telling its reader to fill `manifest.planMeta`",
@@ -13656,10 +13893,11 @@ check("ENG-96571 review 2 (finding 2): `leaf` folds under `mid` and its Freedom 
   /↳/.test(r22Row("leaf")) && /port with `mid`/.test(r22Row("leaf"))
   && !/port with `onSaved`/.test(r22Row("leaf")),
   () => [r22Row("mid"), r22Row("leaf")]);
-check("ENG-96571 review 2 (finding 2): and the trigger CELL still names the platform hook — the answer to 'what starts this' is unchanged by the rebase",
-  /onSaved \(platform lifecycle\) → internal call/.test(r22Row("leaf")),
-  () => r22Row("leaf"));
-check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop — the hook in the cell, the immediate caller in `from`, the middle hops in `via`",
+// ENG-96534 (merge) — the Trigger CELL render (`triggerText`) is GONE: the ⚠ Custom methods table now shows
+// What-it-does / Use-case columns instead of Trigger. The trigger TRACING data (`handlerStubs[].triggers`) and the
+// call-graph FOLD (`port with <caller>`) both survive and stay pinned below; only the assertions on the removed cell
+// text are dropped.
+check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop in the DATA — the hook, the immediate caller in `from`, the middle hops in `via` (the cell that once rendered them is replaced by the What-it-does/Use-case columns)",
   (() => {
     const r = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
       `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
@@ -13672,7 +13910,7 @@ check("ENG-96571 review 2 (finding 2): a THREE-hop chain keeps every hop — the
     const plan = renderPlan(r, {});
     const row = plan.split("\n").find((l) => l.split("|")[1]?.replaceAll("↳", "").trim() === "leaf") || "";
     return t?.from === "mid" && t?.hook === "onSaved" && (t?.via || []).join(",") === "top"
-      && /port with `mid`/.test(row) && /onSaved \(platform lifecycle\) → internal call via top/.test(row);
+      && /port with `mid`/.test(row);
   })(),
   () => JSON.stringify((runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     `define("R22DeepPage", [], function() { return { entitySchemaName: "Deal", methods: {
@@ -13968,9 +14206,11 @@ check("ENG-96571 review 2 (finding 6): the same for an UNMATCHED-key advisory",
   /#### ⚠ Confirm before I build \(0 open\)/.test(r26Spec({ confirmUnmatched: ["rule-condition:Nope"] })),
   () => r26Spec({ confirmUnmatched: ["rule-condition:Nope"] }).split("\n").filter((l) => /Confirm before I build|matched NO/.test(l)));
 check("ENG-96571 review 2 (finding 6) ANTI-VACUITY: with NOTHING to say the worklist is still absent entirely, and with open rows the count is still the plain `(N)` the other goldens pin",
+  // ENG-96327: use a kind the human plan actually SHOWS (`detail-placement`) — `rule-condition` is now denylisted
+  // from the human ⚠ Confirm (SHOWN_IN_TABLE), so it would render `(0 open)`, not the `(1)` this anti-vacuity pins.
   !/⚠ Confirm before I build/.test(r26Spec({}))
-  && /#### ⚠ Confirm before I build \(1\)/.test(r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })),
-  () => [r26Spec({}), r26Spec({ needsDecision: [{ kind: "rule-condition", item: "Job", reason: "unread" }] })]);
+  && /#### ⚠ Confirm before I build \(1\)/.test(r26Spec({ needsDecision: [{ kind: "detail-placement", item: "Doc", reason: "unresolved parent" }] })),
+  () => [r26Spec({}), r26Spec({ needsDecision: [{ kind: "detail-placement", item: "Doc", reason: "unresolved parent" }] })]);
 
 /* ================================================================================================
    ENG-96571 review 3 — a question CLOSED by a disposition is still a question this run ASKED
@@ -14087,9 +14327,8 @@ check("ENG-96571 review 3 ANTI-VACUITY: ONE answer to a closed question raises N
 // `onSaved (platform lifecycle) → internal call via mid`. It does not: `composeUpstream` peels the immediate
 // caller off the chain, so `via` is EMPTY at that depth and `mid` reaches the reader through the FOLD. Pinned as
 // behaviour so the corrected comment cannot drift back.
-check("ENG-96571 review 3 (MINOR): on `onSaved → mid → leaf` the trigger cell carries NO `via` — `mid` is the immediate caller, so it reaches the reader through the fold (``port with `mid` ``), not through this cell",
+check("ENG-96571 review 3 (MINOR) / ENG-96534: on `onSaved → mid → leaf` the trigger DATA carries NO `via` — `mid` is the immediate caller, so it reaches the reader through the fold (``port with `mid` ``); the Trigger cell that once rendered this is replaced by the What-it-does/Use-case columns",
   (r22Trig("leaf")?.via || []).length === 0
-  && /onSaved \(platform lifecycle\) → internal call(?! via)/.test(r22Row("leaf"))
   && /port with `mid`/.test(r22Row("leaf")),
   () => ({ trigger: r22Trig("leaf"), row: r22Row("leaf") }));
 

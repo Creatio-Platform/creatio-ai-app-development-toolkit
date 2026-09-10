@@ -8380,10 +8380,27 @@ console.log("\n===== ENG-96571 (w2b): bundle warnings · module-dep digest · Ap
         && json.structure.bundleWarningsClosed?.length === 1
         && json.structure.bundleWarningsClosed[0].disposition === "resolved-manually",
       () => ({ status: r.status, issues: json?.structure?.issues, closed: json?.structure?.bundleWarningsClosed }));
-    check("ENG-96571 A5: a CLOSED warning is rendered `ℹ … CLOSED by a recorded disposition` with its own text and note — cleared, never deleted (the rule `renderFidelityWarnings` already follows)",
-      () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stdout)
-        && plan.stdout.includes("looked the three details up by hand"),
-      () => ({ status: plan.status, line: (plan.stdout.match(/> ℹ.*bundle warning[^\n]*/) || ["(none)"])[0].slice(0, 200) }));
+    check("ENG-96571 A5: a CLOSED warning is rendered `ℹ … CLOSED by a recorded disposition` with its own text and note — in the agent-facing plan NOTES (stderr with no --out; plan.notes.md with one), never in the approver's plan.md — cleared, never deleted (the rule `renderFidelityWarnings` already follows)",
+      () => plan.status === 0 && /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(plan.stderr)
+        && plan.stderr.includes("looked the three details up by hand")
+        && !plan.stdout.includes("CLOSED by a recorded disposition"),
+      () => ({ status: plan.status, line: (plan.stderr.split("\n").find((l) => l.includes("bundle warning")) || "(none)").slice(0, 200), leakedToStdout: plan.stdout.includes("CLOSED by a recorded disposition") }));
+    // Kravchuk review — the OTHER branch the title names: with `--out plan.md` the SAME CLOSED line lands in
+    // `plan.notes.md` beside the plan (not stderr), and NOT in the approver's plan.md.
+    {
+      const outDir = mkdtempSync(path.join(os.tmpdir(), "a5-notes-"));
+      const planFile = path.join(outDir, "plan.md");
+      runEngine(closed, ["--plan", "--out", planFile]);
+      const notesFile = path.join(outDir, "plan.notes.md");
+      const notes = existsSync(notesFile) ? readFileSync(notesFile, "utf8") : "";
+      const planMd = existsSync(planFile) ? readFileSync(planFile, "utf8") : "";
+      check("ENG-96571 A5 (--out branch): with `--out plan.md` the CLOSED bundle-warning is written to `plan.notes.md` beside it — NOT to the approver's plan.md — the second destination this row's title names",
+        () => /ℹ 1 bundle warning\(s\) from `get-classic-page-sources` CLOSED by a recorded disposition/.test(notes)
+          && notes.includes("looked the three details up by hand")
+          && !planMd.includes("CLOSED by a recorded disposition"),
+        () => ({ notesHasLine: /CLOSED by a recorded disposition/.test(notes), planMdHasLine: planMd.includes("CLOSED by a recorded disposition") }));
+      rmSync(outDir, { recursive: true, force: true });
+    }
     // GUARD-CAN-FAIL: the disposition is load-bearing. Drop the disposition MAP alone and the same manifest blocks
     // again — so the check above passes because the answer was read, not because the fixture cannot block.
     const noDisp = { ...closed }; delete noDisp.bundleWarningDispositions;

@@ -463,8 +463,8 @@ export function mapToFreedom(eff, opts = {}) {
   _pc.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
-  const _w = mapWidgets(eff, { signals: opts.signals });
-  const { widgets, chromeWidgets } = _w;
+  const _w = mapWidgets(eff, { signals: opts.signals, ownSignals: opts.ownSignals, isChildPage });
+  const { widgets, chromeWidgets, dcmActive } = _w;
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
@@ -522,6 +522,9 @@ export function mapToFreedom(eff, opts = {}) {
     profileCards,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
+    // DCM present for THIS page's entity (scoped: a child edit page does not inherit the parent's case) — the
+    // coverage builder gates the case-bar / Next-steps deliverable rows on this, not on the raw inherited signal.
+    dcmActive,
     // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
     chromeWidgets,
     // image/photo components (generator-based) → Freedom image component.
@@ -1146,9 +1149,11 @@ function mapFields(ctx, containers) {
 function detectDetailAddMechanism(dinfo) {
   const am = dinfo?.addMode;
   if (!am?.editableGrid) return null;
+  // No `enableVia` build recipe here: HOW to make a Freedom grid inline-editable (`crt.DataGrid` editable/itemsCreation
+  // properties, resolved via get-component-info) is builder mechanics the freedom-build-executor already owns — the
+  // plan states the human fact (this detail is inline-editable, and WHICH columns), not the component wiring.
   return {
     columns: am.editableColumns?.length ? am.editableColumns : null,
-    enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
     addVia: am.lookup ? "add existing via lookup" : null,
   };
 }
@@ -1852,9 +1857,16 @@ function conditionGap(r) {
   // "when Stage" and reads as "Stage is set", which is not what the classic page evaluated.
   const rightSaysNothing = (c) => (c?.right?.value === null || c?.right?.value === undefined)
     && !c?.right?.attribute && !c?.right?.attributePath;
+  // A presence check (IS_NULL / IS_NOT_NULL) is COMPLETE with no right operand — "when Account is filled" compares
+  // the attribute against nothing by design. Now that the symbolic `Terrasoft.ComparisonType.IS_NOT_NULL` resolves
+  // (engine.mjs `AST_COMPARISON_TYPE`), such a rule reaches here with a real comparison and an empty right side, and
+  // the `rightSaysNothing` test alone would have called it degenerate — flagging a fully-read presence rule as a
+  // parse gap. The codes are the platform's `Terrasoft.ComparisonType` — IS_NULL=1, IS_NOT_NULL=2 (11/12 are
+  // CONTAIN/NOT_CONTAIN, which DO take a right operand and must stay a gap when it is unread). Mirrors `condPhrase`.
+  const PRESENCE_CHECK = new Set([1, 2]);
   const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
     || (!c?.left?.attribute && !c?.left?.path)
-    || rightSaysNothing(c);
+    || (!PRESENCE_CHECK.has(c?.comparison) && rightSaysNothing(c));
   // `every` missed every PARTIAL gap: two declared conditions of which one sanitized away, or three declared and
   // two readable, left `sane` non-empty with at least one readable entry and reported the rule as fully read. The
   // rendered cell then stated a condition that is only half of what the classic page evaluated — the same class of
@@ -2230,7 +2242,14 @@ function mapWidgets(eff, opts = {}) {
   //       tab would carry a schemaTouched TimelineTab and emit it — the rule generalises, no per-widget hardcode.
   //   (2) ON-STAND SIGNAL — DCM (`signal:"dcm"`) is never in the page body (it comes from the DCM case schema),
   //       so it emits only when `manifest.signals.dcm` is resolved+present, regardless of container presence.
-  const dcmPresent = opts.signals?.dcm?.resolved === true && !!opts.signals.dcm.present;
+  // DCM is an ENTITY-level fact (a case schema belongs to ONE entity). A CHILD edit page migrates a DIFFERENT entity,
+  // so the PARENT's inherited `dcm` describes the wrong entity — inheriting it placed the parent's case progress bar
+  // + Next steps onto a plain detail page (e.g. Contract's case leaking onto the SpecInContract detail). Scope it to
+  // the child's OWN bundle: only the child's own recorded `signals.dcm` (or classic evidence in the child body via
+  // `classicEvident` below) may place these on a child page. Same reasoning as `mapDedupOnSave`'s `ownSignals` gate.
+  // Typed / mini folds are the SAME entity as the root, so they keep inheriting (isChildPage is false for them).
+  const dcmSig = opts.isChildPage ? opts.ownSignals?.dcm : opts.signals?.dcm;
+  const dcmPresent = dcmSig?.resolved === true && !!dcmSig.present;
   const byName = new Map((eff.items || []).map((i) => [i.name, i]));
   // "a classic (non-seed) page layer contributed this element" — either it INSERTED it fresh (`!templateOwned`,
   // the defining insert was a client layer) or it MERGED/MOVED onto a base-seed element (`schemaTouched`). The
@@ -2274,7 +2293,10 @@ function mapWidgets(eff, opts = {}) {
   };
   for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
-  return { widgets, chromeWidgets, needsDecision, accountedFor };
+  // `dcmActive` = DCM is present FOR THIS PAGE'S entity (scoped above). Published so the coverage builder demands the
+  // case progress bar / Next steps on the same scoped basis the widgets emit on — never on the parent's inherited
+  // signal (which would ask a plain child detail to grow a case bar it has no case for).
+  return { widgets, chromeWidgets, needsDecision, accountedFor, dcmActive: dcmPresent };
 }
 
 // Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
