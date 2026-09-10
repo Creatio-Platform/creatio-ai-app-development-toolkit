@@ -5,12 +5,50 @@
   },
   "plugins": [
     {
-      "name": "creatio-ai-app-development-toolkit",
+      "name": "creatio-core",
       "version": "1.10.0",
       "source": {
-        "source": "url",
-        "url": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git",
-        "ref": "release"
+        "source": "local",
+        "path": "./plugins/creatio-core"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "development"
+    },
+    {
+      "name": "creatio-app-builder",
+      "version": "1.10.0",
+      "source": {
+        "source": "local",
+        "path": "./plugins/creatio-app-builder"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "development"
+    },
+    {
+      "name": "creatio-ui",
+      "version": "1.10.0",
+      "source": {
+        "source": "local",
+        "path": "./plugins/creatio-ui"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "development"
+    },
+    {
+      "name": "creatio-migration",
+      "version": "1.10.0",
+      "source": {
+        "source": "local",
+        "path": "./plugins/creatio-migration"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -10,13 +10,13 @@ REM
 REM   Python resolution (side-effect-free first):
 REM     1. `py -3` -- the Windows Python Launcher is always a real Python 3, never the
 REM        0-byte Microsoft Store stub.
-REM     2. Fallback ONLY if that fails: runtime\scripts\find_python.ps1, which skips the
+REM     2. Fallback ONLY if that fails: plugins\creatio-app-builder\runtime\scripts\find_python.ps1, which skips the
 REM        Store stub, verifies `--version` is Python 3.x, and (if nothing is found) may
 REM        INSTALL Python via winget.
 REM ===========================================================================
 set "HERE=%~dp0"
 set "DRIVER=%HERE%build_dev_toolchain.py"
-set "RESOLVER=%HERE%..\runtime\scripts\find_python.ps1"
+set "RESOLVER=%HERE%..\plugins\creatio-app-builder\runtime\scripts\find_python.ps1"
 
 set "PYCMD="
 py -3 --version >nul 2>&1 && set "PYCMD=py|-3"

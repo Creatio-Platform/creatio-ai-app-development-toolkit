@@ -1,0 +1,16 @@
+{
+  "name": "creatio-ui",
+  "displayName": "creatio-ui",
+  "version": "1.10.0",
+  "description": "Creatio UI jobs for Creatio app development: branding orchestrator and web-to-mobile page conversion.",
+  "author": {
+    "name": "Creatio"
+  },
+  "repository": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit",
+  "category": "developer-tools",
+  "tags": [
+    "creatio",
+    "mcp"
+  ],
+  "skills": "./skills/"
+}

@@ -6,6 +6,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
+
+
 # The canonical, flow-agnostic stage vocabulary. WHICH flow a run belongs to
 # travels in the `workflow` field. The alternative — a name per flow per stage
 # (migration_plan_approved, branding_approved, ...) — encodes a dimension into
@@ -111,6 +115,15 @@ SKILL_WORKFLOWS = {
 
 
 def read(*parts: str) -> str:
+    """Read a toolkit file by its pre-plugin-split segments, resolved to the plugin that ships it now."""
+    if parts[0] == "context":
+        parts = ("plugins", "creatio-core", *parts)
+    elif parts[0] == "skills":
+        matches = list((ROOT / "plugins").glob(f"*/skills/{parts[1]}"))
+        assert matches, f"no plugin ships skill {parts[1]}"
+        parts = (*matches[0].relative_to(ROOT).parts, *parts[2:])
+    elif parts[0] == "rules":
+        parts = ("plugins", "creatio-app-builder", *parts)
     return (ROOT.joinpath(*parts)).read_text(encoding="utf-8")
 
 
@@ -139,14 +152,14 @@ def table_events(body: str) -> set:
 
 class ProductTelemetryContractTests(unittest.TestCase):
     def test_agents_references_product_telemetry_contract_file(self):
-        agents = read("AGENTS.md")
+        agents = agents_contract_text()
 
         self.assertIn("Product Telemetry", agents)
-        self.assertIn("context/product-telemetry.md", agents)
+        self.assertIn("plugins/creatio-core/context/product-telemetry.md", agents)
         self.assertIn("source of truth for consent handling", agents)
 
     def test_agents_states_the_rule_outside_the_gate_flow(self):
-        agents = read("AGENTS.md")
+        agents = agents_contract_text()
 
         # The defect was structural, not a wording problem: the app-creation
         # checkpoints hang off Gate P/R and AGENTS.md exempts migration, mobile
@@ -221,7 +234,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
         top to bottom got both instructions, and a measured run reported its ENTIRE funnel
         under those names — invisible to every funnel built on the stages.
         """
-        agents = read("AGENTS.md")
+        agents = agents_contract_text()
 
         for deprecated in DEPRECATED_EVENT_NAMES:
             self.assertNotIn(deprecated, agents)
@@ -273,8 +286,8 @@ class ProductTelemetryContractTests(unittest.TestCase):
 
     def test_orchestrator_surfaces_stage_model_and_targeted_changes(self):
         for path in (
-            ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md",
-            ROOT / "rules" / "creatio-app-orchestrator.mdc",
+            ROOT / "plugins" / "creatio-app-builder" / "skills" / "creatio-app-orchestrator" / "SKILL.md",
+            ROOT / "plugins" / "creatio-app-builder" / "rules" / "creatio-app-orchestrator.mdc",
         ):
             with self.subTest(surface=path.name):
                 text = path.read_text(encoding="utf-8")
@@ -335,8 +348,8 @@ class ProductTelemetryContractTests(unittest.TestCase):
         heading = "## Product telemetry"
         sections = {}
         for name, path in (
-            ("SKILL.md", ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md"),
-            ("cursor-rule", ROOT / "rules" / "creatio-app-orchestrator.mdc"),
+            ("SKILL.md", ROOT / "plugins" / "creatio-app-builder" / "skills" / "creatio-app-orchestrator" / "SKILL.md"),
+            ("cursor-rule", ROOT / "plugins" / "creatio-app-builder" / "rules" / "creatio-app-orchestrator.mdc"),
         ):
             text = path.read_text(encoding="utf-8")
             start = text.index(heading)
@@ -384,7 +397,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
         # a live clio — which rejects it silently into the hook's own `rejected`/retry path, not a
         # CI failure a reviewer would see.
         surfaces = {
-            "AGENTS.md": read("AGENTS.md"),
+            "AGENTS.md": agents_contract_text(),
             "product-telemetry.md": read("context", "product-telemetry.md"),
             "cursor-rule": read("rules", "creatio-app-orchestrator.mdc"),
             # The Cursor rule the installer writes to disk is a second copy of that same
@@ -422,8 +435,8 @@ class ProductTelemetryContractTests(unittest.TestCase):
         # skipped build_started, "how many runs reached the writing phase" would
         # need a per-flow special case — the thing this design removes.
         for path in (
-            ROOT / "skills" / "creatio-app-orchestrator" / "SKILL.md",
-            ROOT / "rules" / "creatio-app-orchestrator.mdc",
+            ROOT / "plugins" / "creatio-app-builder" / "skills" / "creatio-app-orchestrator" / "SKILL.md",
+            ROOT / "plugins" / "creatio-app-builder" / "rules" / "creatio-app-orchestrator.mdc",
         ):
             with self.subTest(surface=path.name):
                 text = path.read_text(encoding="utf-8")

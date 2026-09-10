@@ -13,7 +13,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HOOK = ROOT / "hooks" / "telemetry-routing.mjs"
+
+
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
+HOOK = ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry-routing.mjs"
 NODE = shutil.which("node")
 # The floor event carries `workflow`, which only a clio that ships the stage vocabulary
 # accepts — an older release rejects it as unsupported-fields. So the end-to-end check runs
@@ -339,7 +343,8 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
     """The hook must be shipped and registered, or it silently does nothing."""
 
     def test_hook_is_registered_in_the_claude_plugin_manifest(self):
-        manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        # The hook ships with the core plugin; the root manifest is a dependencies-only meta-plugin.
+        manifest = json.loads((ROOT / "plugins" / "creatio-core" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
 
         # PostToolUse, not PreToolUse: the floor event should mean the clio call actually
         # happened, and a hook that spawns a process must not sit in front of the tool it
@@ -413,7 +418,9 @@ class TelemetryRoutingHookWiringTests(unittest.TestCase):
         # does not exist on an installed plugin.
         manifest = json.loads((ROOT / ".release-manifest.json").read_text(encoding="utf-8"))
 
-        self.assertIn("hooks", manifest["plugin_runtime"])
+        # Plugin split: the hook ships inside the core plugin, which the `plugins` entry covers.
+        self.assertIn("plugins", manifest["plugin_runtime"])
+        self.assertTrue((ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry-routing.mjs").is_file())
         self.assertTrue(HOOK.exists())
 
 
@@ -2025,11 +2032,11 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
 
 
 class TelemetryStateDirSecurityTests(unittest.TestCase):
-    """Two security-relevant checks inside hooks/telemetry/state-dir.mjs that the full-hook
+    """Two security-relevant checks inside plugins/creatio-core/hooks/telemetry/state-dir.mjs that the full-hook
     black-box tests above never exercise directly: sanitizeSessionId()'s path-traversal
     allow-list, and assertStateDirIsOurs()'s ownership/symlink guard.
 
-    The module split that created hooks/telemetry/state-dir.mjs is what makes this possible at
+    The module split that created plugins/creatio-core/hooks/telemetry/state-dir.mjs is what makes this possible at
     all: these are now real importable functions rather than closures inside one 1400-line
     script, so a small Node probe script can call them directly instead of going through the
     full hook's stdin/stdout. Each probe runs in its OWN private temp root — never the suite's
@@ -2038,7 +2045,7 @@ class TelemetryStateDirSecurityTests(unittest.TestCase):
     """
 
     def _run_probe(self, import_line: str, expression: str, tmp_root: str) -> dict:
-        module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        module = (ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
         script = Path(tmp_root) / "probe.mjs"
         script.write_text(
             f"import {{ {import_line} }} from {json.dumps(module)};\n"
@@ -2071,7 +2078,7 @@ class TelemetryStateDirSecurityTests(unittest.TestCase):
             "a/b/../../../c",
         ]
         script = Path(tempfile.mkdtemp(prefix="caadt-sanitize-test-", dir=_TMP)) / "probe.mjs"
-        module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        module = (ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
         attempts_literal = json.dumps(attempts)
         script.write_text(
             f"import {{ markerPath }} from {json.dumps(module)};\n"
@@ -2145,7 +2152,7 @@ class ConsentTelemetryHomeFallbackTests(unittest.TestCase):
         if not NODE:
             self.skipTest("node not available")
         tmp_root = tempfile.mkdtemp(prefix="caadt-consent-home-test-")
-        module = (ROOT / "hooks" / "telemetry" / "consent.mjs").as_uri()
+        module = (ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry" / "consent.mjs").as_uri()
         script = Path(tmp_root) / "probe.mjs"
         script.write_text(
             f"Object.defineProperty(process, 'platform', {{ value: {json.dumps(platform)} }});\n"
@@ -2283,8 +2290,8 @@ class TelemetryDispatchRealClioResponseFixtureTests(unittest.TestCase):
             self.skipTest("node not available")
         tmp_root = tempfile.mkdtemp(prefix="caadt-real-outcome-fixture-", dir=_TMP)
         session = str(uuid.uuid4())
-        outcome_module = (ROOT / "hooks" / "telemetry" / "dispatch.mjs").as_uri()
-        marker_module = (ROOT / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
+        outcome_module = (ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry" / "dispatch.mjs").as_uri()
+        marker_module = (ROOT / "plugins" / "creatio-core" / "hooks" / "telemetry" / "state-dir.mjs").as_uri()
         script = Path(tmp_root) / "probe.mjs"
         script.write_text(
             f"import {{ readOutcome }} from {json.dumps(outcome_module)};\n"

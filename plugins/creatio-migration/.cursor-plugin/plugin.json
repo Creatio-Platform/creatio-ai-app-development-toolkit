@@ -1,0 +1,16 @@
+{
+  "name": "creatio-migration",
+  "displayName": "creatio-migration",
+  "version": "1.10.0",
+  "description": "Creatio Classic UI to Freedom UI migration engine and the Classic UI expert for Creatio app modernization.",
+  "author": {
+    "name": "Creatio"
+  },
+  "repository": "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit",
+  "category": "developer-tools",
+  "tags": [
+    "creatio",
+    "mcp"
+  ],
+  "skills": "./skills/"
+}

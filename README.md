@@ -119,10 +119,10 @@ Business discovery tracks whether checklist inputs are `confirmed` or `assumed`;
 
 Use the repository docs by responsibility:
 
-- `AGENTS.md` defines orchestration policy, approvals, support mode, and business invariants.
-- `runbooks/` defines the stage-specific workflow for environment setup, requirements gathering, and post-Gate-R implementation (including the transient section-creation failure playbook).
-- `context/INDEX.md` is the navigation hub for the remaining context files (naming conventions, clio CLI reference, model discovery evidence). Start there to find the smallest supporting context file for the current task.
-- `context/business-checklist.md` defines the Business Plan checklist and `confirmed` / `assumed` source tracking.
+- `AGENTS.md` describes the plugin layout and the repository-wide rules (clio MCP as the source of truth). The app-workflow policy — approvals, support mode, routing — is `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`; business invariants are in `plugins/creatio-core/context/essentials.md`.
+- `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/` holds the orchestration policy and the stage runbooks: the stage-specific workflow for environment setup, requirements gathering, and post-Gate-R implementation (including the transient section-creation failure playbook).
+- `plugins/creatio-core/context/INDEX.md` is the navigation hub for the remaining context files (naming conventions, clio CLI reference, model discovery evidence). Start there to find the smallest supporting context file for the current task.
+- `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md` defines the Business Plan checklist and `confirmed` / `assumed` source tracking.
 
 Executable MCP contract is authoritative only in `clio MCP` through `get-tool-contract`.
 Repository docs do not define clio tool parameter or response shapes.

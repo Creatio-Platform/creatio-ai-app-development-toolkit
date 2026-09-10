@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / "runtime" / "scripts"
+SCRIPTS = ROOT / "plugins" / "creatio-app-builder" / "runtime" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import clio_mcp_preflight as pf  # noqa: E402  (path set above)

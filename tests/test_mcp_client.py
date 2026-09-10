@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "plugins" / "creatio-app-builder") not in sys.path:
+    sys.path.insert(0, str(ROOT / "plugins" / "creatio-app-builder"))
 
 from runtime.scripts import mcp_client
 from runtime.scripts.mcp_client import (

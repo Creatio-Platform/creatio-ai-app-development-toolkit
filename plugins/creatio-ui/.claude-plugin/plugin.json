@@ -1,0 +1,11 @@
+{
+  "name": "creatio-ui",
+  "version": "1.10.0",
+  "description": "Creatio UI jobs for Creatio app development: branding orchestrator and web-to-mobile page conversion.",
+  "author": {
+    "name": "Creatio"
+  },
+  "dependencies": [
+    "creatio-core"
+  ]
+}

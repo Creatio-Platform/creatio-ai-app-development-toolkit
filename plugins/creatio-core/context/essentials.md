@@ -1,0 +1,175 @@
+# Creatio Platform Essentials
+
+> **Scope note for this repository:** This file is platform reference material only. It does not override the gate order in `AGENTS.md`: draft and approve the Business Plan first, then collect runtime inputs, resolve the environment, and execute through clio MCP. Exact tool contracts still come from `get-tool-contract`.
+
+This file contains the high-level platform overview and the local MCP workflow shape. Use the topic-specific files below for naming conventions, package structure, and clio CLI commands. For the executable MCP contract (parameter names, response shapes, error codes), use `get-tool-contract` and the clio MCP guidance resources.
+
+## Companion files
+
+- `plugins/creatio-core/context/naming-conventions.md` — `Usr` prefixes, casing, GUIDs, data binding naming.
+- `plugins/creatio-core/context/clio-cli-reference.md` — CLI commands for environment setup, package management, and development tooling.
+
+## Platform Overview
+
+Creatio is a no-code/low-code platform for process management and CRM where app functionality is delivered through packages.
+
+### Key Concepts
+
+**Creatio Applications**
+- Built from self-contained packages containing entity schemas, page schemas, data bindings, business processes, and source code
+- Packages can depend on other packages via `DependsOn` in `descriptor.json`
+
+**MCP-Orchestrated Runtime**
+- This repo invokes Creatio app generation and mutation through `clio` MCP. Resident tools (`get-tool-contract` index: `resident=true`) are called natively; every other tool is invoked via `clio-run <command>`. Never wrap a resident tool in `clio-run`. `plugins/creatio-app-builder/runtime/scripts/mcp_client.py` is an explicit opt-in escape hatch for hosts without native MCP — not the default fallback and never the automatic response to an unavailable server (see `AGENTS.md`, "clio MCP availability preflight"); it does not change which tools are resident. Both transports must resolve the same `clio` (one config, one registered-environments list) — see `AGENTS.md`, "clio MCP transport preference"
+- The executable MCP contract lives in `clio` MCP discovery plus MCP prompts/resources, not in this repo
+- The raw application context returned by `create-app` or `get-app-info` is a flat runtime payload whose exact fields and selectors must be read from `get-tool-contract`
+- Tool execution evidence (operation log, page evidence, acceptance evidence) is reported inline in the conversation rather than persisted to repo-local files
+
+**MCP Application Creation (DB-first)**
+- Resolve current application creation, discovery, refresh, and main-entity semantics through `get-tool-contract` and the `clio` MCP guidance resources
+- `create-app` is the canonical new-app entrypoint and may return top-level `dataforge` diagnostics produced internally by `clio`
+- Do not add a separate mandatory Data Forge preflight in repo-local orchestration for the standard new-app branch
+- Planning-time read-only discovery is still required when the model is ambiguous or strong existing-schema candidates exist; use that discovery to decide `reuse`, `extend`, or `create` before execution
+- Schema tools mutate entity schemas directly in Creatio DB, so successful mutations are immediately runtime-accessible without a separate compile or deploy step
+- `icon-background` for `create-app` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the 16 palette colors: `#A6DE00`, `#20A959`, `#22AC14`, `#FFAC07`, `#FF8800`, `#F9307F`, `#FF602E`, `#FF4013`, `#B87CCF`, `#7848EE`, `#247EE5`, `#0058EF`, `#009DE3`, `#4F43C2`, `#08857E`, `#00BFA5`.
+
+**MCP Section Management**
+- Use `list-app-sections` to list all sections of an installed application
+- Use `delete-app-section` to remove a section from an installed application
+- Resolve full tool parameter contract through `get-tool-contract` and `docs://mcp/guides/existing-app-maintenance`
+- `delete-entity-schema` on `delete-app-section` is destructive and irreversible; it requires explicit opt-in
+- `icon-background` for `create-app-section` is optional — omit it unless the user explicitly specified a color; the server assigns a random Freedom UI palette color when absent. If provided, the value must be one of the same 16 palette colors listed under MCP Application Creation above.
+- Create sections sequentially, one at a time. On a transient `create-app-section` failure (DB-write contention), follow the transient section-creation failure playbook in `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md` — check `list-app-sections` for the existing section, wait, then retry once with the same name. Never vary the caption to probe the error and never run `compile-creatio` speculatively during scaffolding.
+
+**Entity Schema Sync (DB-first)**
+- Prefer `sync-schemas` for grouped entity work
+- Use `create-lookup`, `create-entity-schema`, `update-entity-schema`, and `create-data-binding-db` only when the flow cannot stay inside `sync-schemas`
+- Create lookup entities before entities or updates that reference them
+
+**Schema Cleanup**
+- `delete-schema` removes any schema from Creatio — entity, Freedom UI page, source code, process, DCM, user task, campaign, service, addon, SQL script, data binding, assembly, and more
+- Two modes: workspace mode (default) requires the schema to belong to a workspace package; remote mode (`remote: true`) deletes by schema name directly from the environment without a workspace
+- This operation is destructive and cannot be undone; confirm the schema name before calling it
+
+**Default Semantics**
+- Follow the current `clio` MCP contract and `docs://mcp/guides/app-modeling` for canonical default semantics
+- A default requirement stays unresolved until the plan classifies it as schema-side or UI-side behavior
+- Lookup seed rows alone do not satisfy a requirement such as `UsrStatus defaults to New`
+- For lookup-backed defaults, resolve the concrete executable mechanism through live contract metadata and app-modeling guidance
+- Binary-like columns do not support constant defaults
+
+**Data Binding And Schema Inspection**
+- `get-entity-schema-properties` returns a deployed schema summary with column metadata
+- `get-entity-schema-column-properties` returns detailed metadata for a single deployed column
+- `create-data-binding-db` persists bindings in DB and installs data immediately
+- `upsert-data-binding-row-db` updates rows only in an already existing binding
+- Lookup/enum values are package data: seed them inline via `sync-schemas`'s row-seeding parameter (name resolved via `get-tool-contract`) when the entity is created in that batch (preferred), or with `create-data-binding-db` when the entity already exists outside the batch — both install immediately and neither needs a compile step
+- Never seed lookup values through runtime OData/DataService calls or raw SQL — those bypass the platform, so the row lands in the table but does not surface as real package data
+
+**Freedom UI (Angular-based)**
+- Modern UI pages are AMD modules
+- UI is described via `viewConfigDiff`
+- Schema type is `"AngularSchema"`
+- Add fields or columns by editing the `body.js` returned by `get-page` directly without replacing unrelated marker sections
+- `update-page` supports `mode: "append"` for additive edits that merge into existing customizations instead of overwriting
+- `validate-page` validates a page body client-side without saving to Creatio
+
+**Freedom UI — Mobile Pages**
+- **Decide web vs mobile before editing.** A requirement targets web, mobile, or both; if it does not say, default to web (mobile is an explicit opt-in). Web and mobile are SEPARATE schemas (e.g., `<Entity>_FormPage`/`_ListPage` vs `<Entity>_MobileFormPage`/`_MobileListPage`) — for every page it touches, edit each targeted variant; the web page never affects its mobile counterpart. The bullets below apply once on a mobile page.
+- Mobile pages have `schema-type: "mobile"` in `get-page` responses; numeric `schemaType` is `10`. In `list-pages` and `get-app-info`, identify mobile pages by naming suffix (`_MobileFormPage` / `_MobileListPage`) or parent template (`MobilePageWithTabsFreedomTemplate`, `BaseMobileListTemplate`)
+- Body format is **plain JSON** (not an AMD `define(...)` module) with top-level keys `viewConfigDiff`, `viewModelConfigDiff`, `modelConfigDiff` only
+- `handlers`, `validators`, and custom `converters` sections are web/AMD-only — do not include them in mobile page bodies; `update-page` and `sync-pages` actively reject them
+- Use `get-component-info` with `schema-type: "mobile"` for mobile component metadata; the mobile component registry is separate from the web registry
+- Call `get-guidance mobile-page-modification` before editing any mobile page body — mobile pages have different component registry, body constraints, and Scaffold inheritance rules
+- The `get-page → update-page` workflow applies identically to web and mobile pages
+- Mobile pages are provisioned automatically by `create-app-section` when the `UseMobilePageDesigner` feature flag is enabled on the target environment; discovery surfaces return no mobile pages when the flag is off
+
+**Page Creation (DB-first)**
+- `list-page-templates` discovers valid Freedom UI page templates per environment
+- `create-page` creates a new page from a template, assigning it to a package and optionally binding an entity schema
+- After creation, use `get-page` to verify and retrieve the initial body for further editing
+- Resolve the full page creation workflow through `docs://mcp/guides/page-creation`
+
+**C# Source-Code Schemas**
+- `create-schema`, `get-schema`, `update-schema` manage C# source-code schemas directly on a remote Creatio environment
+- Use for server-side business logic classes without local workspace file generation
+
+**JS ClientUnit Schemas**
+- `create-client-unit-schema`, `get-client-unit-schema`, `update-client-unit-schema` manage JavaScript schemas on a remote environment
+- Use for utility/helper JS modules — not for Freedom UI pages (use `create-page` for those)
+
+**SQL Script Schemas**
+- `create-sql-schema`, `get-sql-schema`, `update-sql-schema` manage SQL script schemas on a remote environment
+- `install-sql-schema` executes a SQL script schema directly on the database — irreversible
+
+**Entity Model**
+- Entities extend a server-defined parent discovered through live contract metadata
+- Columns use server-defined value-type identifiers
+- Schemas use a diff-oriented metadata model
+
+**System Tables For Navigation**
+- `SysModule` registers a section
+- `SysModuleEntity` binds an entity to a section
+- `SysModuleEdit` binds a form page to a section
+
+Registering a section is not the same as making it reachable. What a user actually sees in the left
+navigation is a **workplace**, and that spans three more tables:
+- `SysWorkplace` — the workplace itself (the entry in the navigation switcher). Also carries
+  `HomePageUId`, the workplace's home page.
+- `SysModuleInWorkplace` — one row per section placed in a workplace.
+- `SysAdminUnitInWorkplace` — one row per role that can see the workplace.
+
+Two consequences that decide whether a newly created app is usable:
+- `create-app` places the section in the `My applications` workplace, which is granted to
+  `System administrators` only. Left there, the app is invisible to ordinary users.
+- A **home page** is a page schema (`BaseHomePage`) that only becomes a workplace's landing page once
+  that workplace's `SysWorkplace.HomePageUId` points at it. Creating the page is half the job.
+
+Do not improvise these tables. clio owns the model, the recipes, and the data-binding column sets:
+read `get-guidance name=workplaces` (and `name=home-page` for `HomePageUId`) before any navigation
+write. Both topics ship from the clio knowledge library's `1.13.0` release onward; if the call returns
+an unknown-topic error the installed library is older than that, or inactive: STOP and tell the
+developer, rather than improvising the writes — see `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md`, "Place the
+app in the navigation". Navigation
+changes are cached — the user must log out and back in to see them; a browser refresh is not enough.
+
+---
+
+## Local MCP Workflow
+
+```text
+Approved Business Plan -> clio MCP call -> source-backed execution evidence -> inline conversation report
+```
+
+Local rule:
+- Keep execution evidence source-backed and derived from MCP responses.
+- Report operation, page, and acceptance evidence inline in the conversation.
+- Resolve executable details through `get-tool-contract`; do not persist a separate repo-local runtime document as the source of truth.
+
+---
+
+## ModifiedOnUtc Format
+
+Use milliseconds since Unix epoch in `/Date(milliseconds)/` format.
+
+## Global Invariants
+
+- Business plan codes are plain PascalCase without any prefix (e.g., `TodoList`, `DueDate`). The implementation agent applies the environment prefix per clio MCP guidance.
+- For newly created entities and custom columns, derive business code/name from the business phrase in requirements/model intent.
+- For newly created entities and custom columns, derive code as PascalCase business tokens and title as human-readable Title Case from the same phrase.
+- Acronym policy for derived names: preserve business acronym readability in title (for example `ID`, `VAT`, `CRM`) and use Pascalized acronym tokens in code (`Id`, `Vat`, `Crm`).
+- Semantic `Id` in business terms is allowed (for example `Tax ID` → `TaxId` in the Business Plan).
+- Treat physical FK/storage aliases (for example `E17`/`ColumnValueName` values like `...Id`) as storage aliases only, never as naming source for new entities or new custom columns.
+- Existing manually edited title/code divergence is allowed; this derivation contract applies to new creations only.
+- Do not add inherited base columns to requirements.
+- Enum-like business values must be modeled as lookup objects.
+- App code collisions and stage-transition state conflicts are internal orchestration concerns. Resolve them internally whenever possible. Ask the developer about them only if they create a genuine product-level ambiguity or blocker.
+- Do not infer the current environment from prior plan content or previous conversation artifacts. Always use the environment resolved by Agent 1 for the current conversation.
+- Do not expose internal commands, filesystem paths, script names, shell quoting fixes, shim utilities, or dependency workarounds in permission prompts or business dialogue unless the developer explicitly asks about the internal mechanics.
+- Before any internal run that depends on `<AppName>`, verify that the name was derived from the current request and not leaked from an earlier run or stale context.
+- If required helper tooling such as `bash` or `jq` is unavailable, treat that as an internal blocker. Do not create ad-hoc shim utilities or workaround wrappers without an explicit user request.
+- Before editing any page, decide whether the requirement targets web, mobile, or both (default to web if unspecified), and edit each matching variant; web and mobile are separate (details in `plugins/creatio-core/context/essentials.md`, "Freedom UI — Mobile Pages"). Applies even in autonomous or pre-approved runs.
+- Before the first schema or page edit, resolve a writable package context up front. On an existing or installed app, confirm the target package is unlocked and editable (not a locked installed-app package); if it is read-only, unlock it or select/create a writable maintainer package before editing. Resolve the exact mechanism through `get-tool-contract` and clio MCP guidance. Do not discover the write rejection mid-run. Applies even in autonomous or pre-approved runs.
+- All user-visible text generated on a page (input placeholders, field labels, panel/tab/section titles, button captions, tooltips, and any other text the runtime renders to the user) must be authored as localizable strings with their default-language value populated at creation time — never as inline literals. clio MCP enforces this and rejects page bodies that hardcode such text; resolve the exact binding syntax, key naming, and registration rules through `get-guidance` with name `page-schema-resources`. Applies even in autonomous or pre-approved runs.
+- The assistant MUST NOT modify repository infrastructure, validation scripts, gates, or workflow helpers unless the user explicitly asks for that change. If such a change seems necessary, stop and report it as an internal blocker.
+- Agent runbooks are the authoritative format specification for their output artifacts. Validation scripts (`plugins/creatio-app-builder/runtime/scripts/workflow_validators.py`) are verification tools, not specification sources. Do not read validator source code to reverse-engineer format rules or regex patterns. If a validation script fails, fix the artifact based on the error message returned by the script.

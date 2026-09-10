@@ -4,13 +4,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
-CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
-MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
-REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
-SURFACE_RESOLUTION = ROOT / "skills/classic-ui-expert/references/01-surface-resolution.md"
-CLASSIC_SKILL = ROOT / "skills/classic-ui-expert/SKILL.md"
-PLATFORM_PATTERNS = ROOT / "skills/classic-ui-expert/references/06-platform-patterns.md"
+MIGRATION_SKILL = ROOT / "plugins/creatio-migration/skills/classic-to-freedom-migration/SKILL.md"
+CARD_CONTRACT = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/08-card-contract.md"
+MEMBER_LEDGER = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/03-member-ledger.md"
+REFERENCE_FOLLOWING = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/05-reference-following.md"
+SURFACE_RESOLUTION = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/01-surface-resolution.md"
+CLASSIC_SKILL = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/SKILL.md"
+PLATFORM_PATTERNS = ROOT / "plugins/creatio-migration/skills/classic-ui-expert/references/06-platform-patterns.md"
 
 EVIDENCE_HEAD = "**A ported behaviour's Evidence lists every AC of its card, one line each.**"
 GATE_HEAD = "**Gate-toggle safety (shared stand).**"

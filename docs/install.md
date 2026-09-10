@@ -219,7 +219,7 @@ deterministically records one `workflow_started` per session (attributed to
 is the denominator: without it there is no way to tell "few runs happened" from "runs happened
 and went unreported".
 
-The hook is `hooks/telemetry-routing.mjs`. It emits the floor through clio's own MCP tool, so it
+The hook is `plugins/creatio-core/hooks/telemetry-routing.mjs`. It emits the floor through clio's own MCP tool, so it
 needs `clio` on `PATH` and stored consent of `granted` — an `unknown` or `denied` decision makes
 it silent, and it never prompts. `CAADT_TELEMETRY_HOOK_HOST` selects how the routing text is
 handed back; the floor event itself is identical on every host.
