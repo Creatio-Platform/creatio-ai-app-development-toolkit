@@ -1861,8 +1861,9 @@ function conditionGap(r) {
   // the attribute against nothing by design. Now that the symbolic `Terrasoft.ComparisonType.IS_NOT_NULL` resolves
   // (engine.mjs `AST_COMPARISON_TYPE`), such a rule reaches here with a real comparison and an empty right side, and
   // the `rightSaysNothing` test alone would have called it degenerate — flagging a fully-read presence rule as a
-  // parse gap. The codes mirror `designspec.mjs` `condPhrase` (11=IS_NULL, 12=IS_NOT_NULL).
-  const PRESENCE_CHECK = new Set([11, 12]);
+  // parse gap. The codes are the platform's `Terrasoft.ComparisonType` — IS_NULL=1, IS_NOT_NULL=2 (11/12 are
+  // CONTAIN/NOT_CONTAIN, which DO take a right operand and must stay a gap when it is unread). Mirrors `condPhrase`.
+  const PRESENCE_CHECK = new Set([1, 2]);
   const degenerate = (c) => c?.comparison === null || c?.comparison === undefined
     || (!c?.left?.attribute && !c?.left?.path)
     || (!PRESENCE_CHECK.has(c?.comparison) && rightSaysNothing(c));

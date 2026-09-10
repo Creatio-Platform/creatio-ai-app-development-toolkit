@@ -435,8 +435,9 @@ const condPhrase = (c) => {
   const left = condLeftName(c);
   if (!left) return null;
   const cmp = typeof c?.comparison === "number" ? c.comparison : c?.comparisonType;
-  if (cmp === 12) return `${left} is filled`;   // IS_NOT_NULL
-  if (cmp === 11) return `${left} is empty`;     // IS_NULL
+  // Platform `Terrasoft.ComparisonType`: IS_NOT_NULL=2, IS_NULL=1 (NOT 11/12 — those are CONTAIN/NOT_CONTAIN).
+  if (cmp === 2) return `${left} is filled`;   // IS_NOT_NULL
+  if (cmp === 1) return `${left} is empty`;     // IS_NULL
   const op = COMPARISON_OP[cmp];
   const right = condRightAttr(c);
   // A column-to-column comparison states the ACTUAL operator — `Stage ≠ OtherStage`, not a hardcoded `=` that would
@@ -444,9 +445,12 @@ const condPhrase = (c) => {
   // table does not name renders neutrally (`vs`) rather than asserting an equality nobody read.
   if (right) return `${left} ${op || "vs"} ${right}`;
   const v = c?.right?.value ?? c?.rightExpression?.value;
-  if (op && v !== null && v !== undefined) {
+  // A comparison against a CONSTANT names its operator too. When the operator is one this renderer does not spell out
+  // (e.g. CONTAIN/START_WITH), fall back to the neutral `vs` — same as the column-to-column branch — so the cell
+  // never drops the value and read as a bare presence check. Only a condition with NO value at all falls to `left`.
+  if (v !== null && v !== undefined) {
     const shown = typeof v === "string" && TYPED_GUID.test(v) ? "a specific value" : String(v);
-    return `${left} ${op} ${shown}`;
+    return `${left} ${op || "vs"} ${shown}`;
   }
   return left;
 };
@@ -1410,6 +1414,13 @@ const describedField = (x, key) => {
 };
 const whatItDoesText = (x) => describedField(x, "whatItDoes");
 const useCaseText = (x) => describedField(x, "useCase");
+// ENG-96534 (Rita review) — a row is "described" for the warning banner iff it carries PLAIN-LANGUAGE prose
+// (whatItDoes / useCase), the SAME thing the two cells mark `⚠ not described`. Counting off `describedIn` truthiness
+// (a card / ac) instead let a pre-ENG-96534 index — a card with no prose, the default state of every analysis on
+// disk — read `0 undescribed` (no banner) while every What-it-does / Use-case cell said `⚠ not described`. The
+// `Described in` column still cites the card: "a card exists" and "plain-language logic was authored" are different
+// facts, and this banner (and these cells) are about the second.
+const hasPlainLanguage = (x) => !!(x.describedIn?.whatItDoes || x.describedIn?.useCase);
 
 // ENG-96327 — no worklist-mechanics preamble in the plan (ported/dropped/blocked, `↳` fold, `⚠ unresolved`,
 // `Described in`): those semantics are agent-facing and live in the build-executor references, which the build agent
@@ -1433,7 +1444,7 @@ function renderImperativeMembers(cs, coverage) {
   const rows = rawRows
     .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
   if (!rows.length) return [];
-  const described = rows.filter((d) => d.describedIn).length;
+  const described = rows.filter(hasPlainLanguage).length;
   const undescribed = rows.length - described;
   // ENG-96327 — same as ⚠ Custom methods: warn ONLY when the analysis could not explain some members (non-blocking,
   // parallel follow-up; each marked `⚠ not described` below), and drop the worklist-mechanics preamble. The per-kind
@@ -1461,7 +1472,7 @@ function renderImperativeLogic(cs, coverage) {
   // very different plans, and the row-by-row table alone made them look identical.
   // The count is of EMPTY cells, so it must not claim "no TRACED trigger": a row the behaviour run answered leaves
   // this count while nothing was traced for it. Those are counted on their own, next to it.
-  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
+  const described = stubs.filter(hasPlainLanguage).length;
   const undescribed = stubs.length - described;
   const { ordered } = foldByCaller(stubs);
   // ENG-96327 — the plan opens with a WARNING only when the analysis could not explain some rows: the human approver
@@ -1897,7 +1908,7 @@ function renderChildMappings(childs) {
       // ENG-96327 — show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT the full form-page mapping: the
       // intro just said there is no form page. `c.logicSpec` is produced by `foldOneChildPage` for inline-grid
       // children; fall back to the full spec if (defensively) it is absent. One push (intro + the demoted logic).
-      P.push(`> **No separate form page — inline-editable grid.** \`${esc(c.resolvedFrom || c.editPage)}\` has **0 form fields**: its body is only an attribute lookup-filter + column-render methods, so editing happens INLINE in the related-list rows (a ConfigurationGrid detail). Do NOT build a Freedom form page for it — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
+      P.push(`> ⚠ **No separate form page — inline-editable grid (confirm on-stand).** \`${esc(c.resolvedFrom || c.editPage)}\` folded to **0 form fields** while carrying behaviour (an attribute lookup-filter + column-render methods), which reads as a ConfigurationGrid detail edited INLINE in the related-list rows. This rests on the fold seeing no fields — if the fields layer was simply not captured (a bad/partial child bundle) the reading is wrong, so CONFIRM the Classic detail really is inline-editable (no separate edit page) before skipping the form. If it is: do NOT build a Freedom form page — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
         "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2)); // Business rules / ⚠ Custom methods / ⚠ Other declared logic
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
     } else if (c.formless === "empty") {

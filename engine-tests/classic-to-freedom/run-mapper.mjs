@@ -4105,6 +4105,13 @@ check("ENG-96327: an inline-grid child reads 'Inline grid' (NOT 'Rebuild (child)
   && /No separate form page — inline-editable grid/.test(inlineGridCs.plan)
   && /build the related list as an editable \*\*crt\.DataGrid\*\*/.test(inlineGridCs.plan),
   () => inlineGridCs.plan.split("\n").filter((l) => /Ig|Inline grid|DataGrid/.test(l)).slice(0, 8));
+// Rita review (Major): the inline-grid verdict rests on the fold seeing 0 fields, which cannot tell "genuinely
+// fieldless" from "the fields layer was not captured" — so the line is a ⚠ that asks the agent to CONFIRM the detail
+// really is inline-editable, not a settled instruction to skip the form.
+check("Rita review: the inline-grid line is a ⚠ that asks to CONFIRM the classification (it rests on missing fields), not a settled skip-the-form assertion",
+  /> ⚠ \*\*No separate form page — inline-editable grid \(confirm on-stand\)\.\*\*/.test(inlineGridCs.plan)
+  && /if the fields layer was simply not captured .* the reading is wrong, so CONFIRM/.test(inlineGridCs.plan),
+  () => inlineGridCs.plan.split("\n").filter((l) => /inline-editable grid/.test(l)));
 // ENG-96327 (self-review Minor): the OTHER arm of the `hasBehaviour ? "inline-grid" : "empty"` split — a child that
 // folds to 0 fields/tabs/details AND carries NO behaviour is a skeletal/bad-bundle fold, marked `empty`, and renders
 // the ⚠ EMPTY-page warning (not the inline-grid "build a crt.DataGrid" mapping). Only inline-grid was covered before,
@@ -6522,6 +6529,20 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     aggRow[2] === "module-dep" && aggRow[3] === "Wires module A." && aggRow[3] !== "⚠ not described"
     && aggRow[4] === "Loaded so A is available.",
     () => aggRow);
+  // ENG-96534 (Rita review Major): a behaviourIndex entry with a CARD but NO whatItDoes/useCase prose (the default
+  // state of every analysis authored before ENG-96534) is UNDESCRIBED for the warning banner — the banner and the
+  // `⚠ not described` cells now agree — even though the `Described in` column still cites the card. Counting off
+  // `describedIn` truthiness used to read `0 undescribed` (no banner) while every plain-language cell said not-described.
+  const cardOnlyRun = runMigration({ entity: "X", entityColumns: { Owner: { type: "Lookup", ref: "Contact" } },
+    seed: CLEAN_SEED, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS, schemas: [{ pkg: "IMP", body: IMP_BODY }],
+    behaviourIndex: { recalcAmount: { card: "main/C01", ac: ["AC-1"] } } }, { baseDir: FIX });
+  const cardOnlyPlan = renderPlan(cardOnlyRun, {});
+  const crow = (cardOnlyPlan.split("\n").find((l) => l.startsWith("| recalcAmount |")) || "").split("|").map((s) => s.trim());
+  check("ENG-96534 (Rita review): a card WITHOUT whatItDoes/useCase prose flags the ⚠ Custom methods banner AND shows `⚠ not described` cells — the two no longer contradict — while `Described in` still cites the card",
+    /could not identify and describe the logic of \d+ of \d+ method\(s\)/.test(cardOnlyPlan)
+    && crow[3] === "⚠ not described" && crow[4] === "⚠ not described"
+    && /main\/C01/.test(crow[6]),
+    () => ({ banner: cardOnlyPlan.split("\n").find((l) => /could not identify and describe/.test(l)), row: crow }));
 }
 
 // ---- method body EVIDENCE replaces name-guessing ----
@@ -13353,14 +13374,21 @@ check("ENG-96327 (self-review) ANTI-VACUITY: EQUAL still reads `= OtherStage` an
   () => ({ eq: r1gOpRow(3), lt: r1gOpRow(5) }));
 // ENG-96327 (self-review, PR #166): the CONFUSABLE boundary operators — every one COMPARISON_OP defines — each pins
 // its OWN glyph, so a copy-paste transposition (≤ vs <, ≥ vs >) that inverts a rule's gating semantics fails here.
-// `<`/`>` are esc-encoded (`&lt;`/`&gt;`); `≤`/`≥` are unicode. IS_NULL (11) reads `is empty` (no right operand).
+// `<`/`>` are esc-encoded (`&lt;`/`&gt;`); `≤`/`≥` are unicode. Platform codes: IS_NULL=1, IS_NOT_NULL=2.
 check("ENG-96327 (self-review): the relational boundary ops each render their exact glyph — ≤ (6), > (7), ≥ (8) — never transposed to the adjacent `<`/`>=`",
   /when Stage ≤ OtherStage/.test(r1gOpRow(6))
   && /when Stage &gt; OtherStage/.test(r1gOpRow(7))
   && /when Stage ≥ OtherStage/.test(r1gOpRow(8)),
   () => ({ le: r1gOpRow(6), gt: r1gOpRow(7), ge: r1gOpRow(8) }));
-check("ENG-96327 (self-review): a presence check IS_NULL (11) reads `is empty` — the confusable partner of IS_NOT_NULL's `is filled`, so a swap is caught",
-  /when Stage is empty/.test(r1gOpRow(11)) && !/is filled/.test(r1gOpRow(11)),
+// Rita review (Blocker): the platform's presence-check codes are 1 (IS_NULL) / 2 (IS_NOT_NULL) — NOT 11/12, which
+// are CONTAIN / NOT_CONTAIN. IS_NULL (1) reads `is empty`; a CONTAIN (11) is NOT a presence check and, with a value,
+// states it neutrally (`vs`) rather than reading as a bare presence check — the exact inversion Rita reproduced.
+check("Rita review: numeric IS_NULL (1) reads `is empty` and IS_NOT_NULL (2) reads `is filled` — the real platform codes, not 11/12",
+  /when Stage is empty/.test(r1gOpRow(1)) && !/is filled/.test(r1gOpRow(1))
+  && /when Stage is filled/.test(r1gOpRow(2)) && !/is empty/.test(r1gOpRow(2)),
+  () => ({ isnull: r1gOpRow(1), isnotnull: r1gOpRow(2) }));
+check("Rita review: CONTAIN (11) is NOT rendered as a presence check — it keeps its operands (`Stage vs OtherStage`), never a bare `when Stage` that reads as a gap-free presence",
+  /when Stage vs OtherStage/.test(r1gOpRow(11)) && !/is empty|is filled/.test(r1gOpRow(11)),
   () => r1gOpRow(11));
 const r1gConst = r1gRun('{ "type": 0, "value": "New" }');
 check("ENG-96327 (was ENG-96571 G ANTI-VACUITY): a comparison against a CONSTANT states the whole condition too — `when Stage = New`, the value the cell now prints (a readable constant is shown; a lookup GUID would read `a specific value`)",

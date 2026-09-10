@@ -1087,9 +1087,9 @@ check("ENG-96571 A3: the real Job.JobRequired condition is 1 DECLARED and saniti
 const a3Sym = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.EQUAL, "rightExpression": { "type": 0, "value": "New" } }]`);
 const a3Pres = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Account" }, "comparisonType": Terrasoft.ComparisonType.IS_NOT_NULL }]`);
 const a3Contain = a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Name" }, "comparisonType": Terrasoft.ComparisonType.CONTAIN, "rightExpression": { "type": 0, "value": "x" } }]`);
-check("ENG-96327: symbolic `Terrasoft.ComparisonType.EQUAL`→3 and `IS_NOT_NULL`→12 resolve; an unlisted `CONTAIN` stays a soft null",
+check("ENG-96327 / Rita review: symbolic `Terrasoft.ComparisonType.EQUAL`→3 and `IS_NOT_NULL`→2 (the platform code, not 12) resolve; an unlisted `CONTAIN` stays a soft null",
   a3Sym.conditions[0].comparison === 3 && a3Sym.conditions[0].left.attribute === "Stage"
-  && a3Pres.conditions[0].comparison === 12 && a3Pres.conditions[0].left.attribute === "Account"
+  && a3Pres.conditions[0].comparison === 2 && a3Pres.conditions[0].left.attribute === "Account"
   && a3Pres.conditions[0].right.value === null
   && a3Contain.conditions[0].comparison === null,
   () => JSON.stringify({ eq: a3Sym.conditions[0], pres: a3Pres.conditions[0], contain: a3Contain.conditions[0] }));
@@ -1097,9 +1097,9 @@ check("ENG-96327: symbolic `Terrasoft.ComparisonType.EQUAL`→3 and `IS_NOT_NULL
 // confusable pairs (NOT_EQUAL vs EQUAL, LESS vs LESS_OR_EQUAL, GREATER vs GREATER_OR_EQUAL, IS_NULL vs IS_NOT_NULL)
 // where a transposed member would silently resolve to the wrong operator. Each maps onto the renderer's contract.
 const symCmp = (name) => a3Rule(`[{ "leftExpression": { "type": 1, "attribute": "Stage" }, "comparisonType": Terrasoft.ComparisonType.${name}, "rightExpression": { "type": 0, "value": "New" } }]`).conditions[0]?.comparison;
-check("ENG-96327: every listed symbolic ComparisonType resolves to its numeric code (NOT_EQUAL→4, LESS→5, LESS_OR_EQUAL→6, GREATER→7, GREATER_OR_EQUAL→8, IS_NULL→11)",
+check("ENG-96327 / Rita review: every listed symbolic ComparisonType resolves to its PLATFORM numeric code (NOT_EQUAL→4, LESS→5, LESS_OR_EQUAL→6, GREATER→7, GREATER_OR_EQUAL→8, IS_NULL→1)",
   symCmp("NOT_EQUAL") === 4 && symCmp("LESS") === 5 && symCmp("LESS_OR_EQUAL") === 6
-  && symCmp("GREATER") === 7 && symCmp("GREATER_OR_EQUAL") === 8 && symCmp("IS_NULL") === 11,
+  && symCmp("GREATER") === 7 && symCmp("GREATER_OR_EQUAL") === 8 && symCmp("IS_NULL") === 1,
   () => JSON.stringify({ ne: symCmp("NOT_EQUAL"), lt: symCmp("LESS"), le: symCmp("LESS_OR_EQUAL"), gt: symCmp("GREATER"), ge: symCmp("GREATER_OR_EQUAL"), isnull: symCmp("IS_NULL") }));
 // (iii) the object-MAP form — a non-array `conditions`. It is READ, through the same `safeKeys` the declared count
 // uses, so the two halves agree: 2 declared / 2 sanitized. Before the ENG-96571 review `sanitizeConditions`
