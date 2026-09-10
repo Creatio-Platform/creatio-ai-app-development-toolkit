@@ -2332,7 +2332,7 @@ check("ENG-96778 (scope expansion): the CLI computes the state (ENG-96776), but 
     && /do NOT recompute, renumber, reopen or close it yourself/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("ENVIRONMENT FAULT — set"), wfSrc.indexOf("ENVIRONMENT FAULT — set") + 300));
 check("ENG-96778 (scope expansion): `classifyBlocker` returns `environment` on a DECLARED subject and says the run stops the round — the gate classifier is the code path that actually fires the stop, so the environment class must exist and its reason must name the consequence",
-  wfSrc.includes(String.raw`return { class: 'environment', reason: 'the agent that hit this blocker DECLARED the stand itself did not answer`)
+  wfSrc.includes("return { class: 'environment', reason: 'the agent that hit this blocker DECLARED the stand itself did not answer")
     && /the run stops the round and asks the operator to restore the stand/.test(wfSrc),
   () => wfSrc.slice(wfSrc.indexOf("class: 'environment'"), wfSrc.indexOf("class: 'environment'") + 200));
 check("ENG-96778 (scope expansion): `BLOCKER_SUBJECT_RULE` ASKS the build agents for `'environment'` — when the STAND ITSELF did not answer — and tells them a transport-only timeout is NOT it (switch transport per the policy), so the declared channel is not inert and a slow MCP is not read as a dead stand",
