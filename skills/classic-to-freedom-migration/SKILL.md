@@ -395,7 +395,20 @@ manifest path and the resolved path to `engine/migrate.mjs`; the approved `plan.
 for how a construct maps; and for a task carrying imperative rows, the step-5.1 behaviour cards with their
 acceptance criteria — a handler is ported against its card's AC, never from its method name.
 
-**7.4 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
+**7.4 Assembling `--built` is YOURS, and it needs two contexts that did not build.** Step 8's gate reads a payload
+keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`, `judge`.
+No task produces it, and a builder must not assemble its own verdict, so:
+
+- **The read-back**: one sub-agent with stand access but NO write access runs `get-page` for every page key the
+  plan publishes and hands you the payload. It reads the stand, never a task's `## Notes` — the notes say what a
+  builder believes it did, and the point of this read is to find out what is actually there.
+- **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
+  reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
+  `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
+
+Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
+
+**7.5 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
 own sections → replacing/extension deltas → backend). Each section gets its own slice, its own task folder and its
 own step 8 before the next one starts.
 

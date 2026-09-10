@@ -159,11 +159,15 @@ check("buildTaskSet: `order` is a dense 1..N sequence over the whole set — the
   SET.tasks.every((t, i) => t.order === i + 1), () => SET.tasks.map((t) => t.order));
 
 console.log("\n===== build order: leaf-first across pages, worklist-first within a page =====");
-check("build order: EVERY sub-page's tasks come before `main`'s — leaf-first is a build requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page must exist before the parent list is wired to it",
+check("build order: `main · Pages` LEADS the whole run — it is not a page's layout but the app/section/package placement, the entity binding and the page shells, so a child page built before it would need a package that does not exist yet",
+  () => SET.tasks[0].pageKey === "main" && SET.tasks[0].group === "Pages",
+  () => SET.tasks.slice(0, 3).map((t) => `${t.order}:${t.pageKey}·${t.group}`));
+check("build order: apart from that scaffolding task, EVERY sub-page's tasks come before `main`'s — leaf-first is a build requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page must exist before the parent list is wired to it",
   () => {
-    const firstMain = Math.min(...SET.tasks.filter((t) => t.pageKey === "main").map((t) => t.order));
+    const mainBuild = SET.tasks.filter((t) => t.pageKey === "main" && t.group !== "Pages");
+    const firstMain = Math.min(...mainBuild.map((t) => t.order));
     const subKeys = new Set(subPageNodes(RUN).map((n) => n.pageKey));
-    return SET.tasks.filter((t) => subKeys.has(t.pageKey)).every((t) => t.order < firstMain);
+    return mainBuild.length > 0 && SET.tasks.filter((t) => subKeys.has(t.pageKey)).every((t) => t.order < firstMain);
   }, () => SET.tasks.map((t) => `${t.order}:${t.pageKey}`));
 check("build order: a GRANDCHILD precedes its own parent child page — reversing the parent-then-children walk puts every node after all of its descendants, so `child:G1` is built before `child:C1`",
   () => Math.max(...SET.tasks.filter((t) => t.pageKey === "child:G1").map((t) => t.order))
@@ -173,9 +177,9 @@ check("build order: the `list` page follows `main` — a list page's deliverable
   () => Math.min(...SET.tasks.filter((t) => t.pageKey === LIST_PAGE_KEY).map((t) => t.order))
     > Math.max(...SET.tasks.filter((t) => t.pageKey === "main").map((t) => t.order)),
   () => SET.tasks.map((t) => `${t.order}:${t.pageKey}`));
-check("build order: within a page the `⚠ Confirm worklist` is FIRST — its rows are open questions answered by reading the stand, and resolving them after the page is built is how a page gets built against a guess",
+check("build order: within a page the `⚠ Confirm worklist` is FIRST of its own build groups (the run-leading scaffolding task aside) — its rows are open questions answered by reading the stand, and resolving them after the page is built is how a page gets built against a guess",
   () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
-    const own = SET.tasks.filter((t) => t.pageKey === k);
+    const own = SET.tasks.filter((t) => t.pageKey === k && !(k === "main" && t.group === "Pages"));
     const confirm = own.find((t) => t.group === "⚠ Confirm worklist");
     return !confirm || confirm.order === Math.min(...own.map((t) => t.order));
   }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
@@ -185,11 +189,12 @@ check("build order: within a page `Quality gates` is LAST — the `creatio-ui-gu
     const gates = own.find((t) => t.group === "Quality gates");
     return !gates || gates.order === Math.max(...own.map((t) => t.order));
   }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
-check("build order: a page's tasks are CONTIGUOUS — no other page's task is interleaved into the middle of one page's build",
+check("build order: a page's tasks are CONTIGUOUS — no other page's task is interleaved into the middle of one page's build (main's scaffolding task is the one declared exception: it leads the run)",
   () => keysOf(SET).every((k) => {
-    const orders = SET.tasks.filter((t) => t.pageKey === k).map((t) => t.order).sort((a, b) => a - b);
+    const orders = SET.tasks.filter((t) => t.pageKey === k && !(k === "main" && t.group === "Pages"))
+      .map((t) => t.order).sort((a, b) => a - b);
     return orders[orders.length - 1] - orders[0] === orders.length - 1;
-  }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}`));
+  }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
 
 console.log("\n===== ids are content-derived, not positional =====");
 check("ids: inserting a page into the plan does NOT renumber any id — every (pageKey, group) that survives keeps the SAME `id` across manifest A and B, so a recorded status stays attached to its own task",
@@ -301,12 +306,34 @@ check("status vocabulary: the unrecognised value is REPORTED on the index's Atte
 check("status vocabulary: an unrecognised status counts as NEITHER done nor open — it is surfaced as `Other` in the index header rather than padding either number",
   () => /\*\*Done:\*\* 0 · \*\*Open:\*\* \d+ · \*\*Other:\*\* 1/.test(renderTaskIndex(BOGUS)),
   () => renderTaskIndex(BOGUS).split("\n")[2]);
-check("status vocabulary: a MALFORMED file is reported too — the engine says it could not read that file's status instead of treating it as not-yet-started",
+check("unreadable file: a file the engine could not parse in full is refused, NOT read and NOT written — rewriting it would destroy the `## Notes` that record work already done on a stand",
   () => {
     const t = taskAt(SET, "main", "Pages");
     const m = mergeTaskSet(SET, [{ file: t.file, notes: "", malformed: "front matter is not terminated", meta: { id: t.id } }]);
-    return renderTaskIndex(m).includes("the engine could not read its status");
-  });
+    return (m.blocked || []).some((b) => b.file === t.file && /front matter is not terminated/.test(b.reason))
+      && renderTaskIndex(m).includes("NOT READ and NOT WRITTEN");
+  }, () => mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }]).blocked);
+check("unreadable file: a file with NO readable `id` is refused the same way — filtering it out as absent is what let a corrupted file's notes be overwritten by a task the engine then read as new",
+  () => {
+    const m = mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "built already", malformed: "no front matter", meta: {} }]);
+    return (m.blocked || []).some((b) => b.file === "task-hand-edited.md") && renderTaskIndex(m).includes("task-hand-edited.md");
+  }, () => mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "x", malformed: "no front matter", meta: {} }]).blocked);
+check("duplicate id: when two files claim one `id` the engine can no longer tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const m = mergeTaskSet(SET, [asExisting(t, { status: "done" }), { ...asExisting(t, { status: "in-progress" }), file: "task-copy.md" }]);
+    const files = (m.blocked || []).map((b) => b.file);
+    return files.includes(t.file) && files.includes("task-copy.md")
+      && (m.blocked || []).every((b) => /claimed by more than one file/.test(b.reason));
+  }, () => mergeTaskSet(SET, [asExisting(taskAt(SET, "main", "Pages"), { status: "done" }), { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-copy.md" }]).blocked);
+check("duplicate id: an ORCHESTRATOR file carrying an engine task's `id` never becomes that task's record — copying a task file as a template would otherwise have the engine write the plan's rows into the file it promises never to rewrite",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const orch = { ...asExisting(t, { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(t, { status: "in-progress" }).meta, origin: "orchestrator" } };
+    const m = mergeTaskSet(SET, [orch]);
+    const same = m.tasks.find((x) => x.id === t.id);
+    return same.origin === "engine" && same.file === t.file && same.status === "todo";
+  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }).meta, origin: "orchestrator" } }]).tasks.filter((x) => x.id === taskAt(SET, "main", "Pages").id));
 
 console.log("\n===== a recorded status whose deliverables later changed is flagged =====");
 // The recorded state is manifest A's; the plan is now manifest C's, whose `main · Form — Coverage (verified)`
@@ -319,7 +346,8 @@ check("drift: the flag is on the index's Attention section, naming `done` and te
   () => {
     const idx = renderTaskIndex(mergeTaskSet(SET3, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]));
     return /recorded `done`, but the plan's deliverables for it have CHANGED since/.test(idx)
-      && /re-check it against the rows now in the file, and set `status: todo` once it is re-opened/.test(idx);
+      && /re-check it against the rows now in the file/.test(idx)
+      && /re-opened \(`status: todo`\) or when the stale `rowsDigest:` line is emptied/.test(idx);
   }, () => renderTaskIndex(mergeTaskSet(SET3, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })])));
 check("drift: an UNCHANGED `done` task is NOT flagged — the signal is the changed row set, not the `done` status (else every re-run would cry drift)",
   () => taskAt(mergeTaskSet(SET, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]), "main", DRIFT_GROUP).drifted === false,
@@ -375,8 +403,14 @@ check("origin: orchestrator: an `order` that is absent or unparseable sorts it A
 check("origin: orchestrator: the merged set still carries a dense 1..N `order` with the orchestrator task in it — the queue the caller walks has no hole where the adopted task sits",
   () => {
     const m = mergeTaskSet(SET, [orchExisting("3")]);
-    return m.tasks.every((t, i) => t.order === i + 1) && m.tasks.length === SET.tasks.length + 1;
-  }, () => mergeTaskSet(SET, [orchExisting("3")]).tasks.map((t) => t.order));
+    return m.tasks.every((t, i) => t.step === i + 1) && m.tasks.length === SET.tasks.length + 1;
+  }, () => mergeTaskSet(SET, [orchExisting("3")]).tasks.map((t) => `${t.step}:${t.origin}`));
+check("origin: orchestrator: `step` is the QUEUE position and is NOT written back into the orchestrator's own file — its declared `order` stands, because the engine never rewrites that file, and calling both `#` invited reading two different facts as one number",
+  () => {
+    const m = mergeTaskSet(SET, [orchExisting("3")]);
+    const orch = m.tasks.find((t) => t.origin === "orchestrator");
+    return orch.order === 3 && orch.step !== orch.order;
+  }, () => mergeTaskSet(SET, [orchExisting("3")]).tasks.map((t) => `${t.step}/${t.order}:${t.origin}`));
 
 console.log("\n===== an engine task that left the plan becomes stale, and is NOT deleted =====");
 const GONE = mergeTaskSet(SET, [asExisting(taskAt(SET2, "child:C2", "Pages"), { status: "done" }, "built on the stand already")]);
@@ -392,10 +426,11 @@ check("stale: it is listed on the index with the reason it is KEPT — deleting 
   }, () => renderTaskIndex(GONE));
 
 console.log("\n===== renderTaskIndex: derived, and complete =====");
-check("renderTaskIndex: every task in the set has a row, in `order`, linking to its own file — the index is the queue the orchestrator walks",
+check("renderTaskIndex: every task in the set has a row, in queue order, linking to its own file — the index is the queue the orchestrator walks",
   () => {
-    const idx = renderTaskIndex(SET);
-    return SET.tasks.every((t) => idx.includes(`| ${t.order} | ${t.group} | \`${t.pageKey}\` |`) && idx.includes(`[${t.file}](${t.file})`));
+    const m = mergeTaskSet(SET, []);
+    const idx = renderTaskIndex(m);
+    return m.tasks.every((t) => idx.includes(`| ${t.step} | ${t.group} | \`${t.pageKey}\` |`) && idx.includes(`[${t.file}](${t.file})`));
   }, () => renderTaskIndex(SET));
 check("renderTaskIndex: it states in the file itself that it is DERIVED and carries no fact of its own, and it names the plan version the folder was sliced from",
   () => /DERIVED FILE/.test(renderTaskIndex(SET)) && /it carries no fact/i.test(renderTaskIndex(SET))
@@ -507,7 +542,7 @@ const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", 
   fs.writeFileSync(victim, fs.readFileSync(victim, "utf8").replace("status: todo", "status: kinda-done"));
   const rerun = cliTasks(["--tasks", dir], MANIFEST);
   check("migrate.mjs --tasks: an unrecognised recorded status is reported on STDOUT as an item needing a human eye, is on the index's Attention section, and is still in the task's own file verbatim — never rewritten to `todo`",
-    () => /⚠ 1 item\(s\) need a human eye/.test(rerun.stdout || "")
+    () => /⚠ 1 task\(s\) need a human eye/.test(rerun.stdout || "")
       && /unrecognised status `kinda-done`/.test(readIndex(dir))
       && /status: kinda-done/.test(fs.readFileSync(victim, "utf8")),
     () => ({ stdout: rerun.stdout, file: fs.readFileSync(victim, "utf8").slice(0, 200) }));

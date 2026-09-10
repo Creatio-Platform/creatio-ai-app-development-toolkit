@@ -2528,13 +2528,17 @@ function runTaskMode(result, dir, opts) {
   }
   const set = syncTaskDir(dir, result, opts);
   const done = set.tasks.filter((t) => t.status === "done").length;
-  const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted || t.malformed).length
+  const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
     + (set.stale?.length || 0);
   const lines = [
     `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not.`,
-    `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Hand ONE task file at a time to a build sub-agent, in the \`order\` the files carry, and re-run this mode after each status change.`,
+    `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Hand ONE task file at a time to a build sub-agent, in the \`Step\` order that index lists, and re-run this mode after each status change.`,
   ];
-  if (attention) lines.push(`⚠ ${attention} item(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  const refused = set.blocked?.length || 0;
+  if (refused) {
+    lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
+  }
+  if (attention) lines.push(`⚠ ${attention} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
   return lines.join("\n") + "\n";
 }
 
@@ -2559,6 +2563,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
   // on a correctly built page. The fail string three lines below says the same thing; this comment used to say
   // the opposite, which is exactly the kind of drift that gets a payload hand-built from the wrong source.
+  // A second mode flag alongside `--tasks` is a LOUD stop, not a silent precedence win. Every other mode is a
+  // print; this one WRITES a folder, so "the first flag matched wins" would answer `--plan --tasks ./d` with a plan
+  // on stdout and no folder — and a caller reading the exit code would believe the tasks were sliced.
+  if (tasksMode) {
+    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode], ["--stubs", stubsMode], ["--verify", verifyMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (alsoAsked.length) fail(`\`--tasks\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES a folder while those print an artifact, so one of the two would silently not happen. Run them as separate commands.`);
+  }
   const builtIdx = argv.indexOf("--built");
   if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
     fail("`--verify` needs `--built <file>` — a JSON KEYED BY PAGE: " + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by (`main`, `list`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>`), and give each one clio `get-page`'s `bundle.viewConfig` VERBATIM (the merged page — not the page's own body, which cannot show template-provided components).");

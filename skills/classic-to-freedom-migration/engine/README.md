@@ -20,7 +20,9 @@ node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to 
 ```
 
 Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
-flag is silently ignored) — pass exactly one. `--out <file>` works with all of them.
+flag is silently ignored) — pass exactly one. `--out <file>` works with all of them, except `--tasks`, which names
+its own destination. `--tasks` is also the one mode that REFUSES a second mode flag instead of losing to it: it
+writes a folder rather than printing, so silent precedence would report a plan while slicing nothing.
 
 **The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview. It is a
 deterministic short hash over three manifest inputs and only those three — `entity`, `schemas` (package + body
@@ -42,17 +44,32 @@ context. Four properties decide its behaviour, and they are stated in full in `t
 - **The engine owns the deliverable rows; the caller owns `status` and `## Notes`.** A re-run rewrites the rows from
   the current plan (they are the plan's) and never touches the caller's two. A task whose `id` carries
   `origin: orchestrator` is neither rewritten nor removed — it is not the engine's to author.
-- **Ids are content-derived, not positional** — a short hash over (pageKey, group) — so inserting a page renumbers
-  nothing and a recorded status stays attached to the task it was recorded for. `order` carries the build sequence
-  and is the field that moves: leaf-first, `main` after its sub-pages, `list` after `main`.
-- **Nothing is ever deleted.** A task that leaves the plan is reported as stale on the index, because deleting the
-  file is how a record of work already done on a stand disappears. Statuses are a checked vocabulary
-  (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is reported, never read as "not done".
+- **Ids are content-derived, not positional** — a short hash over (the page's `pageDedupeId`, group). The dedupe id
+  and not the page KEY, because `claimPageKey` gives a base key to its first claimant: an inserted sibling can take
+  `child:<Entity>` and push an already-built page to `child:<Entity>@<Via>`, and keyed on the key the never-built
+  newcomer would inherit the built page's id — and its recorded `done`. `order` carries the build sequence and is
+  the field that moves; the index calls it `Step`, which is the queue position and not the same fact as the `order`
+  an orchestrator-authored file declares for itself.
+- **The build order is leaf-first with ONE declared exception.** Sub-pages precede `main`, a grandchild precedes its
+  parent, `list` follows `main`, and within a page the `⚠ Confirm worklist` is first and `Quality gates` last. The
+  exception is `main`'s `Pages` group, which leads the whole run: it is not a layout but the app/section/package
+  placement, the binding to the EXISTING entity and the page shells — the preconditions every other task needs.
+- **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
+  stale on the index. A file with no readable `id`, an unterminated front matter (a killed write, a hand edit), or an
+  `id` two files claim is REFUSED: the engine cannot tell whose record it holds, so it is named on the index and on
+  stderr and left byte for byte as it is — its task simply gets no file that run. Rewriting it would destroy the
+  `## Notes` that may be the only record of work already done on a stand. An orchestrator file carrying an engine
+  task's id (the natural result of copying a task file as a template) is refused for the same reason.
+- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is
+  reported, never read as "not done". A status recorded against an older row set keeps its held `rowsDigest`, so the
+  drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
 
 A **plan-level gap writes NOTHING and exits 2** — `gate` / `structure` / `coverage`. Slicing a plan with a gap would
 hand sub-agents write access to a stand against deliverables the plan cannot state, so this mode refuses before it
 creates the folder rather than after a builder has run. `--out` is rejected here (exit 1): the mode writes the
-folder itself, and silently ignoring `--out` would leave a caller believing the artifact went where it asked.
+folder itself, and silently ignoring `--out` would leave a caller believing the artifact went where it asked. So is
+combining it with another mode flag: every other mode PRINTS while this one WRITES, so "first flag matched wins"
+would answer `--plan --tasks ./d` with a plan and no folder.
 
 **The build loop is `--checklist` → build → `--verify`.** `--checklist` renders one group per page the migration
 creates — `main`, `list` (when the plan gates a list-page deliverable), `child:<Entity>`, `typed:<Schema>`,
