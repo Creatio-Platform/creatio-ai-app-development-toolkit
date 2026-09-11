@@ -251,6 +251,18 @@ check("refs: the rendered file carries the two rules that keep the cache from be
     const text = renderTaskFile(REFS, SET);
     return /ENVIRONMENT it was read from/.test(text) && /Never argument-less/.test(text);
   }, () => renderTaskFile(REFS, SET));
+check("refs: a cache big enough to be CUT is chained like any other artifact — chunk 2 waits on chunk 1, and every build task still waits on the whole cache rather than on whichever chunk happened to be last",
+  () => {
+    const tight = buildTaskSet(RUN, { ...OPTS, taskBudget: { chunk: 4 } });
+    const refs = tight.tasks.filter((t) => t.artifact === ARTIFACT_REFS);
+    if (refs.length < 2) return false;
+    const ids = refs.map((t) => t.id);
+    return refs[0].dependsOn.length === 0
+      && refs.slice(1).every((t, i) => t.dependsOn.includes(refs[i].id))
+      && tight.tasks.filter((t) => t.artifact !== ARTIFACT_REFS)
+        .every((t) => ids.every((id) => t.dependsOn.includes(id)));
+  }, () => buildTaskSet(RUN, { ...OPTS, taskBudget: { chunk: 4 } }).tasks
+    .map((t) => `${t.order}:${t.artifact}:${t.id}:deps=${t.dependsOn.join(",")}`));
 check("refs: its rows are NOT plan deliverables — it is the engine's own preparation task, so it carries no `--verify` gate and no plan group",
   () => REFS.gatedRows === 0 && REFS.rows.every((r) => r.group === "Reference cache"),
   () => REFS.rows.map((r) => `${r.group}:${r.vk}`));
@@ -1122,6 +1134,28 @@ console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round 
         && !/no longer in the plan/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"))
         && res.status === 0;
     }, () => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-900));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+{
+  // A PLAN-level gap reaches `--verify --tasks` too, and it must write NOTHING — not the repair tasks, and not the
+  // regenerated index, which would be re-derived from a plan the repair rows were never cut against.
+  const skeletal = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
+  check("plan gap fixture (anti-vacuity): the skeletal-seed manifest really carries a PLAN-level gap, so the refusal below is the behaviour under test",
+    planGaps(runMigration(skeletal)).length > 0, () => planGaps(runMigration(skeletal)));
+  const base = tmp("cli-repair-gap");
+  const dir = path.join(base, "build-tasks");
+  fs.mkdirSync(dir, { recursive: true });
+  const marker = path.join(dir, TASK_INDEX_FILE);
+  fs.writeFileSync(marker, "# an index from an EARLIER, gap-free slice\n");
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], skeletal);
+  check("migrate.mjs --verify --tasks: a PLAN-level gap writes NO repair task AND does not regenerate the index — repairing against a plan that cannot state its own deliverables spends sub-agents on rows nothing can close, and re-deriving the index would replace it from a plan the existing rows were never cut against",
+    () => /NO REPAIR TASKS WRITTEN/.test(run.stdout || "")
+      && fs.readFileSync(marker, "utf8") === "# an index from an EARLIER, gap-free slice\n"
+      && fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-")).length === 0,
+    () => ({ stdout: (run.stdout || "").slice(-400), ls: fs.readdirSync(dir), index: fs.readFileSync(marker, "utf8") }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
