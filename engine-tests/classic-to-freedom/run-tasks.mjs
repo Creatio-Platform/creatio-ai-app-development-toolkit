@@ -134,8 +134,9 @@ check("fixture: manifest C changes ONE task's deliverable rows and NO page — s
 console.log("\n===== buildTaskSet: one task per (pageKey, group), rows verbatim =====");
 check("buildTaskSet: there is EXACTLY one task per (pageKey, group) of `checklistGroups` — no group without a task, no task without a group, nothing invented and nothing collapsed",
   () => {
-    const gKeys = GROUPS.map((g) => `${g.pageKey} ${g.baseTitle}`).sort();
-    const tKeys = SET.tasks.map((t) => `${t.pageKey} ${t.group}`).sort();
+    const byName = (a, b) => a.localeCompare(b);
+    const gKeys = GROUPS.map((g) => `${g.pageKey} ${g.baseTitle}`).sort(byName);
+    const tKeys = SET.tasks.map((t) => `${t.pageKey} ${t.group}`).sort(byName);
     return gKeys.length === tKeys.length && new Set(tKeys).size === tKeys.length && gKeys.every((k, i) => k === tKeys[i]);
   }, () => ({ groups: GROUPS.map((g) => `${g.pageKey}·${g.baseTitle}`), tasks: SET.tasks.map((t) => `${t.pageKey}·${t.group}`) }));
 check("buildTaskSet: a task's rows are its group's rows VERBATIM and in the same order — the task carries what the plan says and adds nothing, so nothing can be in a task that `--verify` will not later ask about",
@@ -193,7 +194,7 @@ check("build order: a page's tasks are CONTIGUOUS — no other page's task is in
   () => keysOf(SET).every((k) => {
     const orders = SET.tasks.filter((t) => t.pageKey === k && !(k === "main" && t.group === "Pages"))
       .map((t) => t.order).sort((a, b) => a - b);
-    return orders[orders.length - 1] - orders[0] === orders.length - 1;
+    return orders.at(-1) - orders[0] === orders.length - 1;
   }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
 
 console.log("\n===== ids are content-derived, not positional =====");
@@ -230,8 +231,8 @@ check("renderTaskFile: the front matter carries the identity and the recorded st
       && meta.rowsDigest === SAMPLE.rowsDigest;
   }, () => parseTaskFile(SAMPLE_TEXT));
 check("renderTaskFile: every deliverable row of the task is in the rendered table, numbered, with the mechanism that CLOSES it — a machine-checked row names `--verify` and its verifier kind",
-  () => SAMPLE.rows.length > 0 && SAMPLE.rows.every((r, i) => new RegExp(`^\\| ${i + 1} \\| `, "m").test(SAMPLE_TEXT))
-    && SAMPLE.rows.filter((r) => r.vk).length > 0
+  () => SAMPLE.rows.length > 0 && SAMPLE.rows.every((r, i) => new RegExp(String.raw`^\| ${i + 1} \| `, "m").test(SAMPLE_TEXT))
+    && SAMPLE.rows.some((r) => r.vk)
     && SAMPLE.rows.filter((r) => r.vk).every((r) => SAMPLE_TEXT.includes("`--verify` (`" + r.vk + "`)")),
   () => SAMPLE_TEXT);
 check("renderTaskFile: a row with no machine verifier is closed by an evidence record plus a judge verdict, and an approved-boundary row is marked N/A — the mechanism is stated per row, never left to the builder",
@@ -337,8 +338,8 @@ check("duplicate id: when two files claim one `id` the engine can no longer tell
   () => {
     const t = taskAt(SET, "main", "Pages");
     const m = mergeTaskSet(SET, [asExisting(t, { status: "done" }), { ...asExisting(t, { status: "in-progress" }), file: "task-copy.md" }]);
-    const files = (m.blocked || []).map((b) => b.file);
-    return files.includes(t.file) && files.includes("task-copy.md")
+    const files = new Set((m.blocked || []).map((b) => b.file));
+    return files.has(t.file) && files.has("task-copy.md")
       && (m.blocked || []).every((b) => /claimed by more than one file/.test(b.reason));
   }, () => mergeTaskSet(SET, [asExisting(taskAt(SET, "main", "Pages"), { status: "done" }), { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-copy.md" }]).blocked);
 check("duplicate id: an ORCHESTRATOR file carrying an engine task's `id` never becomes that task's record — copying a task file as a template would otherwise have the engine write the plan's rows into the file it promises never to rewrite",
@@ -401,7 +402,7 @@ check("origin: orchestrator: an orchestrator-authored task is carried through wi
   () => {
     const m = mergeTaskSet(SET, [orchExisting("3")]);
     const t = m.tasks.find((x) => x.origin === "orchestrator");
-    return t && t.status === "in-progress" && t.notes === "package pushed to the stand" && t.file === ORCH_FILE
+    return t?.status === "in-progress" && t.notes === "package pushed to the stand" && t.file === ORCH_FILE
       && t.group === "Deploy the package" && (m.stale || []).length === 0;
   }, () => mergeTaskSet(SET, [orchExisting("3")]));
 check("origin: orchestrator: it is placed in the queue by its OWN `order` field — an `order: 3` task sits among the engine tasks rather than being appended at the end",
@@ -546,11 +547,11 @@ const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", 
   const run = cliTasks(["--tasks", dir], MANIFEST);
   check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count and the index to present",
     () => run.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE))
-      && new RegExp(`wrote ${SET.tasks.length} build task\\(s\\) \\+ ${TASK_INDEX_FILE}`).test(run.stdout || "")
+      && new RegExp(String.raw`wrote ${SET.tasks.length} build task\(s\) \+ ${TASK_INDEX_FILE}`).test(run.stdout || "")
       && /Hand ONE task file at a time to a build sub-agent/.test(run.stdout || ""),
     () => ({ status: run.status, stdout: run.stdout, stderr: run.stderr, ls: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
   check("migrate.mjs --tasks: with nothing recorded yet the note says 0 done and prints NO ⚠ line — a clean slice must not ask for a human eye it does not need",
-    () => new RegExp(`— 0 done, ${SET.tasks.length} not\\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
+    () => new RegExp(String.raw`— 0 done, ${SET.tasks.length} not\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
     () => run.stdout);
   // An unrecognised status recorded by hand: the ⚠ stdout line is the other half of "reported, never coerced".
   const victim = path.join(dir, taskAt(SET, "main", "Pages").file);

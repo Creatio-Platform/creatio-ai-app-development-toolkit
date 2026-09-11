@@ -98,10 +98,14 @@ const rowsDigest = (rows) => shortHash(rows.map((r) => r.label).join(" "));
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
 function slugify(s) {
-  const slug = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  // The first replace collapses every run, so at most a SINGLE dash can sit at either end — no `+` needed here.
+  const slug = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, "").slice(0, 48);
   return slug || "task";
 }
-export const taskFileName = (task) => `task-${slugify(`${task.pageKey}-${task.group}`)}-${task.id}.md`;
+export const taskFileName = (task) => {
+  const slug = slugify(`${task.pageKey}-${task.group}`);
+  return `task-${slug}-${task.id}.md`;
+};
 
 // ONE task per (page, group). The rows are `checklistGroups`' rows verbatim: a task carries what the plan says and
 // adds nothing of its own, so nothing can be in a task that `--verify` will not later ask about.
@@ -191,9 +195,18 @@ function renderRowTable(rows) {
   return L;
 }
 
+// An empty `## Notes` would otherwise end the file in three newlines. Scanned rather than matched with a
+// quantified regex, which Sonar reads as super-linear backtracking on a long run of newlines.
+function endWithOneBlankLine(text) {
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "\n") end--;
+  return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
+}
+
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} N/A` : "";
-  return [
+  const statusVocabulary = TASK_STATUSES.map((s) => `\`${s}\``).join(" · ");
+  const body = [
     ...renderFrontMatter(task, set),
     "",
     `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
@@ -204,7 +217,7 @@ export function renderTaskFile(task, set = {}) {
     `- **Page key:** \`${task.pageKey}\``,
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
-    `- **Status vocabulary:** ${TASK_STATUSES.map((s) => `\`${s}\``).join(" · ")} — set \`status\` in the front matter above`,
+    `- **Status vocabulary:** ${statusVocabulary} — set \`status\` in the front matter above`,
     "",
     ENGINE_BODY_HEADING,
     "",
@@ -218,7 +231,8 @@ export function renderTaskFile(task, set = {}) {
     "",
     task.notes.trim(),
     "",
-  ].join("\n").replace(/\n{3,}$/, "\n\n");
+  ].join("\n");
+  return endWithOneBlankLine(body);
 }
 
 // Reading a task file back. Deliberately tolerant about WHITESPACE and strict about VALUES: a `status` this file
@@ -230,7 +244,7 @@ export function parseTaskFile(text) {
   if (lines[0]?.trim() !== "---") return { meta, notes: "", malformed: "no front matter" };
   let i = 1;
   for (; i < lines.length && lines[i].trim() !== "---"; i++) {
-    const m = /^\s*([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(lines[i]);
+    const m = /^\s*([A-Za-z][A-Za-z0-9]*):(.*)$/.exec(lines[i]);
     if (m) meta[m[1]] = m[2].trim();
   }
   if (i >= lines.length) return { meta, notes: "", malformed: "front matter is not terminated" };
@@ -263,7 +277,8 @@ const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 function indexRows(tasks) {
   const L = ["| Step | Task | Page | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
-    const rows = `${t.rows.length}${t.gatedRows ? ` (${t.gatedRows} gated)` : ""}`;
+    const gatedNote = t.gatedRows ? ` (${t.gatedRows} gated)` : "";
+    const rows = `${t.rows.length}${gatedNote}`;
     const mark = t.unread ? "⚠ unread" : statusMark(t.status);
     L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
   }
@@ -313,8 +328,9 @@ function countStatuses(tasks) {
 export function renderTaskIndex(set) {
   const counts = countStatuses(set.tasks);
   const other = counts.other ? ` · **Other:** ${counts.other}` : "";
+  const entityNote = set.entity ? ` — ${set.entity}` : "";
   const L = [
-    `# Migration build tasks${set.entity ? ` — ${set.entity}` : ""}`,
+    `# Migration build tasks${entityNote}`,
     "",
     `**Plan version:** \`${set.planVersion || "—"}\` · **Tasks:** ${set.tasks.length} · **Done:** ${counts.done} · **Open:** ${counts.open}${other}`,
     "",
