@@ -16,8 +16,19 @@ node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis hand
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
+node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …and write this run's OPEN rows into <dir> as repair tasks
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
+
+`--verify --tasks <dir>` is the one legal pairing: `--verify` is still the MODE (the table is printed as always)
+and the folder is where its OPEN rows are written as repair tasks. Repair tasks are merged by (page, cause) — sixteen
+handlers missing from one page is ONE task, because sixteen tasks is sixteen sub-agent startups to make one edit
+each. A ROUND IS AN ATTEMPT, not a verify run: re-verifying an unchanged page opens no second round, since the rows
+are still the work of the round already in the folder, and a new round opens only once the previous one was CLOSED
+and the rows came back. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
+three sub-agents have failed at it, so the plan, the stand or the expectation is wrong, not the build. A repair file
+is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
+never reported stale.
 
 Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
 flag is silently ignored) — pass exactly one. `--out <file>` works with all of them, except `--tasks`, which names

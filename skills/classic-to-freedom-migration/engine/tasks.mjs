@@ -421,6 +421,10 @@ function pageIdentities(result) {
 
 const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest",
   "writesTo", "dependsOn", "agentNonce"];
+// A repair task carries two more, and they are what the NEXT verify run reads: which cause it was opened for and
+// which round of it this is. Both live in the file because the folder is the state — counting rounds from a
+// session's memory is how a capped cause quietly gets a fourth sub-agent.
+const REPAIR_KEYS = ["kind", "cause", "repairRound"];
 
 function renderFrontMatter(task, set) {
   const v = {
@@ -440,7 +444,12 @@ function renderFrontMatter(task, set) {
     // having closed two tasks — the engine sees it without asking either of them.
     agentNonce: task.agentNonce || "",
   };
-  return ["---", ...FRONT_MATTER_KEYS.map((k) => `${k}: ${v[k]}`), "---"];
+  const keys = [...FRONT_MATTER_KEYS];
+  if (task.kind === REPAIR_KIND) {
+    Object.assign(v, { kind: task.kind, cause: task.cause, repairRound: String(task.repairRound) });
+    keys.push(...REPAIR_KEYS);
+  }
+  return ["---", ...keys.map((k) => `${k}: ${v[k]}`), "---"];
 }
 
 function closedByOf(row) {
@@ -451,7 +460,15 @@ function closedByOf(row) {
 
 // The `From` column names the plan group each deliverable was read from. A task now spans several groups (they
 // write one artifact between them), so without it the file would no longer say which part of the plan a row is.
-function renderRowTable(rows) {
+function renderRowTable(rows, repair = false) {
+  // A repair row is shown with the STATUS and the EVIDENCE `--verify` recorded for it, verbatim. A sub-agent sent
+  // to fix a row needs to know what the gate actually saw; re-describing it in the engine's own words is how a
+  // repair round gets spent on a row that was never the problem.
+  if (repair) {
+    const L = ["| # | Deliverable | `--verify` said | Evidence it read |", "| --- | --- | --- | --- |"];
+    rows.forEach((r, i) => L.push(`| ${i + 1} | ${r.label} | ${r.status || "—"} | ${r.evidence || "—"} |`));
+    return L;
+  }
   const L = ["| # | From | Deliverable | Closed by |", "| --- | --- | --- | --- |"];
   rows.forEach((r, i) => L.push(`| ${i + 1} | ${r.group || "—"} | ${r.label} | ${closedByOf(r)} |`));
   return L;
@@ -495,8 +512,16 @@ export function renderTaskFile(task, set = {}) {
     "",
     `# ${task.step ?? task.order}. ${task.pageKey} · ${task.group}`,
     "",
-    "> One task of an APPROVED migration plan. Build ONLY what is listed here — a deliverable that looks wrong is a",
-    "> proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+    ...(task.kind === REPAIR_KIND ? [
+      `> REPAIR — round ${task.repairRound} of at most ${REPAIR_ROUND_CAP}. These rows were left OPEN by a \`--verify\``,
+      "> run against the page as it is NOW: they are not new plan work, and the plan has not changed. Fix exactly",
+      "> these rows on the page this task names. If a row is open because the plan is WRONG rather than the build,",
+      "> that is a proposal to the user under `## Notes` — never a plan edit and never a row you close by asserting",
+      "> it. There is no spec slice here on purpose: the deliverable is the failing row, not the page's whole design.",
+    ] : [
+      "> One task of an APPROVED migration plan. Build ONLY what is listed here — a deliverable that looks wrong is a",
+      "> proposal to the user, never a silent change (record it under `## Notes` and build the plan as written).",
+    ]),
     "",
     `- **Page key:** \`${task.pageKey}\``,
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
@@ -508,7 +533,7 @@ export function renderTaskFile(task, set = {}) {
     "",
     "<!-- ENGINE-OWNED. Rewritten from the plan on every `--tasks` run; edits here are lost. -->",
     "",
-    ...renderRowTable(task.rows),
+    ...renderRowTable(task.rows, task.kind === REPAIR_KIND),
     "",
     NOTES_HEADING,
     "",
@@ -692,7 +717,7 @@ export function mergeTaskSet(fresh, existing = []) {
   // Worse, when its name equalled the engine task's computed file name, `syncTaskDir` wrote the engine task over
   // it and destroyed its `## Notes`. It is refused instead: named on Attention and never written to.
   for (const e of usable) {
-    if (claimed.has(e.meta.id) && e.meta.origin === TASK_ORIGIN_ORCHESTRATOR) {
+    if (claimed.has(e.meta.id) && (e.meta.origin === TASK_ORIGIN_ORCHESTRATOR || e.meta.kind === REPAIR_KIND)) {
       blocked.push({
         file: e.file,
         id: e.meta.id,
@@ -701,8 +726,13 @@ export function mergeTaskSet(fresh, existing = []) {
     }
   }
   const extra = usable.filter((e) => !claimed.has(e.meta.id));
-  const orchestrated = extra.filter((e) => e.meta.origin === TASK_ORIGIN_ORCHESTRATOR).map(adoptOrchestrated);
-  const stale = extra.filter((e) => e.meta.origin !== TASK_ORIGIN_ORCHESTRATOR).map((e) => ({ file: e.file, id: e.meta.id }));
+  // A file the engine does NOT re-author on a plain re-slice: one the orchestrator wrote, and one the engine wrote
+  // for a REPAIR round. The repair file is engine-authored but it is not derived from the plan — its rows are what
+  // one `--verify` run found open — so re-slicing has no basis to rewrite it and no business retiring it as "not
+  // in the plan". It never was in the plan; it is a record of a round that happened.
+  const isAdopted = (e) => e.meta.origin === TASK_ORIGIN_ORCHESTRATOR || e.meta.kind === REPAIR_KIND;
+  const orchestrated = extra.filter(isAdopted).map(adoptOrchestrated);
+  const stale = extra.filter((e) => !isAdopted(e)).map((e) => ({ file: e.file, id: e.meta.id }));
   const ordered = [...tasks, ...orchestrated].sort((a, b) => a.order - b.order);
   // A task whose file was refused must not appear in the queue as `todo`. It got the fresh task's default status
   // because nothing readable could be carried over — and that file may record `done`. Reading `todo` there is how
@@ -752,7 +782,7 @@ function chainMerged(ordered) {
 function matchFor(byId, task) {
   const found = byId.get(task.id);
   if (!found) return null;
-  return found.meta.origin === TASK_ORIGIN_ORCHESTRATOR ? null : found;
+  return (found.meta.origin === TASK_ORIGIN_ORCHESTRATOR || found.meta.kind === REPAIR_KIND) ? null : found;
 }
 
 function triageExisting(existing) {
@@ -807,12 +837,146 @@ function adoptOrchestrated(e) {
     // An orchestrator task declares its own artifact and its own nonce. Both are READ, never authored here: a
     // repair task the orchestrator added writes a page like any other task, and it must take part in the same
     // parallelism rule and the same one-sub-agent check as the engine's own.
+    kind: e.meta.kind || null,
+    cause: e.meta.cause || null,
+    repairRound: Number(e.meta.repairRound) || null,
     artifact: e.meta.writesTo || `orchestrator:${e.meta.id}`,
     writesTo: e.meta.writesTo || "",
     dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
     agentNonce: e.meta.agentNonce || "",
     file: e.file,
   };
+}
+
+// ---8<--- REPAIR: the rows `--verify` found open, cut into tasks the same way ---8<---
+//
+// A REPAIR TASK IS NOT A PLAN TASK, and the difference decides everything below. A plan task is derived from the
+// approved plan and is rewritten from it on every re-slice. A repair task is derived from ONE verify run: its rows
+// are the rows that run found open. Re-verifying does not rewrite it — it opens a NEW ROUND — so a repair file is
+// adopted on later slices rather than re-authored, and it is never retired for "not being in the plan", which it
+// never was.
+//
+// MERGED BY (PAGE, CAUSE), because the alternative is a folder nobody walks. Nineteen fields with the wrong names
+// are ONE defect with nineteen symptoms: nineteen tasks is nineteen sub-agent startups to make one edit each, and
+// the orchestrator that has to schedule them will group them anyway — which is the behaviour this whole design
+// removed. They are merged into one task, and split again only when the merged task outgrows the budget.
+export const REPAIR_ROUND_CAP = 3;
+const REPAIR_KIND = "repair";
+
+// The CAUSE is what a single sub-agent can fix in one pass. `unverified` is separated from `missing` first,
+// because they need opposite work: `missing` is a thing to build, `unverified` is a record to file about a thing
+// that may well be there. Beyond that the kind is read off the same row shapes the weights use.
+function causeOf(row) {
+  const label = String(row.deliverable || "");
+  const kind =
+    /—\s*\d+\s+fields?\b|^Fields?\s+—/.test(label) ? "fields"
+    : /^Handler\s+—/.test(label) ? "handlers"
+    : /business rules/i.test(label) ? "rules"
+    : /related list/i.test(label) ? "related-lists"
+    : /template\s*→/i.test(label) ? "template"
+    : /^Card action/i.test(label) ? "card-actions"
+    : "other";
+  return `${row.outcome === "unverified" ? "unverified" : "missing"}:${kind}`;
+}
+const CAUSE_TEXT = {
+  "missing:fields": "expected fields are not on the built page",
+  "missing:handlers": "ported handlers are not on the built page",
+  "missing:rules": "business rules the plan expects are not on the built page",
+  "missing:related-lists": "related lists the plan expects are not on the built page",
+  "missing:template": "the page is not on the template the plan names",
+  "missing:card-actions": "card actions the plan expects are not on the built page",
+  "missing:other": "machine-checked deliverables are not on the built page",
+  "unverified:fields": "the field rows could not be confirmed from what was filed",
+  "unverified:handlers": "the handler rows could not be confirmed from what was filed",
+  "unverified:rules": "the rule rows could not be confirmed from what was filed",
+  "unverified:related-lists": "the related-list rows could not be confirmed from what was filed",
+  "unverified:template": "the template row could not be confirmed from what was filed",
+  "unverified:card-actions": "the card-action rows could not be confirmed from what was filed",
+  "unverified:other": "machine rows could not be confirmed from what was filed",
+};
+const causeText = (cause) => CAUSE_TEXT[cause] || cause;
+
+// The round a (page, cause) is already on, read off the files in the folder. Rounds are counted per CAUSE and not
+// per run: a cause fixed in round 1 and back in round 3 has been attempted twice, which is the number the cap is
+// about. A capped cause is PARKED, not silently re-emitted — three sub-agents have failed at it and a fourth is
+// not the answer; it is a decision for the user.
+function repairRounds(existing) {
+  const rounds = new Map();
+  for (const e of existing) {
+    if (e.meta?.kind !== REPAIR_KIND) continue;
+    const key = `${e.meta.pageKey} ${e.meta.cause || ""}`;
+    const n = Number(e.meta.repairRound) || 1;
+    const prev = rounds.get(key);
+    if (!prev || n >= prev.round) rounds.set(key, { round: n, status: e.meta.status || S_TODO });
+  }
+  return rounds;
+}
+// A ROUND IS AN ATTEMPT, NOT A VERIFY RUN. Re-verifying an unchanged page must not open a new round: the rows are
+// still the work of the round already sitting in the folder, and counting verify runs would burn the cap without a
+// single sub-agent having run. A new round opens only once the previous one was CLOSED and the rows came back —
+// which is the repeat failure the cap is actually about. `blocked` does not auto-reopen either: a sub-agent that
+// said why it could not proceed is answered by a person, not by an identical fourth task.
+const ROUND_ATTEMPTED = new Set([S_DONE, S_NA]);
+
+// Build the repair tasks one verify run calls for. `verifyPages` is `renderVerify`'s `pages` map: each entry
+// carries the rows that run left open, with the text the reader saw rather than a paraphrase of it.
+export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
+  const B = budgetOf(opts);
+  const identity = pageIdentities(result);
+  const rounds = repairRounds(existing);
+  const tasks = [];
+  const parked = [];
+  const pending = [];
+  for (const [pageKey, page] of Object.entries(verifyPages)) {
+    // A row the VERIFIER owns is not a build defect: nobody filed the record. It still needs a task, and the
+    // cause already says which of the two it is, so both go through the same grouping.
+    const byCause = new Map();
+    for (const row of page.openRows || []) {
+      const cause = causeOf(row);
+      if (!byCause.has(cause)) byCause.set(cause, []);
+      byCause.get(cause).push(row);
+    }
+    for (const [cause, rows] of byCause) {
+      const prior = rounds.get(`${pageKey} ${cause}`);
+      if (prior && !ROUND_ATTEMPTED.has(prior.status)) {
+        pending.push({ pageKey, cause, rows: rows.length, round: prior.round, status: prior.status });
+        continue;
+      }
+      const round = (prior?.round || 0) + 1;
+      if (round > REPAIR_ROUND_CAP) {
+        parked.push({ pageKey, cause, rows: rows.length, rounds: REPAIR_ROUND_CAP });
+        continue;
+      }
+      const identityKey = identity.get(pageKey) || pageKey;
+      const artifact = `page:${identityKey}`;
+      const srcRows = rows.map((r) => ({
+        label: r.deliverable, groupTitle: `Repair — ${causeText(cause)}`,
+        vk: r.outcome === "missing" ? { type: "repair" } : null, na: null,
+        weight: B.row, status: r.status, evidence: r.evidence,
+      }));
+      chunkRows(srcRows, B).forEach((chunkSrc, i) => {
+        const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
+        const t = {
+          id, pageKey, artifact, writesTo: writesToOf(artifact),
+          anchor: `repair-${cause}-round${round}${i ? `#${i + 1}` : ""}`,
+          kind: REPAIR_KIND, cause, repairRound: round,
+          group: `Repair round ${round} — ${causeText(cause)}`,
+          title: `Repair round ${round} — ${causeText(cause)}`,
+          groups: [...new Set(chunkSrc.map((r) => r.groupTitle))],
+          order: Number.MAX_SAFE_INTEGER - 1, phase: DEFAULT_PHASE,
+          origin: TASK_ORIGIN_ENGINE, status: S_TODO,
+          rows: chunkSrc.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? "repair" : null, na: null,
+            status: r.status, evidence: r.evidence })),
+          weight: chunkSrc.reduce((a, r) => a + r.weight, 0),
+          gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
+          rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
+        };
+        t.file = `task-repair-round${round}-${slugify(`${pageKey}-${cause}`)}-${id}.md`;
+        tasks.push(t);
+      });
+    }
+  }
+  return { tasks, parked, pending };
 }
 
 // ---8<--- I/O ---8<---
@@ -830,6 +994,27 @@ function readExisting(dir) {
 // Writes the folder and returns what it wrote. Engine tasks are rewritten (the rows are the plan's), orchestrator
 // tasks are left exactly as they are, a file the engine could not read in full is never touched, and nothing is
 // ever deleted.
+// Write the repair round one `--verify` run calls for. It ADDS to the folder: the plan tasks already there are
+// untouched, and a repair file from an earlier round is a record of that round, never overwritten.
+export function syncRepairDir(dir, result, verifyPages, opts = {}) {
+  const existing = readExisting(dir);
+  const { tasks, parked, pending } = buildRepairTasks(result, verifyPages, opts, existing);
+  const onDisk = new Set(existing.map((e) => e.file));
+  fs.mkdirSync(dir, { recursive: true });
+  const written = [];
+  for (const t of tasks) {
+    // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
+    // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
+    if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
+    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null }));
+    written.push(t);
+  }
+  // The index is derived from the FILES, so re-deriving it now picks the new repair files up with everything else.
+  const merged = mergeTaskSet(buildTaskSet(result, opts), readExisting(dir));
+  fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+  return { written, parked, pending, set: merged };
+}
+
 export function syncTaskDir(dir, result, opts = {}) {
   const merged = mergeTaskSet(buildTaskSet(result, opts), readExisting(dir));
   const untouchable = new Set(merged.blocked.map((b) => b.file));

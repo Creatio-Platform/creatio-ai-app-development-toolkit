@@ -55,7 +55,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
-import { syncTaskDir, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
+import { syncTaskDir, syncRepairDir, REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2542,6 +2542,44 @@ function runTaskMode(result, dir, opts) {
   return lines.join("\n") + "\n";
 }
 
+// `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
+// Merged by (page, cause) on purpose: nineteen fields with the wrong names are one defect with nineteen symptoms,
+// and nineteen tasks is nineteen sub-agent startups to make one edit each. A cause that has already had
+// REPAIR_ROUND_CAP rounds is PARKED rather than re-emitted — three sub-agents have failed at it, and a fourth is
+// not the answer; it is a decision for the user.
+function runRepairMode(result, dir, verifyRes, opts) {
+  if (planGaps(result).length) {
+    return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this run has PLAN-level gaps, which no build round can close."
+      + " Fix the plan first; repairing against it would spend sub-agents on rows the plan itself cannot state.\n";
+  }
+  let res;
+  try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
+  catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
+  const lines = [];
+  if (res.written.length) {
+    const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort();
+    lines.push(`migrate.mjs: wrote ${res.written.length} repair task(s) (round ${byRound.join(", ")}) to ${dir}`
+      + ` — the open rows of THIS verify run, merged by (page, cause). Hand ONE to a sub-agent, same contract as a`
+      + ` build task, then re-verify. Re-verifying opens a NEW round; it does not rewrite these files.`);
+  }
+  if (res.pending.length) {
+    const what = res.pending.map((p) => `${p.pageKey}: ${p.cause} (round ${p.round}, ${p.status})`).join(" | ");
+    lines.push(`migrate.mjs: ${res.pending.length} cause(s) already have an OPEN repair task — ${what}. No new round`
+      + ` was opened for them: a round is an ATTEMPT, not a verify run, so re-verifying an unchanged page does not`
+      + ` manufacture one (and would otherwise burn the ${REPAIR_ROUND_CAP}-round cap with nobody having run).`);
+  }
+  if (!res.written.length && !res.parked.length && !res.pending.length) {
+    lines.push(`migrate.mjs: no repair task written to ${dir} — this verify run left no row open on any page.`);
+  }
+  if (res.parked.length) {
+    const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
+    lines.push(`migrate.mjs: ⛔ ${res.parked.length} cause(s) PARKED after ${REPAIR_ROUND_CAP} rounds — ${what}.`
+      + ` No further repair task is written for them: three sub-agents have already failed at each, so a fourth is`
+      + ` not the answer. Take these to the user — the plan, the stand or the expectation is wrong, not the build.`);
+  }
+  return lines.join("\n") + "\n";
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (verifyMode) {
@@ -2558,6 +2596,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
   const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
+  let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
@@ -2566,8 +2605,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // A second mode flag alongside `--tasks` is a LOUD stop, not a silent precedence win. Every other mode is a
   // print; this one WRITES a folder, so "the first flag matched wins" would answer `--plan --tasks ./d` with a plan
   // on stdout and no folder — and a caller reading the exit code would believe the tasks were sliced.
+  // `--verify --tasks <dir>` is the ONE legal pairing, and it is not two modes running at once: `--verify` is
+  // still the mode, and the folder is where its OPEN ROWS are written as repair tasks. Everything else still
+  // writes a folder while the other flag prints an artifact, so one of the two would silently not happen.
   if (tasksMode) {
-    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode], ["--stubs", stubsMode], ["--verify", verifyMode]]
+    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode], ["--stubs", stubsMode]]
       .filter(([, on]) => on).map(([name]) => name);
     if (alsoAsked.length) fail(`\`--tasks\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES a folder while those print an artifact, so one of the two would silently not happen. Run them as separate commands.`);
   }
@@ -2582,7 +2624,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
   // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
   // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
-  if (tasksMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
+  if (tasksMode && !verifyMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -2634,7 +2676,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // hit a filesystem error (`--tasks ./notes.md` ⇒ `ENOTDIR`, a read-only parent, a missing parent). Every sibling
   // FS operation here routes its failure through `fail()`; without this guard the operator — and the orchestrator
   // that parses stderr — got a raw Node stack trace instead of the `migrate.mjs: …` diagnostic.
-  else if (tasksMode) {
+  // `--verify` is checked BEFORE `--tasks`: with both, verify is the MODE and the folder is only where its open
+  // rows are written. Matched the other way round, `--verify --tasks <dir>` re-sliced the plan and printed no
+  // table at all — the caller asked for a verification and got a task folder.
+  else if (tasksMode && !verifyMode) {
     try { output = runTaskMode(result, tasksDir, checklistOpts(manifest)); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
@@ -2651,6 +2696,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     verifyRes = renderVerify(result, checklistOpts(manifest), built);
     output = verifyRes.markdown + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
+    if (tasksMode) repairNote = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
   }
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
@@ -2670,8 +2716,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
-  else if (tasksMode) label = "build tasks";
   else if (verifyMode) label = "verification";
+  else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
@@ -2680,6 +2726,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     process.stdout.write(output);
   }
+  // The repair note goes out AFTER the table (or the wrote-to-file line), because it is about what was written
+  // beside that artifact, not about the artifact itself.
+  if (repairNote) process.stdout.write(repairNote);
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");

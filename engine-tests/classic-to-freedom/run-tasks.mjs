@@ -13,7 +13,8 @@ import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-mig
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
-  ARTIFACT_SCAFFOLD, ARTIFACT_REFS, REFS_DIR } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  ARTIFACT_SCAFFOLD, ARTIFACT_REFS, REFS_DIR, buildRepairTasks, syncRepairDir,
+  REPAIR_ROUND_CAP } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -878,6 +879,149 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+console.log("\n===== repair: the rows `--verify` left open, merged by (page, cause) =====");
+// `--verify` publishes its open rows per page with the SAME text the reader saw. A repair task is cut from those,
+// not from the plan — so it is never rewritten by a re-slice and never retired for "not being in the plan".
+const openRow = (n, deliverable, outcome = "missing", status = "❌ MISSING", evidence = "not on the built page") =>
+  ({ n, deliverable, status, evidence, outcome, owner: "builder" });
+// Shaped like what `renderVerify` actually publishes: the handlers are ONE ROW EACH (that is where a cause with
+// many symptoms really comes from), while the fields arrive as a single coverage row reporting the shortfall.
+const VERIFY_PAGES = {
+  main: { missing: 18, unverified: 1, complete: false, openRows: [
+    ...Array.from({ length: 16 }, (_, i) => openRow(i + 1, `Handler — \`onThing${i}\``)),
+    openRow(17, "Fields — 19 expected", "missing", "❌ MISSING", "0 of 19 matched on the built page"),
+    openRow(18, "Business rules × 3"),
+    openRow(19, "`creatio-ui-guidelines` skill invoked on EVERY built page", "unverified", "⚠ unverified", "no record filed"),
+  ] },
+};
+check("repair (anti-vacuity): the fixture really carries 16 rows of ONE cause plus three of other causes — otherwise 'merged by cause' and 'not one task per row' are the same assertion",
+  () => VERIFY_PAGES.main.openRows.filter((r) => /^Handler —/.test(r.deliverable)).length === 16
+    && new Set(VERIFY_PAGES.main.openRows.map((r) => r.outcome)).size === 2,
+  () => VERIFY_PAGES.main.openRows.length);
+check("repair: 16 handlers missing from one page is ONE task, not 16 — a defect with many symptoms is one defect, and 16 tasks is 16 sub-agent startups to make one edit each, which the orchestrator would group anyway",
+  () => {
+    const { tasks } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []);
+    const h = tasks.filter((t) => t.cause === "missing:handlers");
+    return h.length === 1 && h[0].rows.length === 16;
+  }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => `${t.cause}:${t.rows.length}`));
+check("repair: a merged task that outgrows the budget is CUT like any other — merging by cause is not a licence to hand one sub-agent unbounded work",
+  () => {
+    const many = { main: { openRows: Array.from({ length: 60 }, (_, i) => openRow(i + 1, `Handler — \`m${i}\``)) } };
+    const { tasks } = buildRepairTasks(RUN, many, OPTS, []);
+    return tasks.length > 1 && tasks.every((t) => t.cause === "missing:handlers")
+      && new Set(tasks.map((t) => t.id)).size === tasks.length;
+  }, () => buildRepairTasks(RUN, { main: { openRows: Array.from({ length: 60 }, (_, i) => openRow(i + 1, `Handler — \`m${i}\``)) } }, OPTS, []).tasks.map((t) => t.rows.length));
+check("repair: DIFFERENT causes are different tasks — a missing handler and an unfiled evidence record need opposite work, and `unverified` is separated from `missing` first because one is a thing to build and the other a record to file",
+  () => {
+    const { tasks } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []);
+    const causes = tasks.map((t) => t.cause);
+    return new Set(causes).size === causes.length && causes.length === 4
+      && causes.some((c) => c.startsWith("unverified:")) && causes.some((c) => c === "missing:fields");
+  }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => t.cause));
+check("repair: a repair task WRITES the page's artifact, so it is chained behind the build tasks for that page — a repair that raced the build it repairs is the same clobber as two builders",
+  () => {
+    const { tasks } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []);
+    return tasks.every((t) => t.writesTo === taskAt(SET, "main", DRIFT_GROUP).writesTo);
+  }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => t.writesTo));
+check("repair: the rendered file shows what `--verify` ACTUALLY SAW per row — a sub-agent sent to fix a row needs the gate's own status and evidence, because re-describing it is how a round gets spent on a row that was never the problem",
+  () => {
+    const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const text = renderTaskFile(t, SET);
+    return /\| # \| Deliverable \| `--verify` said \| Evidence it read \|/.test(text)
+      && text.includes("❌ MISSING") && text.includes("not on the built page");
+  }, () => renderTaskFile(buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0], SET));
+check("repair: the file says it is a REPAIR round and carries NO spec slice — the deliverable is the failing row, not the page's whole design, and it states that a row open because the PLAN is wrong is a proposal, never a row closed by asserting it",
+  () => {
+    const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const text = renderTaskFile(t, SET);
+    return /REPAIR — round 1 of at most 3/.test(text) && /no spec slice here on purpose/i.test(text)
+      && /proposal to the user/.test(text);
+  }, () => renderTaskFile(buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0], SET));
+check("repair: the round is read off the FOLDER, not remembered — a cause already repaired once comes back as round 2, because counting rounds from a session's memory is how a capped cause quietly gets another sub-agent",
+  () => {
+    const first = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.find((t) => t.cause === "missing:handlers");
+    const asFile = { file: first.file, notes: "", malformed: null,
+      meta: { id: first.id, status: "done", origin: "engine", pageKey: "main", kind: "repair",
+        cause: first.cause, repairRound: "1" } };
+    const second = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile]).tasks.find((t) => t.cause === "missing:handlers");
+    return first.repairRound === 1 && second.repairRound === 2 && first.id !== second.id;
+  }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => `${t.cause}:r${t.repairRound}`));
+check(`repair: after ${REPAIR_ROUND_CAP} rounds the cause is PARKED and no further task is written — three sub-agents have failed at it, so a fourth is not the answer; it is a decision for the user`,
+  () => {
+    const prior = [];
+    for (let r = 1; r <= REPAIR_ROUND_CAP; r++) {
+      prior.push({ file: `task-repair-round${r}-main-x.md`, notes: "", malformed: null,
+        meta: { id: `r${r}`, status: "done", origin: "engine", pageKey: "main", kind: "repair",
+          cause: "missing:handlers", repairRound: String(r) } });
+    }
+    const { tasks, parked } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, prior);
+    return !tasks.some((t) => t.cause === "missing:handlers")
+      && parked.some((p) => p.cause === "missing:handlers" && p.pageKey === "main" && p.rows === 16)
+      && tasks.some((t) => t.cause === "missing:fields");   // other causes are NOT capped by this one
+  }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => t.cause));
+check("repair: a repair file is ADOPTED by a later plain re-slice — never rewritten (its rows are one verify run's, not the plan's) and never reported stale (it never was in the plan)",
+  () => {
+    const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const asFile = { file: t.file, notes: "fixed 12 of 19", malformed: null,
+      meta: { id: t.id, status: "in-progress", origin: "engine", pageKey: "main", kind: "repair",
+        cause: t.cause, repairRound: "1", writesTo: t.writesTo } };
+    const m = mergeTaskSet(SET, [asFile]);
+    const got = m.tasks.find((x) => x.id === t.id);
+    return got && got.status === "in-progress" && got.notes === "fixed 12 of 19"
+      && (m.stale || []).length === 0 && (m.blocked || []).length === 0;
+  }, () => mergeTaskSet(SET, [{ file: "x.md", notes: "", malformed: null,
+      meta: { id: "zz", status: "todo", origin: "engine", pageKey: "main", kind: "repair", cause: "c", repairRound: "1" } }]));
+check("repair: an adopted repair file joins the WRITE CHAIN of the page it repairs — it declares the artifact, so the merged queue sequences it behind the build tasks rather than beside them",
+  () => {
+    const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const asFile = { file: t.file, notes: "", malformed: null,
+      meta: { id: t.id, status: "todo", origin: "engine", pageKey: "main", kind: "repair",
+        cause: t.cause, repairRound: "1", writesTo: t.writesTo, order: "999" } };
+    const m = mergeTaskSet(SET, [asFile]);
+    const got = m.tasks.find((x) => x.id === t.id);
+    const lastBuild = m.tasks.filter((x) => x.writesTo === t.writesTo && x.id !== t.id).at(-1);
+    return got.dependsOn.includes(lastBuild.id);
+  }, () => "see the merged queue");
+check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",
+  () => {
+    const dir = tmp("repair");
+    syncTaskDir(dir, RUN, OPTS);
+    const before = fs.readdirSync(dir).length;
+    const first = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const after = fs.readdirSync(dir).length;
+    const again = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const settled = fs.readdirSync(dir).length;
+    const idx = readIndex(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    return first.written.length === 4 && after === before + 4
+      && again.written.length === 0 && again.pending.length === 4 && settled === after
+      && /Repair round 1/.test(idx);
+  }, () => {
+    const dir = tmp("repair-dbg");
+    syncTaskDir(dir, RUN, OPTS);
+    const first = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const again = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const out = { wrote: first.written.map((t) => t.file), again: again.written.map((t) => t.file),
+      pending: again.pending };
+    fs.rmSync(dir, { recursive: true, force: true });
+    return out;
+  });
+check("repair: a round that was ATTEMPTED and came back opens the next one — `done` with the rows still open is the repeat failure the cap is about, while `todo` / `in-progress` / `blocked` are the round that is still somebody's work",
+  () => {
+    const first = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.find((t) => t.cause === "missing:handlers");
+    const asFile = (status) => ({ file: first.file, notes: "", malformed: null,
+      meta: { id: first.id, status, origin: "engine", pageKey: "main", kind: "repair",
+        cause: first.cause, repairRound: "1" } });
+    const opened = ["done", "n/a"].every((st) =>
+      buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]).tasks.some((t) => t.cause === "missing:handlers"));
+    const held = ["todo", "in-progress", "blocked"].every((st) => {
+      const r = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]);
+      return !r.tasks.some((t) => t.cause === "missing:handlers")
+        && r.pending.some((p) => p.cause === "missing:handlers" && p.status === st);
+    });
+    return opened && held;
+  }, () => "see buildRepairTasks with each recorded status");
+
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");
 const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
 {
@@ -933,6 +1077,51 @@ const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", 
       && planGaps(gapRun).every((g) => (run.stdout || "").includes(g))
       && /re-run `--plan`/.test(run.stdout || ""),
     () => run.stdout);
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round =====");
+{
+  const base = tmp("cli-repair");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const planFiles = fs.readdirSync(dir).length;
+  // An EMPTY built payload: every machine row is open, so the verify run has real rows to cut a round from.
+  const builtFile = path.join(base, "built.json");
+  // `false` = the page is genuinely absent, which is a valid payload entry and a hard MISSING on every row.
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
+  check("migrate.mjs --verify --tasks: the ONE legal pairing — `--verify` is still the mode and the folder is where its OPEN ROWS are written, so the table is printed AND the repair round lands",
+    () => run.status === 2 && /Plan-vs-Done — VERIFIED/.test(run.stdout || "")
+      && /wrote \d+ repair task\(s\) \(round 1\)/.test(run.stdout || "")
+      && fs.readdirSync(dir).length > planFiles,
+    () => ({ status: run.status, stdout: (run.stdout || "").slice(-800), ls: fs.readdirSync(dir) }));
+  check("migrate.mjs --verify --tasks: the repair files are engine-authored REPAIR tasks, named by round and cause, and they declare the page artifact they write so the queue sequences them behind that page's build",
+    () => {
+      const repairs = fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-round1-"));
+      return repairs.length > 0 && repairs.every((f) => {
+        const { meta } = parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8"));
+        return meta.kind === "repair" && meta.repairRound === "1" && meta.origin === "engine"
+          && meta.cause && meta.writesTo.startsWith("page:");
+      });
+    }, () => fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-")));
+  const again = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
+  check("migrate.mjs --verify --tasks: re-verifying the same unchanged page opens NO second round and says why — a round is an attempt, and counting verify runs would burn the cap with nobody having run",
+    () => /already have an OPEN repair task/.test(again.stdout || "")
+      && !/round 2/.test(again.stdout || "")
+      && fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-round2-")).length === 0,
+    () => (again.stdout || "").slice(-600));
+  check("migrate.mjs --verify --tasks: a plain re-slice ADOPTS the repair files — never rewritten (their rows are one verify run's, not the plan's) and never reported stale (they never were in the plan)",
+    () => {
+      const one = fs.readdirSync(dir).find((f) => f.startsWith("task-repair-round1-"));
+      const p1 = path.join(dir, one);
+      fs.writeFileSync(p1, fs.readFileSync(p1, "utf8").replace("status: todo", "status: in-progress") + "\nfixed 3 so far\n");
+      const before = fs.readFileSync(p1, "utf8");
+      const res = cliTasks(["--tasks", dir], MANIFEST);
+      return fs.readFileSync(p1, "utf8") === before
+        && !/no longer in the plan/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"))
+        && res.status === 0;
+    }, () => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-900));
   fs.rmSync(base, { recursive: true, force: true });
 }
 

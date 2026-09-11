@@ -434,7 +434,25 @@ No task produces it, and a builder must not assemble its own verdict, so:
 
 Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
 
-**7.5 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
+**7.5 Repair — the rows step 8 left open come back as tasks, not as a loop you run yourself.**
+`node engine/migrate.mjs <manifest> --verify --built built.json --tasks <migration-folder>/build-tasks` prints
+step 8's table AND writes that run's OPEN rows into the same folder as repair tasks. They are handed to
+sub-agents exactly like build tasks — same contract, same one-sub-agent rule, and they declare the page artifact
+they write, so the queue sequences them behind that page's build rather than beside it.
+
+- **Merged by (page, cause).** Sixteen handlers missing from one page is ONE task, not sixteen: a defect with
+  many symptoms is one defect, and sixteen tasks is sixteen sub-agent startups to make one edit each. A merged
+  task that outgrows the budget is cut like any other.
+- **A round is an ATTEMPT, not a verify run.** Re-verifying an unchanged page opens no second round — the rows
+  are still the work of the round already in the folder. A new round opens only after the previous one was closed
+  and the rows came back.
+- **Three rounds, then PARKED.** After three attempts at one cause the engine writes no fourth task and says so.
+  Take it to the user: at that point the plan, the stand or the expectation is wrong, not the build. Do not
+  hand-write a fourth task to get around this.
+- **What is YOURS in repair** is only what no sub-agent can do: proposing a PLAN change (to the user, recorded in
+  `decisions.md`), rolling back, and reporting. The rows themselves are the engine's to schedule.
+
+**7.6 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
 own sections → replacing/extension deltas → backend). Each section gets its own slice, its own task folder and its
 own step 8 before the next one starts.
 
