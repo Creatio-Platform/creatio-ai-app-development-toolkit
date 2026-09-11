@@ -4328,7 +4328,7 @@ check("ENG-94714: …and the RECORD page's gate is untouched by it — this is t
 check("ENG-94714: the blocked list page still RENDERS its partial reading, with the verdict stated in the List page block rather than as a plan-wide banner",
   () => { const spec = renderPlan(svBadRun, {});
     return /⛔ \*\*The list page is NOT approvable/.test(spec) && /### List page/.test(spec); },
-  () => renderPlan(svBadRun, {}).split(String.fromCharCode(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
+  () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => /List page|approvable/.test(l)).slice(0, 6));
 check("ENG-94714: a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
 
@@ -4367,7 +4367,7 @@ check("ENG-94714 review 1: …and the full `conditions` set rides along with it,
   () => (svOpenList?.rowActions || []).map((x) => x.conditions));
 check("ENG-94714 review 1: the Row actions TABLE renders that property — while it was being dropped the cell read \"on `visible`\" for every action, which instructs a builder to hide the control instead of greying it",
   () => /`IsQualifyEnabled` on `enabled`/.test(svOpenSpec) && !/`IsQualifyEnabled` on `visible`/.test(svOpenSpec),
-  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /IsQualifyEnabled/.test(l)));
+  () => svOpenSpec.split(String.fromCodePoint(10)).filter((l) => /IsQualifyEnabled/.test(l)));
 check("ENG-94714 review 1 ANTI-VACUITY: a `visible`-bound row action still renders \"on `visible`\" — the fix carried the real property through, it did not relabel the cell",
   () => { const ra = (svList.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
     return ra?.conditionProperty === "visible"
@@ -4401,7 +4401,7 @@ check("ENG-94714 review 1: both open items reach the PLAN through the shared ⚠
   () => /#### ⚠ Confirm before I build/.test(svOpenSpec)
     && /\*\*\[list-section-element\]\*\* section element: SectionSearchHyperlink/.test(svOpenSpec)
     && /\*\*\[list-section-element\]\*\* section element: OrphanExportButton/.test(svOpenSpec),
-  () => svOpenSpec.split(String.fromCharCode(10)).filter((l) => /list-section-element/.test(l)));
+  () => svOpenSpec.split(String.fromCodePoint(10)).filter((l) => /list-section-element/.test(l)));
 check("ENG-94714 review 1 ANTI-VACUITY: the elements the list vocabulary DOES read are not swept into `openItems` — the healthy fixture's button, row action and grid resolve to their regions and raise no section-element question at all",
   () => (svRun.section?.sectionView?.openItems || []).length === 0
     && !(svList.needsDecision || []).some((x) => x.kind === "list-section-element"),

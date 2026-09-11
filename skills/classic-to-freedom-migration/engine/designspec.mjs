@@ -474,9 +474,12 @@ function listCommandBarTable(actions) {
     // Same rule as the Row actions table above: the bound property is part of the condition, not a detail. A
     // button may carry BOTH (the real `SagRequestCombinedSectionButton` binds one method to `visible` and another
     // to `enabled`), so every one this run resolved is rendered rather than only the first.
-    const cond = a.conditions?.length
-      ? a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state"
-      : (a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand");
+    let cond = "⚠ none declared — confirm on-stand";
+    if (a.conditions?.length) {
+      cond = a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state";
+    } else if (a.condition) {
+      cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
+    }
     const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
     L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
