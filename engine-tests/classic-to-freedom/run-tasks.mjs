@@ -12,7 +12,8 @@ import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
-  taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
+  ARTIFACT_SCAFFOLD, ARTIFACT_REFS, REFS_DIR } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -58,16 +59,29 @@ const C1_BUNDLE = { entity: "C1", seed: SEED,
 //   `extraChild` adds a SECOND child page  → a page INSERTED into the plan (ids must not renumber);
 //   `extraField` adds one more form field  → a task's ROW SET changes while the task itself stays the same
 //                                            (the drift signal), with no page inserted at all.
-const mainBody = ({ extraChild, extraField }) => {
+//   `renameField` renames that same field    → the row LABELS and the counts are untouched and only the verifier
+//                                              payload moves, which is the drift a label-only digest missed;
+//   `bulk` adds many fields and handlers      → the `page:main` bucket outgrows the budget, so the chunking path
+//                                              is exercised instead of the monolithic one.
+const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
   const dets = ['R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}}'];
   const items = ['{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}}'];
   if (extraChild) {
     dets.push('R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}');
     items.push('{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}}');
   }
-  items.push('{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}');
+  const f1 = renameField ? "MainRenamed" : "MainF";
+  items.push(`{operation:"insert",name:"${f1}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${f1}"}}`);
   if (extraField) items.push('{operation:"insert",name:"MainF2",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF2"}}');
-  return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]};});`;
+  for (let i = 0; bulk && i < bulk; i++) {
+    items.push(`{operation:"insert",name:"BulkF${i}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"BulkF${i}"}}`);
+  }
+  // Handlers are the heaviest row kind per unit, so a handful of them is what pushes a bucket over the budget
+  // without needing a page body so large it stops resembling a real one.
+  const methods = bulk
+    ? ",methods:{" + Array.from({ length: 8 }, (_, i) => `onBulk${i}:function(){return this.get("x");}`).join(",") + "}"
+    : "";
+  return `define("MPage",[],function(){return{entitySchemaName:"M",details:{${dets.join(",")}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},${items.join(",")}]${methods}};});`;
 };
 const PLAN_META = { scope: "single-section", environment: "test", package: "P → UsrM", approach: "Parallel rebuild",
   whatItDoes: "M register.", sectionSchema: "MSection", listTemplate: "ListPageV3", formTemplate: "FormPageTemplate" };
@@ -103,11 +117,38 @@ const MANIFEST3 = manifestOf({ extraField: true });
 const OPTS3 = checklistOpts(MANIFEST3);
 const RUN3 = runMigration(MANIFEST3);
 const SET3 = buildTaskSet(RUN3, OPTS3);
-const DRIFT_GROUP = "Form — Coverage (verified)";
+// `page:main` is where every group that writes the main form page now lands, so it is the task a changed
+// deliverable drifts under. The old per-group name (`Form — Coverage (verified)`) is one of the groups INSIDE it.
+const DRIFT_GROUP = "Page build";
+const SCAFFOLD_LABEL = "Scaffolding";
 
-const keysOf = (set) => [...new Set(set.tasks.map((t) => t.pageKey))];
+// D — a field RENAMED and nothing else. The layout row still reads `Side profile — 1 field` and the coverage row
+// still reads `Fields — 1 expected`: the caption and the count are both untouched, and only the verifier's expected
+// NAMES move. Digesting labels alone reported no drift here, on exactly the change a built page must be re-checked
+// against, so this fixture exists to keep that hole closed.
+const MANIFEST4 = manifestOf({ renameField: true });
+const OPTS4 = checklistOpts(MANIFEST4);
+const RUN4 = runMigration(MANIFEST4);
+const SET4 = buildTaskSet(RUN4, OPTS4);
+
+// E — the same plan grown past the budget, so `page:main` is CUT into chunks. Everything about chunking below is
+// vacuous on a plan small enough to stay monolithic, which manifests A-D all are.
+const MANIFEST5 = manifestOf({ bulk: 40 });
+const OPTS5 = checklistOpts(MANIFEST5);
+const RUN5 = runMigration(MANIFEST5);
+const SET5 = buildTaskSet(RUN5, OPTS5);
+// F — E with ONE more field. Under count-derived chunk numbering every chunk after the first shifts and every
+// status recorded against them orphans; under a structural anchor the chunks keep their ids.
+const MANIFEST6 = manifestOf({ bulk: 41 });
+const SET6 = buildTaskSet(runMigration(MANIFEST6), checklistOpts(MANIFEST6));
+
+// The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
+const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
+const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
+const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
+const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
 const readIndex = (dir) => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
 
@@ -131,27 +172,145 @@ check("fixture: manifest C changes ONE task's deliverable rows and NO page — s
     && taskAt(SET3, "main", DRIFT_GROUP).rowsDigest !== taskAt(SET, "main", DRIFT_GROUP).rowsDigest,
   () => ({ a: taskAt(SET, "main", DRIFT_GROUP), c: taskAt(SET3, "main", DRIFT_GROUP) }));
 
-console.log("\n===== buildTaskSet: one task per (pageKey, group), rows verbatim =====");
-check("buildTaskSet: there is EXACTLY one task per (pageKey, group) of `checklistGroups` — no group without a task, no task without a group, nothing invented and nothing collapsed",
+console.log("\n===== buildTaskSet: one task per ARTIFACT, rows verbatim, nothing lost =====");
+check("buildTaskSet: EVERY plan row lands in exactly one task — bucketing by artifact regroups who builds a row and must never drop one or hand the same one to two sub-agents",
   () => {
-    const byName = (a, b) => a.localeCompare(b);
-    const gKeys = GROUPS.map((g) => `${g.pageKey} ${g.baseTitle}`).sort(byName);
-    const tKeys = SET.tasks.map((t) => `${t.pageKey} ${t.group}`).sort(byName);
-    return gKeys.length === tKeys.length && new Set(tKeys).size === tKeys.length && gKeys.every((k, i) => k === tKeys[i]);
-  }, () => ({ groups: GROUPS.map((g) => `${g.pageKey}·${g.baseTitle}`), tasks: SET.tasks.map((t) => `${t.pageKey}·${t.group}`) }));
-check("buildTaskSet: a task's rows are its group's rows VERBATIM and in the same order — the task carries what the plan says and adds nothing, so nothing can be in a task that `--verify` will not later ask about",
-  () => GROUPS.every((g) => {
-    const t = taskAt(SET, g.pageKey, g.baseTitle);
-    return t && t.rows.length === g.rows.length && t.rows.every((r, i) => r.label === g.rows[i].label);
-  }), () => GROUPS.filter((g) => {
-    const t = taskAt(SET, g.pageKey, g.baseTitle);
-    return !t || t.rows.length !== g.rows.length || t.rows.some((r, i) => r.label !== g.rows[i].label);
-  }).map((g) => ({ group: `${g.pageKey}·${g.baseTitle}`, planRows: g.rows.map((r) => r.label) })));
-check("buildTaskSet: `gatedRows` / `naRows` are COUNTED off the plan's own rows, not restated — each equals the number of rows carrying a `vk` / an `na` in the matching group",
-  () => GROUPS.every((g) => {
-    const t = taskAt(SET, g.pageKey, g.baseTitle);
-    return t.gatedRows === g.rows.filter((r) => r.vk).length && t.naRows === g.rows.filter((r) => r.na).length;
-  }), () => SET.tasks.map((t) => ({ t: `${t.pageKey}·${t.group}`, gated: t.gatedRows, na: t.naRows })));
+    const planRows = GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey} ${g.baseTitle} ${r.label}`)).sort();
+    const taskRows = pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey} ${r.group} ${r.label}`)).sort();
+    return planRows.length === taskRows.length && planRows.every((k, i) => k === taskRows[i]);
+  }, () => ({ plan: GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey}·${g.baseTitle}·${r.label}`)).length,
+    tasks: pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey}·${r.group}·${r.label}`)).length }));
+check("buildTaskSet: a row keeps the plan GROUP it was read from — a task now spans several groups, so without it the file would no longer say which part of the plan a deliverable belongs to",
+  () => pageTasks(SET).every((t) => t.rows.every((r) => GROUPS.some((g) => g.pageKey === t.pageKey && g.baseTitle === r.group
+    && g.rows.some((x) => x.label === r.label)))),
+  () => pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey}·${r.group}`)));
+check("buildTaskSet: rows inside a task are in the plan's own build order — bucketing changes WHO builds a row, never WHEN it is built relative to the others, so the Confirm worklist still precedes the layout it gates",
+  () => {
+    const t = taskAt(SET, "main", DRIFT_GROUP);
+    const seen = t.rows.map((r) => r.group);
+    return seen.indexOf("⚠ Confirm worklist") === 0 && seen.lastIndexOf("⚠ Confirm worklist") < seen.indexOf("Form — Layout (by tab/region)");
+  }, () => taskAt(SET, "main", DRIFT_GROUP).rows.map((r) => `${r.group} :: ${r.label.slice(0, 40)}`));
+check("buildTaskSet: `gatedRows` / `naRows` are COUNTED off the task's own rows, not restated — each equals the number of rows carrying a `vk` / an `na`",
+  () => SET.tasks.every((t) => t.gatedRows === t.rows.filter((r) => r.vk).length && t.naRows === t.rows.filter((r) => r.na).length),
+  () => SET.tasks.map((t) => ({ t: `${t.pageKey}·${t.group}`, gated: t.gatedRows, na: t.naRows })));
+
+console.log("\n===== artifacts: two tasks never write the same thing =====");
+check("artifacts (anti-vacuity): the fixture really does fold SEVERAL plan groups into one artifact — `page:main` carries the layout, the coverage and the confirm worklist between them, so the no-two-writers invariant below is not trivially true",
+  () => taskAt(SET, "main", DRIFT_GROUP).groups.length >= 3,
+  () => taskAt(SET, "main", DRIFT_GROUP)?.groups);
+check("artifacts: NO stand artifact has more than one task writing it unless those tasks are CHAINED — a page body handed to two sub-agents at once is the read-modify-write clobber the bucketing exists to remove",
+  () => {
+    const byArtifact = new Map();
+    for (const t of SET5.tasks.filter((x) => x.writesTo)) {
+      if (!byArtifact.has(t.writesTo)) byArtifact.set(t.writesTo, []);
+      byArtifact.get(t.writesTo).push(t);
+    }
+    return [...byArtifact.values()].every((ts) => ts.length === 1
+      || ts.slice(1).every((t, i) => t.dependsOn.includes(ts[i].id)));
+  }, () => SET5.tasks.map((t) => `${t.order}:${t.writesTo || "—"}:${t.id}:deps=${t.dependsOn.join(",")}`));
+check("artifacts: a review task WRITES NOTHING — it reads a built page and files a verdict, so it carries an empty `writesTo` and may run beside anything it does not depend on",
+  () => {
+    const reviews = SET.tasks.filter((t) => t.artifact.startsWith("review:"));
+    return reviews.length >= 2 && reviews.every((t) => t.writesTo === "")
+      && pageTasks(SET).filter((t) => !t.artifact.startsWith("review:")).every((t) => t.writesTo === t.artifact);
+  }, () => SET.tasks.map((t) => `${t.artifact} → writesTo=${JSON.stringify(t.writesTo)}`));
+check("artifacts: the scaffolding is its own artifact — the app/package/section placement and the page shells are the preconditions every page task builds into, not one page's body",
+  () => {
+    const s = SET.tasks.filter((t) => t.artifact === ARTIFACT_SCAFFOLD);
+    return s.length === 1 && s[0].pageKey === "main" && s[0].order === 2 && s[0].group === SCAFFOLD_LABEL;
+  }, () => artifactsOf(SET));
+check("artifacts: every page key publishes its own `page:` artifact, and a child page's body is NEVER the same artifact as its parent's — two pages that shared one would be two sub-agents on one schema",
+  () => {
+    const pages = SET.tasks.filter((t) => t.artifact.startsWith("page:"));
+    const byKey = new Map(pages.map((t) => [t.pageKey, t.artifact]));
+    return byKey.size === 4 && new Set(byKey.values()).size === 4;
+  }, () => SET.tasks.map((t) => `${t.pageKey} → ${t.artifact}`));
+
+console.log("\n===== the reference cache: fetched once per run, and it blocks without writing =====");
+// Every build sub-agent starts with an empty context and re-reads the guidance, the contracts and the component
+// docs the previous one just read. One read-only task fetches them once and the rest are handed paths.
+const REFS = SET.tasks.find((t) => t.artifact === ARTIFACT_REFS);
+check("refs: the cache is the FIRST task of the run — a builder that starts before it has nothing to read and refetches everything, which is the cost the cache exists to remove",
+  () => REFS && REFS.order === 1 && REFS.group === "Reference cache",
+  () => SET.tasks.slice(0, 3).map((t) => `${t.order}:${t.artifact}`));
+check("refs: it writes NOTHING on the stand, yet EVERY other task depends on it — that pair is why a dependency is published separately from the write target instead of being inferred from it",
+  () => REFS.writesTo === "" && REFS.dependsOn.length === 0
+    && SET.tasks.filter((t) => t.id !== REFS.id).every((t) => t.dependsOn.includes(REFS.id)),
+  () => SET.tasks.map((t) => `${t.artifact}:writes=${JSON.stringify(t.writesTo)}:deps=${t.dependsOn.join(",")}`));
+check("refs: it names one spec slice per PAGE the plan publishes — a builder reads its own page's slice instead of cutting rows out of the whole design spec",
+  () => keysOf(SET).every((k) => REFS.rows.some((r) => r.label.includes(`${REFS_DIR}/spec-`) && r.label.includes(`\`${k}\``))),
+  () => ({ keys: keysOf(SET), rows: REFS.rows.map((r) => r.label.slice(0, 60)) }));
+check("refs: it names the shared files by PATH — contracts, components and the guidance topics, plus the index whose TIERS are the invalidation story",
+  () => [`${REFS_DIR}/contracts.md`, `${REFS_DIR}/components.md`, `${REFS_DIR}/guidance-`, `${REFS_DIR}/index.md`]
+    .every((f) => REFS.rows.some((r) => r.label.includes(f)))
+    && REFS.rows.some((r) => /stable-docs/.test(r.label) && /environment/.test(r.label) && /plan/.test(r.label)),
+  () => REFS.rows.map((r) => r.label.slice(0, 80)));
+check("refs: the rendered file carries the two rules that keep the cache from becoming a defect — contracts are fetched BY NAME (argument-less dumps the whole catalogue into a file every builder reads) and the component doc records the STAND it came from, because a component contract is environment-specific",
+  () => {
+    const text = renderTaskFile(REFS, SET);
+    return /ENVIRONMENT it was read from/.test(text) && /Never argument-less/.test(text);
+  }, () => renderTaskFile(REFS, SET));
+check("refs: its rows are NOT plan deliverables — it is the engine's own preparation task, so it carries no `--verify` gate and no plan group",
+  () => REFS.gatedRows === 0 && REFS.rows.every((r) => r.group === "Reference cache"),
+  () => REFS.rows.map((r) => `${r.group}:${r.vk}`));
+
+console.log("\n===== the budget: monolithic under it, cut on a structural seam over it =====");
+check("budget (anti-vacuity): manifest A really is UNDER the budget and manifest E really is OVER it — otherwise 'monolithic' and 'chunked' below are the same fixture tested twice",
+  () => tasksOn(SET, "page:main").length === 1 && tasksOn(SET5, "page:main").length > 1,
+  () => ({ a: tasksOn(SET, "page:main").map((t) => t.weight), e: tasksOn(SET5, "page:main").map((t) => t.weight) }));
+check("budget: a bucket under the budget is exactly ONE task — the monolithic case is the same contract with one chunk in it, not a second path with rules of its own",
+  () => {
+    const t = tasksOn(SET, "page:main")[0];
+    return t.weight <= TASK_BUDGET.chunk && t.group === "Page build" && t.rows.length > 1;
+  }, () => tasksOn(SET, "page:main").map((t) => ({ w: t.weight, rows: t.rows.length, label: t.group })));
+check("budget: a bucket over the budget is CUT, and every chunk that is not a single oversized row stays within the budget — the point of the cut is a task one sub-agent can finish in one sitting",
+  () => tasksOn(SET5, "page:main").every((t) => t.weight <= TASK_BUDGET.chunk || t.rows.length === 1),
+  () => tasksOn(SET5, "page:main").map((t) => ({ w: t.weight, rows: t.rows.length })));
+check("budget: a chunk NEVER splits a row — a structural unit (one region, one tab, one handler) is the smallest thing a task may be, so a row heavier than the whole budget gets a chunk to itself rather than being cut in half",
+  () => {
+    const all = tasksOn(SET5, "page:main").flatMap((t) => t.rows.map((r) => r.label));
+    const planned = GROUPS.length && buildTaskSet(RUN5, OPTS5).tasks.filter((t) => t.artifact === "page:main")
+      .flatMap((t) => t.rows.map((r) => r.label));
+    return all.length === planned.length && new Set(all).size === all.length;
+  }, () => tasksOn(SET5, "page:main").map((t) => t.rows.length));
+check("budget: the chunks of one bucket are CONTIGUOUS in the queue and chained by `dependsOn` — they write one page body, so the queue order is the thing that keeps their writes from racing",
+  () => {
+    const chunks = tasksOn(SET5, "page:main");
+    const orders = chunks.map((t) => t.order).sort((a, b) => a - b);
+    return orders.at(-1) - orders[0] === orders.length - 1
+      && chunks.slice(1).every((t, i) => t.dependsOn.includes(chunks[i].id));
+  }, () => tasksOn(SET5, "page:main").map((t) => `${t.order}:${t.id}:deps=${t.dependsOn.join(",")}`));
+check("budget: the thresholds are DECLARED, not buried at the call site — calibration changes with evidence, and `opts.taskBudget` overrides them without a code change",
+  () => {
+    const tight = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 8 } });
+    const loose = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 10000 } });
+    return typeof TASK_BUDGET.chunk === "number"
+      && tight.tasks.filter((t) => t.artifact === "page:main").length > tasksOn(SET5, "page:main").length
+      && loose.tasks.filter((t) => t.artifact === "page:main").length === 1;
+  }, () => ({ declared: TASK_BUDGET,
+    tight: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 8 } }).tasks.filter((t) => t.artifact === "page:main").length,
+    loose: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 10000 } }).tasks.filter((t) => t.artifact === "page:main").length }));
+
+console.log("\n===== dependsOn: the ordering the orchestrator can CHECK rather than infer =====");
+check("dependsOn: the scaffolding depends on nothing and EVERY task that writes depends on it — a page cannot be saved into a package that does not exist yet",
+  () => {
+    const scaffold = SET.tasks.find((t) => t.artifact === ARTIFACT_SCAFFOLD);
+    const refs = SET.tasks.find((t) => t.artifact === ARTIFACT_REFS);
+    return scaffold.dependsOn.join(",") === refs.id
+      && SET.tasks.filter((t) => t.writesTo && t.id !== scaffold.id).every((t) => t.dependsOn.includes(scaffold.id));
+  }, () => SET.tasks.map((t) => `${t.group}:${t.writesTo || "—"}:deps=${t.dependsOn.join(",")}`));
+check("dependsOn: a review depends on every task that wrote the page it judges — the `creatio-ui-guidelines` pass needs a page to look at, and half a page is what it would otherwise be handed",
+  () => tasksOn(SET5, "review:main")[0].dependsOn.length >= tasksOn(SET5, "page:main").length
+    && tasksOn(SET5, "page:main").every((p) => tasksOn(SET5, "review:main")[0].dependsOn.includes(p.id)),
+  () => ({ review: tasksOn(SET5, "review:main")[0]?.dependsOn, page: tasksOn(SET5, "page:main").map((t) => t.id) }));
+check("dependsOn: nothing depends on itself, and every id it names is a task in the same set — a dependency the orchestrator cannot resolve is one it will silently skip",
+  () => {
+    const ids = new Set(SET5.tasks.map((t) => t.id));
+    return SET5.tasks.every((t) => !t.dependsOn.includes(t.id) && t.dependsOn.every((d) => ids.has(d)));
+  }, () => SET5.tasks.map((t) => `${t.id}:${t.dependsOn.join(",")}`));
+check("dependsOn: every dependency sits EARLIER in the queue — the queue order and the dependency graph must agree, or an orchestrator walking `order` dispatches a task whose precondition has not run",
+  () => SET5.tasks.every((t) => t.dependsOn.every((d) => SET5.tasks.find((x) => x.id === d).order < t.order)),
+  () => SET5.tasks.map((t) => `${t.order}:${t.id}→${t.dependsOn.join(",")}`));
 check("buildTaskSet: every task is `origin: engine` / `status: todo` out of the box, and both values are in the published vocabularies",
   SET.tasks.every((t) => t.origin === "engine" && t.status === "todo")
   && TASK_ORIGINS.includes("engine") && TASK_ORIGINS.includes("orchestrator") && TASK_STATUSES[0] === "todo",
@@ -160,12 +319,12 @@ check("buildTaskSet: `order` is a dense 1..N sequence over the whole set — the
   SET.tasks.every((t, i) => t.order === i + 1), () => SET.tasks.map((t) => t.order));
 
 console.log("\n===== build order: leaf-first across pages, worklist-first within a page =====");
-check("build order: `main · Pages` LEADS the whole run — it is not a page's layout but the app/section/package placement, the entity binding and the page shells, so a child page built before it would need a package that does not exist yet",
-  () => SET.tasks[0].pageKey === "main" && SET.tasks[0].group === "Pages",
+check("build order: the SCAFFOLDING leads every BUILD — it is not a page's layout but the app/section/package placement, the entity binding and the page shells, so a child page built before it would need a package that does not exist yet",
+  () => pageTasks(SET)[0].pageKey === "main" && pageTasks(SET)[0].artifact === ARTIFACT_SCAFFOLD,
   () => SET.tasks.slice(0, 3).map((t) => `${t.order}:${t.pageKey}·${t.group}`));
 check("build order: apart from that scaffolding task, EVERY sub-page's tasks come before `main`'s — leaf-first is a build requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page must exist before the parent list is wired to it",
   () => {
-    const mainBuild = SET.tasks.filter((t) => t.pageKey === "main" && t.group !== "Pages");
+    const mainBuild = SET.tasks.filter((t) => t.pageKey === "main" && t.artifact !== ARTIFACT_SCAFFOLD);
     const firstMain = Math.min(...mainBuild.map((t) => t.order));
     const subKeys = new Set(subPageNodes(RUN).map((n) => n.pageKey));
     return mainBuild.length > 0 && SET.tasks.filter((t) => subKeys.has(t.pageKey)).every((t) => t.order < firstMain);
@@ -178,21 +337,22 @@ check("build order: the `list` page follows `main` — a list page's deliverable
   () => Math.min(...SET.tasks.filter((t) => t.pageKey === LIST_PAGE_KEY).map((t) => t.order))
     > Math.max(...SET.tasks.filter((t) => t.pageKey === "main").map((t) => t.order)),
   () => SET.tasks.map((t) => `${t.order}:${t.pageKey}`));
-check("build order: within a page the `⚠ Confirm worklist` is FIRST of its own build groups (the run-leading scaffolding task aside) — its rows are open questions answered by reading the stand, and resolving them after the page is built is how a page gets built against a guess",
+check("build order: within a page the `⚠ Confirm worklist` rows come FIRST — they are open questions answered by reading the stand, and resolving them after the page is built is how a page gets built against a guess. They are rows of the page task now, so the sub-agent that answers them is the one that builds against the answers.",
   () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
-    const own = SET.tasks.filter((t) => t.pageKey === k && !(k === "main" && t.group === "Pages"));
-    const confirm = own.find((t) => t.group === "⚠ Confirm worklist");
-    return !confirm || confirm.order === Math.min(...own.map((t) => t.order));
-  }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
+    const first = SET.tasks.filter((t) => t.artifact === `page:${k}`).sort((a, b) => a.order - b.order)[0];
+    if (!first) return true;
+    const at = first.rows.findIndex((r) => r.group === "⚠ Confirm worklist");
+    return at < 0 || at === 0;
+  }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}[${t.rows.map((r) => r.group).join("|")}]`));
 check("build order: within a page `Quality gates` is LAST — the `creatio-ui-guidelines` pass needs a page to look at",
   () => ["main", "child:C1", "child:G1", LIST_PAGE_KEY].every((k) => {
     const own = SET.tasks.filter((t) => t.pageKey === k);
-    const gates = own.find((t) => t.group === "Quality gates");
+    const gates = own.find((t) => t.artifact.startsWith("review:"));
     return !gates || gates.order === Math.max(...own.map((t) => t.order));
   }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
 check("build order: a page's tasks are CONTIGUOUS — no other page's task is interleaved into the middle of one page's build (main's scaffolding task is the one declared exception: it leads the run)",
   () => keysOf(SET).every((k) => {
-    const orders = SET.tasks.filter((t) => t.pageKey === k && !(k === "main" && t.group === "Pages"))
+    const orders = SET.tasks.filter((t) => t.pageKey === k && t.artifact !== ARTIFACT_SCAFFOLD)
       .map((t) => t.order).sort((a, b) => a - b);
     return orders.at(-1) - orders[0] === orders.length - 1;
   }), () => SET.tasks.map((t) => `${t.order}:${t.pageKey}·${t.group}`));
@@ -202,18 +362,41 @@ check("ids: inserting a page into the plan does NOT renumber any id — every (p
   () => SET.tasks.every((t) => taskAt(SET2, t.pageKey, t.group)?.id === t.id),
   () => SET.tasks.filter((t) => taskAt(SET2, t.pageKey, t.group)?.id !== t.id)
     .map((t) => ({ task: `${t.pageKey}·${t.group}`, a: t.id, b: taskAt(SET2, t.pageKey, t.group)?.id })));
-check("ids: `order` IS the field that moves — the inserted page pushes `main`'s Confirm worklist further down the queue while its id stands still (else the check above would be vacuous)",
-  () => orderOf(SET2, "main", "⚠ Confirm worklist") > orderOf(SET, "main", "⚠ Confirm worklist"),
-  () => ({ a: orderOf(SET, "main", "⚠ Confirm worklist"), b: orderOf(SET2, "main", "⚠ Confirm worklist") }));
+check("ids: `order` IS the field that moves — the inserted page pushes `main`'s page build further down the queue while its id stands still (else the check above would be vacuous)",
+  () => orderOf(SET2, "main", DRIFT_GROUP) > orderOf(SET, "main", DRIFT_GROUP),
+  () => ({ a: orderOf(SET, "main", DRIFT_GROUP), b: orderOf(SET2, "main", DRIFT_GROUP) }));
 check("ids: a task whose ROWS changed is the SAME task with a changed deliverable, not a new task whose status resets — the added form field moves `main · Form — Coverage (verified)`'s `rowsDigest` while its `id` stands still",
   () => {
     const a = taskAt(SET, "main", DRIFT_GROUP), c = taskAt(SET3, "main", DRIFT_GROUP);
     return a.id === c.id && a.rowsDigest !== c.rowsDigest;
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP), c: taskAt(SET3, "main", DRIFT_GROUP) }));
-check("ids: an id is unique across the set, and distinct (pageKey, group) pairs never collide — two pages carry the identically-named `Quality gates` group and get different ids",
+check("ids: an id is unique across the set, and two pages' identically-shaped tasks never collide — every page carries a `Page build` and a `Quality gates` task and they must still be told apart",
   () => new Set(SET.tasks.map((t) => t.id)).size === SET.tasks.length
-    && taskAt(SET, "main", "Quality gates").id !== taskAt(SET, "child:C1", "Quality gates").id,
+    && taskAt(SET, "main", "Quality gates").id !== taskAt(SET, "child:C1", "Quality gates").id
+    && taskAt(SET, "main", DRIFT_GROUP).id !== taskAt(SET, "child:C1", DRIFT_GROUP).id,
   () => SET.tasks.map((t) => `${t.id} ${t.pageKey}·${t.group}`));
+check("ids: ONE MORE FIELD does not renumber the chunks — the anchor is the chunk's first row with its digits MASKED, so `Side profile — 40 fields` and `— 41 fields` are one anchor and every status recorded against a later chunk stays attached to it. Numbering the chunks instead is what orphans them all.",
+  () => {
+    const a = tasksOn(SET5, "page:main"), b = tasksOn(SET6, "page:main");
+    return a.length > 1 && a.length === b.length && a.every((t, i) => t.id === b[i].id);
+  }, () => ({ e: tasksOn(SET5, "page:main").map((t) => `${t.id}:${t.anchor}`),
+    f: tasksOn(SET6, "page:main").map((t) => `${t.id}:${t.anchor}`) }));
+check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that carries the field count has a DIFFERENT row label across E and F while its anchor is the same string, so the check above is not passing because nothing moved",
+  () => {
+    const a = tasksOn(SET5, "page:main"), b = tasksOn(SET6, "page:main");
+    const la = a.flatMap((t) => t.rows.map((r) => r.label)).join("|");
+    const lb = b.flatMap((t) => t.rows.map((r) => r.label)).join("|");
+    return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
+      && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
+  }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
+check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the caption and the count are both untouched by a rename, so digesting labels alone reported no drift on exactly the change a built page has to be re-checked against",
+  () => {
+    const a = taskAt(SET, "main", DRIFT_GROUP), d = taskAt(SET4, "main", DRIFT_GROUP);
+    const sameLabels = a.rows.map((r) => r.label).join("|") === d.rows.map((r) => r.label).join("|");
+    return a.id === d.id && sameLabels && a.rowsDigest !== d.rowsDigest;
+  }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP)?.rowsDigest, d: taskAt(SET4, "main", DRIFT_GROUP)?.rowsDigest,
+    labelsEqual: taskAt(SET, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|")
+      === taskAt(SET4, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|") }));
 check("taskFileName: the file name carries the id as well as a slug — non-Latin captions all strip to the same characters, so a slug ALONE would be many-to-one",
   () => SET.tasks.every((t) => t.file === taskFileName(t) && t.file.endsWith(`-${t.id}.md`))
     && new Set(SET.tasks.map((t) => t.file)).size === SET.tasks.length
@@ -221,7 +404,7 @@ check("taskFileName: the file name carries the id as well as a slug — non-Lati
   () => SET.tasks.map((t) => t.file));
 
 console.log("\n===== the task FILE: rendered, and read back =====");
-const SAMPLE = taskAt(SET, "child:C1", "Form — Coverage (verified)");
+const SAMPLE = taskAt(SET, "child:C1", DRIFT_GROUP);
 const SAMPLE_TEXT = renderTaskFile(SAMPLE, SET);
 check("renderTaskFile: the front matter carries the identity and the recorded state the next run reads back — id, status, origin, pageKey, group, order, rowsDigest",
   () => {
@@ -230,6 +413,27 @@ check("renderTaskFile: the front matter carries the identity and the recorded st
       && meta.pageKey === SAMPLE.pageKey && meta.group === SAMPLE.group && meta.order === String(SAMPLE.order)
       && meta.rowsDigest === SAMPLE.rowsDigest;
   }, () => parseTaskFile(SAMPLE_TEXT));
+check("renderTaskFile: the front matter also carries what the ORCHESTRATOR needs to schedule it — the artifact it writes, the tasks it waits on, and an empty `agentNonce` for the sub-agent to fill",
+  () => {
+    const { meta } = parseTaskFile(SAMPLE_TEXT);
+    return meta.writesTo === SAMPLE.writesTo && meta.dependsOn === SAMPLE.dependsOn.join(" ")
+      && meta.agentNonce === "" && SAMPLE.dependsOn.length > 0;
+  }, () => parseTaskFile(SAMPLE_TEXT).meta);
+check("renderTaskFile: the file STATES the one-sub-agent contract and the parallelism rule it is bound by — the task file is the prompt the sub-agent is handed, so a rule that lives only in the orchestrator's instructions is a rule the reader never sees",
+  () => /\*\*One sub-agent, one task:\*\*/.test(SAMPLE_TEXT) && /agentNonce/.test(SAMPLE_TEXT)
+    && SAMPLE_TEXT.includes("`" + SAMPLE.writesTo + "`") && /no other task may be running against this artifact/.test(SAMPLE_TEXT)
+    && /\*\*Depends on:\*\*/.test(SAMPLE_TEXT) && /Read their `## Notes` first/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT);
+check("renderTaskFile: a read-only task says so instead of naming an artifact — a review that claimed a `writesTo` would block every task that shares its page for no reason",
+  () => {
+    const review = taskAt(SET, "child:C1", "Quality gates");
+    const text = renderTaskFile(review, SET);
+    return review.writesTo === "" && /\*\*Writes:\*\* nothing — read-only/.test(text);
+  }, () => renderTaskFile(taskAt(SET, "child:C1", "Quality gates"), SET));
+check("renderTaskFile: each deliverable row names the plan group it came from — a task spans several groups now, so the `From` column is what keeps the file saying which part of the plan a row is",
+  () => /\| # \| From \| Deliverable \| Closed by \|/.test(SAMPLE_TEXT)
+    && SAMPLE.rows.every((r) => SAMPLE_TEXT.includes(`| ${r.group} | ${r.label} |`)),
+  () => SAMPLE_TEXT);
 check("renderTaskFile: every deliverable row of the task is in the rendered table, numbered, with the mechanism that CLOSES it — a machine-checked row names `--verify` and its verifier kind",
   () => SAMPLE.rows.length > 0 && SAMPLE.rows.every((r, i) => new RegExp(String.raw`^\| ${i + 1} \| `, "m").test(SAMPLE_TEXT))
     && SAMPLE.rows.some((r) => r.vk)
@@ -237,7 +441,7 @@ check("renderTaskFile: every deliverable row of the task is in the rendered tabl
   () => SAMPLE_TEXT);
 check("renderTaskFile: a row with no machine verifier is closed by an evidence record plus a judge verdict, and an approved-boundary row is marked N/A — the mechanism is stated per row, never left to the builder",
   () => {
-    const t = { ...SAMPLE, rows: [{ label: "prose row", vk: null, na: null }, { label: "out of scope", vk: null, na: "agreed boundary" }] };
+    const t = { ...SAMPLE, rows: [{ label: "prose row", group: "Form — Logic", vk: null, na: null }, { label: "out of scope", group: "Pages", vk: null, na: "agreed boundary" }] };
     const text = renderTaskFile(t, SET);
     return text.includes("| an evidence record + a judge verdict |") && text.includes("| N/A — agreed boundary |");
   }, () => renderTaskFile({ ...SAMPLE, rows: [{ label: "prose row" }, { label: "out of scope", na: "agreed boundary" }] }, SET));
@@ -265,14 +469,14 @@ const asExisting = (task, meta = {}, notes = "") => ({
     order: String(task.order), rowsDigest: task.rowsDigest, ...meta },
 });
 const MERGED = mergeTaskSet(SET, [
-  asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }, "half of the pages minted"),
+  asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }, "half of the pages minted"),
   asExisting(taskAt(SET, "child:G1", "Quality gates"), { status: "done" }, "guidelines pass clean"),
 ]);
 check("mergeTaskSet: a re-run KEEPS the caller's recorded `status` — the plan's rows are the engine's, the status is not",
-  () => taskAt(MERGED, "main", "Pages").status === "in-progress" && taskAt(MERGED, "child:G1", "Quality gates").status === "done",
+  () => taskAt(MERGED, "main", SCAFFOLD_LABEL).status === "in-progress" && taskAt(MERGED, "child:G1", "Quality gates").status === "done",
   () => MERGED.tasks.map((t) => `${t.pageKey}·${t.group}=${t.status}`));
 check("mergeTaskSet: a re-run KEEPS the caller's `## Notes` — the record of what was built, what was filed and what blocked is never the engine's to overwrite",
-  () => taskAt(MERGED, "main", "Pages").notes === "half of the pages minted"
+  () => taskAt(MERGED, "main", SCAFFOLD_LABEL).notes === "half of the pages minted"
     && taskAt(MERGED, "child:G1", "Quality gates").notes === "guidelines pass clean",
   () => MERGED.tasks.map((t) => `${t.pageKey}·${t.group}=${JSON.stringify(t.notes)}`));
 check("mergeTaskSet: a task with no recorded state is untouched — merging does not invent a status or a note for a task the caller never opened",
@@ -281,24 +485,24 @@ check("mergeTaskSet: a task with no recorded state is untouched — merging does
   () => MERGED.tasks.map((t) => `${t.status}:${JSON.stringify(t.notes)}`));
 check("mergeTaskSet: a file the caller RENAMED keeps its name — the id is the identity, the file name is for a human opening the folder",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [{ ...asExisting(t), file: "01-do-the-pages-first.md" }]);
-    return taskAt(m, "main", "Pages").file === "01-do-the-pages-first.md";
+    return taskAt(m, "main", SCAFFOLD_LABEL).file === "01-do-the-pages-first.md";
   });
 check("mergeTaskSet: the engine's deliverable rows always LOSE to the current plan — a stale recorded row set is replaced by the plan's, and the fresh `rowsDigest` is what the rewritten file carries",
   () => {
-    const t = taskAt(SET2, "main", "Pages");
-    const m = mergeTaskSet(SET2, [asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" })]);
-    const got = taskAt(m, "main", "Pages");
+    const t = taskAt(SET2, "main", SCAFFOLD_LABEL);
+    const m = mergeTaskSet(SET2, [asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" })]);
+    const got = taskAt(m, "main", SCAFFOLD_LABEL);
     return got.rows.length === t.rows.length && got.rowsDigest === t.rowsDigest
       && got.rows.every((r, i) => r.label === t.rows[i].label);
-  }, () => taskAt(mergeTaskSet(SET2, [asExisting(taskAt(SET, "main", "Pages"))]), "main", "Pages"));
+  }, () => taskAt(mergeTaskSet(SET2, [asExisting(taskAt(SET, "main", SCAFFOLD_LABEL))]), "main", "Pages"));
 
 console.log("\n===== an unrecognised status is reported, never coerced =====");
-const BOGUS = mergeTaskSet(SET, [asExisting(taskAt(SET, "main", "Pages"), { status: "kinda-done" })]);
+const BOGUS = mergeTaskSet(SET, [asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "kinda-done" })]);
 check("status vocabulary: an unrecognised `status` is carried through AS-IS, never folded into `todo` — a mistyped status that silently read as 'not done' would re-dispatch a sub-agent onto a page that is already built",
-  taskAt(BOGUS, "main", "Pages").status === "kinda-done" && !TASK_STATUSES.includes("kinda-done"),
-  () => taskAt(BOGUS, "main", "Pages"));
+  taskAt(BOGUS, "main", SCAFFOLD_LABEL).status === "kinda-done" && !TASK_STATUSES.includes("kinda-done"),
+  () => taskAt(BOGUS, "main", SCAFFOLD_LABEL));
 check("status vocabulary: the unrecognised value is REPORTED on the index's Attention section, naming the file and the vocabulary it must use",
   () => {
     const idx = renderTaskIndex(BOGUS);
@@ -309,11 +513,11 @@ check("status vocabulary: an unrecognised status counts as NEITHER done nor open
   () => renderTaskIndex(BOGUS).split("\n")[2]);
 check("unreadable file: a file the engine could not parse in full is refused, NOT read and NOT written — rewriting it would destroy the `## Notes` that record work already done on a stand",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [{ file: t.file, notes: "", malformed: "front matter is not terminated", meta: { id: t.id } }]);
     return (m.blocked || []).some((b) => b.file === t.file && /front matter is not terminated/.test(b.reason))
       && renderTaskIndex(m).includes("NOT READ and NOT WRITTEN");
-  }, () => mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }]).blocked);
+  }, () => mergeTaskSet(SET, [{ file: taskAt(SET, "main", SCAFFOLD_LABEL).file, notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", SCAFFOLD_LABEL).id } }]).blocked);
 check("unreadable file: a file with NO readable `id` is refused the same way — filtering it out as absent is what let a corrupted file's notes be overwritten by a task the engine then read as new",
   () => {
     const m = mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "built already", malformed: "no front matter", meta: {} }]);
@@ -321,52 +525,52 @@ check("unreadable file: a file with NO readable `id` is refused the same way —
   }, () => mergeTaskSet(SET, [{ file: "task-hand-edited.md", notes: "x", malformed: "no front matter", meta: {} }]).blocked);
 check("unreadable file: its QUEUE ROW says `⚠ unread`, never the fresh task's default `todo` — the refused file may record `done`, and reading `todo` off the queue is how a sub-agent gets dispatched onto a page that is already built",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [{ file: t.file, notes: "built already", malformed: "no front matter", meta: {} , }]);
     const broken = mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]);
     const idx = renderTaskIndex(broken);
     const row = idx.split("\n").find((l) => l.includes(t.file) && l.startsWith("|"));
     return m.blocked.length === 1 && /⚠ unread/.test(row) && !/☐ todo/.test(row);
-  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }])));
+  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", SCAFFOLD_LABEL).file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", SCAFFOLD_LABEL).id } }])));
 check("unreadable file: it counts as `Other`, not as an OPEN task — the queue must not claim to know a status nobody recorded",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const idx = renderTaskIndex(mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]));
     return /\*\*Other:\*\* 1/.test(idx) && new RegExp(String.raw`\*\*Open:\*\* ${SET.tasks.length - 1}`).test(idx);
-  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }])).split("\n")[2]);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", SCAFFOLD_LABEL).file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", SCAFFOLD_LABEL).id } }])).split("\n")[2]);
 check("duplicate id: when two files claim one `id` the engine can no longer tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [asExisting(t, { status: "done" }), { ...asExisting(t, { status: "in-progress" }), file: "task-copy.md" }]);
     const files = new Set((m.blocked || []).map((b) => b.file));
     return files.has(t.file) && files.has("task-copy.md")
       && (m.blocked || []).every((b) => /claimed by more than one file/.test(b.reason));
-  }, () => mergeTaskSet(SET, [asExisting(taskAt(SET, "main", "Pages"), { status: "done" }), { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-copy.md" }]).blocked);
+  }, () => mergeTaskSet(SET, [asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "done" }), { ...asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }), file: "task-copy.md" }]).blocked);
 check("duplicate id: an ORCHESTRATOR file carrying an engine task's `id` never becomes that task's record — copying a task file as a template would otherwise have the engine write the plan's rows into the file it promises never to rewrite",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const orch = { ...asExisting(t, { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(t, { status: "in-progress" }).meta, origin: "orchestrator" } };
     const m = mergeTaskSet(SET, [orch]);
     const same = m.tasks.find((x) => x.id === t.id);
     return same.origin === "engine" && same.file === t.file && same.status === "todo";
-  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }).meta, origin: "orchestrator" } }]).tasks.filter((x) => x.id === taskAt(SET, "main", "Pages").id));
+  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }).meta, origin: "orchestrator" } }]).tasks.filter((x) => x.id === taskAt(SET, "main", SCAFFOLD_LABEL).id));
 
 check("duplicate id: that orchestrator file is REFUSED by name rather than dropped — a file that appears in no queue row and on no `## Attention` line is one `syncTaskDir` would happily write the engine task over",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const orch = { ...asExisting(t, { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(t, { status: "in-progress" }).meta, origin: "orchestrator" } };
     const m = mergeTaskSet(SET, [orch]);
     const b = (m.blocked || []).find((x) => x.file === "task-orch-copy.md");
     return Boolean(b) && /also claimed by an engine task/.test(b.reason) && b.id === t.id
       && m.tasks.find((x) => x.id === t.id).unread === true;
-  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }).meta, origin: "orchestrator" } }]).blocked);
+  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", SCAFFOLD_LABEL), { status: "in-progress" }).meta, origin: "orchestrator" } }]).blocked);
 check("unreadable file: the refusal is linked by `id`, not by filename — a corrupted file the caller RENAMED still makes its task read `unread`, or the queue would dispatch a sub-agent onto a page whose only record (possibly `done`) sits in that file",
   () => {
-    const t = taskAt(SET, "main", "Pages");
+    const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [{ file: "renamed-by-hand.md", notes: "", malformed: "front matter is not terminated", meta: { id: t.id } }]);
     const same = m.tasks.find((x) => x.id === t.id);
     return same.unread === true && (m.blocked || []).some((b) => b.file === "renamed-by-hand.md" && b.id === t.id);
-  }, () => mergeTaskSet(SET, [{ file: "renamed-by-hand.md", notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }]).tasks.filter((x) => x.id === taskAt(SET, "main", "Pages").id));
+  }, () => mergeTaskSet(SET, [{ file: "renamed-by-hand.md", notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", SCAFFOLD_LABEL).id } }]).tasks.filter((x) => x.id === taskAt(SET, "main", SCAFFOLD_LABEL).id));
 
 console.log("\n===== a recorded status whose deliverables later changed is flagged =====");
 // The recorded state is manifest A's; the plan is now manifest C's, whose `main · Form — Coverage (verified)`
@@ -409,6 +613,54 @@ check("drift: the flagged task's DELIVERABLE rows are still the plan's current o
     return DRIFT.rows.length === now.rows.length && DRIFT.rows.every((r, i) => r.label === now.rows[i].label);
   }, () => ({ merged: DRIFT.rows.map((r) => r.label), plan: taskAt(SET3, "main", DRIFT_GROUP).rows.map((r) => r.label) }));
 
+console.log("\n===== agentNonce: one sub-agent per task, checked OUTSIDE the loop that could break it =====");
+// The observed failure this exists for: an orchestrator handed 12 task files to 5 sub-agents and 10 to 1. The
+// orchestrator composes the prompt and reads the reply, so it cannot also be the evidence that it dispatched one
+// sub-agent per task. A nonce the sub-agent mints for itself is evidence neither of them controls.
+const withNonce = (task, nonce, status = "done") => ({
+  file: task.file, notes: "", malformed: null,
+  meta: { id: task.id, status, origin: "engine", pageKey: task.pageKey, group: task.group,
+    order: String(task.order), rowsDigest: task.rowsDigest, agentNonce: nonce },
+});
+check("agentNonce: a nonce recorded by the sub-agent SURVIVES a re-run — it is the caller's record like `status` and `## Notes`, and rewriting it away would erase the one fact that shows which session closed the task",
+  () => {
+    const t = taskAt(SET, "main", DRIFT_GROUP);
+    const m = mergeTaskSet(SET, [withNonce(t, "sa-7f3c")]);
+    return taskAt(m, "main", DRIFT_GROUP).agentNonce === "sa-7f3c"
+      && parseTaskFile(renderTaskFile(taskAt(m, "main", DRIFT_GROUP), m)).meta.agentNonce === "sa-7f3c";
+  }, () => taskAt(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "sa-7f3c")]), "main", DRIFT_GROUP));
+check("agentNonce: the SAME nonce on two task files is reported — that is one sub-agent that closed both, which is the contract violation, and it is found without asking either the orchestrator or the sub-agent",
+  () => {
+    const a = taskAt(SET, "main", DRIFT_GROUP), b = taskAt(SET, "child:C1", DRIFT_GROUP);
+    const idx = renderTaskIndex(mergeTaskSet(SET, [withNonce(a, "sa-dup"), withNonce(b, "sa-dup")]));
+    return /## Attention/.test(idx) && idx.includes("`agentNonce: sa-dup` is on 2 task files")
+      && idx.includes(a.file) && idx.includes(b.file) && /one sub-agent per task/i.test(idx);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "sa-dup"),
+    withNonce(taskAt(SET, "child:C1", DRIFT_GROUP), "sa-dup")])));
+check("agentNonce: DISTINCT nonces are not reported — the signal is one session closing several tasks, not the presence of a nonce, else every honest run would raise it",
+  () => {
+    const a = taskAt(SET, "main", DRIFT_GROUP), b = taskAt(SET, "child:C1", DRIFT_GROUP);
+    const idx = renderTaskIndex(mergeTaskSet(SET, [withNonce(a, "sa-1"), withNonce(b, "sa-2")]));
+    return !/agentNonce/.test(idx);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "sa-1"),
+    withNonce(taskAt(SET, "child:C1", DRIFT_GROUP), "sa-2")])));
+check("agentNonce: tasks with NO nonce are not reported as sharing one — an empty field is a task nobody has closed yet, not a violation",
+  () => !/agentNonce/.test(renderTaskIndex(mergeTaskSet(SET, []))),
+  () => renderTaskIndex(mergeTaskSet(SET, [])));
+check("agentNonce: the duplicate is caught END TO END on disk — two files that record the same nonce raise it on the regenerated index, which is where the orchestrator would actually meet it",
+  () => {
+    const dir = tmp("nonce");
+    const first = syncTaskDir(dir, RUN, OPTS);
+    for (const key of ["main", "child:C1"]) {
+      const f = path.join(dir, taskAt(first, key, DRIFT_GROUP).file);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("status: todo", "status: done").replace("agentNonce:", "agentNonce: sa-same"));
+    }
+    syncTaskDir(dir, RUN, OPTS);
+    const idx = readIndex(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    return idx.includes("`agentNonce: sa-same` is on 2 task files");
+  });
+
 console.log("\n===== an orchestrator-authored task is read, never authored =====");
 const ORCH_FILE = "task-orchestrator-deploy.md";
 const orchExisting = (order, notes = "package pushed to the stand") => ({
@@ -446,16 +698,16 @@ check("origin: orchestrator: `step` is the QUEUE position and is NOT written bac
   }, () => mergeTaskSet(SET, [orchExisting("3")]).tasks.map((t) => `${t.step}/${t.order}:${t.origin}`));
 
 console.log("\n===== an engine task that left the plan becomes stale, and is NOT deleted =====");
-const GONE = mergeTaskSet(SET, [asExisting(taskAt(SET2, "child:C2", "Pages"), { status: "done" }, "built on the stand already")]);
+const GONE = mergeTaskSet(SET, [asExisting(taskAt(SET2, "child:C2", "Page build"), { status: "done" }, "built on the stand already")]);
 check("stale: an engine task that is no longer in the plan is reported as `stale` rather than being dropped silently",
-  () => (GONE.stale || []).length === 1 && GONE.stale[0].file === taskAt(SET2, "child:C2", "Pages").file
-    && !GONE.tasks.some((t) => t.id === taskAt(SET2, "child:C2", "Pages").id),
+  () => (GONE.stale || []).length === 1 && GONE.stale[0].file === taskAt(SET2, "child:C2", "Page build").file
+    && !GONE.tasks.some((t) => t.id === taskAt(SET2, "child:C2", "Page build").id),
   () => GONE.stale);
 check("stale: it is listed on the index with the reason it is KEPT — deleting the file is how a record of work already done on a stand disappears",
   () => {
     const idx = renderTaskIndex(GONE);
     return /## Attention/.test(idx) && /no longer in the plan \(kept, not deleted/.test(idx)
-      && idx.includes(taskAt(SET2, "child:C2", "Pages").file);
+      && idx.includes(taskAt(SET2, "child:C2", "Page build").file);
   }, () => renderTaskIndex(GONE));
 
 console.log("\n===== renderTaskIndex: derived, and complete =====");
@@ -516,7 +768,7 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
     () => ({ unchanged: fs.readFileSync(orchPath, "utf8") === ORCH_BODY, index: readIndex(dir) }));
   check("syncTaskDir: an ENGINE task file IS rewritten from the plan — an edit to its deliverable table is replaced, because the rows are the plan's and the plan may have changed",
     () => {
-      const ep = path.join(dir, taskAt(fifth, "main", "Pages").file);
+      const ep = path.join(dir, taskAt(fifth, "main", SCAFFOLD_LABEL).file);
       fs.writeFileSync(ep, fs.readFileSync(ep, "utf8").replace(/^\| 1 \| .*$/m, "| 1 | a row I invented | nothing |"));
       syncTaskDir(dir, RUN, OPTS);
       return !/a row I invented/.test(fs.readFileSync(ep, "utf8"));
@@ -543,11 +795,11 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   syncTaskDir(dir, RUN, OPTS);   // back to plan A before the grow/shrink pair below
   // Grow the plan (manifest B), then shrink it back: `child:C2`'s files are on disk while the plan no longer has them.
   const grown = syncTaskDir(dir, RUN2, OPTS2);
-  const c2File = taskAt(SET2, "child:C2", "Pages").file;
+  const c2File = taskAt(SET2, "child:C2", "Page build").file;
   check("syncTaskDir: a RENAMED corrupted file gets no duplicate written beside it — the fresh `todo` file the engine would otherwise emit is a second record for one task, and the queue would schedule the wrong one",
     () => {
       const d2 = tmp("renamed");
-      const t = taskAt(SET, "main", "Pages");
+      const t = taskAt(SET, "main", SCAFFOLD_LABEL);
       const broken = path.join(d2, "renamed-by-hand.md");
       fs.writeFileSync(broken, `---\nid: ${t.id}\nstatus: done\n`);   // front matter never terminated
       const before = fs.readFileSync(broken, "utf8");
@@ -584,7 +836,7 @@ const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", 
     () => new RegExp(String.raw`— 0 done, ${SET.tasks.length} not\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
     () => run.stdout);
   // An unrecognised status recorded by hand: the ⚠ stdout line is the other half of "reported, never coerced".
-  const victim = path.join(dir, taskAt(SET, "main", "Pages").file);
+  const victim = path.join(dir, taskAt(SET, "main", SCAFFOLD_LABEL).file);
   fs.writeFileSync(victim, fs.readFileSync(victim, "utf8").replace("status: todo", "status: kinda-done"));
   const rerun = cliTasks(["--tasks", dir], MANIFEST);
   check("migrate.mjs --tasks: an unrecognised recorded status is reported on STDOUT as an item needing a human eye, is on the index's Attention section, and is still in the task's own file verbatim — never rewritten to `todo`",

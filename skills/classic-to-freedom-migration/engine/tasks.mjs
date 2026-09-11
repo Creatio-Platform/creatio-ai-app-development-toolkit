@@ -16,10 +16,25 @@
 // A task that leaves the plan is NOT deleted either: it is listed as stale, because deleting a file is how a
 // record of work already done on a stand disappears.
 //
-// IDS ARE CONTENT-DERIVED, NOT POSITIONAL. `id` is a short hash over (the page's identity, group), so inserting a
-// page renumbers nothing and a recorded status stays attached to the task it was recorded for — and the page's
-// identity is its `pageDedupeId`, not its key, because a key can be taken by a newly inserted sibling. `order`
-// carries the build sequence separately and is the field that moves; the index calls it `Step`.
+// ONE TASK PER ARTIFACT, NOT PER GROUP. A group is a way of READING the plan; an artifact is a thing on the stand
+// that gets written. Every group that writes a page's `viewConfig` — its layout, its coverage, its card actions,
+// its rules, its handlers — writes the SAME artifact, so cutting one task per group hands N sub-agents one page
+// body and makes each of them read-modify-write over the last one's save. Bucketing by artifact instead means two
+// tasks never write the same thing, which is the invariant that removes the hazard rather than documenting it.
+// `writesTo` publishes the bucket so the orchestrator can check it, and an empty `writesTo` is a read-only task.
+//
+// A BUCKET IS CUT ONLY WHEN IT IS TOO BIG, AND ONLY ON A STRUCTURAL SEAM. Under the budget a bucket is one task
+// (that is the monolithic case — the same contract, not a second code path). Over it, the rows are packed into
+// chunks along the seams the plan already publishes: a tab, a region, a related list, a named handler. A single
+// structural unit is never split, so a chunk boundary never lands mid-tab.
+//
+// IDS ARE CONTENT-DERIVED, NOT POSITIONAL — AND NOT COUNT-DERIVED. `id` is a short hash over (the page's identity,
+// the artifact, the chunk's structural anchor), so inserting a page renumbers nothing and a recorded status stays
+// attached to the task it was recorded for. The page's identity is its `pageDedupeId`, not its key, because a key
+// can be taken by a newly inserted sibling. The anchor is the chunk's FIRST row with its DIGITS masked, because
+// the digits are exactly what moves: `Side profile — 12 fields` and `Side profile — 13 fields` are one anchor, so
+// adding a field does not renumber the chunks after it. `order` carries the build sequence and is the field that
+// moves; the index calls it `Step`.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -88,12 +103,134 @@ const groupRank = (order, group, baseTitle) =>
 // `title` precisely so a consumer never has to unpick the prefix (the rendered one passes through `esc`).
 const baseTitleOf = (group) => group.baseTitle || group.title;
 
+// ---8<--- ARTIFACTS: what a task WRITES, which is what decides where a task boundary may fall ---8<---
+
+// `main`'s `Pages` group is the app/package/section placement and the page shells — the preconditions, not a
+// page's body. It is its own artifact so every page task can depend on it.
+export const ARTIFACT_SCAFFOLD = "scaffold";
+// The reference cache. It writes FILES, not the stand, so it blocks on nothing and nothing it does can be
+// clobbered — but every builder reads what it wrote, so everything depends on it.
+export const ARTIFACT_REFS = "refs";
+export const REFS_DIR = "refs";
+const REFS_GROUP = "Reference cache";
+const REVIEW_GROUP = "Quality gates";
+// The review pass reads a built page and files a verdict; it writes nothing, so it is its own read-only task
+// rather than the tail of the build that it is supposed to judge.
+const artifactOf = (group, baseTitle, identity) => {
+  if (isScaffold(group, baseTitle)) return ARTIFACT_SCAFFOLD;
+  const id = identity.get(group.pageKey) || group.pageKey;
+  return baseTitle === REVIEW_GROUP ? `review:${id}` : `page:${id}`;
+};
+// A review task and the reference cache both write nothing ON THE STAND — the cache writes local files, the review
+// writes a verdict. Published as `writesTo:` so the orchestrator's parallelism rule is a field comparison and not a
+// judgement: two tasks may run at once only when their `writesTo` differ. What the cache still imposes on every
+// builder is a DEPENDENCY, not a write conflict, and that is carried by `dependsOn` instead.
+const writesToOf = (artifact) =>
+  (artifact === ARTIFACT_REFS || artifact.startsWith("review:") ? "" : artifact);
+
+// ---8<--- THE BUDGET: how much work one sub-agent is handed ---8<---
+
+// DECLARED, not hard-coded at the call site, because these are calibration and calibration changes with evidence.
+// The unit is nominal build effort, sized so a chunk is one sitting for one sub-agent: the measured runs put a
+// builder at roughly half an hour for about this much, and a task that outgrows a sitting is the task an agent
+// silently splits or silently merges. Override per run with `opts.taskBudget`.
+export const TASK_BUDGET = {
+  chunk: 40,        // max weight in one task
+  field: 1,         // one field inside a layout row
+  relatedList: 4,   // a related list carries its own binding and its own child page
+  rule: 1,          // one business rule
+  handler: 4,       // one ported handler — the heaviest row kind per unit
+  confirm: 2,       // one on-stand question answered before the build
+  row: 2,           // anything else
+};
+const budgetOf = (opts) => ({ ...TASK_BUDGET, ...(opts.taskBudget || {}) });
+
+// A row's weight is read off what the plan already says about it. `Side profile — 12 fields` is twelve fields of
+// work and `Handler — onSaved` is one handler of it; treating both as "one row" is what made a 10-row page and a
+// 10-handler page look like the same amount of work.
+function rowWeight(row, baseTitle, B) {
+  if (row.na) return 0;                                   // an approved boundary is recorded, not built
+  if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
+  const label = String(row.label || "");
+  const fields = /—\s*(\d+)\s+fields?\b/.exec(label);
+  if (fields) return Number(fields[1]) * B.field;
+  if (/\brelated list\b/i.test(label)) return B.relatedList;
+  if (/^Handler\s+—/.test(label)) return B.handler;
+  if (baseTitle === CONFIRM_GROUP) return B.confirm;
+  return B.row;
+}
+const CONFIRM_GROUP = "⚠ Confirm worklist";
+
+// THE STRUCTURAL KEY of a row: everything about it EXCEPT the numbers. The numbers are what a growing plan moves
+// (`— 12 fields` becomes `— 13 fields`), so masking them is what lets a chunk keep its identity when the page it
+// starts at gains a field. Two rows that differ only in a count share a key, deliberately.
+const structuralKey = (label) => String(label)
+  .toLowerCase()
+  .replace(/\d+/g, "n")
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-/, "").replace(/-$/, "")
+  .slice(0, 60) || "row";
+
+// ---8<--- THE REFERENCE CACHE: fetched ONCE per run, not once per fresh context ---8<---
+
+// EVERY BUILD SUB-AGENT STARTS EMPTY. It re-reads the same guidance, the same tool contracts and the same
+// component docs the previous one just read, because a fresh context has none of it — measured at 3.5× the tool
+// lookups of the planning phase for work that is identical every time. So one read-only task fetches them once
+// into `refs/` and every later task is handed PATHS.
+//
+// Three properties, taken from the workflow prototype that proved the saving and kept unchanged here:
+//   PATHS, NEVER PASTED BODIES. Inlining the contracts into every build prompt cost more than fetching them did.
+//   THE CACHE IS A SHORTCUT, NOT A RESTRICTION. A sub-agent needing something the cache does not hold calls the
+//     tool as usual — a cache that FORBIDS is a defect generator.
+//   IT IS STAND-SPECIFIC. `components.md` records the environment it came from; another stand must not trust it.
+function refsRows(result) {
+  const pages = [...new Set([...subPageNodes(result).map((n) => n.pageKey).filter(Boolean), "main", LIST_PAGE_KEY])];
+  return [
+    { label: `\`${REFS_DIR}/index.md\` — what was cached and which TIER each entry belongs to: \`stable-docs\``
+      + " (the same on every run), `host` (this machine), `environment` (this stand), `plan` (this plan version)."
+      + " The tier is the invalidation story: a `plan` entry is stale the moment the plan version changes, an"
+      + " `environment` entry the moment the stand does, and a `stable-docs` entry effectively never." },
+    { label: `\`${REFS_DIR}/contracts.md\` — the tool contracts a page build calls, fetched BY NAME. Never`
+      + " argument-less: that dumps the whole catalogue into the file every builder reads." },
+    { label: `\`${REFS_DIR}/components.md\` — \`get-component-info\` per component type this plan builds, headed`
+      + " with the ENVIRONMENT it was read from, because a component's contract is stand-specific." },
+    { label: `\`${REFS_DIR}/guidance-<topic>.md\` — one file per clio guidance topic this build needs. Resolve the`
+      + " set from the routing map (`get-guidance name=routing`), not from a list written down here — the map is"
+      + " what knows which guide a given kind of work needs." },
+    ...pages.map((k) => ({ label: `\`${REFS_DIR}/spec-${slugify(k)}.md\` — the design-spec slice for \`${k}\``
+      + " (`--spec --page " + k + "`), carrying the plan's `Adjustments` list IN FULL: those are the corrections"
+      + " agreed at approval time and a slice without them silently drops what was agreed." })),
+  ];
+}
+
+// GREEDY PACKING ALONG THE SEAMS. Rows arrive in build order and are taken in that order, so a chunk is always a
+// contiguous run and never a re-ordering of the plan. A row heavier than the whole budget gets a chunk to itself
+// rather than being split: a structural unit — one tab, one region — is the smallest thing a task may be.
+function chunkRows(rows, B) {
+  const out = [];
+  let cur = [];
+  let w = 0;
+  for (const r of rows) {
+    if (cur.length && w + r.weight > B.chunk) { out.push(cur); cur = []; w = 0; }
+    cur.push(r);
+    w += r.weight;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+
 const shortHash = (s) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
-// The identity of a task: its page and its group, nothing else. Not the row labels — a task whose rows changed is
-// the SAME task with a changed deliverable (that is the drift signal below), not a new one whose status resets.
-const taskId = (pageKey, baseTitle) => shortHash(pageKey + " " + baseTitle);
+// The identity of a task: its page, the artifact it writes, and the structural anchor its chunk starts at.
+// NOT the row labels — a task whose rows changed is the SAME task with a changed deliverable (that is the drift
+// signal below), not a new one whose status resets. And not the chunk's ORDINAL: numbering the chunks is what
+// makes one extra field renumber every chunk after it and orphan every status recorded against them.
+const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + artifact + " " + anchor);
 // The row set's own digest, so a `done` task whose deliverables later changed can be told from one that did not.
-const rowsDigest = (rows) => shortHash(rows.map((r) => r.label).join(" "));
+// The VERIFIER PAYLOAD is digested alongside the label because a rename moves neither count nor caption: the
+// coverage row still reads `Fields — 12 expected` when a field has been renamed under it, and digesting the label
+// alone reported no drift on exactly the change a built page has to be re-checked against.
+const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.stringify(r.vk ?? null)}`).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -107,32 +244,63 @@ export const taskFileName = (task) => {
   return `task-${slug}-${task.id}.md`;
 };
 
-// ONE task per (page, group). The rows are `checklistGroups`' rows verbatim: a task carries what the plan says and
+// ONE task per artifact chunk. The rows are `checklistGroups`' rows verbatim, carrying the group they came from so
+// the file still says which part of the plan each deliverable belongs to: a task carries what the plan says and
 // adds nothing of its own, so nothing can be in a task that `--verify` will not later ask about.
-function taskOf(group, order, identity = new Map()) {
-  const base = baseTitleOf(group);
-  const rows = group.rows.map((r) => ({
+function taskOf(chunk, order) {
+  const { artifact, pageKey, label, anchor, identityKey, srcRows } = chunk;
+  const rows = srcRows.map((r) => ({
     label: r.label,
+    group: r.groupTitle,                   // the plan group this deliverable was read from
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
   }));
   const task = {
-    id: taskId(identity.get(group.pageKey) || group.pageKey, base),
-    pageKey: group.pageKey,
-    group: base,
-    title: group.title,
+    id: taskId(identityKey, artifact, anchor),
+    pageKey,
+    artifact,
+    writesTo: writesToOf(artifact),
+    anchor,
+    group: label,
+    title: label,
+    groups: [...new Set(srcRows.map((r) => r.groupTitle))],
     order,
-    phase: phaseOf(base),
+    phase: chunk.phase,
     origin: TASK_ORIGIN_ENGINE,
     status: S_TODO,
     rows,
+    weight: srcRows.reduce((a, r) => a + r.weight, 0),
     gatedRows: rows.filter((r) => r.vk).length,
     naRows: rows.filter((r) => r.na).length,
-    rowsDigest: rowsDigest(rows),
+    rowsDigest: rowsDigest(srcRows),
+    dependsOn: [],
     notes: "",
   };
   task.file = taskFileName(task);
   return task;
+}
+
+// THE LABEL a human reads in the index and in the file name. An artifact that was NOT cut keeps the plain artifact
+// name; a chunk is named after the structural unit it starts at, so two chunks of one page are told apart by where
+// they begin rather than by a number that moves when the page grows.
+function chunkLabel(artifact, rows, cut) {
+  const base = artifact === ARTIFACT_REFS ? REFS_GROUP
+    : artifact === ARTIFACT_SCAFFOLD ? "Scaffolding"
+    : artifact.startsWith("review:") ? REVIEW_GROUP
+    : "Page build";
+  if (!cut) return base;
+  const head = String(rows[0].label).split(/\s+—\s+/)[0].replace(/[`*]/g, "").trim();
+  return `${base} — from ${head.slice(0, 48)}`;
+}
+
+// The rows of one artifact, in build order, each tagged with the group it came from and weighed. Ordering is the
+// group phase (Confirm first, review last) and then the plan's own emission order — the same sequence the
+// per-group slicing walked, so bucketing changes WHO builds a row, never WHEN it is built relative to the others.
+function artifactRows(groups, B) {
+  return groups
+    .map((g, i) => ({ g, i, base: baseTitleOf(g) }))
+    .sort((a, b) => (phaseOf(a.base) - phaseOf(b.base)) || (a.i - b.i))
+    .flatMap(({ g, base }) => g.rows.map((r) => ({ ...r, groupTitle: base, weight: rowWeight(r, base, B) })));
 }
 
 // THE TASK SET. `planVersion` is the engine's own plan version — the string a `decisions.md` approval names — so a
@@ -141,17 +309,99 @@ export function buildTaskSet(result, opts = {}) {
   const groups = checklistGroups(result, opts);
   const order = pageOrder(result);
   const identity = pageIdentities(result);
-  const ranked = groups.map((g, i) => ({ g, i })).sort((a, b) => {
-    const byPage = groupRank(order, a.g, baseTitleOf(a.g)) - groupRank(order, b.g, baseTitleOf(b.g));
-    if (byPage !== 0) return byPage;
-    const byPhase = phaseOf(baseTitleOf(a.g)) - phaseOf(baseTitleOf(b.g));
-    return byPhase !== 0 ? byPhase : a.i - b.i;   // stable: the emission order breaks a phase tie
+  const B = budgetOf(opts);
+  // BUCKET BY ARTIFACT. The bucket, not the group, is the unit a task is cut from — two tasks that would write one
+  // page body are one bucket here and can therefore never be handed to two sub-agents.
+  const buckets = new Map();
+  groups.forEach((g, i) => {
+    const base = baseTitleOf(g);
+    const artifact = artifactOf(g, base, identity);
+    let b = buckets.get(artifact);
+    if (!b) {
+      b = {
+        artifact,
+        pageKey: g.pageKey,
+        identityKey: identity.get(g.pageKey) || g.pageKey,
+        rank: groupRank(order, g, base),
+        seen: i,
+        groups: [],
+      };
+      buckets.set(artifact, b);
+    }
+    // A bucket sorts where its EARLIEST group sorted, so bucketing never moves a page ahead of its own children.
+    b.rank = Math.min(b.rank, groupRank(order, g, base));
+    b.seen = Math.min(b.seen, i);
+    b.groups.push(g);
   });
+  const ordered = [...buckets.values()].sort((a, b) => (a.rank - b.rank) || (a.seen - b.seen));
+  // The cache is fetched before anything is built, so it leads the queue — ahead of the scaffolding, which is the
+  // first thing that would otherwise be reading contracts of its own.
+  const refs = {
+    artifact: ARTIFACT_REFS, pageKey: "run", identityKey: "run", rank: -1, seen: -1,
+    groups: [{ pageKey: "run", baseTitle: REFS_GROUP, title: REFS_GROUP, rows: refsRows(result) }],
+  };
+  const chunks = [refs, ...ordered].flatMap((b) => chunksOf(b, B));
+  const tasks = chunks.map((c, i) => taskOf(c, i + 1));
   return {
     entity: result.entity || null,
     planVersion: result.planVersion || null,
-    tasks: ranked.map(({ g }, i) => taskOf(g, i + 1, identity)),
+    budget: B,
+    tasks: withDependencies(tasks),
   };
+}
+
+// Cut one bucket into the tasks it needs. Under the budget that is exactly ONE task — the monolithic case is this
+// function returning a single chunk, not a separate path with its own contract.
+function chunksOf(bucket, B) {
+  const rows = artifactRows(bucket.groups, B);
+  if (!rows.length) return [];
+  const packed = chunkRows(rows, B);
+  const cut = packed.length > 1;
+  const used = new Map();
+  return packed.map((srcRows) => {
+    // Two chunks of one bucket can only share an anchor when the plan repeats a row label verbatim. Disambiguating
+    // by occurrence keeps both addressable; it is scoped to the repeat, so it cannot renumber unrelated chunks.
+    const key = structuralKey(srcRows[0].label);
+    const n = (used.get(key) || 0) + 1;
+    used.set(key, n);
+    return {
+      artifact: bucket.artifact,
+      pageKey: bucket.pageKey,
+      identityKey: bucket.identityKey,
+      anchor: n > 1 ? `${key}#${n}` : key,
+      label: chunkLabel(bucket.artifact, srcRows, cut),
+      phase: phaseOf(srcRows[0].groupTitle),
+      srcRows,
+    };
+  });
+}
+
+// WHAT MUST BE DONE BEFORE THIS TASK STARTS, as ids the orchestrator can check rather than an ordering it has to
+// infer. Two things are load-bearing: the scaffolding precedes everything that writes (a page cannot be saved into
+// a package that does not exist), and a task that writes an artifact follows the previous task writing THAT SAME
+// artifact. The second is the one that makes `get-page → merge → update-page` safe: same-artifact chunks are
+// chained, so no parallel dispatch of them is ever legal, and a queue walked in `order` already satisfies it.
+function withDependencies(tasks) {
+  const scaffolds = tasks.filter((t) => t.artifact === ARTIFACT_SCAFFOLD).map((t) => t.id);
+  // The cache writes no stand artifact, so `writesTo` cannot express that it still blocks every builder: they all
+  // read the files it produces. That is a DEPENDENCY, and it is the reason dependencies are published separately
+  // from the write target rather than being inferred from it.
+  const refs = tasks.filter((t) => t.artifact === ARTIFACT_REFS).map((t) => t.id);
+  const lastOn = new Map();
+  return tasks.map((t) => {
+    const deps = [];
+    if (t.artifact !== ARTIFACT_REFS) deps.push(...refs);
+    if (t.artifact !== ARTIFACT_SCAFFOLD && t.writesTo) deps.push(...scaffolds);
+    const prev = lastOn.get(t.artifact);
+    if (prev) deps.push(prev);
+    lastOn.set(t.artifact, t.id);
+    // A review reads the page it judges, so it follows every task that wrote that page.
+    if (t.artifact.startsWith("review:")) {
+      const page = `page:${t.artifact.slice("review:".length)}`;
+      deps.push(...tasks.filter((o) => o.artifact === page).map((o) => o.id));
+    }
+    return { ...t, dependsOn: [...new Set(deps)].filter((d) => d !== t.id) };
+  });
 }
 
 // A task's identity must survive a page KEY changing under it. `claimPageKey` gives a base key to its first
@@ -169,7 +419,8 @@ function pageIdentities(result) {
 
 // ---8<--- THE TASK FILE ---8<---
 
-const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest"];
+const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest",
+  "writesTo", "dependsOn", "agentNonce"];
 
 function renderFrontMatter(task, set) {
   const v = {
@@ -179,6 +430,15 @@ function renderFrontMatter(task, set) {
     // current one here would erase the drift warning on the first re-slice after the plan changed, which is the
     // one moment it has to survive.
     rowsDigest: task.recordedDigest || task.rowsDigest,
+    // The artifact this task writes on the stand — empty for a read-only task. Two tasks may run at the same time
+    // only when these differ, which is a comparison and not a judgement call.
+    writesTo: task.writesTo || "",
+    dependsOn: (task.dependsOn || []).join(" "),
+    // WRITTEN BY THE SUB-AGENT, checked by the engine. One sub-agent per task is the contract; the orchestrator
+    // that composes the prompt is also the one that grouped tasks in testing, so it cannot be the thing that
+    // proves the contract held. A nonce the sub-agent mints itself, appearing on two files, is one sub-agent
+    // having closed two tasks — the engine sees it without asking either of them.
+    agentNonce: task.agentNonce || "",
   };
   return ["---", ...FRONT_MATTER_KEYS.map((k) => `${k}: ${v[k]}`), "---"];
 }
@@ -189,9 +449,11 @@ function closedByOf(row) {
   return "an evidence record + a judge verdict";
 }
 
+// The `From` column names the plan group each deliverable was read from. A task now spans several groups (they
+// write one artifact between them), so without it the file would no longer say which part of the plan a row is.
 function renderRowTable(rows) {
-  const L = ["| # | Deliverable | Closed by |", "| --- | --- | --- |"];
-  rows.forEach((r, i) => L.push(`| ${i + 1} | ${r.label} | ${closedByOf(r)} |`));
+  const L = ["| # | From | Deliverable | Closed by |", "| --- | --- | --- | --- |"];
+  rows.forEach((r, i) => L.push(`| ${i + 1} | ${r.group || "—"} | ${r.label} | ${closedByOf(r)} |`));
   return L;
 }
 
@@ -201,6 +463,28 @@ function endWithOneBlankLine(text) {
   let end = text.length;
   while (end > 0 && text[end - 1] === "\n") end--;
   return text.length - end >= 3 ? `${text.slice(0, end)}\n\n` : text;
+}
+
+// THE ONE-SUB-AGENT CONTRACT, stated in the file the sub-agent is handed rather than only in the orchestrator's
+// instructions — the file is the prompt, so the rule that binds the reader has to be in it. The write ordering and
+// the nonce are both here because both are checkable afterwards: `writesTo` says what may not run beside this, and
+// the nonce is how a second task closed by this same sub-agent becomes visible to the engine.
+function oneAgentBlock(task) {
+  const L = [];
+  if (task.writesTo) {
+    L.push(`- **Writes:** \`${task.writesTo}\` — no other task may be running against this artifact. A task with a`
+      + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not.");
+  } else {
+    L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
+  }
+  if (task.dependsOn?.length) {
+    L.push(`- **Depends on:** ${task.dependsOn.map((d) => `\`${d}\``).join(" · ")} — each must read \`done\` before`
+      + " this starts. Read their `## Notes` first: what they answered on the stand is not repeated here.");
+  }
+  L.push("- **One sub-agent, one task:** do not pick up another task file in this session. Before finishing, put a"
+    + " value you mint yourself in `agentNonce:` above (any short unique string). The engine reports the same nonce"
+    + " appearing twice, which is how a task closed by a sub-agent that was already working another one is found.");
+  return L;
 }
 
 export function renderTaskFile(task, set = {}) {
@@ -218,6 +502,7 @@ export function renderTaskFile(task, set = {}) {
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
     `- **Status vocabulary:** ${statusVocabulary} — set \`status\` in the front matter above`,
+    ...oneAgentBlock(task),
     "",
     ENGINE_BODY_HEADING,
     "",
@@ -274,13 +559,16 @@ const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 // `Step` is the position in the QUEUE, which is not the same fact as a task file's `order` field: an
 // orchestrator-authored file is never rewritten, so the `order` it declared for itself stands even where the queue
 // puts it. Naming the column `#` invited reading the two as one number.
+// `Writes` is in the table because the orchestrator's parallelism rule reads off it: two tasks may be dispatched
+// at once only when this column differs between them. A blank cell is a read-only task.
 function indexRows(tasks) {
-  const L = ["| Step | Task | Page | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- |"];
+  const L = ["| Step | Task | Page | Writes | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
     const gatedNote = t.gatedRows ? ` (${t.gatedRows} gated)` : "";
     const rows = `${t.rows.length}${gatedNote}`;
     const mark = t.unread ? "⚠ unread" : statusMark(t.status);
-    L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
+    const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
+    L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${writes} | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
@@ -301,8 +589,32 @@ function taskAttention(t) {
   return out;
 }
 
+// ONE SUB-AGENT PER TASK, CHECKED OUTSIDE THE LOOP THAT COULD BREAK IT. The orchestrator composes the prompt and
+// reads the reply, so it cannot also be the proof that it dispatched one sub-agent per task — in testing it was
+// the orchestrator that grouped tasks. A nonce the sub-agent mints for itself is evidence neither of them controls:
+// the same value on two files is one sub-agent that closed both, which is the violation, stated with the files.
+function nonceAttention(tasks) {
+  const byNonce = new Map();
+  for (const t of tasks) {
+    const n = (t.agentNonce || "").trim();
+    if (!n || t.unread) continue;
+    if (!byNonce.has(n)) byNonce.set(n, []);
+    byNonce.get(n).push(t);
+  }
+  const out = [];
+  for (const [nonce, ts] of byNonce) {
+    if (ts.length < 2) continue;
+    out.push(`- \`agentNonce: ${nonce}\` is on ${ts.length} task files — ${ts.map((t) => "`" + t.file + "`").join(" · ")}`
+      + " — so ONE sub-agent closed them all. The contract is one sub-agent per task: re-check every one of those"
+      + " files against the page as it is now, because what a single session reported for several tasks was not"
+      + " built under the contract the tasks were written for.");
+  }
+  return out;
+}
+
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
+  out.push(...nonceAttention(set.tasks));
   for (const b of set.blocked || []) {
     out.push(`- \`${b.file}\` — NOT READ and NOT WRITTEN: ${b.reason}. Its task got no file this run, and this file was`
       + " left exactly as it is — it may hold the only record of work already done on the stand. Fix its front matter"
@@ -437,6 +749,9 @@ function carryOver(task, prev) {
     status,
     notes: prev.notes || "",
     file: prev.file || task.file,        // a file the caller renamed keeps its name; the id is the identity
+    // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
+    // engine's, and rewriting it away would erase the one fact that shows a task was closed by a shared session.
+    agentNonce: prev.meta.agentNonce || "",
     recordedDigest: held,
     drifted: held !== task.rowsDigest,
   };
@@ -452,6 +767,13 @@ function adoptOrchestrated(e) {
     order: Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER,
     phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR, status: e.meta.status || S_TODO,
     rows: [], gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
+    // An orchestrator task declares its own artifact and its own nonce. Both are READ, never authored here: a
+    // repair task the orchestrator added writes a page like any other task, and it must take part in the same
+    // parallelism rule and the same one-sub-agent check as the engine's own.
+    artifact: e.meta.writesTo || `orchestrator:${e.meta.id}`,
+    writesTo: e.meta.writesTo || "",
+    dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
+    agentNonce: e.meta.agentNonce || "",
     file: e.file,
   };
 }
