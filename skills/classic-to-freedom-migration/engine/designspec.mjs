@@ -192,7 +192,7 @@ function rowsForFeatures(standardFeatures, tabRegion) {
 function widgetSource(w) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
-  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
+  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed)"; // ENG-96327 — the re-bind / MainContainer-fallback recipe lives in the mapping doc, not this cell
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided

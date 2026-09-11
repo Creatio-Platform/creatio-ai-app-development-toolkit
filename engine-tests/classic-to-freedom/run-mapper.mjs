@@ -910,9 +910,16 @@ check("ContactCommunication: detail over the ContactCommunication entity → Com
   commcs.standardFeatures.some(s => s.feature === "Communication options" && s.uiShape === "component" && s.inferredFromEntity)
   && !commcs.details.some(d => d.entity === "ContactCommunication"),
   () => ({ features: commcs.standardFeatures.map(s => s.feature), details: commcs.details.map(d => d.entity) }));
-check("ContactCommunication: the note says use the native crt.CommunicationOptions component (NOT the fabricated crt.ContactCommunication) + do NOT downgrade to a plain grid (package/feature gap = a decision, not a silent fallback)",
-  commcs.needsDecision.some(n => n.kind === "standard-feature" && /crt\.CommunicationOptions/.test(n.reason) && /NOT `?crt\.ContactCommunication/.test(n.reason) && /do NOT downgrade/i.test(n.reason) && /CrtCustomer360App/.test(n.reason)),
-  () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication/.test(n.reason))?.reason);
+// ENG-96327 — the verbose base-component build recipes were TRIMMED out of the plan/notes; they live once in the
+// mapping DOC the build agent is handed. Assert the DOC (the source of truth the agent reads) still carries each.
+const MAPPING_DOC = fs.readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md", import.meta.url)), "utf8");
+check("ENG-96327: the mapping DOC (build agent's source) carries the base-component recipes trimmed from the plan — Approvals two-components, Activities/Emails not-a-Timeline, Communication-options crt.CommunicationOptions, DCM PageWithTabsAndProgressBarTemplate + DcmSchemaManager + flag-icon",
+  /TWO components/.test(MAPPING_DOC) && /crt\.CommunicationOptions/.test(MAPPING_DOC) && /Timeline/.test(MAPPING_DOC)
+  && /DcmSchemaManager/.test(MAPPING_DOC) && /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC),
+  () => "doc phrases present");
+check("ContactCommunication → Communication-options: the plan/decision note is the SHORT prerequisite (CrtCustomer360App + CommonCommunicationsBehavior on-stand), NOT the full recipe (which lives in the mapping doc)",
+  commcs.needsDecision.some(n => n.kind === "standard-feature" && /CrtCustomer360App/.test(n.reason) && /CommonCommunicationsBehavior/.test(n.reason) && !/do NOT downgrade/i.test(n.reason)),
+  () => commcs.needsDecision.find(n => n.kind === "standard-feature" && /Communication|CrtCustomer360App/.test(n.reason))?.reason);
 
 /* ---- virtual-field: a bound field whose column is NOT on the entity (auto-filled companion from a lookup)
    is flagged (build read-only + wire the handler), so it is NOT silently dropped → a lone-field island ---- */
@@ -1032,19 +1039,21 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 // Visa=Approvals domain note must ride on the standardFeature AND surface in the Layout row (the
 // standard-feature decision is excluded from ⚠ Confirm) — so the agent doesn't wrongly downgrade it.
-check("Approvals: Visa carries the 'don't downgrade' domain note in the feature + design-spec Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && /how Approvals is stored/.test(s.note || ""))
-  && /Approvals[\s\S]*?how Approvals is stored/.test(spec));
-check("Approvals: the note says it is TWO components (get-component-info) — add the module ABOVE the profile island AND the list, not just the list",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals"
-    && /TWO components/.test(s.note || "") && /get-component-info/.test(s.note || "")
-    && /ABOVE the profile island/.test(s.note || "") && /Adding only the list is INCOMPLETE/.test(s.note || "")),
+check("Approvals: Visa is DETECTED as the Approvals feature (component); the verbose 'don't downgrade' recipe is no longer duplicated in the plan (it lives in the mapping doc)",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
+  && !/how Approvals is stored/.test(spec),
+  () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals"));
+check("Approvals: the verbose TWO-components/get-component-info/ABOVE-the-island how-to is no longer in the plan note (it lives in the mapping doc); the feature is still detected",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
+  && !/get-component-info/.test(dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note || "")
+  && !/get-component-info/.test(spec),
   () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note);
 // #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline; the 'NOT a Timeline' note must ride on
 // the standardFeature AND surface in the Layout row (a real agent rebuilt them as a crt.Timeline — wrong).
-check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layout row",
-  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
-  && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
+check("#6: Activities is DETECTED as a filtered related list (uiShape list); the 'NOT a Timeline' domain note is no longer in the plan (it lives in the mapping doc)",
+  dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && s.uiShape === "list")
+  && !/NOT a Timeline/i.test(spec),
+  () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Activities"));
 // A method belongs to the ⚠ Custom methods worklist ONLY — never repeated as a Logic row.
 const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
 check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Custom methods only)",
@@ -2802,9 +2811,9 @@ check("ENG-95543: a matching schema NAME beats a matching entity — the resolve
   () => resolveFeatureRow("ContactCommunicationDetail", "ContactCommunication")?.meta);
 // The derived `FEATURE_CATALOG` view must still answer for the callers and goldens that read it — the data moved,
 // the shape did not.
-check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/note/templateProvided)",
-  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && FEATURE_CATALOG.FileDetailV2?.templateProvided === true
-  && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list" && /Approvals renders as TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.note || ""),
+check("ENG-95543: the derived FEATURE_CATALOG view keeps the shape its callers read (feature/freedom/uiShape/templateProvided)",
+  FEATURE_CATALOG.VisaDetailV2?.feature === "Approvals" && /TWO components/.test(FEATURE_CATALOG.VisaDetailV2?.freedom || "")
+  && FEATURE_CATALOG.FileDetailV2?.templateProvided === true && FEATURE_CATALOG.ActivityDetailV2?.uiShape === "list",
   () => FEATURE_CATALOG);
 
 // review (PR#58 Minor) — mapImages: with >1 image and exactly ONE IMAGELOOKUP column, only the FIRST column-less
@@ -2903,20 +2912,24 @@ const dcmCs = runMigration({ entity: "X",
 check("#8 DCM: Action Dashboard emits BOTH Case progress bar and Next steps components",
   dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar")
   && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps"));
-check("#8 DCM: each component carries the 'NOT in the default template — ADD it' + auto-populate note (widget + decision)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /NOT in the default Freedom form template/.test(w.note || "") && /auto-populates/.test(w.note || ""))
-  && dcmCs.changeSet.needsDecision.some((n) => n.kind === "widget" && /NOT in the default Freedom form template/.test(n.reason)));
-check("#8 DCM: the note tells HOW to check the case on-stand — SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager (the false-negative that missed the stage bar)",
-  dcmCs.changeSet.widgets.every((w) => /DcmSchemaManager/.test(w.note || "") && /NOT 'CaseSchemaManager'/.test(w.note || ""))
-  && /DcmSchemaManager/.test(dcmCs.designSpec) && !/ManagerName='CaseSchemaManager'\b(?!.*wrong)/.test(dcmCs.designSpec));
+check("#8 DCM: both components are emitted (Case progress bar + Next steps) and carry the SHORT auto-populate note; the 'not in the default template / how to add' recipe is trimmed from the plan (it lives in the mapping doc)",
+  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /auto-populates/.test(w.note || ""))
+  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /auto-populates/.test(w.note || ""))
+  && !/NOT in the default Freedom form template/.test(dcmCs.designSpec),
+  () => dcmCs.changeSet.widgets.map((w) => w.note));
+check("#8 DCM: the on-stand case check (SysSchema ManagerName='DcmSchemaManager', NOT CaseSchemaManager) lives in the mapping doc, not the plan note",
+  /DcmSchemaManager/.test(MAPPING_DOC) && /CaseSchemaManager/.test(MAPPING_DOC)
+  && !/DcmSchemaManager/.test(dcmCs.designSpec),
+  () => "doc carries the DcmSchemaManager check; plan does not");
 check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress bar as PROVIDED by PageWithTabsAndProgressBarTemplate (re-bind), not a stale 'ADD to default template'",
   /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec)
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
-check("#8 DCM: the notes carry the correct PLACEMENT — progress bar prefers PageWithTabsAndProgressBarTemplate (re-bind) with MainContainer fallback (not MainHeader); Next steps a tab beside Feed/Attachments (tools slot, flag-icon)",
-  dcmCs.changeSet.widgets.some((w) => w.widget === "Case progress bar" && /PageWithTabsAndProgressBarTemplate/.test(w.note || "") && /RE-BIND/i.test(w.note || "") && /in `MainContainer`/.test(w.note || "") && /NOT in `MainHeader`/.test(w.note || ""))
-  && dcmCs.changeSet.widgets.some((w) => w.widget === "Next steps" && /BESIDE the Feed and Attachments tabs/.test(w.note || "") && /`tools` slot/.test(w.note || "") && /flag-icon/.test(w.note || "")),
+check("#8 DCM: the widget PLACEMENT recipe (PageWithTabsAndProgressBarTemplate re-bind / MainContainer fallback, tools slot, flag-icon) lives in the mapping doc, not the plan note",
+  /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC) && /MainContainer/.test(MAPPING_DOC)
+  && !/flag-icon/.test(dcmCs.designSpec)
+  && !/RE-BIND to the case; hand-adding/.test(dcmCs.designSpec),
   () => dcmCs.changeSet.widgets.map((w) => w.note));
 // Recommendations is an inherited base-template container (empty by default, runtime-filled). It is classified
 // `chrome` and HIDDEN from the plan (kept in chromeWidgets for inspection) — not via a hardcoded per-run "ignore".
