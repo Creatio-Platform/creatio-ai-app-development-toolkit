@@ -48,7 +48,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
@@ -250,6 +250,39 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   const drift = enumDriftIssues(manifest.enumVocabulary);
   if (drift.mismatches.length)
     reasons.push(`enum drift — the stand's own enum values DISAGREE with the engine's pinned table: ${drift.mismatches.join("; ")}. Every element of an affected kind is mis-identified; update the pinned table in engine.mjs from this platform version's \`sysenums.js\` before planning.`);
+  return { blocked: reasons.length > 0, reasons };
+}
+
+// THE LIST GATE (ENG-94714). `computeGate` above answers for the RECORD page and deliberately excludes everything
+// tagged `role: "section"` — a filter added because a section body that would not parse used to block a form-page
+// plan that never consumed its `diff` (the spurious block recorded further down at the `sectionParseErrors` note).
+// That exclusion was right then and is wrong now for HALF its scope: since the section `diff` IS folded and mapped,
+// a structural gap in it means the LIST page is built from an incomplete reading — while the form page is still
+// perfectly fine.
+//
+// So the answer is scoped, not moved: this gate blocks the LIST deliverable and leaves `gate.blocked` alone. The
+// form-page plan stays approvable, the list page says it is not, and neither statement is made on the other's
+// evidence. `blocked: false` with no section at all is the normal case for a mini/child fold.
+function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
+  const reasons = [];
+  if (sectionParseErrors.length) {
+    reasons.push(`the section schema body failed to parse (${sectionParseErrors.map((e) => e.pkg).join(", ")}) — every element the section declares in its view \`diff\` is unreadable, so the list page below is built from the method-body signals alone. Fix the body (or re-collect the section bundle) and re-run`);
+  }
+  const sectionStruct = parseDiagnostics.filter((d) => d.role === "section" && isStructuralDiag(d));
+  if (sectionStruct.length) {
+    const fields = [...new Set(sectionStruct.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
+    reasons.push(`the section's parse could not statically resolve structural field(s): ${fields} — its \`diff\` may be INCOMPLETE, so an element the Classic list shows can be missing from the ChangeSet below with nothing to name it`);
+  }
+  // The fold's own correctness warnings — a section op that hit a missing item, or a seed that is not a real
+  // fetched body. Both mean the reading of the section is wrong, not merely unrepresented, which is exactly the
+  // `correctness` severity's own definition.
+  const foldBad = (sectionEff?.warnings || []).filter((w) => w.severity === "correctness");
+  if (foldBad.length) {
+    reasons.push(`the section fold reported ${foldBad.length} correctness warning(s): ${[...new Set(foldBad.map((w) => w.hint))].join(" | ").slice(0, 400)}`);
+  }
+  if ((sectionEff?.unresolvedParents || []).length) {
+    reasons.push(`the section fold could not resolve parent(s): ${sectionEff.unresolvedParents.join(", ")} — supply the section's own template chain as \`section.seed\` (a second \`get-classic-page-sources\` rooted at the *Section schema), or its elements cannot be placed on a list region`);
+  }
   return { blocked: reasons.length > 0, reasons };
 }
 
@@ -458,14 +491,34 @@ function memberDigestOf(changeSet, scopeSchema) {
 // Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
 // so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
 // `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
-function sectionStubScopes(manifest, opts, sectionSchemas) {
-  if (opts.scopeSchema || !sectionSchemas.length) return [];
-  const changeSet = mapToFreedom(mergeHierarchy(sectionSchemas), {
+function sectionStubScopes(manifest, opts, sectionEff) {
+  if (opts.scopeSchema || !sectionEff) return [];
+  const changeSet = mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},
   });
   const schema = manifest.planMeta?.sectionSchema || "Section";
   return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+
+// THE SECTION VIEW (ENG-94714). The *Section chain folded over its OWN parent-template seed — the same
+// `mergeHierarchy` the record page uses, given the section's own `BaseDataView` chain instead of the page's
+// `BaseModulePageV2` one. `null` when no section chain was supplied, so every consumer has one thing to test.
+//
+// ONE fold, TWO consumers, on purpose. It used to be computed inside `sectionStubScopes` and thrown away with
+// that function's ChangeSet; the list page could not see it, which is why every element a section declared in its
+// `diff` was dropped. Folding it twice would be the other way to share it, and would let the two readings of the
+// same chain drift apart — the exact failure `mapping-table.mjs` was created to end.
+//
+// SEEDED, unlike the call this replaces. Without `seedTemplate` the fold has no `DataGrid`, no
+// `CombinedModeActionButtonsCardLeftContainer` and no `activeRowActions` to merge onto, so `templateOwned` is
+// false for the entire tree and base chrome is indistinguishable from what the section itself declares. The seed
+// is not polish here: it is what makes the section-owned/inherited split (and therefore a readable ⚠ worklist)
+// possible at all. A run whose manifest carries no `section.seed` still folds — it just reports the missing base
+// through the fold's own merge-onto-nothing warnings, which name the cause precisely.
+function foldSectionView(sectionSchemas, sectionSeed) {
+  if (!sectionSchemas.length) return null;
+  return mergeHierarchy(sectionSchemas, { seedTemplate: sectionSeed });
 }
 
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
@@ -1363,24 +1416,36 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
 // instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
 // own cause + remedy — a gate reason, not an abort.
 // `rowActions` — one entry per `DataGridActiveRow…` item the section declares, `{ name, caption?, condition?, package? }`.
-// Supplied on the manifest for the same reason a resolved list-column read is: it is evidence the layer parse does not
-// produce yet (the section view `diff` is not folded), and the plan must be able to carry it the moment someone reads
-// it off the section. Unioned with anything the layers do produce, so the automated source supersedes nothing.
+// Still accepted after ENG-94714 taught the fold to produce these itself: a run that collected no section bundle
+// (no `section.schemas`/`section.seed`) has no fold to read them from, and a row action read by hand off a stand must
+// still reach the plan. Unioned with the fold's own entries, and the FOLD wins — see `mergeRowActions`.
 function suppliedRowActions(section) {
   const list = Array.isArray(section?.rowActions) ? section.rowActions : [];
   return list.filter((ra) => ra && typeof ra === "object" && typeof ra.name === "string" && ra.name.trim());
 }
+// `seed` — the section's OWN parent-template chain (ENG-94714), the same shape as the top-level `manifest.seed`
+// and collected the same way: a SECOND `get-classic-page-sources` call rooted at the *Section schema, whose
+// `seed` block is copied here. It is what defines `CombinedModeActionButtonsCardLeftContainer`, `DataGrid` and
+// `activeRowActions` (`BaseDataView` [`CrtUIPlatform7x`]), so without it every section element merges onto
+// nothing and `templateOwned` is false for the whole tree — base chrome then reads as section-declared, which is
+// exactly the distinction the acceptance criteria turn on. OPTIONAL, and deliberately not a fail-loud key like
+// `listColumns`: a manifest authored before this existed must keep producing a plan (the fold then reports the
+// missing seed through its own `unresolvedParents` / merge-onto-nothing warnings, which say far more than an
+// abort would).
+const sectionSeedEntries = (section) => (Array.isArray(section?.seed) ? section.seed : []);
 function sectionInput(section, manifest) {
-  if (Array.isArray(section)) return { schemas: section, resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
-  if (!section || typeof section !== "object") return { schemas: [], resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
+  const empty = { schemas: [], seed: [], resolvedListColumns: null, listColumnIssue: null, rowActions: [] };
+  if (Array.isArray(section)) return { ...empty, schemas: section };
+  if (!section || typeof section !== "object") return empty;
   if (!Object.hasOwn(section, "listColumns")) {
     throw new Error("object-shaped section requires listColumns evidence; use a bare array only for the legacy manifest shape");
   }
   const schemas = Array.isArray(section.schemas) ? section.schemas : [];
+  const seed = sectionSeedEntries(section);
   const rowActions = suppliedRowActions(section);
   const resolved = normalizeResolvedListColumns(section.listColumns, manifest.entity, manifest.planMeta?.sectionSchema);
-  if (resolved.error) return { schemas, resolvedListColumns: null, listColumnIssue: resolved.error, rowActions };
-  return { schemas, resolvedListColumns: resolved, listColumnIssue: null, rowActions };
+  if (resolved.error) return { schemas, seed, resolvedListColumns: null, listColumnIssue: resolved.error, rowActions };
+  return { schemas, seed, resolvedListColumns: resolved, listColumnIssue: null, rowActions };
 }
 
 // Provenance of the columns the plan will actually RENDER: the resolver's own `source` when its set is the one
@@ -1464,8 +1529,9 @@ export function mergeSectionActions(fromLayers = []) {
 
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
-// EXPORTED because the layer arm is unreachable until the section view `diff` is folded — without a seam here the
-// precedence rule would ship with no way to test it.
+// EXPORTED as the seam this precedence rule is asserted through. Since ENG-94714 the fold arm is live (it carries
+// the `activeRowActions` items `mapSectionView` read), so the rule now decides a real collision rather than a
+// hypothetical one.
 export function mergeRowActions(fromLayers = [], fromManifest = []) {
   const byName = new Map();
   for (const ra of [...fromLayers, ...fromManifest]) {
@@ -1480,7 +1546,26 @@ export function mergeRowActions(fromLayers = [], fromManifest = []) {
   }
   return [...byName.values()];
 }
-function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = []) {
+// A diff-declared command-bar button in the shape `mergeSectionActions` and the command-bar table already speak.
+// `condition` stays a single method name because that is the field every existing renderer and golden reads;
+// `conditionProperty` and the full `conditions` list ride alongside it, because WHICH property a condition binds
+// (`visible` vs `enabled`) is the difference between a faithful port and an always-enabled button. The real
+// Opportunity section carries a button with BOTH, so a single-field shape cannot represent it.
+function diffActionAsSectionAction(a) {
+  const primary = a.conditions?.[0] || null;
+  return {
+    name: a.name, caption: a.caption ?? null, icon: null,
+    condition: primary?.method ?? null, conditionProperty: primary?.property ?? null,
+    conditions: a.conditions || [],
+    group: null, parent: a.parent ?? null, package: a.package ?? null,
+    source: a.source || "sectionDiff",
+  };
+}
+// `sectionView` (ENG-94714) — what the section declares in its OWN `diff`, read off the folded section view by
+// `mapSectionView`. Unioned with the method-body signals below rather than replacing them: the two sources see
+// different halves of the same list. `getSectionActions` reads the menu the section builds imperatively; the
+// `diff` declares the buttons it inserts into the command bar, and until now only the first half reached the plan.
+function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listColumnReadRejected = false, suppliedRows = [], sectionView = null) {
   if (!sectionSchemas.length && !resolvedListColumns && !listColumnReadRejected) return null;
   const quickFilters = unionQuickFilters(sectionSchemas);
   const chainColumns = [...new Set(sectionSchemas.flatMap((l) => l.listColumns || []))];
@@ -1498,7 +1583,14 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     schemaGathered: sectionSchemas.length > 0,
     listColumnReadRejected,
     addRecordMiniPage: sectionSchemas.findLast((l) => l.addRecordMiniPage != null)?.addRecordMiniPage ?? null,
-    sectionActions: mergeSectionActions(sectionSchemas.flatMap((l) => l.sectionActions || [])),
+    // Diff-declared buttons come LAST so that, when one name arrives from both surfaces, the `diff` wins field by
+    // field: it is the section's own structural declaration (parent container, index, the property each condition
+    // binds), while `getSectionActions` is read out of a method body. Neither entry is dropped — `mergeSectionActions`
+    // merges rather than replaces, so a caption only the imperative surface knows still survives.
+    sectionActions: mergeSectionActions([
+      ...sectionSchemas.flatMap((l) => l.sectionActions || []),
+      ...(sectionView?.commandBarActions || []).map(diffActionAsSectionAction),
+    ]),
     // Menu helpers no layer in the chain defines. Collected across layers, then cleared by any layer that resolved
     // one: a layer's parse sees only its own src, so the chain resolves what a single src cannot. What survives is a
     // completeness gap and rides into the command-bar decision.
@@ -1513,7 +1605,17 @@ function analyzeSectionChain(sectionSchemas, resolvedListColumns = null, listCol
     listColumnSource: resolvedColumnSource(useResolved, resolvedListColumns, chainColumns),
     listColumnNotes: notes,
     quickFilters,
-    rowActions: mergeRowActions(sectionSchemas.flatMap((l) => l.rowActions || []), suppliedRows),
+    // The fold's own row actions now exist (they are the `activeRowActions` items the section declares), and they
+    // are passed as the LAYER arm — the arm `mergeRowActions` already documents as winning over a manifest entry,
+    // for exactly this moment: a hand-supplied row action must not mask the real one once the engine can read it.
+    rowActions: mergeRowActions([
+      ...sectionSchemas.flatMap((l) => l.rowActions || []),
+      ...(sectionView?.rowActions || []),
+    ], suppliedRows),
+    // The whole folded reading, carried so the ChangeSet can raise what the surfaces above do not absorb: the
+    // declared-but-unmodelled configuration (`controlColumnName` and its family) and any section-declared element
+    // the list vocabulary has no reading for. `null` when no section chain was folded.
+    sectionView,
     processLaunch: sectionSchemas.some((l) => l.processLaunch),
     processNames: [...new Set(sectionSchemas.flatMap((l) => l.processLaunch?.names || []))],
   };
@@ -2132,9 +2234,13 @@ export function runMigration(manifest, opts = {}) {
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionData = sectionInput(manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
+  // ENG-94714 — the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
+  // digest below and the list-page mapping further down. See `foldSectionView`.
+  const sectionSeed = parse(sectionData.seed);
+  const sectionEff = foldSectionView(sectionSchemas, sectionSeed);
   // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
   // guard, the never-null schema label, and why it is a function rather than inline here.
-  const sectionScopes = sectionStubScopes(manifest, opts, sectionSchemas);
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionEff);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -2222,7 +2328,7 @@ export function runMigration(manifest, opts = {}) {
   reportRegistryFindings(changeSet, manifest, baseDir);
 
   // section analysis — union the signals across the section schema chain (last-wins for the mini page).
-  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions);
+  const section = analyzeSectionChain(sectionSchemas, sectionData.resolvedListColumns, sectionData.listColumnIssue != null, sectionData.rowActions, mapSectionView(sectionEff));
   // …and the LIST-PAGE ChangeSet built from those signals — the positioned machine artifact the build step consumes,
   // so the list page is a deliverable on the same footing as the form page. Signals alone render only as prose, which
   // no build step can consume. `null` when the run has no section (mini/child scope).
@@ -2323,6 +2429,9 @@ export function runMigration(manifest, opts = {}) {
   // one annotated array is what every surface reports (ENG-95862 item 5).
   eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
+  // …and the LIST page's own verdict, on the section's evidence alone (ENG-94714). Separate from `gate` on purpose:
+  // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
+  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
@@ -2388,6 +2497,7 @@ export function runMigration(manifest, opts = {}) {
     decisionSummary, // needsDecision counts by kind — the agent's 20% worklist, at a glance
     changeSet,       // full Freedom ChangeSet: viewConfigDiff / *ConfigDiff / rules / details / needsDecision / …
     section,         // section-schema analysis (list page): add-record mini page, section actions, columns, quick filters
+    listGate,        // the LIST page's own gate — blocked when the SECTION's evidence is incomplete, independently of `gate`
     listChangeSet,   // the LIST page's own ChangeSet: positioned grid columns / quick filters / command-bar actions
     childPages,      // custom-detail child entities whose edit page is a recursive sub-migration
     typedPages,      // per-type Classic edit-page family (typed entity) — first-class scope + precedence trap
