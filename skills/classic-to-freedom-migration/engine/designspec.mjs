@@ -346,8 +346,8 @@ function renderLogicSection(cs) {
     ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
-  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`] : [];
-  return ["#### Logic", ...table, ...pointer, ""];
+  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Custom methods** below.`] : [];
+  return ["#### Business rules", ...table, ...pointer, ""];
 }
 
 // The "Add record" line: which mini page (folded / cyclic / not-folded), a verified full edit page, or unverified.
@@ -1063,7 +1063,34 @@ function foldByCaller(stubs) {
   return { ordered, folded: parentOf.size };
 }
 
-// The ⚠ Imperative members worklist. Mirrors ⚠ Imperative logic: a table of port units, with each row's unresolved
+// ENG-96534 — the two plain-language columns the human plan shows for a logic row, in place of the mechanical
+// Trigger / Body does / Reads → writes: WHAT the item does and a step-by-step USE CASE. Both are authored on the
+// behaviour card by the step-5.1 analysis and carried per row in the behaviour index (`whatItDoes` from the card's
+// "What it is"; `useCase` a non-technical walkthrough the analyst writes). No card yet → the same `⚠ not described`
+// marker the `Described in` column uses, so a blank can never read as "nothing to do". `esc` (via `strip`) folds any
+// newline the walkthrough contains into a space, so a multi-step narrative stays in one cell.
+const describedField = (x, key) => {
+  const t = x.describedIn?.[key];
+  return typeof t === "string" && t.trim() ? esc(t) : "⚠ not described";
+};
+const whatItDoesText = (x) => describedField(x, "whatItDoes");
+const useCaseText = (x) => describedField(x, "useCase");
+// ENG-96534 (Rita + Kravchuk review) — a row is "described" for the warning banner iff BOTH plain-language cells
+// carry prose, because both render `⚠ not described` INDEPENDENTLY: a row with one filled and one empty still shows a
+// `⚠ not described` cell, so it must count as undescribed or the banner and the cells disagree. `&&`, not `||`.
+const hasPlainLanguage = (x) => {
+  const t = (v) => typeof v === "string" && v.trim();
+  return !!(t(x.describedIn?.whatItDoes) && t(x.describedIn?.useCase));
+};
+
+// ENG-96534 — the columns are plain-language for the human approver: What the item does + Use case (from the
+// behaviour card) replace the mechanical Trigger / Body does / Reads → writes.
+const IMPERATIVE_LOGIC_TABLE_HEADER = [
+  "| Method | Source | What the item does | Use case | Freedom target | Described in |",
+  "| --- | --- | --- | --- | --- | --- |",
+];
+
+// The ⚠ Other declared logic worklist. Mirrors ⚠ Custom methods: a table of port units, with each row's unresolved
 // aspect stated IN ITS OWN CELL rather than escalated to ⚠ Confirm — a bullet list can only say "this row is open",
 // it cannot say "we know what it is, we do not know whether the template already provides it".
 function renderImperativeMembers(cs) {
@@ -1071,19 +1098,21 @@ function renderImperativeMembers(cs) {
   const rows = rawRows
     .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
   if (!rows.length) return [];
-  const described = rows.filter((d) => d.describedIn).length;
-  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, "",
-    `> ${described} of ${rows.length} carry a behaviour card` +
-    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), "",
-    "> Each row is declared on this page, but its behaviour lives OUTSIDE the page body. Mark each **ported** (naming",
-    "> the Freedom artifact you built), **dropped** (with the reason) or **blocked** — the same standard as a method row.",
-    "> **Described in** names the behaviour card and acceptance criteria a step-5.1 run established: port against those,",
-    "> not against the member's name. `⚠ not described` means no run has covered it yet.", ""];
+  const described = rows.filter(hasPlainLanguage).length;
+  const undescribed = rows.length - described;
+  // ENG-96327 — warn ONLY when the analysis could not explain some members (non-blocking, parallel follow-up; each
+  // marked `⚠ not described` below), and drop the worklist-mechanics preamble. The per-kind note below stays — it
+  // says what each member KIND is, which is not worklist mechanics.
+  const L = [`#### ⚠ Other declared logic — account for EVERY row (${rows.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${rows.length} member(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
   for (const k of order.keys()) if (rows.some((r) => r.kind === k)) L.push("> " + (MEMBER_KIND_NOTE[k] || ATTRIBUTE_DEPENDENCY_NOTE));
-  L.push("", "| Member | Kind | Detail | Described in |", "| --- | --- | --- | --- |");
+  // ENG-96534 — same plain-language columns as ⚠ Custom methods (What the item does + Use case, from the behaviour
+  // card). The mechanical `Detail` column is dropped: the human columns + the per-kind note carry the meaning.
+  L.push("", "| Member | Kind | What the item does | Use case | Described in |", "| --- | --- | --- | --- | --- |");
   for (const d of rows)
-    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${d.detail ? esc(d.detail) : "—"} | ${describedInText(d)} |`);
+    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${whatItDoesText(d)} | ${useCaseText(d)} | ${describedInText(d)} |`);
   L.push("");
   return L;
 }
@@ -1091,40 +1120,24 @@ function renderImperativeMembers(cs) {
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  // Counted, not just listed: how many rows still have no trigger, and how many carry a behaviour card. The
-  // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
-  // very different plans, and the row-by-row table alone made them look identical.
-  // The count is of EMPTY cells, so it must not claim "no TRACED trigger": a row the behaviour run answered leaves
-  // this count while nothing was traced for it. Those are counted on their own, next to it.
-  const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
-  const reported = stubs.filter((h) => (h.triggers || []).some((t) => t.kind === "reported")).length;
-  // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
-  // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
-  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
-  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
-  const { ordered, folded } = foldByCaller(stubs);
-  // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
-  // that are really 39 things to build reads very differently from 63 independent handlers.
-  const units = stubs.length - folded;
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    `> ${unresolved} row(s) have no trigger yet` +
-    (reported ? ` · ${reported} answered by the behaviour run` : "") +
-    (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
-    (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
-    ` · ${described} of ${stubs.length} carry a behaviour card` +
-    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
-  L.push(...IMPERATIVE_LOGIC_PREAMBLE);
-  // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
-  // also print as an unclassified framework call.
-  const siblings = new Set(stubs.map((h) => h.sourceMethod));
+  // ENG-96534 — a row is "described" iff BOTH plain-language cells carry prose (see hasPlainLanguage). The
+  // agent-facing worklist statistics (unresolved / traced-only / helpers folded → port units) are dropped from the
+  // human plan; the `↳` fold still shows per-row in the table, and the trigger DATA the mapper traced still rides
+  // `--units` for the builder.
+  const described = stubs.filter(hasPlainLanguage).length;
+  const undescribed = stubs.length - described;
+  const { ordered } = foldByCaller(stubs);
+  // ENG-96327 — the plan opens with a WARNING only when the analysis could not explain some rows (separate, parallel
+  // follow-up — NOT a blocker); each such row is marked `⚠ not described` in the table.
+  const L = [`#### ⚠ Custom methods — account for EVERY row (${stubs.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${stubs.length} method(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
+  L.push(...IMPERATIVE_LOGIC_TABLE_HEADER);
   for (const { stub: h, depth, parent } of ordered) {
-    const triggers = h.triggers || [];
-    const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const cells = [name, sourceText(h), trigger, bodyDoesText(h, siblings), readsWritesText(h.evidence),
-      target, describedInText(h)];
+    const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");
@@ -2313,8 +2326,9 @@ export function checklistGroups(result, opts = {}) {
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
   G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
-  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
-  const logicItems = [];
+  // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
+  // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
+  const ruleItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
   // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--checklist` have the same
@@ -2327,17 +2341,19 @@ export function checklistGroups(result, opts = {}) {
     ...(cs.pageBusinessRules || []).map((r) => r.element),
     ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
   ].filter(Boolean))];
-  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  if (ruleN) ruleItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
+  const methodItems = [];
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   for (const h of cs.handlerStubs || []) {
     const parent = foldedUnder.get(h.sourceMethod);
-    logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
   }
-  G("Form — Logic", logicItems);
+  G("Form — Custom methods", methodItems);
   // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
   const acts = cs.cardActions || [];
   const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
@@ -2349,7 +2365,7 @@ export function checklistGroups(result, opts = {}) {
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Imperative members worklist", (cs.needsDecision || [])
+  G("⚠ Other declared logic worklist", (cs.needsDecision || [])
     .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
     .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.

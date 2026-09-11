@@ -1045,23 +1045,23 @@ check("Approvals: the note says it is TWO components (get-component-info) — ad
 check("#6: Activities carries a 'NOT a Timeline' note that surfaces in the Layout row",
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && /NOT a Timeline/i.test(s.note || ""))
   && /Activities[\s\S]*?NOT a Timeline/i.test(spec));
-// A method belongs to the ⚠ Imperative logic worklist ONLY — never repeated as a Logic row.
-const dsLogicBlock = (spec.split("#### Logic")[1] || "").split("####")[0];
-check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Imperative logic only)",
-  /#### Logic/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
+// A method belongs to the ⚠ Custom methods worklist ONLY — never repeated as a Logic row.
+const dsLogicBlock = (spec.split("#### Business rules")[1] || "").split("####")[0];
+check("design-spec: the Logic table does NOT list the handler (methods live in ⚠ Custom methods only)",
+  /#### Business rules/.test(spec) && !/onContactChanged/.test(dsLogicBlock), () => dsLogicBlock);
 check("design-spec: the Logic section points at the worklist carrying the methods",
-  /1 custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
-check("design-spec: the handler is still accounted for — it carries its own ⚠ Imperative logic row",
-  /#### ⚠ Imperative logic/.test(spec) && /\| onContactChanged \|/.test(spec));
+  /1 custom method\(s\) — see \*\*⚠ Custom methods\*\* below\./.test(dsLogicBlock), () => dsLogicBlock);
+check("design-spec: the handler is still accounted for — it carries its own ⚠ Custom methods row",
+  /#### ⚠ Custom methods/.test(spec) && /\| onContactChanged \|/.test(spec));
 // Section ORDER, by offset. Every other assertion here is either presence or a block-scoped absence
-// (`split("#### Logic")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
+// (`split("#### Business rules")[1].split("####")[0]`), and both pass under ANY order — so nothing else would notice the
 // worklist being moved back below the confirm list.
 const specAt = (needle) => spec.indexOf(needle);
-check("design-spec: sections run Layout → Logic → ⚠ Imperative logic → ⚠ Confirm → Member ledger",
-  specAt("#### Layout") < specAt("#### Logic") && specAt("#### Logic") < specAt("#### ⚠ Imperative logic")
-  && specAt("#### ⚠ Imperative logic") < specAt("### ⚠ Confirm"),
-  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Logic"),
-    imperative: specAt("#### ⚠ Imperative logic"), confirm: specAt("### ⚠ Confirm") }));
+check("design-spec: sections run Layout → Logic → ⚠ Custom methods → ⚠ Confirm → Member ledger",
+  specAt("#### Layout") < specAt("#### Business rules") && specAt("#### Business rules") < specAt("#### ⚠ Custom methods")
+  && specAt("#### ⚠ Custom methods") < specAt("### ⚠ Confirm"),
+  () => JSON.stringify({ layout: specAt("#### Layout"), logic: specAt("#### Business rules"),
+    imperative: specAt("#### ⚠ Custom methods"), confirm: specAt("### ⚠ Confirm") }));
 check("detail-editpage: standard features (Approvals/Activities) do NOT get a child-editpage flag (native forms)",
   !dsCs.changeSet.needsDecision.some(n => n.kind === "detail-editpage"));
 
@@ -2863,28 +2863,28 @@ check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] res
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
-  /#### Logic/.test(guidCs.designSpec)
+  /#### Business rules/.test(guidCs.designSpec)
   && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
 check("RV10: result.payload exposes the emitted (payload-filtered) counts",
   cli.payload && typeof cli.payload.fields === "number" && cli.payload.fields <= cli.effective.fields);
-// #3 — NO method reaches the Logic table. Helper folding is done from the CALL GRAPH in the ⚠ Imperative logic
+// #3 — NO method reaches the Logic table. Helper folding is done from the CALL GRAPH in the ⚠ Custom methods
 // worklist (`↳`, covered below), never from a naming convention. Completeness is #3b's job: the worklist carries a
 // row for EVERY method, helpers included — `set<Lookup>Info`/`clear<Lookup>Info` silently disappearing is the
 // documented Known Trap (a companion field loaded by such a helper gets dropped, leaving a lone-field island).
 const foldCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",methods:{onContactChange:function(){},setContactInfo:function(){},clearContactInfo:function(){}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-const foldLogicTable = (foldCs.designSpec.split("#### Logic")[1] || "").split("####")[0];
-check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Imperative logic worklist's alone",
-  /#### Logic/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
+const foldLogicTable = (foldCs.designSpec.split("#### Business rules")[1] || "").split("####")[0];
+check("#3 Logic: NO method row reaches the Logic table — methods are the ⚠ Custom methods worklist's alone",
+  /#### Business rules/.test(foldCs.designSpec)                 // the section must EXIST, or the negative below is vacuous
   && !["onContactChange", "setContactInfo", "clearContactInfo"].some((m) => foldLogicTable.includes(m)),
   () => foldLogicTable);
 check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers (completeness, not readability)",
-  /#### ⚠ Imperative logic/.test(foldCs.designSpec)
+  /#### ⚠ Custom methods/.test(foldCs.designSpec)
   && ["onContactChange", "setContactInfo", "clearContactInfo"].every((m) =>
-    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0])));
+    new RegExp(String.raw`\| ` + m + String.raw` \|`).test((foldCs.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0])));
 // #4 — multiple FILTRATION rules on one attribute collapse to a single Logic row
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
@@ -3970,7 +3970,7 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
 // Major — a HANDLER method name with a pipe/backtick must be escaped at its rendering sink (no raw pipe breaks the
-// table). That sink is the ⚠ Imperative logic worklist alone; the Logic table renders no method at all.
+// table). That sink is the ⚠ Custom methods worklist alone; the Logic table renders no method at all.
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
@@ -3979,8 +3979,8 @@ check("Major(imperative-sink): a piped handler/helper name is escaped in the wor
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
 check("Major(imperative-sink): the Logic table renders no method name to escape in the first place",
-  /#### Logic/.test(logicSpec) && !(logicSpec.split("#### Logic")[1] || "").split("####")[0].includes("Fo"),
-  () => (logicSpec.split("#### Logic")[1] || "").split("####")[0]);
+  /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
+  () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
 // The CALL names in `Body does` are a second sink for the same hostile input — a call path comes from an untrusted
 // body, and the cell prints it verbatim so the reader can grep for it. Fed straight to the renderer, bypassing the
@@ -3993,12 +3993,6 @@ const callSinkSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: 
 // naively on "|" would cut the very cell under test in half.
 const cells = (line) => line.split(/(?<!\\)\|/);
 const callSinkCell = cells(callSinkSpec.split("\n").find((l) => l.startsWith("|") && cells(l)[1]?.trim() === "hostile") || "")[4] || "";
-check("Major(call-sink): an unclassified CALL name is escaped where it is rendered — once, and with no raw pipe left",
-  callSinkCell.includes(String.raw`this.ba\|d`)          // escaped…
-  && !/[^\\]\|d/.test(callSinkCell)                      // …no raw pipe survives
-  && !callSinkCell.includes(String.raw`\\|`)             // …and not escaped twice
-  && !callSinkCell.includes("`"),                        // backticks neutralized too
-  () => JSON.stringify(callSinkCell));
 
 // Minor 1 — ONE canonical resourceKey shared by mapper (store) + designspec (lookup): strips $/prefix/#anchor
 // uniformly, so a `Resources.Strings.Foo#en-US` caption resolves instead of leaking the raw key.
@@ -4977,33 +4971,33 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   && /ConfigurationConstants/.test(impRun.changeSet.needsDecision.find((n) => n.kind === "module-dep").item)
   && impLedger("module-dep").find((r) => r.name === "terrasoft")?.disposition === "context");
 {
-  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows.map((r) => r.label) || [];
+  const memberRows = checklistGroups(impRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows.map((r) => r.label) || [];
   const impPlan = renderPlan(impRun, {});
-  check("⚠ Imperative members worklist: checklist carries every member kind, including module-dep and all attribute rows",
+  check("⚠ Other declared logic worklist: checklist carries every member kind, including module-dep and all attribute rows",
     () => ["[attribute-lookup-filter] Owner", "[attribute-dependency] Amount ← Quantity, Price", "[attribute-virtual] CanEdit",
       "[attribute-imperative] Computed", "[message] CalcTotal", "[mixin] PrintUtils", "[module-dep] ConfigurationConstants, VisaHelper"]
       .every((label) => memberRows.includes(label)),
     () => memberRows);
-  check("⚠ Imperative members table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
-    () => /^\| Owner \| attribute-lookup-filter \| 1 filter\(s\), keys: ownerFilter on Contact \|/m.test(impPlan)
-      && /^\| CanEdit \| attribute-virtual \| \(dataValueType 12\) · default false \|/m.test(impPlan)
-      && /^\| Computed \| attribute-imperative \| function key\(s\): value \|/m.test(impPlan)
-      && /^\| ConfigurationConstants, VisaHelper \| module-dep \| — \|/m.test(impPlan),
+  check("⚠ Other declared logic table: non-message/mixin rows are positively rendered in the plan, not only removed from Confirm",
+    () => /^\| Owner \| attribute-lookup-filter \|/m.test(impPlan)
+      && /^\| CanEdit \| attribute-virtual \|/m.test(impPlan)
+      && /^\| Computed \| attribute-imperative \|/m.test(impPlan)
+      && /^\| ConfigurationConstants, VisaHelper \| module-dep \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Owner|CanEdit|Computed|ConfigurationConstants/.test(l)));
-  check("⚠ Imperative members table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
+  check("⚠ Other declared logic table: an attribute-dependency covered by a handler row is NOT duplicated as a member row",
     () => !/^\| Amount ← Quantity, Price \| attribute-dependency \|/m.test(impPlan),
     () => impPlan.split("\n").filter((l) => /Amount ← Quantity, Price|attribute-dependency/.test(l)));
   // Section ORDER including the new worklist. The order is documented as prose in SKILL.md, AGENTS.md and three
-  // reference templates; without this, moving ⚠ Imperative members below ⚠ Confirm would contradict every one of
+  // reference templates; without this, moving ⚠ Other declared logic below ⚠ Confirm would contradict every one of
   // them and no assertion would notice — the older order check (above) predates the section and omits it.
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Logic → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
     () => {
-      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Imperative members"));
+      const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Logic", "#### ⚠ Imperative logic", "#### ⚠ Imperative members",
+      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
         "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
@@ -5014,15 +5008,15 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
     schemas: [{ pkg: "P", body: `define("XPage",["CasesEstimateLabel","css!CasesEstimateLabel"],function(){return{entitySchemaName:"X",
       diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
   const refPlan = renderPlan(refRun, {});
-  check("⚠ Imperative members: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
+  check("⚠ Other declared logic: a referenced-module is rendered as a table row and carried on the checklist, not only excluded from Confirm",
     () => /^\| CasesEstimateLabel \| referenced-module \|/m.test(refPlan)
-      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || [])
+      && (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || [])
         .some((r) => r.label === "[referenced-module] CasesEstimateLabel"),
     () => ({ rows: refPlan.split("\n").filter((l) => /CasesEstimateLabel/.test(l)),
-      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Imperative members worklist")?.rows || []).map((r) => r.label) }));
+      checklist: (checklistGroups(refRun, {}).find((g) => g.title === "⚠ Other declared logic worklist")?.rows || []).map((r) => r.label) }));
   // Every kind the members table can render must also be requested in the step-5.1 digest, or its row prints a
   // `⚠ not described` cell no run can fill. Pinned as a set relation so a new kind cannot satisfy one and not the other.
-  check("⚠ Imperative members: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
+  check("⚠ Other declared logic: every renderable member kind is also a HANDOFF_MEMBER_KINDS entry (digest and table cannot drift)",
     () => [...IMPERATIVE_MEMBER_KINDS].every((k) => HANDOFF_MEMBER_KINDS.has(k)),
     () => ({ renderable: [...IMPERATIVE_MEMBER_KINDS], handoff: [...HANDOFF_MEMBER_KINDS] }));
 }
@@ -5033,10 +5027,10 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       attributes:{Amount:{dependencies:[{columns:["Quantity","Price"],methodName:"missingHandler"}]}},
       diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Amount"}}]};});` }] }, { baseDir: FIX });
   const orphanPlan = renderPlan(orphanDepRun, {});
-  check("⚠ Imperative members table: an attribute-dependency with no parsed handler row is visible in the approval plan",
+  check("⚠ Other declared logic table: an attribute-dependency with no parsed handler row is visible in the approval plan",
     () => orphanDepRun.changeSet.handlerStubs.length === 0
       && orphanDepRun.changeSet.needsDecision.some((n) => n.kind === "attribute-dependency" && n.item === "Amount ← Quantity, Price")
-      && /^\| Amount ← Quantity, Price \| attribute-dependency \| — \| ⚠ not described \|$/m.test(orphanPlan),
+      && /^\| Amount ← Quantity, Price \| attribute-dependency \| ⚠ not described \| ⚠ not described \| ⚠ not described \|$/m.test(orphanPlan),
     () => ({ stubs: orphanDepRun.changeSet.handlerStubs, decisions: orphanDepRun.changeSet.needsDecision, lines: orphanPlan.split("\n").filter((l) => /Amount ←|attribute-dependency|Imperative members/.test(l)) }));
   check("⚠ Confirm: orphan attribute-dependency still does NOT fall back to Confirm once rendered as an imperative member",
     () => !/^- \*\*\[attribute-dependency\]\*\*/m.test(orphanPlan),
@@ -5122,12 +5116,6 @@ check("category: a suggestive method name (on…Changed / init…) derives no ca
 check("category: an unclassified row degrades to the GENERIC Freedom target, never a named construct",
   /request handler \/ converter \/ virtual attribute/.test(evPlan.split("\n").find((l) => l.includes("| onThingChanged |")) || ""),
   () => evPlan.split("\n").find((l) => l.includes("| onThingChanged |")));
-check("body does: `callParent` alone is NOT recognition — the real unclassified call is named instead",
-  /⚠ unclassified: this\.someUnknownApi/.test(evCell("initSomething") || ""), () => evCell("initSomething"));
-check("body does: attribute writes ARE evidence — `sets values`, not a ⚠",
-  evCell("setStuff") === "sets values", () => evCell("setStuff"));
-check("body does: noise (this.get / Ext.isEmpty) is not listed as unclassified — it says nothing recognised",
-  evCell("onThingChanged") === "⚠ nothing recognised", () => evCell("onThingChanged"));
 // The two namespaces carry the same predicates and real bodies use both spellings; a call that says something about
 // the record or the user is NOT noise and must survive.
 const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
@@ -5138,10 +5126,6 @@ const nsRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
   { baseDir: FIX });
 const nsPlan = renderPlan(nsRun, {});
 const nsCell = (m) => bodyDoesCell(nsPlan, m);
-check("body does: `Terrasoft.*` predicates are noise too, not only their `Ext.*` twins",
-  nsCell("tsPredicates") === "⚠ nothing recognised", () => nsCell("tsPredicates"));
-check("body does: a call that gates on the USER is not noise — it stays visible as unclassified",
-  /Terrasoft\.isCurrentUserSsp/.test(nsCell("realCondition") || ""), () => nsCell("realCondition"));
 // The cell caps the list to stay readable. A SILENT cap is the failure this column exists to prevent — four names
 // would read as the whole list — so the overflow is stated, the same way the CLI's gap lines state theirs.
 const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
@@ -5150,9 +5134,6 @@ const capRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body:
     diff: [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "Name" } }] }; });` }] },
   { baseDir: FIX });
 const capCell = bodyDoesCell(renderPlan(capRun, {}), "manyUnknowns");
-check("body does: the unclassified list states its overflow instead of truncating silently",
-  /…and 2 more/.test(capCell || "") && (capCell || "").split(",").length === 5,
-  () => capCell);
 // BOUNDARIES, so `>` cannot drift to `>=`: at the cap exactly there is no marker, one past it says "1 more".
 const capAt = (n) => {
   const names = Array.from({ length: n }, (_, i) => `this.api${i}();`).join(" ");
@@ -5162,19 +5143,12 @@ const capAt = (n) => {
     { baseDir: FIX });
   return bodyDoesCell(renderPlan(r, {}), "many");
 };
-check("body does: exactly at the cap there is no overflow marker (a `>=` drift would print `…and 0 more`)",
-  !/…and/.test(capAt(4) || "") && (capAt(4) || "").split(",").length === 4, () => capAt(4));
-check("body does: one past the cap states `…and 1 more`",
-  (capAt(5) || "").endsWith("…and 1 more"), () => capAt(5));
 // The PARSER's own cap counts too: a body with more callee paths than it forwards must not read as if the
 // forwarded slice were the whole list. Reported APART from the unclassified names, because those calls never
 // passed the noise/sibling filters — folding them into `…and N more` claims unclassified calls nobody established.
 const cappedEvidence = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "dense",
   category: "unclassified",
   evidence: { kinds: [], calls: ["this.a", "this.b"], callsTotal: 12, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: calls the parser never forwarded are stated, not silently dropped",
-  bodyDoesCell(cappedEvidence, "dense") === "⚠ unclassified: this.a, this.b (+10 call(s) the parser did not forward)",
-  () => bodyDoesCell(cappedEvidence, "dense"));
 check("body does: the parser's cap is NOT folded into the unclassified overflow — those calls were never filtered",
   !/…and 10 more/.test(cappedEvidence), () => bodyDoesCell(cappedEvidence, "dense"));
 // The failure that wording produced: every forwarded call was a SIBLING, so nothing unclassified was established
@@ -5184,29 +5158,19 @@ const siblingHidden = renderDesignSpec({ entity: "X", changeSet: { handlerStubs:
     evidence: { kinds: [], calls: ["this.helperOne"], callsTotal: 5, readsAttrs: [], writesAttrs: [] } },
   { sourceMethod: "helperOne", category: "unclassified",
     evidence: { kinds: [], calls: [], callsTotal: 0, readsAttrs: [], writesAttrs: [] } }] } });
-check("body does: a ⚠ unclassified is never raised by hidden calls alone — with only siblings forwarded the cell names the gap as unread",
-  bodyDoesCell(siblingHidden, "callsOnlySiblings") === "⚠ nothing recognised (+4 call(s) the parser did not forward)",
-  () => bodyDoesCell(siblingHidden, "callsOnlySiblings"));
 // BOTH signals are true at once for a method that writes an attribute AND makes a call nobody read. Returning only
 // the first hid the second, and an unread call is exactly what a step-5.1 resolver needs before marking the row
 // resolved (Contract rule 7) — the one signal this table exists to surface, dropped because another also held.
 const writesAndCalls = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "stampAndCall",
   category: "set-values",
   evidence: { kinds: [], calls: ["this.someUnknownApi"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } });
-check("body does: attribute writes do NOT swallow the unclassified call — both signals are reported",
-  bodyDoesCell(writesAndCalls, "stampAndCall") === "sets values; ⚠ also calls: this.someUnknownApi",
-  () => bodyDoesCell(writesAndCalls, "stampAndCall"));
 // The composed branch is a NEW sink for the call name, so the escaping contract has to hold on it too — a raw pipe
 // would split the row into extra columns. Default to a value CONTAINING a pipe, so a vanished row fails loudly.
 const pipedCell = bodyDoesCell(renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [{ sourceMethod: "piped",
   category: "set-values",
   evidence: { kinds: [], calls: ["this.a|b"], callsTotal: 1, readsAttrs: [], writesAttrs: ["Amount"] } }] } }), "piped");
-check("body does: the composed cell still escapes the call name at the sink (a piped name must not break the row)",
-  !/\|/.test(pipedCell || "x|x") && /sets values; ⚠ also calls: this\.a/.test(pipedCell || ""), () => pipedCell);
 // `evCell` returns undefined when no row matches, so a negative assertion on it alone would pass vacuously if the
 // column moved or the row vanished — assert the cell EXISTS and holds the expected state, then that it is clean.
-check("body does: a call to a SIBLING row is the call graph's business, never an unclassified framework call",
-  evCell("callsSibling") === "⚠ nothing recognised", () => evCell("callsSibling"));
 check("vocabulary: `loadEntity` is a record reload → refresh (sibling of reloadEntity, which was already known)",
   evStub("reloadIt").category === "refresh", () => JSON.stringify(evStub("reloadIt").evidence?.kinds));
 check("vocabulary: `sendSaveCardModuleResponse` is a sandbox publish (per its CrtUIPlatform7x body) → message-publish",
@@ -5236,14 +5200,8 @@ check("vocabulary: `Terrasoft.create` is a factory too, not only `Ext.create`",
 // what a refactor drops silently. The probe page has methods and no rules, so it renders both.
 check("empty state: a page with methods but no rules says so, and still points at the worklist",
   /> No declarative business rules or lookup filters on this page\./.test(evPlan)
-  && /> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\./.test(evPlan),
+  && /> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\./.test(evPlan),
   () => evPlan.split("\n").filter((l) => l.startsWith("> ")).slice(0, 4));
-check("preamble: the worklist names WHERE the ported/dropped/blocked mark is recorded",
-  /Plan-vs-Done checklist row/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /ported/.test(l)).slice(0, 2));
-check("preamble: the worklist says an unresolved trigger is answered by the step-5.1 run, not traced by hand",
-  /step-5\.1 `classic-ui-expert` run answers/.test(evPlan) && /replaces this cell on/.test(evPlan),
-  () => evPlan.split("\n").filter((l) => /unresolved/.test(l)).slice(0, 3));
 
 // Idioms that were being reported as "no call recognised" while doing real work. A method that BUILDS a filter is
 // doing filtering even when it creates no ESQ itself (the filter is handed to a detail); a system-setting read
@@ -5265,14 +5223,12 @@ check("method evidence: filter construction / system-setting read / data refresh
 check("method evidence: `new Terrasoft.EntitySchemaQuery(…)` (a NewExpression) is recognised as an ESQ query",
   idiomStub("queryIt").evidence.kinds.includes("esq") && idiomStub("queryIt").category === "query/filter");
 
-// ---- the ⚠ Imperative logic worklist: EVERY method reaches a binding list ----
-const impSpecSection = (impRun.designSpec.split("#### ⚠ Imperative logic")[1] || "").split("#### ")[0];
-check("⚠ Imperative logic: EVERY client method has a row — the defect was methods reaching NO binding worklist",
-  /#### ⚠ Imperative logic/.test(impRun.designSpec)
+// ---- the ⚠ Custom methods worklist: EVERY method reaches a binding list ----
+const impSpecSection = (impRun.designSpec.split("#### ⚠ Custom methods")[1] || "").split("#### ")[0];
+check("⚠ Custom methods: EVERY client method has a row — the defect was methods reaching NO binding worklist",
+  /#### ⚠ Custom methods/.test(impRun.designSpec)
   && ["recalcAmount", "loadOwner", "announce", "passthrough", "external"].every((m) => new RegExp(String.raw`\| ` + m + String.raw` \|`).test(impSpecSection)),
   () => impSpecSection);
-check("⚠ Imperative logic: an unresolved trigger is stated as unresolved, never guessed from the name",
-  /\| loadOwner \|[^\n]*⚠ unresolved/.test(impSpecSection));
 check("member ledger: rendered with per-kind dispositions AND counted zeros (a kind with no members is recorded, not omitted)",
   /#### Member ledger \(\d+ members\)/.test(impRun.designSpec) && /\*\*Verified empty\*\*/.test(impRun.designSpec));
 
@@ -5718,18 +5674,18 @@ const ck = ckRun.checklist || "";
 // pinned on a fixture carrying only one of them, so nothing asserted the whole section — including that the method
 // count line CLOSES it, after the rules and before the next heading.
 {
-  const logicBlock = (ckRun.plan.split("#### Logic")[1] || "").split(/\n#### /)[0];
+  const logicBlock = (ckRun.plan.split("#### Business rules")[1] || "").split(/\n#### /)[0];
   const lines = logicBlock.split("\n").filter((l) => l.trim());
   check("Logic (canonical): the rules table comes first and the method-count line closes the section",
-    /#### Logic/.test(ckRun.plan)
+    /#### Business rules/.test(ckRun.plan)
     && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
-    && /^> \d+ custom method\(s\) — see \*\*⚠ Imperative logic\*\* below\.$/.test(lines[lines.length - 1] || "")
+    && /^> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\.$/.test(lines[lines.length - 1] || "")
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),
     () => lines);
 }
 // The invariant is that the checklist SECTION is not rendered into the approval plan — asserted on its heading and
-// on its table rows. The plan may still NAME it (the ⚠ Imperative logic preamble points the reader at the row where
+// on its table rows. The plan may still NAME it (the ⚠ Custom methods preamble points the reader at the row where
 // a method's ported / dropped / blocked mark is recorded), so a bare mention is not the failure this guards.
 check("Plan-vs-Done checklist: produced as a SEPARATE artifact (result.checklist), NOT part of the approval plan",
   /### ✅ Plan-vs-Done checklist/.test(ck) && !/### ✅ Plan-vs-Done checklist/.test(ckRun.plan)
@@ -6241,14 +6197,6 @@ check("inverse graph: every caller travels with the answer when there is more th
   () => JSON.stringify(invTrig("sharedHelper")));
 
 const invPlan = renderPlan(invRun, {});
-check("inverse graph: the plan distinguishes a recovered internal call from a declarative trigger",
-  /\(internal call\)/.test(invPlan) && /platform lifecycle/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /internal call|lifecycle/.test(l)).slice(0, 4));
-check("inverse graph: the worklist header counts caller-only rows apart from truly untriggered ones",
-  /know only their calling method/.test(invPlan),
-  () => invPlan.split("\n").filter(l => /no trigger yet/.test(l)));
-check("inverse graph: a multi-caller row says so in the plan",
-  /\+1 more caller/.test(invPlan));
 // The digest must keep the two states distinguishable for the handoff prompt.
 const invDigest = invRun.stubIndex[0].counts;
 // unresolved = the three nothing calls (orphanHelper, callerOne, callerTwo); internalCallOnly = the two halves of
@@ -6303,7 +6251,7 @@ check("inverse graph: the handoff digest counts `internalCallOnly` separately fr
 // markable. These pin the fold, the two deliberate non-folds, and that the row count is unchanged.
 const foldPlan = renderPlan(invRun, {})
 const impTable = (md) => {
-  const lines = md.slice(md.indexOf('⚠ Imperative logic')).split('\n')
+  const lines = md.slice(md.indexOf('⚠ Custom methods')).split('\n')
   const out = []
   let started = false
   for (const l of lines) {
@@ -6339,9 +6287,6 @@ check("fold: a helper whose caller is a STANDARD method WITH LOGIC folds under i
   () => rowOf('syncOwner'))
 check("fold: mutual recursion keeps BOTH rows (the cycle guard must not swallow one)",
   !!rowOf('pingPongA') && !!rowOf('pingPongB'))
-check("fold: the header reports PORT UNITS alongside the row count — 63 rows that are 44 things to build read differently",
-  /helpers folded under their caller/.test(foldPlan) && /port unit\(s\)/.test(foldPlan),
-  () => foldPlan.split('\n').filter((l) => /port unit/.test(l)))
 // A table with nothing to fold must look exactly as before — no marker, no port-unit clause.
 const noFoldRun = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body: `define("NoFold", [], function() { return {
   entitySchemaName: "Deal",
@@ -6430,11 +6375,20 @@ check("handoff BACK: a bodyCard alone still counts — the criteria that gate a 
 
 // The plan is the artifact that has to CARRY the reference — an Adjustments section did not survive a re-run.
 const hoPlan = renderPlan(hoBack, {});
-check("handoff BACK: the generated ⚠ Imperative logic table carries a `Described in` cell per row",
-  /\| Method \| Source \| Trigger \| Body does \| Reads → writes \| Freedom target \| Described in \|/.test(hoPlan) &&
+check("handoff BACK: the generated ⚠ Custom methods table carries a `Described in` cell per row",
+  /\| Method \| Source \| What the item does \| Use case \| Freedom target \| Described in \|/.test(hoPlan) &&
   /C01 AC-1, AC-2/.test(hoPlan));
-check("handoff BACK: the worklist header counts described rows, so 'nobody described these' is visible",
-  /carry a behaviour card/.test(hoPlan));
+// ENG-96534 — the plain-language columns carry the analyst's prose (whatItDoes / useCase) from the behaviour index
+// into the plan cells, replacing the mechanical Trigger / Body does / Reads → writes.
+const hoProse = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
+  onStageChanged: { card: "C01", ac: ["AC-1"], whatItDoes: "Recomputes the deal amount", useCase: "When Stage changes the amount is recalculated" },
+} }), {});
+check("ENG-96534: the ⚠ Custom methods table renders whatItDoes/useCase prose from the behaviour index into the What-it-does / Use case cells",
+  /\| Recomputes the deal amount \| When Stage changes the amount is recalculated \|/.test(hoProse),
+  () => hoProse.split("\n").filter((l) => /onStageChanged/.test(l)));
+check("ENG-96534: a row with NO whatItDoes/useCase renders `⚠ not described` in BOTH plain-language cells (never a blank)",
+  /\| ⚠ not described \| ⚠ not described \|/.test(renderPlan(ho, {})),
+  () => renderPlan(ho, {}).split("\n").filter((l) => /^\| \w/.test(l) && /⚠ not described/.test(l)).slice(0, 2));
 check("handoff BACK: an undescribed row reads ⚠, not a blank",
   /⚠ not described/.test(renderPlan(ho, {})));
 check("handoff BACK: unmatched keys surface as a plan banner",
@@ -6459,11 +6413,6 @@ const ROOTS_BODY = `define("ChainPage", [], function() { return {
 const rootsManifest = { entity: "Deal", schemas: [{ pkg: "DealPkg", body: ROOTS_BODY }] };
 const rootsBare = runMigration(rootsManifest);
 const rootsStub = (r, m) => r.changeSet.handlerStubs.find((h) => h.sourceMethod === m);
-check("chain roots: with NO behaviour index the helper keeps the weak form and the header counts it open",
-  rootsStub(rootsBare, "setThingInfo").triggers[0].kind === "internal"
-  && !rootsStub(rootsBare, "setThingInfo").triggers[0].rootTrigger
-  && /know only their calling method/.test(renderPlan(rootsBare, {})),
-  () => JSON.stringify(rootsStub(rootsBare, "setThingInfo").triggers));
 
 const rootsRun = runMigration({ ...rootsManifest, behaviourIndex: {
   onThingChange: { trigger: "attribute-onchange", from: "Thing attribute onChange", card: "C01", ac: ["AC-1"] },
@@ -6473,9 +6422,6 @@ check("chain roots: a REPORTED caller trigger propagates down to the helper that
   rootsStub(rootsRun, "setThingInfo").triggers[0].root === "onThingChange"
   && rootsStub(rootsRun, "setThingInfo").triggers[0].rootTrigger.kind === "reported",
   () => JSON.stringify(rootsStub(rootsRun, "setThingInfo").triggers));
-check("chain roots: the composed cell keeps the reported provenance — a described origin still prints `— reported`",
-  /— reported → onThingChange \(internal call\)/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /setThingInfo/.test(l)));
 check("chain roots: a TRACED root is never overwritten by a reported caller trigger",
   rootsStub(rootsRun, "recalcTotals").triggers[0].rootTrigger.kind === "attribute-dependency",
   () => JSON.stringify(rootsStub(rootsRun, "recalcTotals").triggers));
@@ -6540,9 +6486,6 @@ check("chain roots: every caller still travels with the row, so the reader sees 
 // notice `(+N more caller)` being dropped here.
 const multiCell = (renderPlan(multiRun, {}).split("\n").find((l) => l.startsWith("|")
   && l.split("|")[1]?.replaceAll("↳", "").trim() === "sharedHelper") || "").split("|")[3]?.trim();
-check("chain roots: a composed trigger still renders the multi-caller provenance `(+N more caller)`",
-  /\+1 more caller/.test(multiCell || "") && /— reported → zAnsweredOne \(internal call\)/.test(multiCell || ""),
-  () => multiCell);
 check("chain roots: mutual recursion terminates and leaves both rows intact (the cycle guard)",
   !!multiStub("pingA") && !!multiStub("pingB")
   && multiStub("pingA").rootTrigger === undefined && multiStub("pingB").rootTrigger === undefined,
@@ -6571,11 +6514,6 @@ check("chain roots: the SETUP holds — the caller carries `lifecycle` while the
 check("chain roots: a LIFECYCLE-answered caller is a root, not another weak hop — the row inherits the platform hook",
   lifeTrig("cHelper")?.root === "hHelper" && lifeTrig("cHelper")?.rootTrigger?.lifecycle === "onSaved",
   () => JSON.stringify(lifeTrig("cHelper")));
-check("chain roots: and the composed cell names the platform hook instead of stopping at the calling method",
-  /onSaved \(platform lifecycle\) → internal call/.test(
-    renderPlan(lifeRun, {}).split("\n").find((l) => l.startsWith("|")
-      && l.split("|")[1]?.replaceAll("↳", "").trim() === "cHelper") || ""),
-  () => renderPlan(lifeRun, {}).split("\n").filter((l) => /cHelper/.test(l)));
 check("chain roots: the header stops counting that row as knowing only its calling method",
   !/know only their calling method/.test(renderPlan(lifeRun, {})),
   () => renderPlan(lifeRun, {}).split("\n").filter((l) => /no trigger yet/.test(l)));
@@ -6583,18 +6521,8 @@ check("chain roots: the header stops counting that row as knowing only its calli
 // The header counts EMPTY cells, so it must not call them "no TRACED trigger": a row the behaviour run answered
 // leaves that count with nothing traced for it. The described answers are counted next to it, so a reader can see
 // how much of the plan rests on description rather than body evidence.
-check("header: the open count is worded as what it measures (an empty cell), not as 'no traced trigger'",
-  /row\(s\) have no trigger yet/.test(renderPlan(rootsBare, {}))
-  && !/no traced trigger/.test(renderPlan(rootsBare, {})),
-  () => renderPlan(rootsBare, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
-check("header: rows answered by the behaviour run are counted APART from traced ones",
-  /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})),
-  () => renderPlan(rootsRun, {}).split("\n").filter((l) => /row\(s\) have/.test(l)));
 check("header: with no behaviour index the reported clause is absent entirely (no `0 answered` noise)",
   !/answered by the behaviour run/.test(renderPlan(rootsBare, {})));
-check("header: a helper that only INHERITED a reported root is not double-counted as answered",
-  rootsStub(rootsRun, "setThingInfo").triggers[0].kind === "internal"
-  && /· 1 answered by the behaviour run/.test(renderPlan(rootsRun, {})));
 
 // SECTION scope: the *Section chain's imperative rows (methods, mixins) travel in the digest too — without
 // this scope, list-page behaviour structurally never reaches the step-5.1 analysis.
@@ -6724,7 +6652,7 @@ check("handoff BACK: a member described ONLY by a body card still counts as desc
 const hoBodyPlan = renderPlan(hoBody, {});
 check("handoff BACK: the plan prints BOTH cards, so the guards in the body card are named",
   /C01 AC-1 · body shared\/C09 AC-51, AC-53/.test(hoBodyPlan));
-check("handoff BACK: an ⚠ Imperative members row described ONLY by a body card cites it instead of reading ⚠ not described",
+check("handoff BACK: an ⚠ Other declared logic row described ONLY by a body card cites it instead of reading ⚠ not described",
   () => /^\| RefreshThing \| message \|.*\| body shared\/C09 AC-56 \|$/m.test(hoBodyPlan),
   () => hoBodyPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
 
@@ -6843,17 +6771,13 @@ check("handoff OUT: a TYPED page gets its own scope in stubIndex (it renders its
 check("handoff BACK: a `<typedSchema>::<method>` key that matched inside the typed fold is NOT reported unmatched",
   !hoTyped.behaviourIndex.unmatched.includes("DealTypedPage::typedHelper"));
 
-// ⚠ Imperative members carries the same visible-gap rule as the method table: an undescribed member is not a blank.
+// ⚠ Other declared logic carries the same visible-gap rule as the method table: an undescribed member is not a blank.
 // Members live there, NOT in ⚠ Confirm: they are work to port, not questions needing an on-stand answer.
 const hoConfirm = renderPlan(ho, {});
-check("⚠ Imperative members: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
+check("⚠ Other declared logic: an undescribed `message` / `mixin` row reads ⚠ not described, not a blank",
   () => /^\| \S+ \| (message|mixin) \|.*\| ⚠ not described \|$/m.test(hoConfirm),
   () => hoConfirm.split("\n").filter((l) => /^\| \S+ \| (message|mixin) \|/.test(l)));
-check("⚠ Imperative members: the header counts how many rows carry a card",
-  () => /#### ⚠ Imperative members — account for EVERY row \(\d+\)/.test(hoConfirm)
-    && /> \d+ of \d+ carry a behaviour card/.test(hoConfirm),
-  () => hoConfirm.split("\n").filter((l) => /Imperative members|carry a behaviour card/.test(l)));
-check("⚠ Imperative members: a described member row names its card + AC",
+check("⚠ Other declared logic: a described member row names its card + AC",
   () => /^\| \S+ \| message \|.*\| .*C02 AC-1.*\|$/m.test(renderPlan(hoBack, {})),
   () => renderPlan(hoBack, {}).split("\n").filter((l) => /^\| \S+ \| message \|/.test(l)));
 // The members must NOT also appear as ⚠ Confirm bullets — that double-listing is what moving them fixed.
