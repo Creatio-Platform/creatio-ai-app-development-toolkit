@@ -14098,27 +14098,38 @@ check("ENG-96571 review 3 (MINOR): on `onSaved → mid → leaf` the trigger cel
   () => ({ trigger: r22Trig("leaf"), row: r22Row("leaf") }));
 
 /* ================================================================================================================
-   ENG-94756 — FEED AND ATTACHMENTS MUST CARRY THE CREATION-FLOW SETTINGS, NOT JUST A NAME.
+   ENG-94756 — A COMPONENT THE TEMPLATE DOES NOT SHIP IS ROUTED TO THE CANONICAL CONTRACT, NEVER CONFIGURED HERE.
 
    ENG-96457 settled WHETHER a component gets built: the measured `FREEDOM_TEMPLATE_CAPABILITIES` table replaced the
    unconditional "template context — provided by the Freedom template" claim with three honest verdicts. It did not
    settle HOW the built component is CONFIGURED, and that is this ticket: a page migrated onto a template that ships
    neither Feed nor Attachments gets both components created, but with none of the property values the section/app
-   CREATION flow produces — so the Feed queries nothing and the Attachments gallery shows nothing.
+   CREATION flow produces — so the Feed queries nothing and the Attachments list shows nothing.
 
-   THE VALUES BELOW ARE MEASURED, NOT CHOSEN. They were read read-only from stand `eng96655`, page
-   `UsrSourceCodes_FormPage` (parent template `PageWithTabsFreedomTemplate`), on 2026-09-11 — a page the creation
-   flow built, i.e. the shape a migrated page has to match. They are asserted here, in the engine goldens, rather
-   than re-measured per run: a stand read at test time would make the suite depend on a live environment, and the
-   whole point is that the canonical shape is a FIXED contract.
+   WHERE THE VALUES LIVE, AND WHY NOT HERE. The canonical value set was measured read-only on stand `eng96655`
+   (page `UsrSourceCodes_FormPage`, parent template `PageWithTabsFreedomTemplate`, 2026-09-11) and PUBLISHED — as
+   the clio-knowledge guidance item `page-modification-standard-components`, which a builder reads at build time
+   through `get-guidance`. Approved requirement R7 is explicit that CAADT keeps NO literal copy of those values and
+   carries only a reference to that item. The engine could not honour a copy anyway: the plan is produced OFFLINE by
+   `node`, with no clio access and no stand, so a value table here would be a second source of truth drifting from
+   the one the builder actually reads — and `get-component-info` stays authoritative for the property vocabulary.
 
-   T1 AND T2 FAIL AGAINST TODAY'S ENGINE, AND THAT IS WHAT THEY ARE FOR. Nothing in the toolkit names these values
-   anywhere, which IS the defect ENG-94756 reports; the two checks draw the success boundary for the engine change
-   (plan step S5, deliberately not part of this change set). They are written as ordinary checks on purpose — not
-   skipped, not softened, not marked expected-failure — because a red goldens run is the accurate report of a
-   defect that is still open.
-   T3 and T4 assert behaviour that already exists and must survive S5: T3 is the merge-vs-insert boundary, T4 is the
-   ENG-96457 regression guard for a template nobody has measured.
+   THE FIRST DRAFT OF THESE TESTS ASSERTED THE OPPOSITE — that the rendered spec CONTAINS `feedType = Record`,
+   `viewType = gallery` and the rest — and an independent review found the contradiction: those assertions and R7
+   cannot both hold, so the engine could only go green by violating the architecture decision. The engineer kept R7
+   and had the tests rewritten. What they assert now is the contract R7 actually creates on the ABSENT path:
+     (i)   the plan ROUTES the builder to the guidance item by its stable id, so the values are one call away;
+     (ii)  the deliverables are gated by PRESENCE — the component with its own expected count, and the companion
+           `AttachmentListDS` data source, without which a built `crt.FileList` lists nothing;
+     (iii) the value table is ABSENT from CAADT — asserted over the rendered output AND over the engine sources.
+           That guard is the one nobody had written, and it is what stops decision (i) decaying back into a paste.
+   The cost is recorded rather than hidden: R3's second criterion ("a built page missing the companion data source
+   is reported as incomplete rather than passing") is now met by PRESENCE, and the deliverables' VALUES are checked
+   by the agent that read the guidance item. An offline gate cannot check values it is deliberately not allowed to
+   know; pretending otherwise is what produced the contradiction in the first place.
+
+   T3 and T4 assert behaviour that must survive all of this: T3 is the merge-vs-insert boundary (R4), T4 the
+   ENG-96457 regression guard for a template nobody has measured (R6).
    ================================================================================================================ */
 // The fixture: ONE page carrying BOTH components, built by the REAL mapper rather than hand-composed, so the
 // widget/feature records under test are the ones production emits. `businessrule1` — the fixture the ENG-96457
@@ -14127,6 +14138,8 @@ check("ENG-96571 review 3 (MINOR): on `onSaved → mid → leaf` the trigger cel
 //             layer MERGES onto its ancestor `ESNTab`, which is the classic evidence `mapWidgets` demands before
 //             it will emit a base container (otherwise inherited chrome would leak onto every page).
 //   Attachments arrives as a standard FEATURE, by the `*File` ENTITY rule — the same path `FileDetailV2` takes.
+//             That asymmetry is not incidental: it is why the engine's template-absent rows had to learn to read
+//             `standardFeatures` and not only `widgets` (see the R4 half of T3).
 const faSeed = L("Tpl", { diff: [
   di({ name: "Tabs", itemType: 15 }),
   di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", isTab: true }),
@@ -14143,16 +14156,30 @@ const faCs = mapToFreedom(mergeHierarchy([faClient], { seedTemplate: [faSeed] })
 const faResult = { entity: FA_ENTITY, changeSet: faCs, signals: {} };
 const faOpts = (tpl) => ({ planMeta: { formTemplate: tpl } });
 const faPlan = (tpl) => renderPlan(faResult, faOpts(tpl));
-const faRows = (tpl) => checklistGroups(faResult, faOpts(tpl)).flatMap((g) => g.rows).map((r) => r.label);
-// The spec a builder actually READS is the plan document PLUS the coverage checklist it is gated on. T1/T2 assert
-// against both joined, deliberately: the contract is that the canonical values REACH the builder, not that they
-// are printed in one particular table, so S5 stays free to publish them wherever it fits best.
+const faRowRecs = (tpl) => checklistGroups(faResult, faOpts(tpl)).flatMap((g) => g.rows);
+const faRows = (tpl) => faRowRecs(tpl).map((r) => r.label);
+// The spec a builder actually READS is the plan document PLUS the coverage checklist it is gated on. The R7 guard
+// asserts against both joined, deliberately: the claim is that the values are nowhere in what CAADT produces, and
+// a guard over one table only would be satisfied by moving them into the other.
 const faSpec = (tpl) => [faPlan(tpl), ...faRows(tpl)].join("\n");
 const FA_ABSENT_TPL = "PageWithTopAreaAndTabsFreedomTemplate";   // measured: ships neither Feed nor Attachments
 const FA_PROVIDED_TPL = "__FixtureTemplateShippingFeed";         // the PR #156 fixture: measured to ship Feed
-const FA_UNMEASURED_TPL = "PageWithTabsFreedomTemplate";         // never measured → the third state
-// Which of a named value set the spec is missing. Returned as a LIST, not a boolean, so a failing check reports
-// exactly which properties are absent instead of "false" — the difference between a report and a puzzle.
+// UNMEASURABLE BY CONSTRUCTION (PR #177 review, F7). This was `PageWithTabsFreedomTemplate` — the very template a
+// recorded follow-up proposes to MEASURE into the capability table, so the first person to do that honest piece of
+// work would have broken this regression guard for a reason that has nothing to do with a regression. Any name
+// absent from the table is unmeasured; the `__` prefix is not a legal Creatio schema name, so no real manifest can
+// ever name this one, and no future measurement can accidentally claim it.
+const FA_UNMEASURED_TPL = "__FixtureUnmeasuredTemplate";
+// The stable id of the clio-knowledge guidance item, SPELLED OUT here rather than imported from the engine. It is a
+// CROSS-REPO contract — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json` — and a test
+// that imported the engine's own constant would follow a rename straight past the break: the plan would keep
+// pointing at "whatever the engine calls it" while `get-guidance` served nothing under that name.
+const FA_GUIDANCE_ID = "page-modification-standard-components";
+// The ABSENT-path Source cell for one component: the plan line that states the template ships none of it. That
+// sentence is where the routing has to be, because it is the line a builder reads when it learns it must build.
+const faAbsentCell = (tpl, what) => faPlan(tpl).split("\n").find((l) => l.includes(`ships NO ${what}`)) || "";
+// Which named items are MISSING from a text. Returned as a LIST, not a boolean, so a failing check reports exactly
+// what is absent instead of "false" — the difference between a report and a puzzle.
 const faMissing = (text, contract) => contract.filter(([, re]) => !re.test(text)).map(([label]) => label);
 
 check("ENG-94756 fixture: the page carries a base-declared Feed widget (capability `feed`) AND an entity-inferred Attachments feature — both halves of the defect on ONE page, emitted by the real mapper",
@@ -14160,55 +14187,85 @@ check("ENG-94756 fixture: the page carries a base-declared Feed widget (capabili
   && faCs.standardFeatures.some((s) => s.feature === "Attachments" && s.uiShape === "component"),
   () => ({ widgets: faCs.widgets, standardFeatures: faCs.standardFeatures }));
 
-// ---- T1 (R5 / R2 / R3): the ABSENT path must name the canonical AttachmentList value set -----------------------
-// Measured on `UsrSourceCodes_FormPage`. The single Name column is bound to the COMPANION data source
-// (`AttachmentListDS_Name`, dataValueType 28, width 200) — not to the page's own object, which is why R3 makes the
-// data source part of the deliverable rather than an implementation detail: an AttachmentList emitted without
-// `AttachmentListDS` renders an empty gallery, and a `--verify` run that only counts the component calls it done.
-const FA_ATTACHMENT_CONTRACT = [
-  ["masterRecordColumnValue = $Id", /masterRecordColumnValue[^\n]*\$Id/],
-  ["recordColumnName = RecordId", /recordColumnName[^\n]*RecordId/],
-  ["items = $AttachmentList", /items[^\n]*\$AttachmentList/],
-  ["primaryColumnName = AttachmentListDS_Id", /primaryColumnName[^\n]*AttachmentListDS_Id/],
-  ["Name column bound to AttachmentListDS_Name", /AttachmentListDS_Name/],
-  ["Name column dataValueType 28", /dataValueType[^\n]*\b28\b/],
-  ["Name column width 200", /width[^\n]*\b200\b/],
-  ["viewType = gallery", /viewType[^\n]*gallery/],
-  ["tileSize = small", /tileSize[^\n]*small/],
-  ["companion data source AttachmentListDS", /AttachmentListDS\b/],
-  ["AttachmentListDS is a crt.EntityDataSource", /crt\.EntityDataSource/],
-  ["AttachmentListDS scope = viewElement", /scope[^\n]*viewElement/],
-  ["AttachmentListDS entitySchemaName = SysFile", /entitySchemaName[^\n]*SysFile/],
+// ---- T1 (R5 / R2 / R3 / R7): the ABSENT path ROUTES and GATES, for Attachments -----------------------------------
+// Three things have to be true of the Attachments row, and each one fails differently in production:
+//   route — without the guidance item named ON the line that says "build it", the builder configures from memory,
+//           which is the reported defect;
+//   count — without its own expected count the component rides on nothing, and `--verify` exits 0 on a page that
+//           never built it (this is the half that was missing entirely: `templateAbsentRows` read `widgets` only,
+//           and Attachments is a `standardFeature`);
+//   companion — an `AttachmentList` without `AttachmentListDS` lists nothing, so a gate that counts only the
+//           component calls an empty tab done. The row must be GATED (carry a `vk`): a row without one renders as
+//           a note and closes on nobody.
+const FA_ATTACHMENT_DELIVERABLES = [
+  ["the ADD cell routes to the guidance item", new RegExp(`get-guidance name=${FA_GUIDANCE_ID}`)],
 ];
-check("ENG-94756 T1 (R5/R2/R3): for a template MEASURED not to ship Attachments, the spec names the canonical AttachmentList value set AND the companion `AttachmentListDS` data source as required deliverables — today it names the component and none of its settings, which is the defect",
-  () => faMissing(faSpec(FA_ABSENT_TPL), FA_ATTACHMENT_CONTRACT).length === 0,
-  () => ({ template: FA_ABSENT_TPL, missing: faMissing(faSpec(FA_ABSENT_TPL), FA_ATTACHMENT_CONTRACT),
-    attachmentsLines: faSpec(FA_ABSENT_TPL).split("\n").filter((l) => /Attachment/i.test(l)) }));
+check("ENG-94756 T1 (R5/R2/R3 + R7): for a template MEASURED not to ship Attachments, the plan ROUTES the builder to the `page-modification-standard-components` guidance item, and the coverage gate names BOTH deliverables — the `crt.FileList` with its own expected count, and the companion `AttachmentListDS` data source as a GATED row",
+  () => {
+    const cell = faAbsentCell(FA_ABSENT_TPL, "Attachments");
+    const rows = faRowRecs(FA_ABSENT_TPL);
+    const comp = rows.find((r) => /^Attachments — 1 expected \(`crt\.FileList`\)/.test(r.label));
+    const ds = rows.find((r) => r.label.includes("AttachmentListDS"));
+    return faMissing(cell, FA_ATTACHMENT_DELIVERABLES).length === 0
+      && !!comp && comp.vk?.type === "element" && comp.vk.ctype === "crt.FileList" && comp.vk.n === 1
+      && !!ds && !!ds.vk && ds.label.includes(FA_GUIDANCE_ID);
+  },
+  () => ({ template: FA_ABSENT_TPL, cell: faAbsentCell(FA_ABSENT_TPL, "Attachments"),
+    missingFromCell: faMissing(faAbsentCell(FA_ABSENT_TPL, "Attachments"), FA_ATTACHMENT_DELIVERABLES),
+    attachmentRows: faRowRecs(FA_ABSENT_TPL).filter((r) => /Attachment/i.test(r.label)).map((r) => ({ label: r.label, vk: r.vk || null })) }));
 
-// ---- T2 (R1): the ABSENT path must name the canonical Feed value set ------------------------------------------
-// `entitySchemaName` is the one value that is NOT a constant: it is the MIGRATED object, so the assertion pairs the
-// property with this page's own entity rather than accepting the bare token — the measured page's value was its own
-// object, and a hardcoded schema name would be the same defect in a new place.
-const FA_FEED_CONTRACT = [
-  ["feedType = Record", /feedType[^\n]*Record/],
-  ["primaryColumnValue = $Id", /primaryColumnValue[^\n]*\$Id/],
-  ["cardState = $CardState", /cardState[^\n]*\$CardState/],
-  ["dataSourceName = PDS", /dataSourceName[^\n]*PDS/],
-  [`entitySchemaName = ${FA_ENTITY} (the page's own object)`, new RegExp(`entitySchemaName[^\\n]*${FA_ENTITY}`)],
-];
-check("ENG-94756 T2 (R1): for a template MEASURED not to ship Feed, the spec names the canonical Feed value set — feedType `Record`, primaryColumnValue `$Id`, cardState `$CardState`, dataSourceName `PDS`, and entitySchemaName bound to the MIGRATED object",
-  () => faMissing(faSpec(FA_ABSENT_TPL), FA_FEED_CONTRACT).length === 0,
-  () => ({ template: FA_ABSENT_TPL, missing: faMissing(faSpec(FA_ABSENT_TPL), FA_FEED_CONTRACT),
-    feedLines: faSpec(FA_ABSENT_TPL).split("\n").filter((l) => /Feed/i.test(l)) }));
+// ---- T2 (R1 / R7): the ABSENT path ROUTES and GATES, for Feed ----------------------------------------------------
+// The Feed half of the same contract. Feed needs no companion artifact, so what it owes is the route and the count:
+// the engine says WHICH component is missing and WHERE its settings are published, and says nothing at all about
+// what those settings are — including `entitySchemaName`, the one value that is not even a constant (it is the
+// migrated object). A plan that hardcoded it would be this same defect in a new place.
+check("ENG-94756 T2 (R1 + R7): for a template MEASURED not to ship Feed, the plan routes the builder to the same guidance item for the Feed value set, and the Feed row keeps its own `crt.Feed` expected count — the engine names the component and the source of its settings, never the settings",
+  () => {
+    const cell = faAbsentCell(FA_ABSENT_TPL, "Feed (ESN)");
+    const feed = faRowRecs(FA_ABSENT_TPL).find((r) => /^Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(r.label));
+    return cell.includes(`get-guidance name=${FA_GUIDANCE_ID}`)
+      && !!feed && feed.vk?.type === "element" && feed.vk.ctype === "crt.Feed" && feed.vk.n === 1;
+  },
+  () => ({ template: FA_ABSENT_TPL, cell: faAbsentCell(FA_ABSENT_TPL, "Feed (ESN)"),
+    feedRows: faRowRecs(FA_ABSENT_TPL).filter((r) => /Feed/.test(r.label)).map((r) => ({ label: r.label, vk: r.vk || null })) }));
 
-// ---- T3 (R4): a template that SHIPS the component is re-bound, never rebuilt -----------------------------------
-// The boundary S5 must not cross. ENG-96457 pinned this for Feed; both halves are restated here against this
-// fixture because T1/T2 change what the ABSENT arm says, and the PROVIDED arm has to stay silent about settings:
-// re-binding the template's own component is not the same act as building one.
-check("ENG-94756 T3 (R4) — FEED: a template MEASURED to ship Feed reads re-bind / do not rebuild, files NO extra `crt.Feed` expected count, and never renders the ABSENT wording",
+// ---- R7 GUARD: the value table is ABSENT from CAADT ---------------------------------------------------------------
+// The tokens are the property NAMES and measured literals of the canonical value set — the very list the first
+// draft of T1/T2 asserted must be PRESENT. Inverting that list is what makes this guard the executable form of the
+// engineer's decision rather than a comment about it: paste the measured table into the engine to "help the
+// builder" and this goes red, naming each value that was pasted.
+const FA_VALUE_TOKENS = ["feedType", "primaryColumnValue", "cardState", "dataSourceName", "masterRecordColumnValue",
+  "recordColumnName", "viewType", "tileSize", "gallery", "$AttachmentList", "$CardState", "SysFile",
+  "crt.EntityDataSource", "AttachmentListDS_"];
+check("ENG-94756 R7 GUARD (output): the CAADT-rendered spec for the ABSENT path carries NOT ONE canonical property value — it names the components, the guidance item and the companion data source, and stops there",
+  () => FA_VALUE_TOKENS.every((t) => !faSpec(FA_ABSENT_TPL).includes(t)),
+  () => ({ template: FA_ABSENT_TPL, leaked: FA_VALUE_TOKENS.filter((t) => faSpec(FA_ABSENT_TPL).includes(t)),
+    lines: faSpec(FA_ABSENT_TPL).split("\n").filter((l) => FA_VALUE_TOKENS.some((t) => l.includes(t))) }));
+// The output guard only sees what THIS fixture renders; R7 is about the REPOSITORY. So the same list is run over
+// every engine source, which is where a copy would actually be typed — and which is the only place a reviewer of a
+// future PR would have to notice it by eye. `dataSourceName` is dropped from this arm ONLY: `mapper.mjs` has
+// spoken that word since ENG-94714, in the Freedom recipe for a list Actions-button process launch, so a hit on it
+// here could not be told apart from a paste. Its absence from the OUTPUT arm above still pins the Feed value.
+const FA_SOURCE_TOKENS = FA_VALUE_TOKENS.filter((t) => t !== "dataSourceName");
+const faEngineSources = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs"))
+  .map((f) => ({ file: f, text: fs.readFileSync(path.join(ENGINE_DIR, f), "utf8") }));
+check("ENG-94756 R7 GUARD (source): no engine source file carries the canonical value table either — CAADT holds the guidance item's ID and the names of the deliverables it gates, and not one of the values behind them",
+  () => faEngineSources.length >= 5
+    && faEngineSources.every((s) => FA_SOURCE_TOKENS.every((t) => !s.text.includes(t))),
+  () => ({ scanned: faEngineSources.map((s) => s.file),
+    hits: faEngineSources.flatMap((s) => FA_SOURCE_TOKENS.filter((t) => s.text.includes(t)).map((t) => `${s.file}: ${t}`)) }));
+
+// ---- T3 (R4): a template that SHIPS the component is re-bound, never rebuilt -------------------------------------
+// The boundary the engine change must not cross. ENG-96457 pinned this for Feed; both halves are restated here
+// against this fixture because the ABSENT arm's wording changed, and the PROVIDED arm has to stay silent about
+// settings: re-binding the template's own component is not the same act as building one, and it owes no guidance
+// call, no expected count and no companion row.
+check("ENG-94756 T3 (R4) — FEED: a template MEASURED to ship Feed reads re-bind / do not rebuild, files NO extra `crt.Feed` expected count, never renders the ABSENT wording, and is not routed to the guidance item — there is nothing for it to configure",
   () => { const out = faPlan(FA_PROVIDED_TPL);
+    const feedLines = out.split("\n").filter((l) => /Feed \(ESN\)/.test(l));
     return out.includes(`template context — \`${FA_PROVIDED_TPL}\` ships Feed (ESN) (measured); re-bind it, do not rebuild`)
       && !/ships NO Feed/.test(out)
+      && !feedLines.some((l) => l.includes(FA_GUIDANCE_ID))
       && !faRows(FA_PROVIDED_TPL).some((l) => /^Feed \(ESN\) — 1 expected \(`crt\.Feed`\)/.test(l)); },
   () => ({ feedLines: faPlan(FA_PROVIDED_TPL).split("\n").filter((l) => /Feed/.test(l)),
     rows: faRows(FA_PROVIDED_TPL).filter((l) => /Feed/.test(l)) }));
@@ -14216,42 +14273,64 @@ check("ENG-94756 T3 (R4) — FEED: a template MEASURED to ship Feed reads re-bin
 // `attachments: true` — `PageWithTopAreaAndTabsFreedomTemplate` was measured to ship none, and the `__Fixture…`
 // entry PR #156 added covers Feed only — so the PROVIDED arm for Attachments is reachable from no input this suite
 // can construct without editing the engine's table. Rather than fake it or skip it, the check READS the table:
-// while no such template exists it asserts what IS true today (the Attachments row is answered by the measured
-// table, never by the flat template-provided claim ENG-96457 removed), and the moment a template measured to ship
+// while no such template exists it asserts what IS true today, and the moment a template measured to ship
 // Attachments is added it switches to asserting the real re-bind contract. Nothing has to remember to come back.
+//
+// PR #177 review, F8 — THE NO-SHIPPER ARM IS R5 COVERAGE, NOT R4, and it is labelled that way now. It asserts the
+// ABSENT wording and the ABSENT row shape, which is the INSERT path; calling it R4 claimed a merge assertion this
+// suite has never been able to make for Attachments. The review also predicted that the shipper arm would flip red
+// for whoever first measures an attachments-shipping template, because `buildCoverageRows` filed the
+// `Attachments (crt.FileList)` row UNCONDITIONALLY — an extra expected count against a component the template
+// already ships. That defect is FIXED in this same change (the feature row is now owned by the template verdict),
+// so the arm is expected to PASS on the day it first runs. If it does not, read it as a real R4 regression.
 const faAttachmentsShipper = Object.keys(FREEDOM_TEMPLATE_CAPABILITIES)
   .find((t) => FREEDOM_TEMPLATE_CAPABILITIES[t].attachments === true) || null;
-check("ENG-94756 T3 (R4) — ATTACHMENTS: the row is answered by the MEASURED capability table, never by a flat template-provided claim; and once a template measured to SHIP Attachments exists, its row must read re-bind and file no extra expected count (none is measured today, so that arm is asserted the moment one is added)",
+check("ENG-94756 T3 (R5 today / R4 once a shipper exists) — ATTACHMENTS: with no measured attachments-shipping template the row is answered by the MEASURED table on the INSERT path (ADD, routed, its own expected count — never the flat template-provided claim); once such a template is added, its row must instead read re-bind and file no extra expected count",
   () => {
     if (!faAttachmentsShipper) {
       const absent = faPlan(FA_ABSENT_TPL);
       return absent.includes(`⚠ ADD — \`${FA_ABSENT_TPL}\` ships NO Attachments (measured)`)
-        && !/template context — provided by the Freedom template/.test(absent);
+        && !/template context — provided by the Freedom template/.test(absent)
+        && faRows(FA_ABSENT_TPL).some((l) => /^Attachments — 1 expected \(`crt\.FileList`\)/.test(l));
     }
     const out = faPlan(faAttachmentsShipper);
     return out.includes(`template context — \`${faAttachmentsShipper}\` ships Attachments (measured); re-bind it, do not rebuild`)
       && !/ships NO Attachments/.test(out)
-      && !faRows(faAttachmentsShipper).some((l) => /^Attachments \(`crt\.FileList`\)/.test(l)); },
+      && !faRows(faAttachmentsShipper).some((l) => /^Attachments.*expected/.test(l)); },
   () => ({ attachmentsShipper: faAttachmentsShipper,
     attachmentLines: faPlan(faAttachmentsShipper || FA_ABSENT_TPL).split("\n").filter((l) => /Attachment/i.test(l)),
     rows: faRows(faAttachmentsShipper || FA_ABSENT_TPL).filter((l) => /Attachment/i.test(l)) }));
 
-// ---- T4 (R6): an UNMEASURED template keeps today's wording, to the byte ----------------------------------------
+// ---- T4 (R6): an UNMEASURED template keeps today's wording, to the byte ------------------------------------------
 // The ENG-96457 regression boundary. The third verdict is the one that keeps the plan honest, and it is the easiest
-// to lose while adding settings to the other two: whichever way S5 names the canonical values, a template nobody
-// has measured must still claim NOTHING — no value set, no "ships NO", no expected count. Asserted as an exact
-// sentence rather than a loose pattern, because "unchanged wording" is the requirement itself.
+// to lose while adding routing to the other two: a template nobody has measured must still claim NOTHING — no value
+// set, no "ships NO", no expected count, and no guidance call either, because a plan that cannot say whether the
+// component needs building at all must not send anyone off to configure one. Asserted as an exact sentence rather
+// than a loose pattern, because "unchanged wording" is the requirement itself.
 const faUnmeasuredSentence = (what) =>
   `⚠ confirm on-stand — \`${FA_UNMEASURED_TPL}\`'s capabilities are NOT measured, so whether it ships ${what} is unknown.`
   + " Check the template before approval; if it ships none, this is an explicit build step";
-check("ENG-94756 T4 (R6): for an UNMEASURED template the confirm-on-stand sentence is byte-identical to today's for BOTH Feed and Attachments — no `ships NO` claim, no template-provided claim, and no expected count filed for either",
+const FA_EXPECTED_COUNT_RE = /— 1 expected \(`crt\.(Feed|FileList)`\)/;
+check("ENG-94756 T4 (R6): for an UNMEASURED template the confirm-on-stand sentence is byte-identical to today's for BOTH Feed and Attachments — no `ships NO` claim, no template-provided claim, no guidance call, and no expected count filed for either",
   () => { const out = faPlan(FA_UNMEASURED_TPL);
     return out.includes(faUnmeasuredSentence("Feed (ESN)")) && out.includes(faUnmeasuredSentence("Attachments"))
       && !/ships NO /.test(out) && !/provided by the Freedom template/.test(out)
-      && !faRows(FA_UNMEASURED_TPL).some((l) => /— 1 expected \(`crt\.(Feed|FileList)`\)/.test(l)); },
+      && !out.includes(FA_GUIDANCE_ID)
+      && !faRows(FA_UNMEASURED_TPL).some((l) => FA_EXPECTED_COUNT_RE.test(l)); },
   () => ({ template: FA_UNMEASURED_TPL,
     lines: faPlan(FA_UNMEASURED_TPL).split("\n").filter((l) => /Feed|Attachment/i.test(l)),
     rows: faRows(FA_UNMEASURED_TPL).filter((l) => /Feed|Attachment/i.test(l)) }));
+// THE POSITIVE CONTROL FOR THE NEGATIVE ABOVE (PR #177 review, F7 second half). `— 1 expected (crt.Feed|crt.FileList)`
+// used to be vacuous for `crt.FileList`: `templateAbsentRows` emitted that label for WIDGETS only, and Attachments
+// is a standard feature, so no input could have produced a `crt.FileList` count and T4's negative could not fail.
+// It is not vacuous now — the ABSENT path emits exactly that label for BOTH components — and this check is what
+// proves it, by asserting the same regex MATCHES on the template where the rows are supposed to exist. Delete this
+// and T4's negative silently becomes decoration again for whichever half stops being emitted.
+check("ENG-94756 T4 control: the expected-count label T4 asserts is ABSENT for an unmeasured template is genuinely EMITTED on the measured-absent one — for `crt.Feed` AND for `crt.FileList`, so neither half of that negative is vacuous",
+  () => { const rows = faRows(FA_ABSENT_TPL).filter((l) => FA_EXPECTED_COUNT_RE.test(l));
+    return rows.some((l) => l.includes("`crt.Feed`")) && rows.some((l) => l.includes("`crt.FileList`")); },
+  () => ({ template: FA_ABSENT_TPL, matched: faRows(FA_ABSENT_TPL).filter((l) => FA_EXPECTED_COUNT_RE.test(l)),
+    allRows: faRows(FA_ABSENT_TPL) }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

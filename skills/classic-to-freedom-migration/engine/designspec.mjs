@@ -17,7 +17,10 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey, SEVERITY } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor); ENG-96204: ONE severity vocabulary, shared with the merge-replay warnings
-import { featureVerifyType, featureVerifyExtraTypes, analogsOf, templateCapabilities, templateProvides } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf, templateCapabilities, templateProvides,
+  // ENG-94756: the guidance item that OWNS the canonical settings, and the companion artifact an inserted
+  // attachments component is inert without. Both are names this file renders; neither is a property value.
+  STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -274,13 +277,24 @@ function templateVerdict(opts, capability) {
   if (p === false) return TPL.ABSENT;
   return TPL.UNCONFIRMED;
 }
+// ENG-94756 — THE ROUTE TO THE CANONICAL SETTINGS, in ONE place, because the plan says it in two (the Layout
+// table's Source cell and the coverage rows the build unit is gated on) and a run that pointed at the guidance
+// item in one of them and improvised in the other would be the duplication all over again. The call is printed
+// verbatim so it can be pasted: the values are a `get-guidance` away, and they are deliberately nowhere in here.
+const GUIDANCE_CALL = `\`get-guidance name=${STANDARD_COMPONENTS_GUIDANCE_ID}\``;
+const configureFrom = (what) => `Configure ${what} from ${GUIDANCE_CALL} — that item owns the canonical property set for it; this plan names none of the values, and none may be invented`;
+// The same route, compressed to what fits at the end of a gated checklist row.
+const GUIDANCE_POINTER = `settings: ${GUIDANCE_CALL}`;
 // The Source cell for a base-declared element the template may or may not ship. Replaces the flat
 // "template context — provided by the Freedom template" that was asserted without looking at the template.
 function templateContextCell(opts, capability, what) {
   const tpl = formTemplateOf(opts);
   const verdict = templateVerdict(opts, capability);
+  // PROVIDED and UNCONFIRMED get NO route, deliberately. Re-binding the template's own component configures
+  // nothing, and a template nobody has measured cannot be told whether it owes a build at all (R6) — sending
+  // either one off to read a build recipe would be the false instruction this verdict model exists to remove.
   if (verdict === TPL.PROVIDED) return `template context — \`${esc(tpl)}\` ships ${what} (measured); re-bind it, do not rebuild`;
-  if (verdict === TPL.ABSENT) return `⚠ ADD — \`${esc(tpl)}\` ships NO ${what} (measured): build it explicitly. This is NOT template context, and it needs its own expected count`;
+  if (verdict === TPL.ABSENT) return `⚠ ADD — \`${esc(tpl)}\` ships NO ${what} (measured): build it explicitly. This is NOT template context, and it needs its own expected count. ${configureFrom(what)}`;
   return tpl
     ? `⚠ confirm on-stand — \`${esc(tpl)}\`'s capabilities are NOT measured, so whether it ships ${what} is unknown. Check the template before approval; if it ships none, this is an explicit build step`
     : `⚠ confirm on-stand — no form template is named yet, so whether ${what} is template-provided is unknown`;
@@ -2413,16 +2427,56 @@ function fieldLayoutOf(fieldOps) {
     .map((o) => ({ name: o.name, ...pickCell(o.values?.layoutConfig) }))
     .filter((e) => Number.isInteger(e.row) && Number.isInteger(e.column));
 }
+// EVERY base-declared element whose template capability the table tracks, from BOTH shapes the mapper emits it in.
+// ENG-94756 — this used to read `cs.widgets` only, and Attachments never arrives as a widget: it is a standard
+// FEATURE (the `*File` entity rule, the same path `FileDetailV2` takes). So the ABSENT verdict for Attachments
+// produced no explicit-build row at all, and the unconditional `Attachments (crt.FileList)` row in
+// `buildCoverageRows` stood in for it — the SAME row a template that ships Attachments got, which is an extra
+// expected count filed against a component the template already provides, i.e. a direct R4 violation the moment
+// any template is measured as shipping it. Feed escaped only because it happens to be a widget.
+// A list-shaped feature is skipped: it is covered by the `Related lists` count, and counting it twice would gate
+// one deliverable in two places.
+function capabilityElements(cs) {
+  const out = (cs.widgets || []).map((w) => ({ what: w.widget, capability: w.capability }));
+  for (const s of cs.standardFeatures || []) {
+    if (s.uiShape === "list") continue;
+    const f = s.feature || s.caption || "";
+    out.push({ what: f, capability: FEATURE_CAPABILITY[f] || null });
+  }
+  return out;
+}
 function templateAbsentRows(cs, opts) {
   const rows = [];
-  for (const w of cs.widgets || []) {
-    if (templateVerdict(opts, w.capability) !== TPL.ABSENT) continue;
-    const ctype = featureVerifyType(CAPABILITY_FEATURE[w.capability] || "");
+  for (const el of capabilityElements(cs)) {
+    if (templateVerdict(opts, el.capability) !== TPL.ABSENT) continue;
+    const ctype = featureVerifyType(CAPABILITY_FEATURE[el.capability] || "");
     if (!ctype) continue;
-    rows.push({ label: `${esc(w.widget)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly`,
+    rows.push({ label: `${esc(el.what)} — 1 expected (\`${ctype}\`) — the chosen template ships none, so it is built explicitly. ${GUIDANCE_POINTER}`,
       vk: { type: "element", ctype, n: 1 } });
+    rows.push(...companionRows(el.capability, opts));
   }
   return rows;
+}
+// ENG-94756 — THE COMPANION ARTIFACT A BUILT COMPONENT IS INERT WITHOUT. An attachments component reads its records
+// from `AttachmentListDS`; a page built with the component and without it lists nothing, and a `--verify` that
+// counted only the component would report that page done. So the data source is a DELIVERABLE of the insert, with
+// a row of its own, and only on the ABSENT path — a template that ships the component ships its data source too.
+//
+// WHY AN EVIDENCE ROW AND NOT A COUNT. `--built.pages[<key>]` carries the page's `viewConfig` — its ITEMS — and a
+// data source is not an item; it lives in the page's model configuration, which no read this engine is given can
+// show. An `element` count would therefore be a gate that can never close on a correctly built page. The evidence
+// mechanism is exactly the one this file already uses for "a deliverable no page body can prove": the verifier
+// reads it on the stand and files a record, an independent judge rules on that record, and until then the row is
+// `⚠ unverified` — visible and open, never a silent pass.
+//
+// AND IT GATES PRESENCE, NOT VALUES — the narrowing R7 forces on R3's second criterion, stated here rather than
+// left for someone to discover. The engine does not carry the data source's shape (entity, scope, attribute), so
+// it cannot check it; what it can honestly assert is that the artifact EXISTS and that whoever built it was sent
+// to the item that defines it. Checking the values is the job of the agent that read that item.
+function companionRows(capability, opts) {
+  if (capability !== "attachments") return [];
+  return [evidenceRow(`${pageKeyOf(opts)}#datasource:${ATTACHMENTS_DATA_SOURCE}`,
+    `Companion data source \`${ATTACHMENTS_DATA_SOURCE}\` — the inserted \`${featureVerifyType("Attachments")}\` reads its records from it and lists NOTHING without it; ${GUIDANCE_POINTER}`)];
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
@@ -2464,7 +2518,15 @@ function buildCoverageRows(cs, pm, result, opts = {}) {
   for (const s of cs.standardFeatures || []) {
     const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
-    cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+    // ENG-94756 — a feature whose capability the MEASURED table has ANSWERED is owned by that verdict, not by this
+    // unconditional row. ABSENT gets its explicit-build row from `templateAbsentRows` (with its own expected count
+    // and the route to the settings), and PROVIDED gets NO row at all: filing one against a component the chosen
+    // template already ships is exactly the extra expected count R4 forbids — the plan would demand a build for
+    // something the template hands over, which is how ENG-96445 turned a Feed into a gate violation. UNCONFIRMED
+    // (no capability tracked, no template named, or a template nobody has measured) keeps this row untouched: R6
+    // is that an unmeasured template's wording and gating do not move.
+    if (templateVerdict(opts, FEATURE_CAPABILITY[f] || null) === TPL.UNCONFIRMED)
+      cover.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
     // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
     // gated row PER HALF, same as the DCM case-progress-bar/next-steps split a few lines below. Before this, the
     // second half lived only in `notes` prose, and a build that added just the list read identically to one that
@@ -2688,12 +2750,15 @@ function pageGroup(pageKey, title, rows) {
 // ⚠ Confirm item — is closed by an evidence RECORD plus an independent judge verdict, not by prose in the Evidence
 // cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. Keep this
 // list complete — an id missing here reads to an executor as an id that does not exist, so it never gets filed.
-// FOUR shapes:
+// FIVE shapes:
 //   `<pageKey>#quality-gates`            — the singleton per-page row (one per published page key)
 //   `<pageKey>#confirm:<kind>:<item>`    — one per ⚠ Confirm worklist item
 //   `<pageKey>#childpage`                — an unfolded child page (see `unresolvedChildGroups` below)
 //   `list#listpage:<kind>:<item>`        — one per list-page deliverable: `columns:set`, `filter:<name>`,
 //                                          `action:<name>` (see `listRow`; `<pageKey>` is always `list`)
+//   `<pageKey>#datasource:<name>`        — ENG-94756: a data source the page's components read from, which the
+//                                          page BODY cannot show (it is not a view item). Emitted only on the
+//                                          template-ABSENT path, by `companionRows`
 // Built from the RAW `pageKey` / `d.kind` / `d.item`, never from the rendered label: labels pass through `esc`, so
 // a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so `--units` can publish it.

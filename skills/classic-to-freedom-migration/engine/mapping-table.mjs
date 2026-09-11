@@ -706,6 +706,33 @@ export function templateProvides(name, capability) {
   return caps[capability];
 }
 
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+   The table above answers WHETHER a template ships Feed / Attachments. It deliberately does NOT answer HOW the
+   component is configured once it has to be built — and neither does anything else in this repository. The property
+   values the section/app CREATION flow produces are published ONCE, as clio-knowledge guidance, and read at build
+   time through `get-guidance`; `get-component-info` stays authoritative for the property VOCABULARY. So the plan
+   ROUTES a builder to that item by its stable id and asserts nothing about the values themselves.
+
+   WHY A POINTER AND NOT A COPY (approved requirement R7). A table of values here would be a SECOND source of truth
+   for the same knowledge, free to drift from the one the builder actually reads — the duplication this ticket
+   exists to end. And the engine could not maintain it honestly even if that were wanted: `migrate.mjs` renders the
+   plan OFFLINE, under plain `node`, with no clio and no stand, so it can never check a value it printed. Naming
+   the item costs one string and keeps the run's only claim a true one: here is the component you owe, and here is
+   where its settings are defined.
+
+   The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`,
+   served under `docs://knowledge/com.creatio.clio/page-modification-standard-components`. Renaming it there
+   without renaming it here produces a plan that points at nothing, which is why the engine tests spell the literal
+   out rather than importing this constant. Note that only RUNTIME consumption needs the clio release that carries
+   the item; the plan needs the id alone.                                                                          */
+export const STANDARD_COMPONENTS_GUIDANCE_ID = "page-modification-standard-components";
+// The companion data source an inserted attachments component is inert without: it is what the component reads its
+// records from, so a page built with the component and without this lists nothing — and a gate that counted only
+// the component would call that page done. This is a deliverable NAME, not one of the property values: the plan has
+// to be able to say WHICH artifact is owed and `--verify` has to be able to gate it. Its SHAPE — the entity it
+// binds, its scope, its attribute — stays in the guidance item, with everything else the builder configures.
+export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
+
 // ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
 //
 // A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
