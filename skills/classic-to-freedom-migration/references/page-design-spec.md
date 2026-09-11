@@ -19,21 +19,21 @@ HTML or a rendered artifact.
 - **One `Layout` table = structure + contents.** The `Region` column is the page structure (side-profile
   islands, tabs, card actions) and REPEATS down its rows (Markdown can't merge cells). Every field,
   related list, native component and card action is ONE row — nothing is listed twice.
-- **`Logic` is where the business rules live** — the declarative page rules (required / read-only /
+- **`Business rules` is where the business rules live** — the declarative page rules (required / read-only /
   visible-when, each with its condition) render here, together with entity/lookup filters and
   process launch. The Layout `Rule` column carries only intrinsic field state
   (e.g. a read-only mirror), never a business rule — a reader finds all the rules in ONE place.
-- **Custom METHODS are not in `Logic`** — each is a row in `⚠ Imperative logic`, with its trigger traced
-  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Logic` = what the
-  engine MAPPED; `⚠ Imperative logic` = the methods it could not, each carrying a ported/dropped/blocked
-  obligation. `Logic` closes with a pointer line naming how many methods the page has.
-- **`⚠ Imperative members`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
+- **Custom METHODS are not in `Business rules`** — each is a row in `⚠ Custom methods`, with its trigger traced
+  from the data (a declaration, a control binding, the call graph, a lifecycle hook). `Business rules` = what the
+  engine MAPPED; `⚠ Custom methods` = the methods it could not, each carrying a ported/dropped/blocked
+  obligation. `Business rules` closes with a pointer line naming how many methods the page has.
+- **`⚠ Other declared logic`** = the non-method imperative members (`mixin`, `message`, `attribute-*`,
   `module-dep`, `referenced-module`) — declared on this page, defined elsewhere. Same contract as
-  `⚠ Imperative logic`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
+  `⚠ Custom methods`: one row each, ported/dropped/blocked, with a **Described in** cell. What each KIND
   is, is stated once above the table; the row carries only what differs.
 - **`⚠ Confirm before I build`** collects only what needs a human ON-STAND answer (plus any discovery
   risks/gaps you append). A member explained by a step-5.1 card is NOT a confirm item — it is work, and it
-  lives in `⚠ Imperative members`.
+  lives in `⚠ Other declared logic`.
 - Feed the resolution inputs so names are real, not codes: `resources` (captions), `columnTitles` (field
   labels), `detailSchemas` (detail entity/columns/title). Separate confirmed facts from inferences.
 
@@ -127,33 +127,33 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
-#### Logic
+#### Business rules
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
 | Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
 | Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
 
-> <N> custom method(s) — see **⚠ Imperative logic** below.
+> <N> custom method(s) — see **⚠ Custom methods** below.
 
-#### ⚠ Imperative logic — account for EVERY row (<N>)
-| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
-| --- | --- | --- | --- | --- | --- | --- |
-| <method> | L<from>-<to> | <traced trigger> / ⚠ unresolved | <recognised calls> / sets values[; ⚠ also calls: <call>] / ⚠ unclassified: <call> / ⚠ nothing recognised [(+<N> call(s) the parser did not forward)] | <attrs read> → <attrs written> | <Freedom construct> | <card> <AC…> / ⚠ not described |
-| ↳ <helper> | L<from>-<to> | internal call from <caller> | … | … | port with `<caller>` | <card> <AC…> |
+#### ⚠ Custom methods — account for EVERY row (<N>)
+| Method | Source | What the item does | Use case | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- |
+| <method> | L<from>-<to> | <plain-language what it does — trigger → effect, fields read/written, edge cases> / ⚠ not described | <plain-language step-by-step use case> / ⚠ not described | <Freedom construct> | <card> <AC…> / ⚠ not described |
+| ↳ <helper> | L<from>-<to> | … | … | port with `<caller>` | <card> <AC…> |
 
-#### ⚠ Imperative members — account for EVERY row (<N>)
+#### ⚠ Other declared logic — account for EVERY row (<N>)
 > what each KIND is, one line per kind present — stated here, not repeated on every row
-| Member | Kind | Detail | Described in |
-| --- | --- | --- | --- |
-| <name> | mixin / message / attribute-* / module-dep / referenced-module | <what differs for this row> | <card> <AC…> / ⚠ not described |
+| Member | Kind | What the item does | Use case | Described in |
+| --- | --- | --- | --- | --- |
+| <name> | mixin / message / attribute-* / module-dep / referenced-module | <plain-language what it does> / ⚠ not described | <plain-language use case> / ⚠ not described | <card> <AC…> / ⚠ not described |
 
 #### ⚠ Confirm before I build
 - **[<kind>]** <item> — <what to confirm / resolve>
 - **risk/gap:** <cross-cutting discovery risk or missing source>
 ```
 
-Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Imperative logic → ⚠ Imperative members → ⚠ Confirm), then each child page under **Child page mappings**.
+Reading order follows the plan's **Main scope** table: list page first, then the form page (Layout → Logic → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm), then each child page under **Child page mappings**.
 
 ## Worked example (single-section, abbreviated)
 
@@ -202,7 +202,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Tab · Approvals | Visas | Approvals | native — confirm component on-stand | — | — |
 | Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
-#### Logic
+#### Business rules
 | Behaviour | Trigger | Effect | Freedom target |
 | --- | --- | --- | --- |
 | Specialist expertise level | when Stage | required (else optional) | page business rule |
@@ -210,13 +210,13 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 
-> 2 custom method(s) — see **⚠ Imperative logic** below.
+> 2 custom method(s) — see **⚠ Custom methods** below.
 
-#### ⚠ Imperative logic — account for EVERY row (2)
-| Method | Source | Trigger | Body does | Reads → writes | Freedom target | Described in |
-| --- | --- | --- | --- | --- | --- | --- |
-| onContactChange | L247-250 | attribute-onchange (from Contact attribute onChange) — reported | refresh | — | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
-| ↳ setContactInfo | L429-433 | internal call from onContactChange | sets values | Email, MobilePhone, Skype → Email, MobilePhone, Skype | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
+#### ⚠ Custom methods — account for EVERY row (2)
+| Method | Source | What the item does | Use case | Freedom target | Described in |
+| --- | --- | --- | --- | --- | --- |
+| onContactChange | L247-250 | Refreshes the record when the linked contact is changed. | When a user picks a different Contact, the page reloads so the contact-derived fields show the new person's details. | `crt.LoadDataRequest` / data-source reload from a handler | Applicant1Page/C02 AC-3, AC-4 |
+| ↳ setContactInfo | L429-433 | Copies the chosen contact's email, phone and Skype onto the record. | After the contact loads, its communication details are filled in so the recruiter does not retype them. | port with `onContactChange` | Applicant1Page/C01 AC-5, AC-7 |
 
 #### ⚠ Confirm before I build
 - **[profile-island]** ContactContainer, InternalRequestContainer — two side-profile islands rebuilt as separate containers; confirm the left-area representation.
