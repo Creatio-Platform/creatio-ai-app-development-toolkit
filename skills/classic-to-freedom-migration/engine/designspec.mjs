@@ -1847,7 +1847,12 @@ function buildCoverageRows(cs, pm, result) {
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
   cover.push(...standardFeatureRows(cs));
-  if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
+  // `cs.dcmActive` (from the mapper) scopes DCM to THIS page's entity — a child edit page does not inherit the
+  // parent's case, so it demands no case bar. The mapper sets it on every real changeSet; a hand-built changeSet
+  // (no `dcmActive` key) falls back to the raw resolved signal, which is the unscoped main-page reading it always
+  // had. On a main/typed page dcmActive tracks the resolved signal exactly, so this is unchanged for them.
+  const dcmActive = cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present);
+  if (dcmActive) {
     cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } }, { label: "DCM Next steps", vk: { type: "dcm-next" } });
   }
   return cover;

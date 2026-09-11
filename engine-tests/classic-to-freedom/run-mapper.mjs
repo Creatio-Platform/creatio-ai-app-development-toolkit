@@ -2960,6 +2960,30 @@ check("s48/widget-gate: DCM (progress bar + Next steps) is DROPPED without the o
   !wNames(chromeNoDcm).has("Case progress bar") && !wNames(chromeNoDcm).has("Next steps"));
 check("s48/widget-gate: DCM EMITS when signals.dcm is resolved+present, even though the classic page body has no dashboard",
   wNames(chromeDcm).has("Case progress bar") && wNames(chromeDcm).has("Next steps"));
+check("s48/widget-gate: a main page publishes `dcmActive` tracking the resolved signal (true with dcm, false without)",
+  chromeDcm.dcmActive === true && chromeNoDcm.dcmActive === false);
+// ENG-96327 — DCM is ENTITY-scoped: a CHILD edit page migrates a DIFFERENT entity, so it must NOT inherit the
+// parent's case. With the parent's dcm INHERITED (opts.signals) but the child's OWN bundle carrying none
+// (ownSignals), the case progress bar + Next steps do NOT emit — the leak that put Contract's case bar onto the
+// plain SpecInContract detail — and `dcmActive` is false so the coverage builder demands no case bar either.
+const chromeChildInherited = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isChildPage: true, ownSignals: {} });
+check("ENG-96327: a child edit page does NOT inherit the parent's DCM — no case bar / Next steps, dcmActive false",
+  !wNames(chromeChildInherited).has("Case progress bar") && !wNames(chromeChildInherited).has("Next steps")
+  && chromeChildInherited.dcmActive === false);
+// …but a child whose OWN bundle records the case DOES get them (its own entity really is case-managed).
+const chromeChildOwn = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isChildPage: true, ownSignals: { dcm: { resolved: true, present: true } } });
+check("ENG-96327: a child whose OWN bundle records dcm still emits the case bar + Next steps (its entity is case-managed)",
+  wNames(chromeChildOwn).has("Case progress bar") && wNames(chromeChildOwn).has("Next steps")
+  && chromeChildOwn.dcmActive === true);
+// ENG-96327 REGRESSION GUARD: the scoping is gated ONLY on `isChildPage`. A TYPED fold (`formOnly:true`) and a MINI
+// fold (`isMiniPage:true`) are the SAME entity as the root, carry NO own signals, and must keep inheriting the
+// root's DCM exactly as before this change — the fix must not touch the main / typed / mini record pages.
+const chromeTyped = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, formOnly: true, ownSignals: {} });
+const chromeMini = mapToFreedom(chromeEff, { signals: { dcm: { resolved: true, present: true } }, isMiniPage: true, ownSignals: {} });
+check("ENG-96327 guard: a TYPED page (formOnly) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeTyped).has("Case progress bar") && wNames(chromeTyped).has("Next steps") && chromeTyped.dcmActive === true);
+check("ENG-96327 guard: a MINI page (isMiniPage) still inherits the root's DCM — case bar + Next steps emit, dcmActive true (fix is child-only)",
+  wNames(chromeMini).has("Case progress bar") && wNames(chromeMini).has("Next steps") && chromeMini.dcmActive === true);
 
 // #6 — Layout region order: the side profile (all islands) comes BEFORE tabs, even when the classic
 // field order interleaves an island, a tab field, then a second island.
