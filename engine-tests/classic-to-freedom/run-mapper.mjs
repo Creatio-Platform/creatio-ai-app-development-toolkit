@@ -4691,6 +4691,37 @@ check("ENG-95254: an UNBALANCED brace degrades — the layer reports a parse err
     + `a.addItem(this.getButtonMenuItem({Click:{bindTo:"doIt"});return a;}`), "P");
     return !!r.error && Array.isArray(r.sectionActions); })());
 // The fold must not blank a field only the base layer declared.
+// ENG-94714 — the same-name collision ACROSS the two surfaces, end to end. The unit assertions above pin
+// `mergeSectionActions` itself; this one pins the precedence at the CALL SITE, where the section `diff` entries
+// are appended LAST and therefore win field by field. Both surfaces declare a NON-NULL condition here on
+// purpose: `mergeSectionActions` filters nulls, so a fixture whose imperative entry leaves those fields unset
+// passes whatever the spread order is, and pins nothing. With both sides populated, reversing the order
+// relabels `source`, `condition` and `conditionProperty` to the imperative-menu reading and this fails.
+const secActCollide = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  planMeta: { sectionSchema: "XSection" },
+  section: { schemas: [{ pkg: "OrderInSales", body: `define("XSection",[],function(){return{entitySchemaName:"X",`
+    + `methods:{getSectionActions:function(){var a=this.callParent(arguments);`
+    + `a.addItem(this.getButtonMenuItem({Caption:"ImperativeOnlyCaption",Click:{bindTo:"foldedButton"},`
+    + `Enabled:{bindTo:"isAnySelected"}}));return a;}},`
+    + `diff:[{"operation":"insert","name":"foldedButton","parentName":"CombinedModeActionButtonsCardLeftContainer",`
+    + `"propertyName":"items","index":3,"values":{"itemType":5,"click":{"bindTo":"foldedButton"},`
+    + `"visible":{"bindTo":"getIsStageActive"}}}]};});` }],
+    seed: svSeed,
+    listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } },
+}, { baseDir: FIX });
+const secActCollided = () => (secActCollide.listChangeSet?.commandBarActions || []).find((x) => x.name === "foldedButton");
+check("ENG-94714: a button declared on BOTH surfaces is folded into ONE entry — not published twice",
+  (secActCollide.listChangeSet?.commandBarActions || []).filter((a) => a.name === "foldedButton").length === 1,
+  () => (secActCollide.listChangeSet?.commandBarActions || []).map((a) => a.name));
+check("ENG-94714: on that collision the section `diff` wins the contested fields — it is appended LAST, so the bound property and its source read off the view, not off the imperative menu",
+  (() => { const a = secActCollided();
+    return !!a && a.source === "sectionDiff" && a.condition === "getIsStageActive" && a.conditionProperty === "visible"
+      && a.parent === "CombinedModeActionButtonsCardLeftContainer"; })(),
+  () => secActCollided());
+check("ENG-94714: the merge is FIELD BY FIELD on that collision too — a caption only `getSectionActions` declares survives the diff entry that carries none",
+  (() => { const a = secActCollided(); return !!a && a.caption === "ImperativeOnlyCaption"; })(),
+  () => secActCollided());
 check("ENG-95254: `mergeSectionActions` merges FIELD BY FIELD — a partial top-layer override keeps the base layer's condition and icon",
   (() => { const base = { name: "setOwner", caption: "BaseCaption", condition: "isSingleSelected", icon: "IconA", package: "Base", order: 0, group: 0 };
     const top = { name: "setOwner", caption: "TopCaption", condition: null, icon: null, package: "Top", order: 0, group: 0 };

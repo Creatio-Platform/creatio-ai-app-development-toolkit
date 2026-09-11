@@ -2533,7 +2533,13 @@ function listCommandBarDecision(section, actions) {
 }
 function listRowActionDecisions(rowActions) {
   return rowActions.map((ra) => {
-    const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
+    // Every resolved condition is named, not only the first: an item binding one method to `visible` and another
+    // to `enabled` would otherwise reach the worklist as a visibility question alone, and the dropped `enabled`
+    // rule is exactly the behaviour change this reason exists to prevent. The singular pair is the fallback.
+    const pairs = ra.conditions?.length
+      ? ra.conditions.map((c) => `\`${c.method}\` on \`${c.property || "visible"}\``).join(" · ")
+      : (ra.condition ? `\`${ra.condition}\` on \`${ra.conditionProperty || "visible"}\`` : null);
+    const cond = pairs ? `its condition(s) (${pairs}) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
     return { kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
       reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` };
   });

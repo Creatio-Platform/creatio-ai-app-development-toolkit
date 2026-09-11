@@ -450,9 +450,16 @@ function listRowActionsTable(rowActions) {
     // The PROPERTY the condition binds travels with the method name (ENG-94714). `visible` and `enabled` are not
     // interchangeable: porting an enablement condition as a visibility rule hides the control instead of greying
     // it, and porting either as nothing ships an always-available action. The cell says which one it is.
-    const cond = ra.condition
-      ? `\`${esc(ra.condition)}\` on \`${esc(ra.conditionProperty || "visible")}\` — carry as Freedom state`
-      : "⚠ none declared — confirm on-stand";
+    // An item may bind BOTH properties (one method to `visible`, another to `enabled`), so every condition this
+    // run resolved is rendered rather than only the first — the same rule the command-bar table applies. The
+    // singular pair is the fallback for a row action resolved before `conditions` was plumbed through.
+    let cond = "⚠ none declared — confirm on-stand";
+    if (ra.conditions?.length) {
+      cond = ra.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property || "visible")}\``).join(" · ")
+        + " — carry as Freedom state";
+    } else if (ra.condition) {
+      cond = `\`${esc(ra.condition)}\` on \`${esc(ra.conditionProperty || "visible")}\` — carry as Freedom state`;
+    }
     const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
     L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
   }
