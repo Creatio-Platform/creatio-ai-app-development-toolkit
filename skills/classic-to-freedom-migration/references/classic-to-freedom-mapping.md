@@ -173,6 +173,24 @@ Two consequences drive everything below: the dashboards can only be discovered *
 schema chain reveals them), and their *delivery* — packaged vs stand-only — is a property of the **bindings**,
 not of the section's own package. A single section routinely owns one of each.
 
+**Where a migrated dashboard lands — the two delivery routes.** The migrator writes the 8x dashboard as a
+client unit schema, and *which store* it uses is decided by the `TargetPackageName` process parameter:
+
+| `TargetPackageName` | The migrated schema lands in | Named |
+| --- | --- | --- |
+| passed | `SysSchema`, inside that package | prefixed with the `SchemaNamePrefix` system setting — e.g. `UsrTest01_0957AC8FB1_8x` |
+| omitted | `SysUserLevelSchema`, in **no** package | unprefixed — e.g. `Test10_D4FA19580A_8x` |
+
+Omitting the parameter is therefore a **supported route, not a missing input**: it is the migrator's original
+and for a long time only behaviour, and it stores the schema somewhere else rather than skipping it.
+
+**Absence from `SysSchema` is NOT absence.** A stand-only migrated dashboard is in a different table, so
+checking `SysSchema` alone reports a *successful* migration as a no-op — and the conclusion that follows from
+that ("name a package for these dashboards") silently converts stand-only sources into packaged ones, which is
+precisely the delivery regression this whole section exists to prevent. Read the migrator's own verdict from
+`DashboardsMigrationLog` / `DashboardMigrationLog` first: a `Success` row with a schema you cannot find means
+you are looking in the wrong store.
+
 **Resolution order.** Both chains run at PLAN time and their answer is recorded in `manifest.signals.dashboards`
 (the engine gates the plan on it). Read them with **`execute-esq`**, not `odata-read`: `SectionSchemaUId` is a
 plain-Guid column the OData endpoint drops from `select` and rejects in `filter`, while DataService handles it.

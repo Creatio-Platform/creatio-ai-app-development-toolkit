@@ -2703,10 +2703,10 @@ const DASH_TWO = { resolved: true, present: true, items: [
   { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", caption: "ML model analytics", package: "ML" },
 ] };
 const dashTwo = runMigration(dashMani(DASH_TWO));
-check("T3 dashboards plan: every dashboard is listed by caption WITH its delivery mode (package vs stand-only)",
-  /\*\*Section dashboards:\*\* 2 present/.test(dashTwo.plan)
-  && /test dashboard 1 \(stand-only\)/.test(dashTwo.plan)
-  && /ML model analytics \(package `ML`\)/.test(dashTwo.plan),
+check("T3 dashboards plan: dashboards are GROUPED by delivery mode (a group = one migrator run), packages before stand-only",
+  /\*\*Section dashboards:\*\* 2 present in 2 delivery groups/.test(dashTwo.plan)
+  && /\*\*ONE run per group\*\* \(`TargetPackageName` takes one value per run\)/.test(dashTwo.plan)
+  && /^ {2}- bound in package `ML`:\n {4}- ML model analytics\n {2}- stand-only:\n {4}- test dashboard 1$/m.test(dashTwo.plan),
   () => dashTwo.plan.split("\n").filter((l) => /dashboard/i.test(l)));
 check("T3 dashboards plan: the List page block carries the migrate-last hand-off note (BR4 ordering)",
   /- \*\*Dashboards:\*\*/.test(dashTwo.plan) && /MigrateDashboardsProcess/.test(dashTwo.plan),
@@ -2823,6 +2823,44 @@ check("OBS1 docs: the delivery-mode scan covers EVERY SysDashboard binding, with
   && !skillFlat.includes("Probe the packages that own the section-schema layers first")
   && mappingFlat.includes("package-agnostically"),
   () => "the section-package probe shortcut is still offered");
+
+// The incident these lock: a clean agent ran BOTH delivery groups successfully, found the packaged schemas in
+// SysSchema, did NOT find the stand-only ones (those live in SysUserLevelSchema), declared that run a no-op on a
+// made-up "a schema must belong to some package" rule, and asked the engineer to name a package for 12
+// stand-only dashboards: the BR9 delivery regression, arriving as a request for a DECISION rather than as a
+// reported failure, which is why no engine gate could catch it.
+check("BR9 docs: the migrated dashboard's two destination stores are documented, and 'not in SysSchema' is not 'not migrated'",
+  mappingFlat.includes("Where a migrated dashboard lands")
+  && mappingFlat.includes("`SysUserLevelSchema`, in **no** package")
+  && mappingFlat.includes("`SchemaNamePrefix` system setting")
+  && mappingFlat.includes("**Absence from `SysSchema` is NOT absence.**")
+  && skillFlat.includes("**Omitting `TargetPackageName` is the supported stand-only route, not a missing input**")
+  && skillFlat.includes("you are querying the wrong store")
+  && skillFlat.includes("not looking at a failed migration"),
+  () => "the migrated-dashboard destination stores, or the supported no-package route, are not documented");
+check("BR9 docs: the delivery-mode scan warns that a binding's Data carries a BOM that breaks JSON.parse",
+  skillFlat.includes("Strip a leading BOM before parsing"),
+  () => "the SysDashboard binding Data BOM is undocumented");
+check("BR docs: `Partially migrated` is documented as NOT done, and the decision is the user's",
+  skillFlat.includes("treat `Partially migrated` as NOT done")
+  && skillFlat.includes("never make that call yourself")
+  && skillFlat.includes("dashboardsPartialsResolved"),
+  () => "SKILL.md does not say a partially migrated dashboard is unfinished, or omits the evidence key");
+
+// T5b: the partial-outcome row. Emitted for ANY section with dashboards (unlike the delivery row, which needs a
+// packaged source): a widget the converter cannot map leaves a stand-only dashboard just as incomplete. It
+// asserts the CONVERSATION, not the outcome: whether to accept an incomplete dashboard is the user's call, and
+// the failure it guards is the agent making that call for them and reporting the migration complete.
+check("T5b partial-outcome checklist: the row is emitted even when no source dashboard is packaged",
+  /No unresolved partial migration/.test(dashStandOnly.checklist),
+  () => dashStandOnly.checklist.split("\n").filter((l) => /partial/i.test(l)));
+const dashVerifyPartialsDone = renderVerify(dashTwo, { planMeta: docPlanMeta },
+  { ops: dashBuiltOps, parentSchemaName: "XPage", dashboardsMigrated: true, dashboardsPartialsResolved: true });
+check("T5b partial-outcome verify: stays a non-zero verify until built.dashboardsPartialsResolved, then passes",
+  /⚠ verify/.test(dashRow(dashVerifyPartial.markdown, "No unresolved partial migration"))
+  && dashVerifyPartial.unverified > 0
+  && /✅ Done/.test(dashRow(dashVerifyPartialsDone.markdown, "No unresolved partial migration")),
+  () => dashRow(dashVerifyPartial.markdown, "No unresolved partial migration"));
 
 // T6 (BR7) — the three pre-existing signal lines must read EXACTLY as before; the dashboards line is additive.
 check("T6 dashboards regression (BR7): the dcm / processes / printables lines are byte-for-byte untouched",

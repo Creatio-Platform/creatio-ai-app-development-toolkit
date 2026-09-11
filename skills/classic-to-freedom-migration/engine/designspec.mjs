@@ -626,30 +626,49 @@ function renderPlanBanners(result, opts) {
   if (sq?.possiblyPartial) P.push(`> ⚠ **Seed may be a PARTIAL fetch — confirm before relying on the base layout.** The parent-template \`seed\` defines only ${sq.seedMethods} method(s); a FULL base-template chain has 150+ (mini 152, record ≈347, section 428). Re-check that \`get-classic-page-sources\` captured the WHOLE parent-template chain (not a truncated grab) — building on a partial base silently produces a hollow fold. (Advisory only: it does not block the gate.)`, "");
   return P;
 }
-// A discovered dashboard's DELIVERY MODE, as the plan states it. `package` on the signal item = that dashboard
-// ships inside a package (a SysDashboard data binding owns it), so the MIGRATED dashboard must ship there too;
-// no `package` = it exists only as stand data (user-level) and stays that way. Read from actual bindings — the
-// section's own package does NOT predict a dashboard's delivery (a section can own both kinds at once).
-// A bare item (a plain caption string) is NOT the recorded shape: "no package key" would then read as a
-// stand-only ANSWER the agent never gave, which is the one thing BR9 forbids — say it is unrecorded instead.
-const dashboardDelivery = (d) => {
-  if (!d || typeof d !== "object") return "⚠ delivery mode not recorded";
-  return d.package ? `package \`${esc(d.package)}\`` : "stand-only";
-};
-// The `Section dashboards` line of `### On-stand signals` — same three states as the other signals, plus the
+// Dashboards grouped BY DELIVERY MODE. `package` on the signal item = that dashboard ships inside a package (a
+// SysDashboard data binding owns it), so the MIGRATED dashboard must ship there too; no `package` = it exists
+// only as stand data (user-level) and stays that way. Read from actual bindings — the section's own package does
+// NOT predict a dashboard's delivery (a section can own both kinds at once). A bare item (a plain caption
+// string) is NOT the recorded shape: "no package key" would then read as a stand-only ANSWER the agent never
+// gave, which is the one thing BR9 forbids — it gets its own unrecorded group instead.
+// A group IS one process run: `TargetPackageName` takes ONE value per `MigrateDashboardsProcess` run, so
+// grouping makes the plan's own shape state how many runs the human is approving. Group order is fixed
+// (packages A→Z, then stand-only, then unrecorded) so the rendering is deterministic; WITHIN a group the
+// agent's recorded discovery order is preserved.
+function dashboardDeliveryGroups(items) {
+  const packages = new Map();
+  const standOnly = [], unrecorded = [];
+  for (const d of items) {
+    const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
+    if (!name) continue;
+    if (!d || typeof d !== "object") { unrecorded.push(name); continue; }
+    if (!d.package) { standOnly.push(name); continue; }
+    const pkg = String(d.package);
+    if (!packages.has(pkg)) packages.set(pkg, []);
+    packages.get(pkg).push(name);
+  }
+  const groups = [...packages.keys()].sort().map((pkg) => ({ label: `bound in package \`${esc(pkg)}\``, names: packages.get(pkg) }));
+  if (standOnly.length) groups.push({ label: "stand-only", names: standOnly });
+  if (unrecorded.length) groups.push({ label: "⚠ delivery mode not recorded", names: unrecorded });
+  return groups;
+}
+// The `Section dashboards` lines of `### On-stand signals` — same three states as the other signals, plus the
 // per-item captions AND delivery mode, because both are what the human approves (they decide whether to migrate
 // each dashboard, and the delivery mode is not recoverable after the fact).
-function dashboardsSigLine(s) {
+function dashboardsSigLines(s) {
   const label = "- **Section dashboards:**";
-  if (s?.resolved !== true) return `${label} ⚠ not resolved — run the on-stand check`;
-  if (!s.present) return `${label} none (checked on-stand → not migrated)`;
+  if (s?.resolved !== true) return [`${label} ⚠ not resolved — run the on-stand check`];
+  if (!s.present) return [`${label} none (checked on-stand → not migrated)`];
   const items = dashboardItems(s);
-  const list = items.map((d) => {
-    const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
-    return name ? `${name} (${dashboardDelivery(d)})` : "";
-  }).filter(Boolean).join(" · ");
-  const listPart = list ? ` — ${list}` : "";
-  return `${label} ${items.length} present${listPart} → migrate with \`MigrateDashboardsProcess\` **after** the Freedom list page is built and confirmed; each keeps its delivery mode`;
+  const groups = dashboardDeliveryGroups(items);
+  const runs = `${groups.length} delivery group${groups.length === 1 ? "" : "s"}`;
+  const L = [`${label} ${items.length} present in ${runs} → migrate with \`MigrateDashboardsProcess\` **after** the Freedom list page is built and confirmed; **ONE run per group** (\`TargetPackageName\` takes one value per run), so each keeps its delivery mode`];
+  for (const g of groups) {
+    L.push(`  - ${g.label}:`);
+    for (const name of g.names) L.push(`    - ${name}`);
+  }
+  return L;
 }
 // Child page mappings — one design spec per related-list child, recursively embedding grandchildren. Own fn for
 // Sonar CC 15. Returns the lines to push (empty when there are no child pages).
@@ -861,7 +880,7 @@ export function renderPlan(result, opts = {}) {
     const multiDcm = k === "dcm" && items.length > 1 ? " (multiple case versions — use the ACTIVE/published one; the progress bar + Next steps auto-populate from it, do not hand-author stages)" : "";
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), dashboardsSigLine(signals.dashboards), "");
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -1012,12 +1031,16 @@ function buildListItems(pm, section, result) {
   return items;
 }
 // Dashboards checklist rows — emitted only when the on-stand signal says the section HAS 7x dashboards.
-// Three deliverables, none of them derivable from the form page alone:
+// Four deliverables, none of them derivable from the form page alone:
 //  1. the `crt.Dashboards` element on the built Freedom LIST page — the migrator's write target, machine-checked
 //     against the built ops (so the `--built` ops must include the list page's components);
 //  2. the migration itself — a business-process run, invisible to `get-page`, so it reads an on-stand evidence
 //     boolean exactly like the section-registration / mini-page-wiring rows;
-//  3. delivery preservation — ONLY when a source dashboard is packaged; there is nothing to preserve for a
+//  3. partial outcomes — the migrator reports `Partially migrated` for a dashboard it created but could not
+//     finish (a widget it could not convert, rights it could not bind). WHICH of those a user accepts is THEIR
+//     call, so this row does not check the outcome — it checks that the call reached them instead of being
+//     made for them;
+//  4. delivery preservation — ONLY when a source dashboard is packaged; there is nothing to preserve for a
 //     stand-only one, and emitting the row anyway would make every plain migration permanently unverifiable.
 function buildDashboardRows(result) {
   const sd = result.signals?.dashboards;
@@ -1026,6 +1049,7 @@ function buildDashboardRows(result) {
   const rows = [
     { label: "Dashboards element on the Freedom list page (`crt.Dashboards`) — the migration TARGET; without it `MigrateDashboardsProcess` has nowhere to write. `ListPageV3Template` ships it as `Dashboards` under `DashboardsContainer` (INHERITED — it shows up in the list page's own ops as a type-less `merge` on that name, not as a `crt.Dashboards` insert); on any other list template ADD the Dashboards tab + element to that same page.", vk: { type: "feature", ftype: "crt.Dashboards", byName: "Dashboards", viaTpl: "ListPageV3Template" } },
     { label: `Dashboards migrated — ${items.length} classic dashboard(s) moved by \`MigrateDashboardsProcess\` (the agent does NOT rebuild the widgets by hand). Re-running is safe: already-migrated dashboards come back as skipped and the count does not grow.`, vk: { type: "onstand", evidence: "dashboardsMigrated", what: "DashboardsMigrationLog / migrated-dashboard read", miss: "the dashboards were never migrated — the Freedom section has no analytics" } },
+    { label: "No unresolved partial migration — the migrator reports `Partially migrated` for a dashboard it created but could not finish (a widget it could not convert, rights it could not bind). Taking one as it stands is the USER's decision: this row asserts only that each was shown to them and answered, never that nothing was missing.", vk: { type: "onstand", evidence: "dashboardsPartialsResolved", what: "DashboardMigrationLog status read + the user's answer", miss: "a dashboard shipped incomplete and the user was never told what is missing" } },
   ];
   const packaged = items.filter((d) => d && typeof d === "object" && d.package);
   if (packaged.length) {
