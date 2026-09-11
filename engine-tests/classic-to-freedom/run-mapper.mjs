@@ -1171,10 +1171,24 @@ check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the
   () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
     && /read from the saved grid PROFILE/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
-check("ENG-95850 (D): a profile-sourced set still raises ONE ⚠ Confirm decision — a profile can be scoped, so it is used but not silently adopted for every user",
-  () => /profile-sourced list column set/.test(profileRun.designSpec)
-    && /confirm this is the set every user should get/.test(profileRun.designSpec),
+check("ENG-95850 (D) / ENG-96327: a profile-sourced set's caveat rides the `- **List columns:**` line (confirm every user should get it), and the `list-columns` decision is DROPPED from the human ⚠ Confirm as noise",
+  () => /read from the saved grid PROFILE/.test(profileRun.designSpec)
+    && /confirm this is the set every user should get/.test(profileRun.designSpec)
+    && !/profile-sourced list column set/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
+// ENG-96327 — the human ⚠ Confirm shrink: a genuine decision (map-or-drop a component) stays, while cosmetic
+// (field-labels) and builder-only (visibility-rule) kinds are dropped from the plan the approver reads. A DENYLIST.
+{
+  const shrinkSpec = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+    { kind: "component", item: "FancyWidget", reason: "no clean Freedom mapping — confirm the substitute" },
+    { kind: "field-labels", item: "SomeField", reason: "fetch the caption on-stand" },
+    { kind: "visibility-rule", item: "SomeRule", reason: "wire the dynamic visibility rule" },
+  ] } }, { embedded: true });
+  check("ENG-96327: the human ⚠ Confirm keeps a genuine decision (component) and DROPS cosmetic (field-labels) + builder-only (visibility-rule) kinds",
+    /\*\*\[component\]\*\* FancyWidget/.test(shrinkSpec)
+      && !/\[field-labels\]/.test(shrinkSpec) && !/\[visibility-rule\]/.test(shrinkSpec),
+    () => shrinkSpec.split("\n").filter((l) => /\[component\]|\[field-labels\]|\[visibility-rule\]|Confirm before/.test(l)));
+}
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
@@ -1463,13 +1477,13 @@ check("ENG-95218: `filterAttributes` publishes only THIS ChangeSet's contributio
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218: the command-bar set does NOT claim to be complete — ONE decision per run (never per action, so a section whose buttons live only in its view `diff` still raises it) names the buttons found and reaches the plan through the shared ⚠ Confirm section, not a prose aside",
+check("ENG-95218 / ENG-96327: the command-bar set does NOT claim to be complete — ONE `list-command-bar` decision per run (names the buttons found) — but the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
     && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
     && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
     && /not folded at all/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").reason)
-    && /#### ⚠ Confirm before I build/.test(lpRun.designSpec)
-    && /\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
+    && /- \*\*Command-bar actions:\*\* 1 found/.test(lpRun.designSpec)
+    && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
 check("ENG-95218: the design spec renders the list page as POSITIONED tables (columns in order, filters with container+index, actions) instead of the old prose bullets",
   () => /#### List columns \(in order\)/.test(lpRun.designSpec) && /#### Quick filters/.test(lpRun.designSpec)
@@ -1757,15 +1771,15 @@ check("ENG-95218: a row action emits NO op and says so — every other op here r
       && /carries no op in this ChangeSet/.test(lpRowActionRun.designSpec)
       && /control and placement NOT resolved here/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.designSpec.slice(lpRowActionRun.designSpec.indexOf("#### Row actions"), lpRowActionRun.designSpec.indexOf("#### Row actions") + 700));
-check("ENG-95218: each row action raises a ⚠ Confirm decision — a declared condition must become Freedom state, and an action with none asks whether Classic gated it, because an always-enabled port is a behaviour change",
+check("ENG-95218 / ENG-96327: each row action is a `list-row-action` decision (its condition→Freedom-state / always-enabled reason on the data) surfaced in the Row-actions TABLE — NOT a ⚠ Confirm row (binary: there is a row action or there is not)",
   () => { const nd = lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action");
     const withCond = nd.find((d) => /QualificationProcess/.test(d.item));
     const without = nd.find((d) => /PlainAction/.test(d.item));
     return nd.length === 2
       && /must become Freedom state/.test(withCond.reason) && /canQualify/.test(withCond.reason)
       && /always-enabled port is a behaviour change/.test(without.reason)
-      && /#### ⚠ Confirm before I build/.test(lpRowActionRun.designSpec)
-      && /\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
+      && /#### Row actions/.test(lpRowActionRun.designSpec)
+      && !/\*\*\[list-row-action\]\*\*/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action"));
 // A SUB-BUNDLE MAY CARRY ITS OWN `section` — the engine accepts it silently, and the self-referential typed fixture
 // above shows the shape occurs. Its list-page questions must stay in the main scope: a per-type form page has no grid,
@@ -5032,12 +5046,18 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
   // Scoped to ONE `###` page block first: a plan renders these `####` headings once per page (form, mini, each
   // typed fold) and suppresses a section that is empty, so a whole-document `indexOf` can take its needles from
   // two different pages and compare positions that were never in the same block.
-  check("plan sections run Layout → Logic → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
+  check("plan sections run Layout → Business rules → ⚠ Custom methods → ⚠ Other declared logic → ⚠ Confirm → Member ledger",
     () => {
       const page = impPlan.split(/^### /m).find((seg) => seg.includes("#### ⚠ Other declared logic"));
       if (!page) return false;
-      const order = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic",
-        "#### ⚠ Confirm before I build", "#### Member ledger"].map((n) => page.indexOf(n));
+      // ENG-96327 — ⚠ Confirm is only present when a HUMAN-facing decision remains after the shrink (cosmetic /
+      // shown-in-a-table / builder-only / list-noise kinds are dropped), so include it in the order check only when
+      // it renders. Member ledger still closes the section on this engine.
+      const base = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic"];
+      const seq = page.includes("#### ⚠ Confirm before I build")
+        ? [...base, "#### ⚠ Confirm before I build", "#### Member ledger"]
+        : [...base, "#### Member ledger"];
+      const order = seq.map((n) => page.indexOf(n));
       return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));

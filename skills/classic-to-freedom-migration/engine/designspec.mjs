@@ -511,6 +511,14 @@ function renderListPageBlock(result, section, opts = {}) {
   if (section) {
     L.push(listColumnLine(section));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
+    // ENG-96327 — an EXPLICIT found/not signal for the section's command-bar actions. The `#### Command-bar actions`
+    // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
+    // only place the "none found" fact is stated (the `list-command-bar` ⚠ Confirm that used to carry it is now
+    // dropped from the human plan as noise). Always shown, so the approver sees found-or-not at a glance.
+    const cbaCount = (result.listChangeSet?.commandBarActions || []).length;
+    L.push(cbaCount
+      ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
+      : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
   // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
@@ -656,8 +664,41 @@ const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget",
   // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
+// ENG-96327 — WHO the ⚠ Confirm block is for. It is read by the HUMAN approver, but a caption/label/hint to fetch
+// on-stand, a control type to look up, a field's density/truncation, an image's placement are pure AGENT work — the
+// agent resolves them on-stand and nothing about the answer is the approver's call. Keep them OUT of the human list,
+// which is left to the decisions that genuinely need a person (map-or-drop, layout shape, a Classic side effect, an
+// add mechanism, …). A DENYLIST, not an allowlist: a new decision kind stays VISIBLE by default (the safe direction)
+// and is hidden only when it is added here as demonstrably cosmetic.
+const COSMETIC_CONFIRM_KINDS = new Set([
+  "element-caption", "group-caption", "detail-caption", "field-labels", "field-hint", "field-control",
+  "layout-density", "layout-truncated", "image-column", "image-placement",
+]);
+// ENG-96327 — kinds whose decision is ALREADY printed in a TABLE the plan renders, so repeating them in the ⚠ Confirm
+// list makes the approver read the same question twice: `rule-condition` / `entity-filter` are each a row in the
+// **Business rules** table (`⚠ condition unread — parse gap` / `⚠ dynamic — resolve value`).
+// NB `detail-add-mechanism` is deliberately NOT dropped here: its full guidance (add-disabled / custom grid action /
+// service verify — beyond the Layout table's `⚠ INLINE-EDITABLE` note) has no other home in the plan, so it stays a
+// ⚠ Confirm row on this engine.
+const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter"]);
+// ENG-96327 — BUILDER/ANALYST-facing decisions: real questions the migration AGENT resolves (wiring a dynamic
+// visibility rule, a stale/entity-only rule target, an unmapped classic container, an attribute the parser could not
+// read, the composite-only mechanics of `crt.FileList`/`crt.ApprovalList`, the 12-column layout the agent designs
+// itself), none of which is the business APPROVER's call — kept OUT of the human approval plan.
+const BUILDER_ONLY_CONFIRM_KINDS = new Set([
+  "visibility-rule", "ancestor-visibility", "rule-target-missing", "unmapped-component", "parse-gap", "registry-composite-only",
+  "layout-type", "base-tab-placement", "lookup-value",
+]);
+// ENG-96327 — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in the List-page
+// block: `list-columns` (profile caveat on the `- **List columns:**` line), `list-column-path` (a builder detail),
+// `list-command-bar` / `list-add-routing` (stated in the List-page bullets), and `list-row-action` / `list-process`
+// (BINARY — the Row-actions table / `- **Section process:**` bullet state found-or-not).
+const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing",
+  "list-row-action", "list-process"]);
+
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
-// or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
+// or the ⚠ Custom methods worklist are not re-listed; cosmetic / shown-in-a-table / builder-only / list-noise kinds
+// are dropped by the denylists above), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -667,8 +708,14 @@ function renderConfirmWorklist(cs) {
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
   // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+  // ENG-96327 — the RENDERED human list is the shrink: cosmetic / shown-in-a-table / builder-only / list-page-noise
+  // kinds are dropped from the plan the approver reads (see the denylists above), leaving the decisions that
+  // genuinely need a person. A DENYLIST: a new kind stays visible by default.
+  const confirm = nd
+    .filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
+      && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind))
+    .map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
+      (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
   // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
