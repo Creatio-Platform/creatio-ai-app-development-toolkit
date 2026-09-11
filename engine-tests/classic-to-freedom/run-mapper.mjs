@@ -2904,7 +2904,7 @@ check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] res
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
   /#### Business rules/.test(guidCs.designSpec)
-  && /\| Contact \| when Stage \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
+  && /\| when Stage \| Contact \| required \(else optional\) \| page business rule \|/.test(guidCs.designSpec));
 check("P3: the rule is NOT duplicated in the Layout Rule column (Contact row's Rule cell is '—')",
   /\| Contact \| [^|]+\| PDS\.Contact \| — \|/.test(guidCs.designSpec));
 // RV10 — the JSON result reports the F9 payload counts alongside the (larger, template-inclusive) effective counts
@@ -2929,7 +2929,8 @@ check("#3b Imperative logic worklist lists EVERY method incl. the folded helpers
 const dupFilt = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Req:{a:{ruleType:1,baseAttributePatch:"T",comparisonType:3,value:true,dataValueType:12},b:{ruleType:1,baseAttributePatch:"S"}}},diff:[{operation:"insert",name:"Req",parentName:"Header",propertyName:"items",values:{bindTo:"Req"}}]};});` }] }, { baseDir: FIX });
 check("#4 Logic: multiple filters on one attribute collapse to a single row",
-  /Filter · Req \|[^\n]*\| 2 filters/.test(dupFilt.designSpec));
+  /Filter · Req \|[^\n]*2 filters/.test(dupFilt.designSpec),
+  () => (dupFilt.designSpec || "").split("\n").filter((l) => /Filter · Req|Req lookup/.test(l)).join(" ||| "));
 // #5 — Next steps (Action Dashboard) is placed as a NEW tab next to Feed, flagged ADD (not template-provided).
 const wReg = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"ActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
@@ -5754,7 +5755,7 @@ const ck = ckRun.checklist || "";
   const lines = logicBlock.split("\n").filter((l) => l.trim());
   check("Logic (canonical): the rules table comes first and the method-count line closes the section",
     /#### Business rules/.test(ckRun.plan)
-    && /^\| Behaviour \| Trigger \| Effect \| Freedom target \|$/.test(lines[0] || "")
+    && /^\| Trigger \| Behaviour \| Effect \| Freedom target \|$/.test(lines[0] || "")
     && lines.some((l) => l.endsWith("| page business rule |"))
     && /^> \d+ custom method\(s\) — see \*\*⚠ Custom methods\*\* below\.$/.test(lines[lines.length - 1] || "")
     && !lines.some((l) => /\| (init|onSaved|onContactChange) \|/.test(l)),

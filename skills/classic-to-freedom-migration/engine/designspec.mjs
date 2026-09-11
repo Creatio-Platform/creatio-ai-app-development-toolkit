@@ -307,7 +307,7 @@ function pageRuleRows(cs) {
     const condTrigger = (r.conditions || []).length ? "conditional" : "always";
     const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
-    return [esc(r.element), trigger, effect, "page business rule"];
+    return [trigger, esc(r.element), effect, "page business rule"];
   });
 }
 // entity/lookup filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
@@ -319,18 +319,18 @@ function entityFilterRows(cs) {
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
     const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
     const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
+    return [`${esc(attr)} lookup`, `Filter · ${esc(attr)}`, effc, "entity business rule / lookup filter"];
   });
 }
 // Build the Logic-table rows (declarative page rules → entity/lookup filters → process launch).
 // Logic carries what the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the
 // table that carries the port obligation and traces the trigger from the data.
-// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
+// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [trigger, behaviour, effect, target].
 function buildLogicRows(cs) {
   const logic = [...pageRuleRows(cs), ...entityFilterRows(cs)];
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
+    logic.push(["Run process action", "Run process", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
   }
   return logic;
 }
@@ -343,7 +343,7 @@ function renderLogicSection(cs) {
   const stubCount = (cs.handlerStubs || []).length;
   if (!logic.length && !stubCount) return [];
   const table = logic.length
-    ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
+    ? ["| Trigger | Behaviour | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
   const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Custom methods** below.`] : [];

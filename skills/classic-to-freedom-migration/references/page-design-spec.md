@@ -128,11 +128,11 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
 #### Business rules
-| Behaviour | Trigger | Effect | Freedom target |
+| Trigger | Behaviour | Effect | Freedom target |
 | --- | --- | --- | --- |
-| <field> | when <attr> | required (else optional) / visible (else hidden) / read-only | page business rule |
-| Filter · <attr> | <attr> lookup | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
-| Run process | Run process action | launch <process> | ⚠ which process — resolve via connected processes on-stand |
+| when <attr> | <field> | required (else optional) / visible (else hidden) / read-only | page business rule |
+| <attr> lookup | Filter · <attr> | static filter / ⚠ dynamic — resolve value | entity business rule / lookup filter |
+| Run process action | Run process | launch <process> | ⚠ which process — resolve via connected processes on-stand |
 
 > <N> custom method(s) — see **⚠ Custom methods** below.
 
@@ -203,10 +203,10 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Card actions | Run process | Action | — | — | ⚠ which process — resolve via connected processes on-stand |
 
 #### Business rules
-| Behaviour | Trigger | Effect | Freedom target |
+| Trigger | Behaviour | Effect | Freedom target |
 | --- | --- | --- | --- |
-| Specialist expertise level | when Stage | required (else optional) | page business rule |
-| Request | when Stage | required (else optional) | page business rule |
+| when Stage | Specialist expertise level | required (else optional) | page business rule |
+| when Stage | Request | required (else optional) | page business rule |
 | Reject reason | when Stage | required (else optional) | page business rule |
 | Filter · Request | Request lookup | ⚠ dynamic — Type = … , Status ∈ {In progress, On distribution} | entity rule / lookup filter |
 
