@@ -35,8 +35,26 @@ built plans share their MAIN-PAGE inputs — it is not a checksum of the whole a
 survive the next `--plan --out`.
 
 **`--tasks <dir>` — the plan as a FOLDER of one-task files (SKILL.md step 7).** Same rows as `--checklist`, cut one
-task per (page, group) so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
-context. Four properties decide its behaviour, and they are stated in full in `tasks.mjs`:
+task per ARTIFACT so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
+context. The properties that decide its behaviour are stated in full in `tasks.mjs`:
+
+- **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — layout,
+  coverage, card actions, rules, handlers, the page's `⚠ Confirm` questions — writes the same thing, so they are
+  ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes
+  `writesTo:` (empty = read-only) and `dependsOn:`, so the orchestrator's parallelism rule is a field comparison
+  rather than a judgement: two tasks may overlap only when their `writesTo` differ and neither depends on the other.
+- **Under the budget a bucket is ONE task; over it, it is cut on a structural seam.** The monolithic case is one
+  chunk of the same contract, not a second code path. Chunks pack greedily along the seams the plan already
+  publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
+  heavier than the whole budget gets a chunk to itself. Same-artifact chunks are chained through `dependsOn`.
+  The weights and the chunk size are declared in `TASK_BUDGET` and overridable per run with `opts.taskBudget`.
+- **The run's FIRST task is the reference cache.** One read-only sub-agent fetches the guidance, tool contracts and
+  component docs every fresh-context builder would otherwise refetch, plus a per-page spec slice, into `refs/`, and
+  every later task is handed PATHS. It writes no stand artifact and blocks everything — which is why a dependency
+  is published separately from the write target rather than inferred from it.
+- **`agentNonce` is written by the sub-agent and checked by the engine.** The same value on two files, or a `done`
+  task carrying none, is reported on the index. The orchestrator composes the prompt and reads the reply, so it
+  cannot also be the evidence that it dispatched one sub-agent per task.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
@@ -44,16 +62,21 @@ context. Four properties decide its behaviour, and they are stated in full in `t
 - **The engine owns the deliverable rows; the caller owns `status` and `## Notes`.** A re-run rewrites the rows from
   the current plan (they are the plan's) and never touches the caller's two. A task whose `id` carries
   `origin: orchestrator` is neither rewritten nor removed — it is not the engine's to author.
-- **Ids are content-derived, not positional** — a short hash over (the page's `pageDedupeId`, group). The dedupe id
-  and not the page KEY, because `claimPageKey` gives a base key to its first claimant: an inserted sibling can take
-  `child:<Entity>` and push an already-built page to `child:<Entity>@<Via>`, and keyed on the key the never-built
-  newcomer would inherit the built page's id — and its recorded `done`. `order` carries the build sequence and is
-  the field that moves; the index calls it `Step`, which is the queue position and not the same fact as the `order`
-  an orchestrator-authored file declares for itself.
-- **The build order is leaf-first with ONE declared exception.** Sub-pages precede `main`, a grandchild precedes its
-  parent, `list` follows `main`, and within a page the `⚠ Confirm worklist` is first and `Quality gates` last. The
-  exception is `main`'s `Pages` group, which leads the whole run: it is not a layout but the app/section/package
-  placement, the binding to the EXISTING entity and the page shells — the preconditions every other task needs.
+- **Ids are content-derived — not positional, and not count-derived** — a short hash over (the page's
+  `pageDedupeId`, the artifact, the chunk's structural anchor). The dedupe id and not the page KEY, because
+  `claimPageKey` gives a base key to its first claimant: an inserted sibling can take `child:<Entity>` and push an
+  already-built page to `child:<Entity>@<Via>`, and keyed on the key the never-built newcomer would inherit the
+  built page's id — and its recorded `done`. The anchor is the chunk's first row with its DIGITS MASKED, because
+  the digits are what a growing plan moves: `Side profile — 12 fields` and `— 13 fields` are one anchor, so adding
+  a field does not renumber the chunks after it. `order` carries the build sequence and is the field that moves;
+  the index calls it `Step`, which is the queue position and not the same fact as the `order` an
+  orchestrator-authored file declares for itself. `rowsDigest` covers the verifier payload as well as the label, so
+  a RENAMED field raises drift even though neither the caption nor the count moved.
+- **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
+  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
+  `Quality gates` review is its last task. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
+  and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
   stale on the index. A file with no readable `id`, an unterminated front matter (a killed write, a hand edit), or an
   `id` two files claim is REFUSED: the engine cannot tell whose record it holds, so it is named on the index and on

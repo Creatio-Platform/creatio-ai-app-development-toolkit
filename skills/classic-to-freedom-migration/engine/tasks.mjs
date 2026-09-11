@@ -594,10 +594,14 @@ function taskAttention(t) {
 // the orchestrator that grouped tasks. A nonce the sub-agent mints for itself is evidence neither of them controls:
 // the same value on two files is one sub-agent that closed both, which is the violation, stated with the files.
 function nonceAttention(tasks) {
+  // Only a CLOSED task makes a claim about who built it. A `todo` task has not been handed to anyone and an
+  // `in-progress` one may not have finished writing its own file yet, so neither is missing anything.
+  const closed = tasks.filter((t) => !t.unread && t.status === S_DONE);
   const byNonce = new Map();
-  for (const t of tasks) {
+  const silent = [];
+  for (const t of closed) {
     const n = (t.agentNonce || "").trim();
-    if (!n || t.unread) continue;
+    if (!n) { silent.push(t); continue; }
     if (!byNonce.has(n)) byNonce.set(n, []);
     byNonce.get(n).push(t);
   }
@@ -608,6 +612,15 @@ function nonceAttention(tasks) {
       + " — so ONE sub-agent closed them all. The contract is one sub-agent per task: re-check every one of those"
       + " files against the page as it is now, because what a single session reported for several tasks was not"
       + " built under the contract the tasks were written for.");
+  }
+  // AN EMPTY NONCE IS THE CHEAPER EVASION, and reporting only duplicates would miss it entirely: the session that
+  // closed ten tasks at once leaves ten blank fields and raises nothing. A `done` task therefore has to CARRY the
+  // mark, not merely avoid sharing one — absence is not evidence of compliance, it is the absence of evidence.
+  if (silent.length) {
+    out.push(`- ${silent.length} task(s) recorded \`done\` with NO \`agentNonce\` — ${silent.map((t) => "`" + t.file + "`").join(" · ")}`
+      + " — so nothing says which sub-agent closed them, and one session closing several tasks looks exactly like"
+      + " this. Each task file asks the sub-agent that builds it to mint the value; a closed task without one has"
+      + " not shown that the one-sub-agent-per-task contract held for it.");
   }
   return out;
 }
@@ -702,10 +715,34 @@ export function mergeTaskSet(fresh, existing = []) {
   const refusedIds = new Set(blocked.map((b) => b.id).filter(Boolean));
   return {
     ...fresh,
-    tasks: ordered.map((t, i) => ({ ...t, step: i + 1, unread: refused.has(t.file) || refusedIds.has(t.id) })),
+    tasks: chainMerged(ordered).map((t, i) => ({ ...t, step: i + 1, unread: refused.has(t.file) || refusedIds.has(t.id) })),
     stale,
     blocked,
   };
+}
+
+// THE CHAIN IS RE-DERIVED OVER THE MERGED QUEUE, not carried over from the slice. `buildTaskSet` chains the tasks
+// IT authored; an orchestrator task is adopted afterwards and can declare a `writesTo` of its own — a repair task
+// added for a page the engine already sliced is exactly that shape. Chained only at slice time, it would sit in the
+// queue writing a page body with nothing depending on it and nothing it depends on, which is the one arrangement
+// the whole `writesTo` rule exists to make impossible. Chaining by QUEUE ORDER cannot produce a cycle: every link
+// points backwards. Declared dependencies are kept and added to, never replaced — the orchestrator knows things
+// about its own task that the engine does not.
+function chainMerged(ordered) {
+  const refs = ordered.filter((t) => t.artifact === ARTIFACT_REFS).map((t) => t.id);
+  const scaffolds = ordered.filter((t) => t.artifact === ARTIFACT_SCAFFOLD).map((t) => t.id);
+  const lastWriter = new Map();
+  return ordered.map((t) => {
+    const deps = [...(t.dependsOn || [])];
+    if (t.artifact !== ARTIFACT_REFS) deps.push(...refs);
+    if (t.writesTo) {
+      if (t.artifact !== ARTIFACT_SCAFFOLD) deps.push(...scaffolds);
+      const prev = lastWriter.get(t.writesTo);
+      if (prev) deps.push(prev);
+      lastWriter.set(t.writesTo, t.id);
+    }
+    return { ...t, dependsOn: [...new Set(deps)].filter((d) => d && d !== t.id) };
+  });
 }
 
 // An ENGINE task is matched only against an ENGINE file. An orchestrator file that carries an engine task's `id` —

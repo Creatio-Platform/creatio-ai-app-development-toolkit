@@ -644,9 +644,18 @@ check("agentNonce: DISTINCT nonces are not reported — the signal is one sessio
     return !/agentNonce/.test(idx);
   }, () => renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "sa-1"),
     withNonce(taskAt(SET, "child:C1", DRIFT_GROUP), "sa-2")])));
-check("agentNonce: tasks with NO nonce are not reported as sharing one — an empty field is a task nobody has closed yet, not a violation",
+check("agentNonce: an OPEN task with no nonce is not reported — nobody has closed it, so there is nothing it has failed to show",
   () => !/agentNonce/.test(renderTaskIndex(mergeTaskSet(SET, []))),
   () => renderTaskIndex(mergeTaskSet(SET, [])));
+check("agentNonce: a task recorded `done` with an EMPTY nonce IS reported — leaving the field blank is the cheaper evasion, and reporting only duplicates would miss the session that closed ten tasks at once and marked none of them",
+  () => {
+    const t = taskAt(SET, "main", DRIFT_GROUP);
+    const idx = renderTaskIndex(mergeTaskSet(SET, [withNonce(t, "")]));
+    return /recorded `done` with NO `agentNonce`/.test(idx) && idx.includes(t.file);
+  }, () => renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "")])));
+check("agentNonce: `in-progress` is NOT reported for a missing nonce — the sub-agent writes its file before it finishes, so the mark is required at `done` and not before",
+  () => !/agentNonce/.test(renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "", "in-progress")]))),
+  () => renderTaskIndex(mergeTaskSet(SET, [withNonce(taskAt(SET, "main", DRIFT_GROUP), "", "in-progress")])));
 check("agentNonce: the duplicate is caught END TO END on disk — two files that record the same nonce raise it on the regenerated index, which is where the orchestrator would actually meet it",
   () => {
     const dir = tmp("nonce");
@@ -696,6 +705,54 @@ check("origin: orchestrator: `step` is the QUEUE position and is NOT written bac
     const orch = m.tasks.find((t) => t.origin === "orchestrator");
     return orch.order === 3 && orch.step !== orch.order;
   }, () => mergeTaskSet(SET, [orchExisting("3")]).tasks.map((t) => `${t.step}/${t.order}:${t.origin}`));
+
+console.log("\n===== the write chain is re-derived over the MERGED queue =====");
+// `buildTaskSet` chains the tasks it authored. An orchestrator task is adopted afterwards and may declare a
+// `writesTo` of its own — a repair task added for a page the engine already sliced is exactly that shape.
+const orchWriter = (id, order, writesTo, dependsOn = "") => ({
+  file: `task-orch-${id}.md`, notes: "", malformed: null,
+  meta: { id, status: "todo", origin: "orchestrator", pageKey: "main", group: "Repair the form page",
+    order: String(order), writesTo, dependsOn },
+});
+check("merged chain: an ORCHESTRATOR task that writes a page the engine already sliced is CHAINED to the engine task before it — sliced-time chaining alone left it in the queue writing a page body with nothing depending on it, which is the arrangement `writesTo` exists to make impossible",
+  () => {
+    const m = mergeTaskSet(SET, [orchWriter("orchw001", 99, "page:main")]);
+    const orch = m.tasks.find((t) => t.id === "orchw001");
+    const enginePage = m.tasks.filter((t) => t.artifact === "page:main" && t.origin === "engine");
+    return orch.dependsOn.includes(enginePage.at(-1).id);
+  }, () => mergeTaskSet(SET, [orchWriter("orchw001", 99, "page:main")]).tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}:deps=${t.dependsOn.join(",")}`));
+check("merged chain: the invariant holds on the MERGED set, not only on a fresh slice — every task writing one artifact is chained to the previous writer of it, engine and orchestrator tasks alike",
+  () => {
+    const m = mergeTaskSet(SET, [orchWriter("orchw002", 99, "page:main"), orchWriter("orchw003", 100, "page:main")]);
+    const byArtifact = new Map();
+    for (const t of m.tasks.filter((x) => x.writesTo)) {
+      if (!byArtifact.has(t.writesTo)) byArtifact.set(t.writesTo, []);
+      byArtifact.get(t.writesTo).push(t);
+    }
+    return [...byArtifact.values()].every((ts) => ts.slice(1).every((t, i) => t.dependsOn.includes(ts[i].id)));
+  }, () => mergeTaskSet(SET, [orchWriter("orchw002", 99, "page:main"), orchWriter("orchw003", 100, "page:main")])
+    .tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}:deps=${t.dependsOn.join(",")}`));
+check("merged chain: a dependency the ORCHESTRATOR declared is KEPT and added to, never replaced — it knows things about its own task the engine does not",
+  () => {
+    const m = mergeTaskSet(SET, [orchWriter("orchw004", 99, "page:main", "some-earlier-id")]);
+    const orch = m.tasks.find((t) => t.id === "orchw004");
+    return orch.dependsOn.includes("some-earlier-id") && orch.dependsOn.length > 1;
+  }, () => mergeTaskSet(SET, [orchWriter("orchw004", 99, "page:main", "some-earlier-id")]).tasks.find((t) => t.id === "orchw004"));
+check("merged chain: a read-only orchestrator task (no `writesTo`) joins no chain and blocks nobody — it still waits on the reference cache like everything else",
+  () => {
+    const m = mergeTaskSet(SET, [orchWriter("orchw005", 99, "")]);
+    const orch = m.tasks.find((t) => t.id === "orchw005");
+    const refs = m.tasks.find((t) => t.artifact === ARTIFACT_REFS);
+    return orch.dependsOn.join(",") === refs.id
+      && m.tasks.every((t) => !t.dependsOn.includes("orchw005"));
+  }, () => mergeTaskSet(SET, [orchWriter("orchw005", 99, "")]).tasks.map((t) => `${t.id}:deps=${t.dependsOn.join(",")}`));
+check("merged chain: no task depends on itself and every link points BACKWARDS in the queue — chaining by queue order is what makes a cycle impossible",
+  () => {
+    const m = mergeTaskSet(SET, [orchWriter("orchw006", 3, "page:main")]);
+    const at = new Map(m.tasks.map((t) => [t.id, t.step]));
+    return m.tasks.every((t) => !t.dependsOn.includes(t.id)
+      && t.dependsOn.every((d) => !at.has(d) || at.get(d) < t.step));
+  }, () => mergeTaskSet(SET, [orchWriter("orchw006", 3, "page:main")]).tasks.map((t) => `${t.step}:${t.id}→${t.dependsOn.join(",")}`));
 
 console.log("\n===== an engine task that left the plan becomes stale, and is NOT deleted =====");
 const GONE = mergeTaskSet(SET, [asExisting(taskAt(SET2, "child:C2", "Page build"), { status: "done" }, "built on the stand already")]);

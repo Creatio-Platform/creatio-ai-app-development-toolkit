@@ -44,7 +44,7 @@ Every stage lands on a point the Contract above **already** forces you to stop a
 | `plan_changes_requested` | — | receive a change request, including re-approval of an amended frozen plan |
 | `plan_approved` | — | get explicit approval — before the first Freedom artifact (rule 1) |
 | `build_started` | — | begin creating Freedom artifacts |
-| `work_item_completed` | `variant=page` | finish and verify each page, once per page — a page is SEVERAL step-7 tasks, so emit when its last task closes, never per task |
+| `work_item_completed` | `variant=page` | finish and verify each page, once per page — a page is its `Page build` chain plus its `Quality gates` task, so emit when the LAST task carrying that page key closes, never per task |
 | `workflow_completed` / `workflow_failed` | — | reach the end of the run |
 | `changes_requested` | — | the developer asks for further changes AFTER the run completed. Emit before starting that follow-up work |
 | `changes_applied` | — | the follow-up changes are applied and verified |
@@ -366,17 +366,32 @@ in one context it had one machine check, at the very end. A session that hit a u
 4. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
    hand-author a task list, a status table or a progress summary of your own beside it.
 
+**A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
+its coverage, its card actions, its rules, its handlers — writes the same thing, so the folder buckets them into
+ONE `Page build` task per page rather than five tasks racing over one page body. Each task publishes `writesTo:`
+(the artifact it writes, empty for a read-only task) and `dependsOn:` (the tasks that must close first). A page
+big enough to outgrow one sitting is cut into several `Page build` tasks that are chained to each other, so they
+are still never two writers at once. The run's first task is the `Reference cache`, and the second is
+`Scaffolding`.
+
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
 1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
    requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
-   before the parent list that opens it, and the list page comes after the form page it is gated off. Two
-   deliberate exceptions: the run's FIRST task is `main · Pages` — the app, package, section and page shells that
-   every other task needs to exist — and within each page its `⚠ Confirm worklist` precedes that page's own build
-   groups, so a page is never built against an unanswered question. (A question that could change WHICH pages
-   exist blocks the plan at the structure gate instead, so it never reaches a task.)
-2. **One sub-agent per task, in a fresh context.** The stand is a shared mutable resource: reads parallelise,
-   writes do not. Never run two build sub-agents at once.
+   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
+   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
+   guidance, contracts and component docs every later fresh context would otherwise refetch, and every other task
+   depends on it), then `Scaffolding` — the app, package, section and page shells that every other task needs to
+   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
+   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
+   the structure gate instead, so it never reaches a task.)
+2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run two build
+   sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and neither lists the other in
+   `dependsOn`, which in practice means a read-only task beside a build. Each sub-agent writes a value it mints
+   itself into `agentNonce:` before it finishes. You do not supply that value and you do not check it: the engine
+   reports the same nonce on two files, and a `done` task carrying none, on the index's `Attention` section. That
+   check exists because you are the wrong party to prove this rule held — in testing it was the orchestrator that
+   grouped twelve tasks onto five sub-agents and ten onto one.
 3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
    the sub-agent reported to you: the file is what survives your own session ending. A task whose sub-agent died
    without writing stays `todo`/`in-progress` and is re-dispatched.
@@ -385,19 +400,26 @@ in one context it had one machine check, at the very end. A session that hit a u
    status, a task recorded `done` whose deliverables have since changed, and a task that left the plan surface.
 5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to hold two
    separate pieces of work, or add one the plan does not model, by writing a new file with `origin: orchestrator`
-   (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. You may
-   NOT delete or edit an engine task, and a deviation from the plan itself is a proposal to the user, recorded in
+   (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. Give it
+   a `writesTo:` naming the artifact it writes (copy the value from the task whose page it touches) so the engine
+   chains it behind the other writers of that page; a repair task added for an already-built page is exactly this
+   case, and without the field it sits in the queue writing a page body with nothing sequencing it. You may NOT
+   delete or edit an engine task, and a deviation from the plan itself is a proposal to the user, recorded in
    `decisions.md`, never an edit you make on their behalf.
 6. **Report after every task, and never report completion yourself.** Tell the user which task closed, what the
    sub-agent recorded, what is still open, and anything under `Attention`. The run's completion report is step 8's
    `--verify` table — a hand-authored "all done" summary in its place is the same defect this step exists to remove.
 
 **7.3 What each sub-agent is handed.** A fresh context knows nothing, and a workflow cannot go looking for a file,
-so pass all of it explicitly: the **path to its own task file**; the migration folder; the environment name; the
-manifest path and the resolved path to `engine/migrate.mjs`; the approved `plan.md` and the page's `--spec` slice;
-`./references/build-task-execution.md` (its rules and the whole build procedure); `./references/classic-to-freedom-mapping.md`
-for how a construct maps; and for a task carrying imperative rows, the step-5.1 behaviour cards with their
-acceptance criteria — a handler is ported against its card's AC, never from its method name.
+so pass all of it explicitly: the **path to its own task file** (it carries the contract, the deliverables, the
+artifact it writes and the tasks it waits on); the migration folder; the environment name; the manifest path and
+the resolved path to `engine/migrate.mjs`; the approved `plan.md`; the `refs/` folder the first task wrote —
+**paths, never pasted bodies**, because inlining the contracts into every build prompt costs more than fetching
+them does; `./references/build-task-execution.md` (its rules and the whole build procedure);
+`./references/classic-to-freedom-mapping.md` for how a construct maps; and for a task carrying imperative rows,
+the step-5.1 behaviour cards with their acceptance criteria — a handler is ported against its card's AC, never
+from its method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they answered
+on the stand is recorded there and is not repeated in its own file.
 
 **7.4 Assembling `--built` is YOURS, and it needs two contexts that did not build.** Step 8's gate reads a payload
 keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`, `judge`.
