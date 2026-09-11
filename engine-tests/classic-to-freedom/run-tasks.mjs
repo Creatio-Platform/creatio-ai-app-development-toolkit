@@ -332,7 +332,7 @@ check("unreadable file: it counts as `Other`, not as an OPEN task — the queue 
   () => {
     const t = taskAt(SET, "main", "Pages");
     const idx = renderTaskIndex(mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]));
-    return /\*\*Other:\*\* 1/.test(idx) && new RegExp(`\\*\\*Open:\\*\\* ${SET.tasks.length - 1}`).test(idx);
+    return /\*\*Other:\*\* 1/.test(idx) && new RegExp(String.raw`\*\*Open:\*\* ${SET.tasks.length - 1}`).test(idx);
   }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", "Pages").file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }])).split("\n")[2]);
 check("duplicate id: when two files claim one `id` the engine can no longer tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
   () => {
@@ -350,6 +350,23 @@ check("duplicate id: an ORCHESTRATOR file carrying an engine task's `id` never b
     const same = m.tasks.find((x) => x.id === t.id);
     return same.origin === "engine" && same.file === t.file && same.status === "todo";
   }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }).meta, origin: "orchestrator" } }]).tasks.filter((x) => x.id === taskAt(SET, "main", "Pages").id));
+
+check("duplicate id: that orchestrator file is REFUSED by name rather than dropped — a file that appears in no queue row and on no `## Attention` line is one `syncTaskDir` would happily write the engine task over",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const orch = { ...asExisting(t, { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(t, { status: "in-progress" }).meta, origin: "orchestrator" } };
+    const m = mergeTaskSet(SET, [orch]);
+    const b = (m.blocked || []).find((x) => x.file === "task-orch-copy.md");
+    return Boolean(b) && /also claimed by an engine task/.test(b.reason) && b.id === t.id
+      && m.tasks.find((x) => x.id === t.id).unread === true;
+  }, () => mergeTaskSet(SET, [{ ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }), file: "task-orch-copy.md", meta: { ...asExisting(taskAt(SET, "main", "Pages"), { status: "in-progress" }).meta, origin: "orchestrator" } }]).blocked);
+check("unreadable file: the refusal is linked by `id`, not by filename — a corrupted file the caller RENAMED still makes its task read `unread`, or the queue would dispatch a sub-agent onto a page whose only record (possibly `done`) sits in that file",
+  () => {
+    const t = taskAt(SET, "main", "Pages");
+    const m = mergeTaskSet(SET, [{ file: "renamed-by-hand.md", notes: "", malformed: "front matter is not terminated", meta: { id: t.id } }]);
+    const same = m.tasks.find((x) => x.id === t.id);
+    return same.unread === true && (m.blocked || []).some((b) => b.file === "renamed-by-hand.md" && b.id === t.id);
+  }, () => mergeTaskSet(SET, [{ file: "renamed-by-hand.md", notes: "", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", "Pages").id } }]).tasks.filter((x) => x.id === taskAt(SET, "main", "Pages").id));
 
 console.log("\n===== a recorded status whose deliverables later changed is flagged =====");
 // The recorded state is manifest A's; the plan is now manifest C's, whose `main · Form — Coverage (verified)`
@@ -527,6 +544,19 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   // Grow the plan (manifest B), then shrink it back: `child:C2`'s files are on disk while the plan no longer has them.
   const grown = syncTaskDir(dir, RUN2, OPTS2);
   const c2File = taskAt(SET2, "child:C2", "Pages").file;
+  check("syncTaskDir: a RENAMED corrupted file gets no duplicate written beside it — the fresh `todo` file the engine would otherwise emit is a second record for one task, and the queue would schedule the wrong one",
+    () => {
+      const d2 = tmp("renamed");
+      const t = taskAt(SET, "main", "Pages");
+      const broken = path.join(d2, "renamed-by-hand.md");
+      fs.writeFileSync(broken, `---\nid: ${t.id}\nstatus: done\n`);   // front matter never terminated
+      const before = fs.readFileSync(broken, "utf8");
+      const merged = syncTaskDir(d2, RUN, OPTS);
+      return !fs.existsSync(path.join(d2, t.file))
+        && fs.readFileSync(broken, "utf8") === before
+        && merged.tasks.find((x) => x.id === t.id).unread === true;
+    },
+    () => "see the folder listing for the renamed-refusal case");
   check("syncTaskDir: NOTHING is ever deleted — a plan that GREW keeps every file already in the folder, the orchestrator's included",
     () => grown.tasks.length > fifth.tasks.length && fs.existsSync(orchPath)
       && fifth.tasks.every((t) => fs.existsSync(path.join(dir, t.file))),

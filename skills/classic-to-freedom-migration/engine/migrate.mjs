@@ -2630,7 +2630,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scopes: result.stubIndex,
     }, null, 2) + "\n";
   }
-  else if (tasksMode) output = runTaskMode(result, tasksDir, checklistOpts(manifest));
+  // `--tasks` is the one mode that WRITES into a caller-supplied directory, so it is also the one most likely to
+  // hit a filesystem error (`--tasks ./notes.md` ⇒ `ENOTDIR`, a read-only parent, a missing parent). Every sibling
+  // FS operation here routes its failure through `fail()`; without this guard the operator — and the orchestrator
+  // that parses stderr — got a raw Node stack trace instead of the `migrate.mjs: …` diagnostic.
+  else if (tasksMode) {
+    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest)); }
+    catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
+  }
   else if (verifyMode) {
     let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
     catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }

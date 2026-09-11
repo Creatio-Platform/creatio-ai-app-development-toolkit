@@ -362,6 +362,19 @@ export function mergeTaskSet(fresh, existing = []) {
   for (const e of usable) byId.set(e.meta.id, e);
   const tasks = fresh.tasks.map((t) => carryOver(t, matchFor(byId, t)));
   const claimed = new Set(fresh.tasks.map((t) => t.id));
+  // An orchestrator file whose `id` an engine task also claims cannot become that task's record (`matchFor`), and
+  // it is not `extra` either — so it used to fall out of the index entirely: no queue row, no `## Attention` line.
+  // Worse, when its name equalled the engine task's computed file name, `syncTaskDir` wrote the engine task over
+  // it and destroyed its `## Notes`. It is refused instead: named on Attention and never written to.
+  for (const e of usable) {
+    if (claimed.has(e.meta.id) && e.meta.origin === TASK_ORIGIN_ORCHESTRATOR) {
+      blocked.push({
+        file: e.file,
+        id: e.meta.id,
+        reason: `its \`id\` \`${e.meta.id}\` is also claimed by an engine task; rename its \`id\` or move it aside`,
+      });
+    }
+  }
   const extra = usable.filter((e) => !claimed.has(e.meta.id));
   const orchestrated = extra.filter((e) => e.meta.origin === TASK_ORIGIN_ORCHESTRATOR).map(adoptOrchestrated);
   const stale = extra.filter((e) => e.meta.origin !== TASK_ORIGIN_ORCHESTRATOR).map((e) => ({ file: e.file, id: e.meta.id }));
@@ -370,10 +383,14 @@ export function mergeTaskSet(fresh, existing = []) {
   // because nothing readable could be carried over — and that file may record `done`. Reading `todo` there is how
   // a sub-agent gets dispatched onto a page that is already built, which is the whole reason the status vocabulary
   // is checked in the first place.
+  // Matching by FILENAME alone missed a refused file the caller renamed, or one whose page key moved (the `id` is
+  // stable, the computed file name is not): the fresh task then read `todo` and a duplicate file was written beside
+  // the refused one, holding a possibly `done` record. The `id` parsed before the corruption is the reliable link.
   const refused = new Set(blocked.map((b) => b.file));
+  const refusedIds = new Set(blocked.map((b) => b.id).filter(Boolean));
   return {
     ...fresh,
-    tasks: ordered.map((t, i) => ({ ...t, step: i + 1, unread: refused.has(t.file) })),
+    tasks: ordered.map((t, i) => ({ ...t, step: i + 1, unread: refused.has(t.file) || refusedIds.has(t.id) })),
     stale,
     blocked,
   };
@@ -393,15 +410,15 @@ function triageExisting(existing) {
   const blocked = [];
   const readable = [];
   for (const e of existing) {
-    if (!e.meta.id) blocked.push({ file: e.file, reason: e.malformed || "no `id` in its front matter" });
-    else if (e.malformed) blocked.push({ file: e.file, reason: e.malformed });
+    if (!e.meta.id) blocked.push({ file: e.file, id: e.meta.id, reason: e.malformed || "no `id` in its front matter" });
+    else if (e.malformed) blocked.push({ file: e.file, id: e.meta.id, reason: e.malformed });
     else readable.push(e);
   }
   const seen = new Map();
   for (const e of readable) seen.set(e.meta.id, (seen.get(e.meta.id) || 0) + 1);
   const usable = [];
   for (const e of readable) {
-    if (seen.get(e.meta.id) > 1) blocked.push({ file: e.file, reason: `its \`id\` \`${e.meta.id}\` is claimed by more than one file` });
+    if (seen.get(e.meta.id) > 1) blocked.push({ file: e.file, id: e.meta.id, reason: `its \`id\` \`${e.meta.id}\` is claimed by more than one file` });
     else usable.push(e);
   }
   return { usable, blocked };
@@ -459,7 +476,9 @@ export function syncTaskDir(dir, result, opts = {}) {
   const untouchable = new Set(merged.blocked.map((b) => b.file));
   fs.mkdirSync(dir, { recursive: true });
   for (const t of merged.tasks) {
-    if (t.origin === TASK_ORIGIN_ORCHESTRATOR || untouchable.has(t.file)) continue;
+    // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
+    // would let a fresh `todo` be written beside the record that is still on disk.
+    if (t.origin === TASK_ORIGIN_ORCHESTRATOR || untouchable.has(t.file) || t.unread) continue;
     fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
