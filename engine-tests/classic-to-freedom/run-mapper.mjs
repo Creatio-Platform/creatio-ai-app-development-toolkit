@@ -2275,6 +2275,23 @@ check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeho
   /\*\*Scope:\*\* single-section ·/.test(pmRun.plan) && /\*\*Environment:\*\* workbuild103 ·/.test(pmRun.plan)
   && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
   && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
+// ENG-96327 (8abee97) — the agent no longer supplies `listTemplate`: Freedom has ONE list-page template, so the
+// engine FIXES it to ListPageV3Template. With NO planMeta.listTemplate the Main-scope list-page row shows the
+// hardcoded default — never a `<FILL:>`, never blank, never an agent's guess — and it is NOT a missing planMeta key.
+{
+  const noLtMeta = { scope: "s", environment: "e", package: "p", approach: "Rebuild", whatItDoes: "x", sectionSchema: "XSection", formTemplate: "PageWithTabsFreedomTemplate" };
+  const noLtRun = runMigration({
+    entity: "X", seed: [{ pkg: "P", body: `define("BaseX",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Name",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+    schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+    section: [{ pkg: "S", body: `define("XSection",[],function(){return{};});` }],
+    addRecordMiniPage: false, planMeta: noLtMeta,
+    signals: { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } });
+  check("ENG-96327 (8abee97): with NO planMeta.listTemplate the Main-scope list-page row shows the DEFAULT ListPageV3Template — not a `<FILL:>`, not blank, and listTemplate is NOT a missing planMeta key",
+    /\| XSection \(list page\) \| ListPageV3Template \| Rebuild \|/.test(noLtRun.plan)
+    && !/<FILL: Freedom list template>/.test(noLtRun.plan)
+    && (noLtRun.planMetaMissing || []).indexOf("listTemplate") === -1,
+    () => noLtRun.plan.split("\n").filter((l) => /\(list page\)/.test(l)));
+}
 // reconcile-aware Main-scope: the default (no Freedom counterpart) is Rebuild; `freedomExists:true` flips the
 // Call to Update (reconcile) + a note pointing at the reconcile procedure (read via get-page → diff → update-page).
 check("reconcile: default Main-scope Call is Rebuild (fully-custom case, no Freedom page)",

@@ -22,7 +22,7 @@
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
-//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
@@ -737,7 +737,11 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides. `formTemplate` stays
+// required — a genuine multi-way choice (top-area / progress-bar / mini / …).
+const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
+const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "formTemplate"];
 // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
 // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
 // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
@@ -841,8 +845,12 @@ function existingAppIssues(p, target) {
 // as no row helper read the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
-  const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
+  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
+  // renderers read this normalized `pm`, so the Main-scope/Overview row and the missing-key gate see the default.
+  const pm0 = manifest.planMeta || {};
+  const pm = blank(pm0.listTemplate) ? { ...pm0, listTemplate: DEFAULT_LIST_TEMPLATE } : pm0;
   // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
   // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
@@ -851,7 +859,7 @@ export function checklistOpts(manifest, opts = {}) {
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
-    planMeta: manifest.planMeta,
+    planMeta: pm,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
