@@ -120,8 +120,13 @@ function planIndex(groups) {
 const GROUP_MARK = "@";
 const groupClaim = (label) => {
   if (!label.startsWith(GROUP_MARK)) return null;
-  const m = /^(.*?)\s*\[(\d+)\]$/.exec(label.slice(GROUP_MARK.length));
-  return m ? { group: m[1].trim(), take: Number(m[2]) } : { group: label.slice(GROUP_MARK.length).trim(), take: Infinity };
+  const body = label.slice(GROUP_MARK.length).trim();
+  // Matched on the TAIL only. A leading `(.*?)` before the bracket backtracks across the whole group name, which
+  // on a long one is super-linear for no benefit — the count is always the last thing in the entry.
+  const m = /\[(\d+)\]$/.exec(body);
+  return m
+    ? { group: body.slice(0, m.index).trim(), take: Number(m[1]) }
+    : { group: body, take: Infinity };
 };
 
 // One entry against the plan: the row it names, or the reason it names none. Kept apart from the walk below so
@@ -209,8 +214,7 @@ export function resolveSplit(split, groups, identity = new Map()) {
       rows,
     });
   }
-  errors.push(...unknownWriteTargets(items, index));
-  errors.push(...splitFoldedChains(items));
+  errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -221,29 +225,29 @@ export function resolveSplit(split, groups, identity = new Map()) {
 // under the same caller, in the next. A split that repeats that mistake is refused instead of merely regretted.
 const FOLDED = /^Handler — `([^`]+)` \(ported with `([^`]+)`\)/;
 const CALLER = /^Handler — `([^`]+)`\s*$/;
-function splitFoldedChains(items) {
-  const owner = new Map();              // handler name -> item id
+function callerIndex(items) {
+  const owner = new Map();              // "page|handler name" -> item id
   for (const it of items) {
     for (const r of it.rows) {
       const c = CALLER.exec(r.label);
       if (c) owner.set(`${it.pageKey}|${c[1]}`, it.id);
     }
   }
-  const out = [];
-  for (const it of items) {
-    for (const r of it.rows) {
-      const f = FOLDED.exec(r.label);
-      if (!f) continue;
-      const parent = owner.get(`${it.pageKey}|${f[2]}`);
-      // Only when the caller is in this plan at all: a helper whose caller was dropped is not a split defect.
-      if (parent && parent !== it.id) {
-        out.push(`\`${f[1]}\` is in \`${it.id}\` but the plan folds it under \`${f[2]}\`, which is in \`${parent}\``
-          + " — a folded helper and its caller are one piece of work, so two sub-agents would each port half of one"
-          + " chain. Put them in the same item.");
-      }
-    }
-  }
-  return out;
+  return owner;
+}
+
+function splitFoldedChains(items) {
+  const owner = callerIndex(items);
+  return items.flatMap((it) => it.rows.flatMap((r) => {
+    const f = FOLDED.exec(r.label);
+    if (!f) return [];
+    const parent = owner.get(`${it.pageKey}|${f[2]}`);
+    // Only when the caller is in this plan at all: a helper whose caller was dropped is not a split defect.
+    if (!parent || parent === it.id) return [];
+    return [`\`${f[1]}\` is in \`${it.id}\` but the plan folds it under \`${f[2]}\`, which is in \`${parent}\``
+      + " — a folded helper and its caller are one piece of work, so two sub-agents would each port half of one"
+      + " chain. Put them in the same item."];
+  }));
 }
 
 // A page key named in `writesTo` that the plan does not publish is a typo the engine must not quietly honour: the
