@@ -901,6 +901,14 @@ const FULL_SPLIT = { planVersion: RUN.planVersion, items: keysOf(SET).map((k) =>
   splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, allRows(k))) };
 function slugKey(k) { return k.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, ""); }
 
+// The four deliberately-broken variants, built once so the assertion and its failure detail cannot drift apart.
+const withItem = (extra) => ({ ...FULL_SPLIT, items: [...FULL_SPLIT.items, extra] });
+const mapMain = (fn) => ({ ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? fn(i) : i) });
+const DUP_SPLIT = () => withItem(splitItem("second-claim", "main", "main", [allRows("main")[0]]));
+const BOGUS_SPLIT = () => withItem(splitItem("invented", "main", "main", ["Build the thing the plan forgot"]));
+const SHORT_SPLIT = () => mapMain((i) => ({ ...i, rows: i.rows.slice(1) }));
+const BAD_WRITES_SPLIT = () => mapMain((i) => ({ ...i, writesTo: "mian" }));
+
 check("split (anti-vacuity): the fixture split really covers EVERY plan row across all four pages — otherwise the coverage checks below pass because there is nothing to miss",
   () => {
     const inSplit = FULL_SPLIT.items.flatMap((i) => i.rows).length;
@@ -933,29 +941,25 @@ check("split: EVERY plan row still lands in exactly one task — the guarantee t
   }, () => "row sets differ");
 check("split: a row claimed by TWO items is REFUSED and names both — one deliverable handed to two sub-agents is the failure the whole artifact model exists to prevent",
   () => {
-    const dup = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("second-claim", "main", "main", [allRows("main")[0]])] };
-    const set = buildTaskSetFromSplit(RUN, dup, OPTS);
+    const set = buildTaskSetFromSplit(RUN, DUP_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /is claimed 2 times/.test(p) && p.includes("second-claim"));
-  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("second-claim", "main", "main", [allRows("main", OPTS)[0]])] }).problems);
+  }, () => buildTaskSetFromSplit(RUN, DUP_SPLIT(), OPTS).problems);
 check("split: a row the plan does NOT have is REFUSED — a split naming work the plan never described would schedule a sub-agent against a deliverable nothing can verify",
   () => {
-    const bogus = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("invented", "main", "main", ["Build the thing the plan forgot"])] };
-    const set = buildTaskSetFromSplit(RUN, bogus, OPTS);
+    const set = buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /claims a row the plan does not have/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("invented", "main", "main", ["Build the thing the plan forgot"], OPTS)] }).problems);
+  }, () => buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS).problems);
 check("split: a plan row in NO item is REPORTED by name and the engine picks no owner — which item a row belongs to is exactly the judgement the split records, so guessing would undo the point of having one",
   () => {
-    const short = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) };
-    const set = buildTaskSetFromSplit(RUN, short, OPTS);
+    const set = buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS);
     return !set.refused && set.added.length === 1
       && set.problems.some((p) => /is in NO item/.test(p) && /will not pick an owner/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }).problems);
+  }, () => buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS).problems);
 check("split: the unplaced row reaches the INDEX too — a caller who reads the folder rather than the command output must meet the same gap",
   () => {
-    const short = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) };
-    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, short, OPTS), []));
+    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), []));
     return /## Attention/.test(idx) && /is in NO item/.test(idx);
-  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }), [])));
+  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), [])));
 check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
   () => {
     const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
@@ -996,10 +1000,9 @@ check("split: a READ-ONLY item joins no chain and blocks nobody — a recon item
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.id}:${t.writesTo}`));
 check("split: `writesTo` naming a page the plan does not publish is REFUSED — the item would write an artifact nothing else is chained against, which is the silent-collision case spelled as a typo",
   () => {
-    const bad = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, writesTo: "mian" } : i) };
-    const set = buildTaskSetFromSplit(RUN, bad, OPTS);
+    const set = buildTaskSetFromSplit(RUN, BAD_WRITES_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /which is not a page in this plan/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, writesTo: "mian" } : i) }).problems);
+  }, () => buildTaskSetFromSplit(RUN, BAD_WRITES_SPLIT(), OPTS).problems);
 check("parseSplit: a duplicate `id`, a missing `rows` array and a malformed id are each named — the file is authored by hand or by an agent, so the error has to say what to change",
   () => {
     const dup = parseSplit(JSON.stringify({ items: [splitItem("a", "main", "", ["x"]), splitItem("a", "main", "", ["y"])] }));

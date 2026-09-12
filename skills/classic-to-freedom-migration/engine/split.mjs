@@ -147,25 +147,32 @@ export function resolveSplit(split, groups, identity = new Map()) {
       rows,
     });
   }
-  // A page key named in `writesTo` that the plan does not publish is a typo the engine must not quietly honour:
-  // the item would write an artifact nothing else is chained against.
+  errors.push(...unknownWriteTargets(items, index));
+  return { items, errors, unplaced: unconsumed(index, taken) };
+}
+
+// A page key named in `writesTo` that the plan does not publish is a typo the engine must not quietly honour: the
+// item would write an artifact nothing else is chained against, which is the silent-collision case spelled as a
+// spelling mistake.
+function unknownWriteTargets(items, index) {
   const known = new Set(index.keys());
-  for (const it of items) {
-    const d = it.declaredWritesTo;
-    if (d && d !== SPLIT_SCAFFOLD && !known.has(d)) {
-      errors.push(`\`${it.id}\`.writesTo names \`${d}\`, which is not a page in this plan — known pages: ${[...known].join(", ")}`);
-    }
-  }
-  // An occurrence nobody consumed. Reported per SLOT, so a row the plan carries twice and the split claims once
-  // still says the second one has no owner.
-  const unplaced = [];
+  return items
+    .filter((it) => it.declaredWritesTo && it.declaredWritesTo !== SPLIT_SCAFFOLD && !known.has(it.declaredWritesTo))
+    .map((it) => `\`${it.id}\`.writesTo names \`${it.declaredWritesTo}\`, which is not a page in this plan`
+      + ` — known pages: ${[...known].join(", ")}`);
+}
+
+// An occurrence nobody consumed. Reported per SLOT, so a row the plan carries twice and the split claims once
+// still says the second one has no owner.
+function unconsumed(index, taken) {
+  const out = [];
   for (const [page, m] of index) {
     for (const [key, rows] of m) {
       const consumed = (taken.get(`${page}|${key}`) || []).length;
-      if (consumed < rows.length) unplaced.push({ pageKey: page, key, rows: rows.slice(consumed), unclaimed: rows.length - consumed });
+      if (consumed < rows.length) out.push({ pageKey: page, key, rows: rows.slice(consumed), unclaimed: rows.length - consumed });
     }
   }
-  return { items, errors, unplaced };
+  return out;
 }
 
 const resolveWritesTo = (declared, identity) => {
