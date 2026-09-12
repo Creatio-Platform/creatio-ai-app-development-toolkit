@@ -145,9 +145,15 @@ export const TASK_BUDGET = {
   // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
   // artifact rule exists so two sub-agents never write one page body; on a run this small there is only ever one
   // builder, so the rule protects nothing and each extra task is a fresh context that re-reads everything the
-  // last one just read. Measured: a 31-row section came out as six tasks (reference cache, scaffolding, two page
-  // builds, two reviews) whose five sub-agents cost 4.5M weighted tokens, of which the cache alone was 0.78M for
-  // work nobody else read. Two chunks' worth is the line — above it a single sitting stops being credible.
+  // last one just read. Measured: a 31-row section (write weight 60) came out as six tasks — reference cache,
+  // scaffolding, two page builds, two reviews — whose five sub-agents cost 4.5M weighted tokens, of which the
+  // cache alone was 0.78M for work no second builder read.
+  // TWO CHUNKS, NOT ONE, AND DELIBERATELY: `chunk` is sized to one sitting, so this hands a single sub-agent more
+  // than a sitting's work. It is the lesser cost. A chunk boundary buys protection only when another task writes
+  // the same artifact afterwards; a collapsed run has no such task, so an agent that runs long is re-dispatched
+  // against a folder of two files rather than against a chain of six. At 60 the smoke section sat exactly on the
+  // line, which is not a calibration; 80 is the round number above it that still leaves every measured multi-page
+  // plan (the smallest was 160) on the per-artifact cut.
   run: 80,
   field: 1,         // one field inside a layout row
   relatedList: 4,   // a related list carries its own binding and its own child page
@@ -443,6 +449,11 @@ function chunksOf(bucket, B) {
 // could be handed out before the page it judges was written.
 const reviewedArtifacts = (t) => {
   if (Array.isArray(t.reviewsArtifacts)) return t.reviewsArtifacts;
+  // The collapsed run's review judges the whole build. `review:whole` does not name that the way `review:<page>`
+  // names a page, so it is spelled out here rather than left to the `reviewsArtifacts` field alone: that field is
+  // not in the front matter, so it survives a re-slice only because the fresh set is rebuilt before the merge.
+  // Deriving it from the artifact instead keeps the answer right whoever the task was parsed or adopted by.
+  if (t.artifact === WHOLE_REVIEW) return [ARTIFACT_WHOLE];
   return t.artifact?.startsWith("review:") ? [`page:${t.artifact.slice("review:".length)}`] : [];
 };
 

@@ -1485,6 +1485,29 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
     () => buildTaskSet(RUN5, { ...OPTS5, taskBudget: { run: 100000 } }).tasks.length === 2
       && buildTaskSet(RUN, { ...OPTS, taskBudget: { run: 0 } }).tasks.length > 2,
     () => ({ forced: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { run: 100000 } }).tasks.length }));
+  check("small run: the review still waits on the build after a RE-SLICE, and the dependency is in the file on disk — `dependsOn` is re-derived on every `--tasks` run, and what the collapsed review judges is named by no `review:<page>` artifact, so this is the path that would silently lose it",
+    () => {
+      const base = tmp("small-resync");
+      const dir = path.join(base, "build-tasks");
+      const cOpts = checklistOpts(MANIFEST);
+      syncTaskDir(dir, RUN, cOpts);
+      const again = syncTaskDir(dir, RUN, cOpts);
+      const build = again.tasks.find((t) => t.writesTo);
+      const review = again.tasks.find((t) => !t.writesTo);
+      const onDisk = fs.readFileSync(path.join(dir, review.file), "utf8");
+      fs.rmSync(base, { recursive: true, force: true });
+      return again.tasks.length === 2 && review.dependsOn.length === 1
+        && review.dependsOn[0] === build.id && new RegExp(`dependsOn: .*${build.id}`).test(onDisk);
+    },
+    () => {
+      const base = tmp("small-resync-why");
+      const dir = path.join(base, "build-tasks");
+      syncTaskDir(dir, RUN, checklistOpts(MANIFEST));
+      const again = syncTaskDir(dir, RUN, checklistOpts(MANIFEST));
+      const out = again.tasks.map((t) => `${t.id} writes=${t.writesTo || "-"} deps=${t.dependsOn.join(",")}`);
+      fs.rmSync(base, { recursive: true, force: true });
+      return out;
+    });
   check("small run: the collapsed task renders and reads back like any other — it is one more artifact, not a second file format",
     () => {
       const text = renderTaskFile(writers[0], small);
