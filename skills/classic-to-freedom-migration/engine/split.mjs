@@ -148,7 +148,40 @@ export function resolveSplit(split, groups, identity = new Map()) {
     });
   }
   errors.push(...unknownWriteTargets(items, index));
+  errors.push(...splitFoldedChains(items));
   return { items, errors, unplaced: unconsumed(index, taken) };
+}
+
+// ONE SEAM THE ENGINE CAN CHECK RATHER THAN TRUST. A helper the plan folded under a caller says so in its own row
+// — `Handler — \`setContactInfo\` (ported with \`onContactChange\`)` — so "these two are one piece of work" is
+// machine-readable here, unlike the rest of the judgement a split records. It is also the seam the row-count
+// slicer actually got wrong: it put `setInternalRequestInfo` in one task and `clearInternalRequestInfo`, folded
+// under the same caller, in the next. A split that repeats that mistake is refused instead of merely regretted.
+const FOLDED = /^Handler — `([^`]+)` \(ported with `([^`]+)`\)/;
+const CALLER = /^Handler — `([^`]+)`\s*$/;
+function splitFoldedChains(items) {
+  const owner = new Map();              // handler name -> item id
+  for (const it of items) {
+    for (const r of it.rows) {
+      const c = CALLER.exec(r.label);
+      if (c) owner.set(`${it.pageKey}|${c[1]}`, it.id);
+    }
+  }
+  const out = [];
+  for (const it of items) {
+    for (const r of it.rows) {
+      const f = FOLDED.exec(r.label);
+      if (!f) continue;
+      const parent = owner.get(`${it.pageKey}|${f[2]}`);
+      // Only when the caller is in this plan at all: a helper whose caller was dropped is not a split defect.
+      if (parent && parent !== it.id) {
+        out.push(`\`${f[1]}\` is in \`${it.id}\` but the plan folds it under \`${f[2]}\`, which is in \`${parent}\``
+          + " — a folded helper and its caller are one piece of work, so two sub-agents would each port half of one"
+          + " chain. Put them in the same item.");
+      }
+    }
+  }
+  return out;
 }
 
 // A page key named in `writesTo` that the plan does not publish is a typo the engine must not quietly honour: the

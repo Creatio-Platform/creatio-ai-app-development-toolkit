@@ -1003,6 +1003,48 @@ check("split: `writesTo` naming a page the plan does not publish is REFUSED — 
     const set = buildTaskSetFromSplit(RUN, BAD_WRITES_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /which is not a page in this plan/.test(p));
   }, () => buildTaskSetFromSplit(RUN, BAD_WRITES_SPLIT(), OPTS).problems);
+// The folded-chain rule is about the ROW TEXT — the plan writes `(ported with \`X\`)` into the helper's own label —
+// so it is tested against groups carrying exactly those labels rather than against a manifest coaxed into folding.
+const CHAIN_GROUPS = [{ pageKey: "main", baseTitle: "Form — Logic", rows: [
+  { label: "Handler — `onContactChange`" },
+  { label: "Handler — `setContactInfo` (ported with `onContactChange`)" },
+  { label: "Handler — `clearContactInfo` (ported with `onContactChange`)" },
+  { label: "Handler — `onSaved`" },
+] }];
+const chainSplit = (items) => resolveSplit({ items }, CHAIN_GROUPS, new Map());
+check("split: a folded helper separated from its caller is REFUSED — the plan says in the row itself that the two are one piece of work, so this seam is one the engine can CHECK rather than trust, and it is the seam the row-count slicer actually got wrong",
+  () => {
+    const r = chainSplit([
+      { id: "chain-a", title: "a", pageKey: "main", writesTo: "main", rows: ["Handler — `onContactChange`", "Handler — `setContactInfo` (ported with `onContactChange`)"] },
+      { id: "chain-b", title: "b", pageKey: "main", writesTo: "main", rows: ["Handler — `clearContactInfo` (ported with `onContactChange`)", "Handler — `onSaved`"] },
+    ]);
+    return r.errors.length === 1 && /is in `chain-b` but the plan folds it under/.test(r.errors[0])
+      && r.errors[0].includes("chain-a") && /Put them in the same item/.test(r.errors[0]);
+  }, () => chainSplit([
+    { id: "chain-a", title: "a", pageKey: "main", writesTo: "main", rows: ["Handler — `onContactChange`", "Handler — `setContactInfo` (ported with `onContactChange`)"] },
+    { id: "chain-b", title: "b", pageKey: "main", writesTo: "main", rows: ["Handler — `clearContactInfo` (ported with `onContactChange`)", "Handler — `onSaved`"] },
+  ]).errors);
+check("split: the WHOLE chain in one item passes, and an unrelated handler beside it is not dragged in — the rule is about the fold the plan declares, not about keeping every handler together",
+  () => {
+    const r = chainSplit([
+      { id: "chain-all", title: "a", pageKey: "main", writesTo: "main", rows: ["Handler — `onContactChange`", "Handler — `setContactInfo` (ported with `onContactChange`)", "Handler — `clearContactInfo` (ported with `onContactChange`)"] },
+      { id: "other", title: "b", pageKey: "main", writesTo: "main", rows: ["Handler — `onSaved`"] },
+    ]);
+    return r.errors.length === 0;
+  }, () => chainSplit([
+    { id: "chain-all", title: "a", pageKey: "main", writesTo: "main", rows: ["Handler — `onContactChange`", "Handler — `setContactInfo` (ported with `onContactChange`)", "Handler — `clearContactInfo` (ported with `onContactChange`)"] },
+    { id: "other", title: "b", pageKey: "main", writesTo: "main", rows: ["Handler — `onSaved`"] },
+  ]).errors);
+check("split: a helper whose CALLER is not in the plan at all is not a chain defect — the rule fires on a fold the plan declares and both halves of which it carries, never on a dangling reference",
+  () => {
+    const groups = [{ pageKey: "main", baseTitle: "Form — Logic", rows: [
+      { label: "Handler — `setContactInfo` (ported with `onContactChange`)" },
+    ] }];
+    const r = resolveSplit({ items: [{ id: "lone", title: "l", pageKey: "main", writesTo: "main",
+      rows: ["Handler — `setContactInfo` (ported with `onContactChange`)"] }] }, groups, new Map());
+    return r.errors.length === 0;
+  });
+
 check("parseSplit: a duplicate `id`, a missing `rows` array and a malformed id are each named — the file is authored by hand or by an agent, so the error has to say what to change",
   () => {
     const dup = parseSplit(JSON.stringify({ items: [splitItem("a", "main", "", ["x"]), splitItem("a", "main", "", ["y"])] }));

@@ -56,9 +56,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
   two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice
   or a row the plan does not have is refused with nothing written; a plan row in no item is reported by name and the
-  engine picks no owner. Items sharing a `writesTo` are chained automatically. Row matching masks digits and the
-  plural they drive, so a plan that gains a field does not force a re-cut. With no split file the budget slicer
-  below stays as the degenerate path.
+  engine picks no owner. Items sharing a `writesTo` are chained automatically. ONE seam is checked rather than
+  trusted: the plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
+  from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong.
+  Row matching masks digits and the plural they drive, so a plan that gains a field does not force a re-cut. With
+  no split file the budget slicer below stays as the degenerate path.
 - **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — layout,
   coverage, card actions, rules, handlers, the page's `⚠ Confirm` questions — writes the same thing, so they are
   ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes
