@@ -676,14 +676,11 @@ const COSMETIC_CONFIRM_KINDS = new Set([
 // service verify — beyond the Layout table's `⚠ INLINE-EDITABLE` note) has no other home in the plan, so it stays a
 // ⚠ Confirm row on this engine.
 const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter"]);
-// ENG-96327 — BUILDER/ANALYST-facing decisions: real questions the migration AGENT resolves (wiring a dynamic
-// visibility rule, a stale/entity-only rule target, an unmapped classic container, an attribute the parser could not
-// read, the composite-only mechanics of `crt.FileList`/`crt.ApprovalList`, the 12-column layout the agent designs
-// itself), none of which is the business APPROVER's call — kept OUT of the human approval plan.
-const BUILDER_ONLY_CONFIRM_KINDS = new Set([
-  "visibility-rule", "ancestor-visibility", "rule-target-missing", "unmapped-component", "parse-gap", "registry-composite-only",
-  "layout-type", "base-tab-placement", "lookup-value",
-]);
+// NB there is deliberately NO BUILDER_ONLY denylist on this engine: builder/analyst decisions (visibility-rule,
+// rule-target-missing, unmapped-component, parse-gap, registry-composite-only, layout-type, base-tab-placement,
+// lookup-value) are KEPT visible in ⚠ Confirm. Without a `--units` machine channel, `plan.md`'s ⚠ Confirm IS the
+// build agent's worklist (SKILL step 7), so hiding a real decision here would lose it — the only kinds dropped are
+// genuine noise whose information the plan already carries elsewhere (COSMETIC / SHOWN_IN_TABLE / LIST_PAGE_NOISE).
 // ENG-96327 — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in the List-page
 // block: `list-columns` (profile caveat on the `- **List columns:**` line), `list-column-path` (a builder detail),
 // `list-command-bar` / `list-add-routing` (stated in the List-page bullets), and `list-row-action` / `list-process`
@@ -703,18 +700,22 @@ function renderConfirmWorklist(cs) {
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
   // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  // ENG-96327 — the RENDERED human list is the shrink: cosmetic / shown-in-a-table / builder-only / list-page-noise
-  // kinds are dropped from the plan the approver reads (see the denylists above), leaving the decisions that
-  // genuinely need a person. A DENYLIST: a new kind stays visible by default.
+  // ENG-96327 — the RENDERED list is the shrink, but ONLY of what is genuinely NOISE for THIS engine: cosmetic kinds
+  // the agent resolves on-stand (COSMETIC), decisions already printed in a table (SHOWN_IN_TABLE), and list-page
+  // decisions already stated by a bullet/table (LIST_PAGE_NOISE). Builder/analyst decisions are NOT dropped: this
+  // engine has no `--units` machine channel, so `plan.md`'s ⚠ Confirm IS the build agent's worklist (SKILL step 7) —
+  // hiding a real decision here would lose it. A DENYLIST: a new kind stays visible by default.
   const confirm = nd
     .filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
-      && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind))
+      && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind))
     .map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
       (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
-  // ENG-96327 (dd21d45) — the lookup-GUID prompt is NOT re-added here: resolving a business-rule condition's
-  // lookup-record GUID to its display name on-stand is the AGENT's build work (`lookup-value` is in
-  // BUILDER_ONLY_CONFIRM_KINDS above), so it is kept OUT of the human approval plan rather than pushed back in as a
-  // render-time bullet.
+  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec shows
+  // "required (conditional)" but the raw GUID is unreadable. The build agent resolves it on-stand, and with no
+  // `--units` channel this prompt is how it reaches the agent — so it stays in the worklist.
+  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
+    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }

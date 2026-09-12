@@ -1186,9 +1186,10 @@ check("ENG-95850 (D) / ENG-96327: a profile-sourced set's caveat rides the `- **
     { kind: "field-labels", item: "SomeField", reason: "fetch the caption on-stand" },
     { kind: "visibility-rule", item: "SomeRule", reason: "wire the dynamic visibility rule" },
   ] } }, { embedded: true });
-  check("ENG-96327: the human ⚠ Confirm keeps a genuine decision (component) and DROPS cosmetic (field-labels) + builder-only (visibility-rule) kinds",
+  check("ENG-96327 (D): the human ⚠ Confirm keeps genuine decisions — a map-or-drop component AND a builder-only visibility-rule (no --units channel, so plan.md IS the builder's worklist) — and DROPS only cosmetic (field-labels) noise",
     /\*\*\[component\]\*\* FancyWidget/.test(shrinkSpec)
-      && !/\[field-labels\]/.test(shrinkSpec) && !/\[visibility-rule\]/.test(shrinkSpec),
+      && /\*\*\[visibility-rule\]\*\*/.test(shrinkSpec)
+      && !/\[field-labels\]/.test(shrinkSpec),
     () => shrinkSpec.split("\n").filter((l) => /\[component\]|\[field-labels\]|\[visibility-rule\]|Confirm before/.test(l)));
 }
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
@@ -2901,8 +2902,8 @@ check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
-check("ENG-96327 (dd21d45): a rule condition comparing a lookup GUID does NOT surface a [lookup-value] note in the human ⚠ Confirm — resolving the GUID to a name on-stand is the agent's build work (BUILDER_ONLY), kept out of the approval plan",
-  !/\[lookup-value\]/.test(guidCs.designSpec));
+check("C2 / ENG-96327 (D): a rule condition comparing a lookup GUID DOES surface a [lookup-value] resolve-on-stand note — with no --units channel the plan is the build agent's worklist, so this builder decision stays visible",
+  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
