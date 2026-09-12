@@ -187,8 +187,30 @@ Then decide `sectionHost.mode` — and put the decision to the user whenever it 
 | Mode | When | What the build does |
 |---|---|---|
 | `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
-| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | `create-app` FIRST — the platform gives the new app its own editable primary package — then register the section there. **The app must exist BEFORE the section is registered:** step 7 creates it first, then registers the section — nothing creates the app for you |
+| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call that carries the entity — see below. It returns the app, its own editable primary package, AND the section over the existing object. Do NOT follow it with `create-app-section` |
 | `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+
+**`new-app` is ONE call, and `create-app-section` is not part of it.** `create-app` takes
+`optional-template-data-json`, and that is what binds the app's own section to an object that already
+exists:
+
+```json
+{ "name": "<App name>", "code": "<AppCode>", "template-code": "AppFreedomUI",
+  "with-mobile-pages": false,
+  "optional-template-data-json": "{\"useExistingEntitySchema\": true, \"entitySchemaName\": \"<Entity>\"}" }
+```
+
+Both fields together, or neither: `entitySchemaName` alone is unsupported, and the entity must already
+exist on the stand before the call. With them, Creatio suppresses the new canonical entity it would
+otherwise mint and puts the app's section on yours.
+
+Without them, `create-app` builds its starter section on a NEW entity named after the app — a list
+page, a form page and a detail that migrate nothing — and a following `create-app-section` adds a
+SECOND section beside it. A measured run shipped six pages where three were wanted, two of them named
+identically in the app's page list, and paid an extra ~90-second call for the privilege: `create-app`
+is `AppInstallerService.svc/CreateApp`, the platform's own app generator, while `create-app-section`
+is a raw `DataService/json/SyncReply/InsertQuery` into the section tables. `create-app-section` is for
+a SECOND section in an app that already exists — that is what `existing-app` uses it for.
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes

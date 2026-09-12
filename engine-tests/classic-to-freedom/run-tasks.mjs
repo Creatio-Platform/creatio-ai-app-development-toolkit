@@ -261,10 +261,11 @@ check("refs: it names the shared files by PATH — contracts, components and the
     .every((f) => REFS.rows.some((r) => r.label.includes(f)))
     && REFS.rows.some((r) => /stable-docs/.test(r.label) && /environment/.test(r.label) && /plan/.test(r.label)),
   () => REFS.rows.map((r) => r.label.slice(0, 80)));
-check("refs: the rendered file carries the two rules that keep the cache from becoming a defect — contracts are fetched BY NAME (argument-less dumps the whole catalogue into a file every builder reads) and the component doc records the STAND it came from, because a component contract is environment-specific",
+check("refs: the rendered file carries the three rules that keep the cache from becoming a defect — contracts are fetched BY NAME (argument-less dumps the whole catalogue into a file every builder reads), the component doc records the STAND it came from because a component contract is environment-specific, and an argument that changes WHAT a tool creates is copied with its description rather than reduced to its name (a run that shortened `optional-template-data-json` to the bare name then took the anti-pattern path the same file records)",
   () => {
     const text = renderTaskFile(REFS, SET);
-    return /ENVIRONMENT it was read from/.test(text) && /Never argument-less/.test(text);
+    return /ENVIRONMENT it was read from/.test(text) && /Never argument-less/.test(text)
+      && /SUMMARISE THE SHAPE, NEVER THE MEANING/.test(text);
   }, () => renderTaskFile(REFS, SET));
 check("refs: a cache big enough to be CUT is chained like any other artifact — chunk 2 waits on chunk 1, and every build task still waits on the whole cache rather than on whichever chunk happened to be last",
   () => {

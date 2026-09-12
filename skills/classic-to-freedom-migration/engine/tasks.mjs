@@ -214,7 +214,12 @@ function refsRows(result) {
       + " The tier is the invalidation story: a `plan` entry is stale the moment the plan version changes, an"
       + " `environment` entry the moment the stand does, and a `stable-docs` entry effectively never." },
     { label: `\`${REFS_DIR}/contracts.md\` — the tool contracts a page build calls, fetched BY NAME. Never`
-      + " argument-less: that dumps the whole catalogue into the file every builder reads." },
+      + " argument-less: that dumps the whole catalogue into the file every builder reads. SUMMARISE THE SHAPE,"
+      + " NEVER THE MEANING: an argument that changes WHAT the tool creates is copied with its own description,"
+      + " not reduced to its name in a list. One run shortened `create-app`'s `optional-template-data-json` to"
+      + " the bare name, so the builder reading this file could not know it is what binds the app's section to an"
+      + " existing object — and took the two-call path the very same file records as the anti-pattern, shipping"
+      + " three pages that migrate nothing." },
     { label: `\`${REFS_DIR}/components.md\` — \`get-component-info\` per component type this plan builds, headed`
       + " with the ENVIRONMENT it was read from, because a component's contract is stand-specific." },
     { label: `\`${REFS_DIR}/guidance-<topic>.md\` — one file per clio guidance topic this build needs. Resolve the`
