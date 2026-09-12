@@ -1116,6 +1116,53 @@ check("split: a helper whose CALLER is not in the plan at all is not a chain def
     return r.errors.length === 0;
   });
 
+// Per-type routing binds each Type's form by the Type column, so it cannot run before those forms exist. Like the
+// folded chain, the engine emits the row itself and knows which page keys are typed — so this ordering is checked,
+// not trusted. It is a real mistake: on a 94-item split of a real plan the routing item sat second, ahead of both
+// typed pages, while the split's own summary said it could only start once both were built.
+const TYPED_GROUPS = [
+  { pageKey: "main", baseTitle: "Pages", rows: [
+    { label: "Per-type page routing — bind EACH Type's form by the Type column" },
+    { label: "Form page → PageWithTabsFreedomTemplate" },
+  ] },
+  { pageKey: "typed:P1Page", baseTitle: "Form — Layout (by tab/region)", rows: [{ label: "Side profile — 3 fields" }] },
+];
+const typedSplit = (items) => resolveSplit({ items }, TYPED_GROUPS, new Map());
+const ROUTE_ITEM = { id: "routing", title: "r", pageKey: "main", writesTo: "scaffold",
+  rows: ["Per-type page routing — bind EACH Type's form by the Type column", "Form page → PageWithTabsFreedomTemplate"] };
+const TYPED_ITEM = { id: "typed-build", title: "t", pageKey: "typed:P1Page", writesTo: "typed:P1Page",
+  rows: ["Side profile — 3 fields"] };
+check("split: an item carrying the per-type ROUTING row may not sit before the items that build the typed pages — routing binds each Type's form by the Type column, and a form that has not been built cannot be bound",
+  () => {
+    const r = typedSplit([ROUTE_ITEM, TYPED_ITEM]);
+    return r.errors.length === 1 && /carries the per-type routing row but sits BEFORE/.test(r.errors[0])
+      && r.errors[0].includes("typed-build") && /Move it after them/.test(r.errors[0]);
+  }, () => typedSplit([ROUTE_ITEM, TYPED_ITEM]).errors);
+check("split: the same two items in the RIGHT order pass — the rule is about ordering, not about which item owns the row",
+  () => typedSplit([TYPED_ITEM, ROUTE_ITEM]).errors.length === 0,
+  () => typedSplit([TYPED_ITEM, ROUTE_ITEM]).errors);
+check("split: a plan with NO typed pages is never reported — the rule fires on an order that is actually impossible, not on the presence of a routing row",
+  () => {
+    const groups = [{ pageKey: "main", baseTitle: "Pages", rows: [
+      { label: "Per-type page routing — bind EACH Type's form by the Type column" }] }];
+    const r = resolveSplit({ items: [{ id: "only", title: "o", pageKey: "main", writesTo: "scaffold",
+      rows: ["Per-type page routing — bind EACH Type's form by the Type column"] }] }, groups, new Map());
+    return r.errors.length === 0;
+  });
+check("split: the message NAMES a few of the blocking items and COUNTS the rest — a plan with two typed forms puts fifty items after the routing one, and a message listing them all is one nobody reads",
+  () => {
+    const many = [ROUTE_ITEM, ...Array.from({ length: 6 }, (_, i) => ({
+      id: `typed-${i}`, title: "t", pageKey: "typed:P1Page", writesTo: "typed:P1Page",
+      rows: i === 0 ? ["Side profile — 3 fields"] : [] }))].filter((x) => x.rows.length || x.id === "routing");
+    const groups = [TYPED_GROUPS[0], { pageKey: "typed:P1Page", baseTitle: "Form — Layout (by tab/region)",
+      rows: [{ label: "Side profile — 3 fields" }, { label: "Header — 2 fields" }] }];
+    const items = [ROUTE_ITEM,
+      { id: "typed-a", title: "a", pageKey: "typed:P1Page", writesTo: "typed:P1Page", rows: ["Side profile — 3 fields"] },
+      { id: "typed-b", title: "b", pageKey: "typed:P1Page", writesTo: "typed:P1Page", rows: ["Header — 2 fields"] }];
+    const r = resolveSplit({ items }, groups, new Map());
+    return r.errors.length === 1 && r.errors[0].length < 340;
+  }, () => "message length");
+
 check("parseSplit: a duplicate `id`, a missing `rows` array and a malformed id are each named — the file is authored by hand or by an agent, so the error has to say what to change",
   () => {
     const dup = parseSplit(JSON.stringify({ items: [splitItem("a", "main", "", ["x"]), splitItem("a", "main", "", ["y"])] }));

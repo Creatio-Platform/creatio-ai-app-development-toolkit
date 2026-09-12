@@ -214,7 +214,7 @@ export function resolveSplit(split, groups, identity = new Map()) {
       rows,
     });
   }
-  errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items));
+  errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items), ...routingBeforeTypedPages(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -225,6 +225,36 @@ export function resolveSplit(split, groups, identity = new Map()) {
 // under the same caller, in the next. A split that repeats that mistake is refused instead of merely regretted.
 const FOLDED = /^Handler — `([^`]+)` \(ported with `([^`]+)`\)/;
 const CALLER = /^Handler — `([^`]+)`\s*$/;
+// THE SECOND SEAM THE ENGINE CAN CHECK. Per-type routing binds each Type's form by the Type column — it cannot
+// bind a form that has not been built, so the item carrying that row has to come after every item writing a typed
+// page. This is checkable for the same reason the folded chain is: the engine emits the row itself and knows which
+// page keys are typed, so the ordering is not a judgement it has to take on trust.
+//
+// It is a real mistake, not a hypothetical one: on the plan this rule was written against, a split placed the
+// routing item second — ahead of both typed pages — while its own summary said the item could only start once both
+// were built. Without the check that reaches a sub-agent as "bind a form that does not exist yet".
+const ROUTING_ROW = /^Per-type page routing\b/;
+function routingBeforeTypedPages(items) {
+  const typedAt = items
+    .map((it, i) => ({ it, i }))
+    .filter(({ it }) => it.declaredWritesTo?.startsWith("typed:"));
+  if (!typedAt.length) return [];
+  const out = [];
+  items.forEach((it, i) => {
+    if (!it.rows.some((r) => ROUTING_ROW.test(r.label))) return;
+    const after = typedAt.filter(({ i: j }) => j > i);
+    if (!after.length) return;
+    // Named, then counted: a plan with two typed forms puts fifty items after this one, and a message that lists
+    // them all is one nobody reads.
+    const shown = after.slice(0, 3).map(({ it: t }) => "`" + t.id + "`").join(", ");
+    const more = after.length > 3 ? `, …and ${after.length - 3} more` : "";
+    out.push(`\`${it.id}\` carries the per-type routing row but sits BEFORE ${after.length} item(s) that build a typed`
+      + ` page (${shown}${more}) — routing binds each Type's form by the Type column, and a form that has not been`
+      + " built yet cannot be bound. Move it after them.");
+  });
+  return out;
+}
+
 function callerIndex(items) {
   const owner = new Map();              // "page|handler name" -> item id
   for (const it of items) {
