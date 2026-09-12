@@ -13,7 +13,7 @@ import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-mig
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
-  ARTIFACT_SCAFFOLD, ARTIFACT_REFS, REFS_DIR, buildRepairTasks, syncRepairDir,
+  ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -101,22 +101,28 @@ const manifestOf = (edit = {}) => ({
   signals: { dcm: RESOLVED, processes: RESOLVED, printables: RESOLVED, deduplication: RESOLVED },
 });
 
+// Fixtures A-F are all small enough that the DEFAULT budget would collapse them into one build task plus one
+// review — which is the right answer for a run that size and the wrong fixture for everything below, all of which
+// is about where the per-artifact boundaries fall. `run: 0` turns the collapse off so those boundaries exist to be
+// checked; the collapse itself has its own block at the end, on the default budget.
+const optsOf = (m) => ({ ...checklistOpts(m), taskBudget: { run: 0 } });
+
 const MANIFEST = manifestOf();
-const OPTS = checklistOpts(MANIFEST);            // the SAME opts `buildTaskSet` forwards to `checklistGroups`
+const OPTS = optsOf(MANIFEST);                   // the SAME opts `buildTaskSet` forwards to `checklistGroups`
 const RUN = runMigration(MANIFEST);
 const SET = buildTaskSet(RUN, OPTS);
 const GROUPS = checklistGroups(RUN, OPTS);
 
 // B — the same plan with one page INSERTED (a second child page).
 const MANIFEST2 = manifestOf({ extraChild: true });
-const OPTS2 = checklistOpts(MANIFEST2);
+const OPTS2 = optsOf(MANIFEST2);
 const RUN2 = runMigration(MANIFEST2);
 const SET2 = buildTaskSet(RUN2, OPTS2);
 
 // C — the same plan with the same pages, but one task's DELIVERABLE ROWS changed (an extra form field). Kept apart
 // from B on purpose: drift is about a row set moving under a recorded status, not about the page set moving.
 const MANIFEST3 = manifestOf({ extraField: true });
-const OPTS3 = checklistOpts(MANIFEST3);
+const OPTS3 = optsOf(MANIFEST3);
 const RUN3 = runMigration(MANIFEST3);
 const SET3 = buildTaskSet(RUN3, OPTS3);
 // `page:main` is where every group that writes the main form page now lands, so it is the task a changed
@@ -129,20 +135,20 @@ const SCAFFOLD_LABEL = "Scaffolding";
 // NAMES move. Digesting labels alone reported no drift here, on exactly the change a built page must be re-checked
 // against, so this fixture exists to keep that hole closed.
 const MANIFEST4 = manifestOf({ renameField: true });
-const OPTS4 = checklistOpts(MANIFEST4);
+const OPTS4 = optsOf(MANIFEST4);
 const RUN4 = runMigration(MANIFEST4);
 const SET4 = buildTaskSet(RUN4, OPTS4);
 
 // E — the same plan grown past the budget, so `page:main` is CUT into chunks. Everything about chunking below is
 // vacuous on a plan small enough to stay monolithic, which manifests A-D all are.
 const MANIFEST5 = manifestOf({ bulk: 40 });
-const OPTS5 = checklistOpts(MANIFEST5);
+const OPTS5 = optsOf(MANIFEST5);
 const RUN5 = runMigration(MANIFEST5);
 const SET5 = buildTaskSet(RUN5, OPTS5);
 // F — E with ONE more field. Under count-derived chunk numbering every chunk after the first shifts and every
 // status recorded against them orphans; under a structural anchor the chunks keep their ids.
 const MANIFEST6 = manifestOf({ bulk: 41 });
-const SET6 = buildTaskSet(runMigration(MANIFEST6), checklistOpts(MANIFEST6));
+const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
@@ -243,8 +249,12 @@ check("refs: it writes NOTHING on the stand, yet EVERY other task depends on it 
   () => REFS.writesTo === "" && REFS.dependsOn.length === 0
     && SET.tasks.filter((t) => t.id !== REFS.id).every((t) => t.dependsOn.includes(REFS.id)),
   () => SET.tasks.map((t) => `${t.artifact}:writes=${JSON.stringify(t.writesTo)}:deps=${t.dependsOn.join(",")}`));
-check("refs: it names one spec slice per PAGE the plan publishes — a builder reads its own page's slice instead of cutting rows out of the whole design spec",
-  () => keysOf(SET).every((k) => REFS.rows.some((r) => r.label.includes(`${REFS_DIR}/spec-`) && r.label.includes(`\`${k}\``))),
+check("refs: it names ONE spec file and names every page it covers — the engine renders a single design spec and has no per-page slice, so a row promising `--spec --page <key>` sent a run to cache the same file under two names and report both as written",
+  () => {
+    const spec = REFS.rows.filter((r) => r.label.includes(`${REFS_DIR}/spec`));
+    return spec.length === 1 && !/--page/.test(spec[0].label)
+      && keysOf(SET).every((k) => spec[0].label.includes(`\`${k}\``));
+  },
   () => ({ keys: keysOf(SET), rows: REFS.rows.map((r) => r.label.slice(0, 60)) }));
 check("refs: it names the shared files by PATH — contracts, components and the guidance topics, plus the index whose TIERS are the invalidation story",
   () => [`${REFS_DIR}/contracts.md`, `${REFS_DIR}/components.md`, `${REFS_DIR}/guidance-`, `${REFS_DIR}/index.md`]
@@ -258,7 +268,7 @@ check("refs: the rendered file carries the two rules that keep the cache from be
   }, () => renderTaskFile(REFS, SET));
 check("refs: a cache big enough to be CUT is chained like any other artifact — chunk 2 waits on chunk 1, and every build task still waits on the whole cache rather than on whichever chunk happened to be last",
   () => {
-    const tight = buildTaskSet(RUN, { ...OPTS, taskBudget: { chunk: 4 } });
+    const tight = buildTaskSet(RUN, { ...OPTS, taskBudget: { ...OPTS.taskBudget, chunk: 4 } });
     const refs = tight.tasks.filter((t) => t.artifact === ARTIFACT_REFS);
     if (refs.length < 2) return false;
     const ids = refs.map((t) => t.id);
@@ -266,7 +276,7 @@ check("refs: a cache big enough to be CUT is chained like any other artifact —
       && refs.slice(1).every((t, i) => t.dependsOn.includes(refs[i].id))
       && tight.tasks.filter((t) => t.artifact !== ARTIFACT_REFS)
         .every((t) => ids.every((id) => t.dependsOn.includes(id)));
-  }, () => buildTaskSet(RUN, { ...OPTS, taskBudget: { chunk: 4 } }).tasks
+  }, () => buildTaskSet(RUN, { ...OPTS, taskBudget: { ...OPTS.taskBudget, chunk: 4 } }).tasks
     .map((t) => `${t.order}:${t.artifact}:${t.id}:deps=${t.dependsOn.join(",")}`));
 check("refs: its rows are NOT plan deliverables — it is the engine's own preparation task, so it carries no `--verify` gate and no plan group",
   () => REFS.gatedRows === 0 && REFS.rows.every((r) => r.group === "Reference cache"),
@@ -300,14 +310,14 @@ check("budget: the chunks of one bucket are CONTIGUOUS in the queue and chained 
   }, () => tasksOn(SET5, "page:main").map((t) => `${t.order}:${t.id}:deps=${t.dependsOn.join(",")}`));
 check("budget: the thresholds are DECLARED, not buried at the call site — calibration changes with evidence, and `opts.taskBudget` overrides them without a code change",
   () => {
-    const tight = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 8 } });
-    const loose = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 10000 } });
+    const tight = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { ...OPTS5.taskBudget, chunk: 8 } });
+    const loose = buildTaskSet(RUN5, { ...OPTS5, taskBudget: { ...OPTS5.taskBudget, chunk: 10000 } });
     return typeof TASK_BUDGET.chunk === "number"
       && tight.tasks.filter((t) => t.artifact === "page:main").length > tasksOn(SET5, "page:main").length
       && loose.tasks.filter((t) => t.artifact === "page:main").length === 1;
   }, () => ({ declared: TASK_BUDGET,
-    tight: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 8 } }).tasks.filter((t) => t.artifact === "page:main").length,
-    loose: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { chunk: 10000 } }).tasks.filter((t) => t.artifact === "page:main").length }));
+    tight: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { ...OPTS5.taskBudget, chunk: 8 } }).tasks.filter((t) => t.artifact === "page:main").length,
+    loose: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { ...OPTS5.taskBudget, chunk: 10000 } }).tasks.filter((t) => t.artifact === "page:main").length }));
 
 console.log("\n===== dependsOn: the ordering the orchestrator can CHECK rather than infer =====");
 check("dependsOn: the scaffolding depends on nothing and EVERY task that writes depends on it — a page cannot be saved into a package that does not exist yet",
@@ -1437,22 +1447,74 @@ check("repair: a round that was ATTEMPTED and came back opens the next one — `
     return opened && held;
   }, () => "see buildRepairTasks with each recorded status");
 
+console.log("\n===== a run too small to split: ONE build task plus ONE review =====");
+{
+  // The artifact rule exists so two sub-agents never write one page body. On a run this small there is only ever
+  // one builder, so the rule protects nothing while each extra task pays a fresh context that re-reads what the
+  // last one read. MANIFEST is the same fixture A-D use; here it is sliced with the REAL default budget.
+  const small = buildTaskSet(RUN, checklistOpts(MANIFEST));
+  const writers = small.tasks.filter((t) => t.writesTo);
+  const readers = small.tasks.filter((t) => !t.writesTo);
+  check("small run: the whole build is ONE task and the review is the only other one — six sub-agent startups for a section this size cost more than the split saves",
+    () => small.tasks.length === 2 && writers.length === 1 && readers.length === 1
+      && writers[0].artifact === ARTIFACT_WHOLE && writers[0].writesTo === ARTIFACT_WHOLE,
+    () => small.tasks.map((t) => `${t.id} ${t.pageKey}·${t.group} writes=${t.writesTo || "-"}`));
+  check("small run (anti-vacuity): the SAME plan with the collapse switched off cuts into more than two tasks, so the check above is not passing because the plan is trivial",
+    () => buildTaskSet(RUN, OPTS).tasks.length > 2,
+    () => buildTaskSet(RUN, OPTS).tasks.map((t) => t.group));
+  check("small run: the review still WAITS on the build and is still read-only — a verdict filed by the agent that just built the page is not a verdict, however small the run",
+    () => readers[0].dependsOn.length === 1 && readers[0].dependsOn[0] === writers[0].id
+      && readers[0].writesTo === "",
+    () => ({ review: readers[0].dependsOn, build: writers[0].id }));
+  check("small run: NO reference-cache task — the cache exists to stop N fresh contexts re-fetching the same contracts, and with one builder there is no second reader to amortise it over",
+    () => !small.tasks.some((t) => t.artifact === ARTIFACT_REFS), () => small.tasks.map((t) => t.artifact));
+  check("small run: every plan row the per-artifact cut carried is still carried — the collapse moves rows between tasks, it never drops one",
+    () => {
+      const rowsOf = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS)
+        .flatMap((t) => t.rows.map((r) => r.label)).sort();
+      return JSON.stringify(rowsOf(small)) === JSON.stringify(rowsOf(buildTaskSet(RUN, OPTS)));
+    },
+    () => ({ small: small.tasks.flatMap((t) => t.rows.length), full: buildTaskSet(RUN, OPTS).tasks.length }));
+  check("small run: the threshold is the RUN's weight, not its row count — the same plan grown past `TASK_BUDGET.run` keeps the per-artifact cut, and one page is still never written by two tasks that are not chained",
+    () => {
+      const big = buildTaskSet(RUN5, checklistOpts(MANIFEST5));
+      return !big.tasks.some((t) => t.artifact === ARTIFACT_WHOLE) && big.tasks.length > 2;
+    },
+    () => buildTaskSet(RUN5, checklistOpts(MANIFEST5)).tasks.map((t) => t.artifact));
+  check("small run: the threshold is DECLARED like the rest of the budget — `TASK_BUDGET.run` at 0 turns the collapse off and a large value forces it, both without a code change",
+    () => buildTaskSet(RUN5, { ...OPTS5, taskBudget: { run: 100000 } }).tasks.length === 2
+      && buildTaskSet(RUN, { ...OPTS, taskBudget: { run: 0 } }).tasks.length > 2,
+    () => ({ forced: buildTaskSet(RUN5, { ...OPTS5, taskBudget: { run: 100000 } }).tasks.length }));
+  check("small run: the collapsed task renders and reads back like any other — it is one more artifact, not a second file format",
+    () => {
+      const text = renderTaskFile(writers[0], small);
+      const back = parseTaskFile(text);
+      const tableRows = text.split(/\r?\n/).filter((l) => /^\|\s*\d+\s*\|/.test(l)).length;
+      return back.malformed === null && back.meta.id === writers[0].id
+        && back.meta.writesTo === ARTIFACT_WHOLE && tableRows === writers[0].rows.length;
+    },
+    () => parseTaskFile(renderTaskFile(writers[0], small)).meta);
+}
+
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");
 const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
+// The CLI has no `run: 0` to hand it, so it slices this small fixture with the REAL default budget — which
+// collapses it. Everything the CLI block asserts about counts and file names has to be read off that set.
+const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
 {
   const base = tmp("cli");
   const dir = path.join(base, "build-tasks");   // deliberately NOT pre-created: the mode must create it
   const run = cliTasks(["--tasks", dir], MANIFEST);
   check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count and the index to present",
     () => run.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE))
-      && new RegExp(String.raw`wrote ${SET.tasks.length} build task\(s\) \+ ${TASK_INDEX_FILE}`).test(run.stdout || "")
+      && new RegExp(String.raw`wrote ${CLI_SET.tasks.length} build task\(s\) \+ ${TASK_INDEX_FILE}`).test(run.stdout || "")
       && /Hand ONE task file at a time to a build sub-agent/.test(run.stdout || ""),
     () => ({ status: run.status, stdout: run.stdout, stderr: run.stderr, ls: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
   check("migrate.mjs --tasks: with nothing recorded yet the note says 0 done and prints NO ⚠ line — a clean slice must not ask for a human eye it does not need",
-    () => new RegExp(String.raw`— 0 done, ${SET.tasks.length} not\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
+    () => new RegExp(String.raw`— 0 done, ${CLI_SET.tasks.length} not\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
     () => run.stdout);
   // An unrecognised status recorded by hand: the ⚠ stdout line is the other half of "reported, never coerced".
-  const victim = path.join(dir, taskAt(SET, "main", SCAFFOLD_LABEL).file);
+  const victim = path.join(dir, CLI_SET.tasks.find((t) => t.writesTo).file);
   fs.writeFileSync(victim, fs.readFileSync(victim, "utf8").replace("status: todo", "status: kinda-done"));
   const rerun = cliTasks(["--tasks", dir], MANIFEST);
   check("migrate.mjs --tasks: an unrecognised recorded status is reported on STDOUT as an item needing a human eye, is on the index's Attention section, and is still in the task's own file verbatim — never rewritten to `todo`",

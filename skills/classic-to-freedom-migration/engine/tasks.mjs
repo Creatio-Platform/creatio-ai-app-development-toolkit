@@ -112,6 +112,11 @@ export const ARTIFACT_SCAFFOLD = "scaffold";
 // The reference cache. It writes FILES, not the stand, so it blocks on nothing and nothing it does can be
 // clobbered — but every builder reads what it wrote, so everything depends on it.
 export const ARTIFACT_REFS = "refs";
+// The whole build as ONE artifact, used only for a run under `TASK_BUDGET.run`. It is the single writer of that
+// run, so the parallelism rule still reads off `writesTo` unchanged: nothing else writes anything.
+export const ARTIFACT_WHOLE = "whole";
+const WHOLE_GROUP = "Whole migration";
+const WHOLE_REVIEW = "review:whole";
 export const REFS_DIR = "refs";
 const REFS_GROUP = "Reference cache";
 const REVIEW_GROUP = "Quality gates";
@@ -137,6 +142,13 @@ const writesToOf = (artifact) =>
 // silently splits or silently merges. Override per run with `opts.taskBudget`.
 export const TASK_BUDGET = {
   chunk: 40,        // max weight in one task
+  // A WHOLE RUN worth no more than this is ONE build task plus ONE review, not one task per artifact. The
+  // artifact rule exists so two sub-agents never write one page body; on a run this small there is only ever one
+  // builder, so the rule protects nothing and each extra task is a fresh context that re-reads everything the
+  // last one just read. Measured: a 31-row section came out as six tasks (reference cache, scaffolding, two page
+  // builds, two reviews) whose five sub-agents cost 4.5M weighted tokens, of which the cache alone was 0.78M for
+  // work nobody else read. Two chunks' worth is the line — above it a single sitting stops being credible.
+  run: 80,
   field: 1,         // one field inside a layout row
   relatedList: 4,   // a related list carries its own binding and its own child page
   rule: 1,          // one business rule
@@ -202,9 +214,11 @@ function refsRows(result) {
     { label: `\`${REFS_DIR}/guidance-<topic>.md\` — one file per clio guidance topic this build needs. Resolve the`
       + " set from the routing map (`get-guidance name=routing`), not from a list written down here — the map is"
       + " what knows which guide a given kind of work needs." },
-    ...pages.map((k) => ({ label: `\`${REFS_DIR}/spec-${slugify(k)}.md\` — the design-spec slice for \`${k}\``
-      + " (`--spec --page " + k + "`), carrying the plan's `Adjustments` list IN FULL: those are the corrections"
-      + " agreed at approval time and a slice without them silently drops what was agreed." })),
+    { label: `\`${REFS_DIR}/spec.md\` — the design spec (\`--spec\`) VERBATIM, carrying the plan's \`Adjustments\``
+      + " list IN FULL: those are the corrections agreed at approval time and a copy without them silently drops"
+      + " what was agreed. ONE file for the whole run, covering " + pages.map((k) => `\`${k}\``).join(" · ")
+      + " — the engine renders one spec and has no per-page slice, so asking it for one yields the same file"
+      + " under two names." },
   ];
 }
 
@@ -253,7 +267,7 @@ export const taskFileName = (task) => {
 // the file still says which part of the plan each deliverable belongs to: a task carries what the plan says and
 // adds nothing of its own, so nothing can be in a task that `--verify` will not later ask about.
 function taskOf(chunk, order) {
-  const { artifact, pageKey, label, anchor, identityKey, srcRows } = chunk;
+  const { artifact, pageKey, label, anchor, identityKey, srcRows, reviewsArtifacts } = chunk;
   const rows = srcRows.map((r) => ({
     label: r.label,
     group: r.groupTitle,                   // the plan group this deliverable was read from
@@ -281,6 +295,9 @@ function taskOf(chunk, order) {
     dependsOn: [],
     notes: "",
   };
+  // Only a collapsed run carries this: `review:<page>` names the page it judges in the artifact itself, and the
+  // collapsed review judges the whole build, which no artifact name encodes.
+  if (reviewsArtifacts) task.reviewsArtifacts = reviewsArtifacts;
   task.file = taskFileName(task);
   return task;
 }
@@ -288,7 +305,8 @@ function taskOf(chunk, order) {
 // THE LABEL a human reads in the index and in the file name. An artifact that was NOT cut keeps the plain artifact
 // name; a chunk is named after the structural unit it starts at, so two chunks of one page are told apart by where
 // they begin rather than by a number that moves when the page grows.
-const ARTIFACT_LABEL = new Map([[ARTIFACT_REFS, REFS_GROUP], [ARTIFACT_SCAFFOLD, "Scaffolding"]]);
+const ARTIFACT_LABEL = new Map([[ARTIFACT_REFS, REFS_GROUP], [ARTIFACT_SCAFFOLD, "Scaffolding"],
+  [ARTIFACT_WHOLE, WHOLE_GROUP]]);
 const artifactLabel = (artifact) =>
   ARTIFACT_LABEL.get(artifact) || (artifact.startsWith("review:") ? REVIEW_GROUP : "Page build");
 
@@ -346,7 +364,12 @@ export function buildTaskSet(result, opts = {}) {
     artifact: ARTIFACT_REFS, pageKey: "run", identityKey: "run", rank: -1, seen: -1,
     groups: [{ pageKey: "run", baseTitle: REFS_GROUP, title: REFS_GROUP, rows: refsRows(result) }],
   };
-  const chunks = [refs, ...ordered].flatMap((b) => chunksOf(b, B));
+  const small = collapseSmallRun(ordered, B);
+  // A collapsed run is ONE chunk by construction, so the chunk budget is lifted for it: cutting the single build
+  // task back into chunks would undo exactly what the collapse decided.
+  const chunks = small
+    ? small.flatMap((b) => chunksOf(b, { ...B, chunk: Infinity }))
+    : [refs, ...ordered].flatMap((b) => chunksOf(b, B));
   const tasks = chunks.map((c, i) => taskOf(c, i + 1));
   return {
     entity: result.entity || null,
@@ -354,6 +377,32 @@ export function buildTaskSet(result, opts = {}) {
     budget: B,
     tasks: withDependencies(tasks),
   };
+}
+
+// A RUN TOO SMALL TO SPLIT. Returns the two buckets it collapses to — everything that writes, then everything
+// that reviews — or `null` when the run is big enough that the per-artifact cut stands. The reference cache is
+// dropped rather than folded in: it exists to stop N fresh contexts re-fetching the same contracts, and with one
+// builder there is no second reader to amortise it over. Nothing verifiable is lost — its rows are engine-authored
+// task rows, not plan deliverables, so `--checklist` and `--verify` never saw them.
+function collapseSmallRun(ordered, B) {
+  const isReview = (b) => b.artifact.startsWith("review:");
+  const writes = ordered.filter((b) => !isReview(b));
+  const reviews = ordered.filter(isReview);
+  if (writes.length < 2) return null;            // one writer already — there is nothing to collapse
+  const weight = writes.flatMap((b) => artifactRows(b.groups, B)).reduce((a, r) => a + r.weight, 0);
+  if (weight > B.run) return null;
+  const at = (bs) => ({ rank: Math.min(...bs.map((b) => b.rank)), seen: Math.min(...bs.map((b) => b.seen)) });
+  const whole = {
+    artifact: ARTIFACT_WHOLE, pageKey: "run", identityKey: "run",
+    ...at(writes), groups: writes.flatMap((b) => b.groups),
+  };
+  if (!reviews.length) return [whole];
+  // The review keeps its own read-only task: a verdict filed by the agent that just built the page is not a
+  // verdict, and that holds however small the run is.
+  return [whole, {
+    artifact: WHOLE_REVIEW, pageKey: "run", identityKey: "run",
+    ...at(reviews), reviewsArtifacts: [ARTIFACT_WHOLE], groups: reviews.flatMap((b) => b.groups),
+  }];
 }
 
 // Cut one bucket into the tasks it needs. Under the budget that is exactly ONE task — the monolithic case is this
@@ -374,6 +423,7 @@ function chunksOf(bucket, B) {
       artifact: bucket.artifact,
       pageKey: bucket.pageKey,
       identityKey: bucket.identityKey,
+      reviewsArtifacts: bucket.reviewsArtifacts,
       anchor: n > 1 ? `${key}#${n}` : key,
       label: chunkLabel(bucket.artifact, srcRows, cut),
       phase: phaseOf(srcRows[0].groupTitle),

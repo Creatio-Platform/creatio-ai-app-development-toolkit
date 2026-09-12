@@ -389,6 +389,12 @@ big enough to outgrow one sitting is cut into several `Page build` tasks that ar
 are still never two writers at once. The run's first task is the `Reference cache`, and the second is
 `Scaffolding`.
 
+**A run small enough gets ONE build task and ONE review.** Below `TASK_BUDGET.run` the folder holds exactly two
+files: everything that writes the stand (app, package, section, every page) as a single `Whole migration` task, and
+the quality gates as a single read-only review that waits on it. There is no `Reference cache` in such a run — it
+exists to stop several fresh contexts re-fetching the same contracts, and here there is only one builder. A 31-row
+section came out as six tasks and five sub-agents before this, one of them caching contracts nobody else read.
+
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
 1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build

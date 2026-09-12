@@ -2493,6 +2493,11 @@ function provenanceIssue(pages) {
 const TASKS_FLAG = "--tasks";
 const SPLIT_FLAG = "--split";
 const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG]);
+// EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
+// spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
+// not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
+// for, so the flag that produced them has to be the thing that fails.
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -2620,6 +2625,8 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const argv = process.argv.slice(2);
+  const unknown = argv.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a));
+  if (unknown.length) fail(`unknown flag ${unknown.join(" / ")} — this CLI accepts ${[...KNOWN_FLAGS].sort().join(" ")}. Nothing was written: an ignored flag makes a wrong invocation report success (\`--spec --page main\` and \`--spec --page list\` returned the same whole spec twice).`);
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)

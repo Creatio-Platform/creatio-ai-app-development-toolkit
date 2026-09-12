@@ -82,9 +82,16 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
   heavier than the whole budget gets a chunk to itself. Same-artifact chunks are chained through `dependsOn`.
   The weights and the chunk size are declared in `TASK_BUDGET` and overridable per run with `opts.taskBudget`.
-- **The run's FIRST task is the reference cache.** One read-only sub-agent fetches the guidance, tool contracts and
-  component docs every fresh-context builder would otherwise refetch, plus a per-page spec slice, into `refs/`, and
-  every later task is handed PATHS. It writes no stand artifact and blocks everything — which is why a dependency
+- **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
+  exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
+  rule protects nothing while every extra task pays a fresh context that re-reads what the last one read. Measured
+  on a 31-row section: six tasks, five sub-agents, 4.5M weighted tokens, of which the reference cache alone was
+  0.78M for work no second builder read. The collapsed build writes one artifact (`whole`), so the parallelism rule
+  still reads off `writesTo` unchanged; the review keeps its own read-only task, because a verdict filed by the
+  agent that just built the page is not a verdict at any size. No reference cache is written for such a run.
+- **Above it, the run's FIRST task is the reference cache.** One read-only sub-agent fetches the guidance, tool
+  contracts and component docs every fresh-context builder would otherwise refetch, plus the design spec, into
+  `refs/`, and every later task is handed PATHS. It writes no stand artifact and blocks everything — which is why a dependency
   is published separately from the write target rather than inferred from it.
 - **`agentNonce` is written by the sub-agent and checked by the engine.** The same value on two files, or a `done`
   task carrying none, is reported on the index. The orchestrator composes the prompt and reads the reply, so it
