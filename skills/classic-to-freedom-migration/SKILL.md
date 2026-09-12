@@ -363,7 +363,9 @@ in one context it had one machine check, at the very end. A session that hit a u
    rows it absorbs. This is a judgement and it is yours: put work that must be done together in one item (a related
    list and the handler that filters it; a folded handler chain and its helpers; the containers before what goes in
    them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish, and give an
-   item `"writesTo": ""` when it only reads. Then:
+   item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns into a filename — lower-case
+   letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
+   whole file. Then:
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
    The engine REFUSES a split that claims a row twice or names a row the plan does not have, and writes nothing at
    all in that case. A plan row in NO item does not block the folder but is reported by name — the engine will not

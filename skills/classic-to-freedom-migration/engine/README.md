@@ -54,8 +54,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   plan is a judgement about the work — that a related list and the handler filtering it are one piece, that the tab
   containers precede what goes in them, that an unresolved child entity is a reason to stop rather than a row to
   report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
-  two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice
-  or a row the plan does not have is refused with nothing written; a plan row in no item is reported by name and the
+  two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice,
+  a row the plan does not have, or an item `id` that is not a slug of lower-case letters, digits and dashes within
+  49 characters is refused with nothing written; a plan row in no item is reported by name and the
   engine picks no owner. Items sharing a `writesTo` are chained automatically. Three seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
