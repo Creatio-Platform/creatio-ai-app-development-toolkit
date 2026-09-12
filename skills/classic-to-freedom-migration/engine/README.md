@@ -13,13 +13,28 @@ node migrate.mjs <manifest.json>          # full JSON: effective page + ChangeSe
 node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
+node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
+node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
+node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …and write this run's OPEN rows into <dir> as repair tasks
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
+`--verify --tasks <dir>` is the one legal pairing: `--verify` is still the MODE (the table is printed as always)
+and the folder is where its OPEN rows are written as repair tasks. Repair tasks are merged by (page, cause) — sixteen
+handlers missing from one page is ONE task, because sixteen tasks is sixteen sub-agent startups to make one edit
+each. A ROUND IS AN ATTEMPT, not a verify run: re-verifying an unchanged page opens no second round, since the rows
+are still the work of the round already in the folder, and a new round opens only once the previous one was CLOSED
+and the rows came back. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
+three sub-agents have failed at it, so the plan, the stand or the expectation is wrong, not the build. A repair file
+is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
+never reported stale.
+
 Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
-flag is silently ignored) — pass exactly one. `--out <file>` works with all of them.
+flag is silently ignored) — pass exactly one. `--out <file>` works with all of them, except `--tasks`, which names
+its own destination. `--tasks` is also the one mode that REFUSES a second mode flag instead of losing to it: it
+writes a folder rather than printing, so silent precedence would report a plan while slicing nothing.
 
 **The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview. It is a
 deterministic short hash over three manifest inputs and only those three — `entity`, `schemas` (package + body
@@ -30,6 +45,95 @@ version to approve. It does NOT cover `seed`, `detailSchemas`, `childPageSchemas
 built plans share their MAIN-PAGE inputs — it is not a checksum of the whole artifact. It is the string the
 `decisions.md` approval entry names. `plan.md` is engine-WRITTEN, so nothing else can put a version in it and
 survive the next `--plan --out`.
+
+**`--tasks <dir>` — the plan as a FOLDER of one-task files (SKILL.md step 7).** Same rows as `--checklist`, cut one
+task per ARTIFACT so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
+context. The properties that decide its behaviour are stated in full in `tasks.mjs`:
+
+- **`--split <file>` decides WHERE the seams go; the engine decides whether that answer is admissible.** Cutting a
+  plan is a judgement about the work — that a related list and the handler filtering it are one piece, that the tab
+  containers precede what goes in them, that an unresolved child entity is a reason to stop rather than a row to
+  report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
+  two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice,
+  a row the plan does not have, or an item `id` that is not a slug of lower-case letters, digits and dashes within
+  49 characters is refused with nothing written; a plan row in no item is reported by name and the
+  engine picks no owner. Items sharing a `writesTo` are chained automatically. Three seams are checked rather than
+  trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
+  from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
+  (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
+  that build the typed pages: routing binds each Type form by the Type column, so a form that is not built yet
+  cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
+  `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
+  still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
+  because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
+  An item may claim a whole group (`@Form — Logic`) or the next N rows of one (`@Form — Logic[50]`), taken in plan
+  order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
+  hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
+  matching masks COUNTS but not identifiers (a digit inside a code span is part of a name), so a plan that gains a
+  field does not force a re-cut while `ASPPricing2Page` stays distinct from its sibling. With no split file the
+  budget slicer below stays as the degenerate path.
+- **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — layout,
+  coverage, card actions, rules, handlers, the page's `⚠ Confirm` questions — writes the same thing, so they are
+  ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes
+  `writesTo:` (empty = read-only) and `dependsOn:`, so the orchestrator's parallelism rule is a field comparison
+  rather than a judgement: two tasks may overlap only when their `writesTo` differ and neither depends on the other.
+- **Under the budget a bucket is ONE task; over it, it is cut on a structural seam.** The monolithic case is one
+  chunk of the same contract, not a second code path. Chunks pack greedily along the seams the plan already
+  publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
+  heavier than the whole budget gets a chunk to itself. Same-artifact chunks are chained through `dependsOn`.
+  The weights and the chunk size are declared in `TASK_BUDGET` and overridable per run with `opts.taskBudget`.
+- **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
+  exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
+  rule protects nothing while every extra task pays a fresh context that re-reads what the last one read. Measured
+  on a 31-row section: six tasks, five sub-agents, 4.5M weighted tokens, of which the reference cache alone was
+  0.78M for work no second builder read. The collapsed build writes one artifact (`whole`), so the parallelism rule
+  still reads off `writesTo` unchanged; the review keeps its own read-only task, because a verdict filed by the
+  agent that just built the page is not a verdict at any size. No reference cache is written for such a run.
+- **Above it, the run's FIRST task is the reference cache.** One read-only sub-agent fetches the guidance, tool
+  contracts and component docs every fresh-context builder would otherwise refetch, plus the design spec, into
+  `refs/`, and every later task is handed PATHS. It writes no stand artifact and blocks everything — which is why a dependency
+  is published separately from the write target rather than inferred from it.
+- **`agentNonce` is written by the sub-agent and checked by the engine.** The same value on two files, or a `done`
+  task carrying none, is reported on the index. The orchestrator composes the prompt and reads the reply, so it
+  cannot also be the evidence that it dispatched one sub-agent per task.
+
+- **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
+  carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
+  the index changes nothing.
+- **The engine owns the deliverable rows; the caller owns `status` and `## Notes`.** A re-run rewrites the rows from
+  the current plan (they are the plan's) and never touches the caller's two. A task whose `id` carries
+  `origin: orchestrator` is neither rewritten nor removed — it is not the engine's to author.
+- **Ids are content-derived — not positional, and not count-derived** — a short hash over (the page's
+  `pageDedupeId`, the artifact, the chunk's structural anchor). The dedupe id and not the page KEY, because
+  `claimPageKey` gives a base key to its first claimant: an inserted sibling can take `child:<Entity>` and push an
+  already-built page to `child:<Entity>@<Via>`, and keyed on the key the never-built newcomer would inherit the
+  built page's id — and its recorded `done`. The anchor is the chunk's first row with its DIGITS MASKED, because
+  the digits are what a growing plan moves: `Side profile — 12 fields` and `— 13 fields` are one anchor, so adding
+  a field does not renumber the chunks after it. `order` carries the build sequence and is the field that moves;
+  the index calls it `Step`, which is the queue position and not the same fact as the `order` an
+  orchestrator-authored file declares for itself. `rowsDigest` covers the verifier payload as well as the label, so
+  a RENAMED field raises drift even though neither the caption nor the count moved.
+- **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
+  its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
+  `Quality gates` review is its last task. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
+  and the page shells, the preconditions every other task needs.
+- **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
+  stale on the index. A file with no readable `id`, an unterminated front matter (a killed write, a hand edit), or an
+  `id` two files claim is REFUSED: the engine cannot tell whose record it holds, so it is named on the index and on
+  stderr and left byte for byte as it is — its task simply gets no file that run. Rewriting it would destroy the
+  `## Notes` that may be the only record of work already done on a stand. An orchestrator file carrying an engine
+  task's id (the natural result of copying a task file as a template) is refused for the same reason.
+- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is
+  reported, never read as "not done". A status recorded against an older row set keeps its held `rowsDigest`, so the
+  drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
+
+A **plan-level gap writes NOTHING and exits 2** — `gate` / `structure` / `coverage`. Slicing a plan with a gap would
+hand sub-agents write access to a stand against deliverables the plan cannot state, so this mode refuses before it
+creates the folder rather than after a builder has run. `--out` is rejected here (exit 1): the mode writes the
+folder itself, and silently ignoring `--out` would leave a caller believing the artifact went where it asked. So is
+combining it with another mode flag: every other mode PRINTS while this one WRITES, so "first flag matched wins"
+would answer `--plan --tasks ./d` with a plan and no folder.
 
 **The build loop is `--checklist` → build → `--verify`.** `--checklist` renders one group per page the migration
 creates — `main`, `list` (when the plan gates a list-page deliverable), `child:<Entity>`, `typed:<Schema>`,
@@ -164,6 +268,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `registry/component-index.json` — the **generated** component index (205 components × 7 platform versions; version membership as a bitmask). Regenerate with `node scripts/build-registry-index.mjs --src <static-files checkout>`; it is data, never hand-edited, and excluded from Sonar for that reason.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
+- `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
 
 ## Tests & internals

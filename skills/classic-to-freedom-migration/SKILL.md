@@ -21,6 +21,10 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
 7. **Resolve, don't defer — and build the plan, don't simplify it.** Two halves, one rule, because they are the recurring failure: **(a) Every item in the plan's `⚠` worklist is RESOLVED before you build — by running its specific on-stand query and recording the ANSWER, not by guessing "probably N/A" or leaving it "pending". The `⚠` worklist is ALL THREE generated lists: `⚠ Confirm before I build` (open questions needing an on-stand answer) AND `⚠ Imperative logic` (one row per Classic method) AND `⚠ Imperative members` (one row per `mixin` / `message` / `attribute-*` / `module-dep` / `referenced-module` — declared on this page, defined elsewhere). Each row of the latter two is marked *ported* naming the Freedom handler/converter/attribute you built, *dropped* with its reason, or *blocked*. No list is optional and none outranks the others; a method or member left unmarked is the same defect as an unresolved DCM check. A row the engine could not resolve — `Trigger: ⚠ unresolved`, a method assigned from another module, a `message` or `mixin` member reading `⚠ not described` — is answered by the plan-time `classic-ui-expert` run (step 5.1) and marked against **every one** of its card's acceptance criteria — the negative ones ("does NOT fire when…") exercised, not reasoned about — never from the method's name.** A `⚠ ADD only if present` (DCM case → `SysSchema ManagerName='DcmSchemaManager'`; connected processes → `ProcessInModules`; printables → `SysModuleReport`) is a task to *execute*, not a note to defer; a 0-row result proves nothing until you have confirmed the filter is correct; the Classic body lacking a widget/button is **not** evidence the section lacks the case/process. **(b) Build the plan's layout and components EXACTLY as specified** — every profile island (each its own container), every tab/group, and BOTH halves of a two-part component (e.g. Approvals = module *above the island* + list; DCM = progress bar *in `MainContainer`* + Next steps *tab*). Collapsing, merging, or simplifying "for simplicity" is a plan deviation to **propose to the user**, never to apply silently. When unsure whether the plan is right, ask — do not quietly do something smaller.
 8. **UI/UX guidelines are mandatory when you BUILD, not optional.** Whenever you create or edit a Freedom UI page while implementing the approved plan (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring the page body and apply its rules (layout/containers, component choice, `colSpan`/gaps, `caption` vs `title`, island/card settings, lookups, fields, tooltips, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components). This is the same guideline the plan's **Quality gates** checklist row verifies after the build; this rule makes it a **before-build** gate too, so page bodies are authored to it in the first place rather than only reviewed afterward. It binds **whoever builds** — the five tools named above ARE the definition of "build" — and it binds at BOTH points; running only the save-time review is exactly how the gate gets skipped. (This is a **page-design** guideline — distinct from the clio build `get-guidance` contracts you read to write the schema.)
 
+> **Rules 7 and 8 bind whoever writes to the stand.** From step 7 that is a build sub-agent, one per task, so the
+> brief it is handed carries them — `./references/build-task-execution.md` states both, and the orchestrator that
+> dispatched it neither builds around a `⚠` item nor accepts a page that skipped the UI-guidelines gate.
+
 > **This plan is standalone.** A Classic→Freedom migration is a technical UI-transformation, not a business-requirements task — so its plan is the engine-written `plan.md` above (Overview / Main scope / Layout / Logic / ⚠ Imperative logic / ⚠ Imperative members / ⚠ Confirm), **not** a BA-style Business Plan, and it does **not** go through the orchestrator's Gate P/R (`AGENTS.md` exempts this skill). Present the engine's `plan.md` verbatim (rule 2).
 
 ## Product telemetry — emit the shared stages with `workflow: "classic-to-freedom-migration"`
@@ -40,7 +44,7 @@ Every stage lands on a point the Contract above **already** forces you to stop a
 | `plan_changes_requested` | — | receive a change request, including re-approval of an amended frozen plan |
 | `plan_approved` | — | get explicit approval — before the first Freedom artifact (rule 1) |
 | `build_started` | — | begin creating Freedom artifacts |
-| `work_item_completed` | `variant=page` | finish and verify each page, once per page |
+| `work_item_completed` | `variant=page` | finish and verify each page, once per page — a page is its `Page build` chain plus its `Quality gates` task, so emit when the LAST task carrying that page key closes, never per task |
 | `workflow_completed` / `workflow_failed` | — | reach the end of the run |
 | `changes_requested` | — | the developer asks for further changes AFTER the run completed. Emit before starting that follow-up work |
 | `changes_applied` | — | the follow-up changes are applied and verified |
@@ -183,8 +187,30 @@ Then decide `sectionHost.mode` — and put the decision to the user whenever it 
 | Mode | When | What the build does |
 |---|---|---|
 | `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
-| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | `create-app` FIRST — the platform gives the new app its own editable primary package — then register the section there. **The app must exist BEFORE the section is registered:** step 7 creates it first, then registers the section — nothing creates the app for you |
+| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call that carries the entity — see below. It returns the app, its own editable primary package, AND the section over the existing object. Do NOT follow it with `create-app-section` |
 | `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+
+**`new-app` is ONE call, and `create-app-section` is not part of it.** `create-app` takes
+`optional-template-data-json`, and that is what binds the app's own section to an object that already
+exists:
+
+```json
+{ "name": "<App name>", "code": "<AppCode>", "template-code": "AppFreedomUI",
+  "with-mobile-pages": false,
+  "optional-template-data-json": "{\"useExistingEntitySchema\": true, \"entitySchemaName\": \"<Entity>\"}" }
+```
+
+Both fields together, or neither: `entitySchemaName` alone is unsupported, and the entity must already
+exist on the stand before the call. With them, Creatio suppresses the new canonical entity it would
+otherwise mint and puts the app's section on yours.
+
+Without them, `create-app` builds its starter section on a NEW entity named after the app — a list
+page, a form page and a detail that migrate nothing — and a following `create-app-section` adds a
+SECOND section beside it. A measured run shipped six pages where three were wanted, two of them named
+identically in the app's page list, and paid an extra ~90-second call for the privilege: `create-app`
+is `AppInstallerService.svc/CreateApp`, the platform's own app generator, while `create-app-section`
+is a raw `DataService/json/SyncReply/InsertQuery` into the section tables. `create-app-section` is for
+a SECOND section in an app that already exists — that is what `existing-app` uses it for.
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes
@@ -312,6 +338,16 @@ Run it BEFORE the final `--plan --out` and before approval, so the plan the user
 
 **A page on a non-default template is an orphan until it is RE-BOUND to the object** — the scaffolded default keeps opening instead, for the record page, each typed per-type page and each child edit page alike. That re-bind is build work (step 7), gated by the engine's reachability rows (`sectionRegistered`, `typedRouting`, `miniPageWired`, `reuseBindings`); what this step owes it is a named template per page, not the wiring.
 
+**Re-templating the scaffolded form page: the sequence, so nobody improvises it.** Neither `create-app` nor `create-app-section` accepts a template argument — the form page always arrives on `PageWithTabsFreedomTemplate`. When the table above names a different one, the build does this, in this order, inside the ONE task that owns the page:
+
+1. `get-page` the scaffolded form page and keep its body somewhere outside the repo — everything after this is destructive.
+2. `delete-schema` that page.
+3. `create-page` with the SAME schema name, the target `--template`, the target `--package-name` and `--entity-schema-name`. It gets a NEW `schemaUId`; nothing that referenced the old one follows it.
+4. `create-related-page-addon` for the entity, in the target package, pointing the default page at the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read back as you set them — the list page opens whatever this record says, and a build that skips it leaves a section whose rows open nothing.
+5. Only now author the layout into the new page.
+
+A re-template that stops after step 3 is the failure this sequence exists to prevent. If the Classic signal is weak — a header with one or two fields, no progress bar — prefer the scaffolded template and place those fields in the side profile: the re-template costs a delete, a re-bind and a page whose id changed, and that is not worth buying a top area for two fields.
+
 For every Classic item choose one target: direct Freedom analog · configurable business rule · handler/converter/validator · backend/service dependency · unsupported/manual decision. Prefer declarative Freedom configuration over custom handlers when equivalent.
 
 **Generate the per-page design spec — do not hand-write it.** For every Rebuild/Delta page, run `node engine/migrate.mjs <manifest> --spec`: it prints the whole spec as Markdown straight from the ChangeSet — one `Layout` table (`Region · Element · Type · Source · Rule · Additional`), a `Logic` table (business rules/filters/process launch), the `⚠ Imperative logic` method worklist, the `⚠ Imperative members` member worklist and the `⚠ Confirm before I build` worklist, in the format of `./references/page-design-spec.md`. **You generate it and present it verbatim; the build consumes it as its per-page INPUT** (each page's own block, including the nested `### Child page mappings` / `### Typed page mappings` / `### Add mini-page mapping`). Your only additions go in the `⚠ Confirm` list — never into the Layout/Logic tables (Contract rule 2). Hand-writing it is the recurring failure — loose prose, no per-field placement, features mislabelled (Activities→"Timeline", Approvals→"Expanded list") the engine had already resolved.
@@ -341,31 +377,149 @@ A batch of lettered items ending in "confirm A2 and A8" is the defect this repla
 >
 > The same rule governs the `⚠ Confirm` cells the engine renders: `plan.md` is presented verbatim, so its text is user-facing too. If you find an internal name in a rendered cell, that is an engine defect to report — do not paper over it by re-explaining the internals in the question.
 
-### 7. Implement The Approved Plan
+### 7. Implement The Approved Plan — Slice It, Then Orchestrate One Task At A Time
 
-**Build preflight (Contract rule 7).** Before you create or edit ANY Freedom artifact: (a) the plan's `⚠ Confirm` list is your worklist — every item is RESOLVED by running its on-stand query and recording the answer (DCM `SysSchema ManagerName='DcmSchemaManager'`, `ProcessInModules`, `SysModuleReport`, `get-component-info`), not deferred as "probably N/A"; (b) you build the plan's layout/components exactly — every island, tab, group, and both halves of a two-part component. Any simplification is a proposal to the user, not a silent change. → the mapping reference's build recipes.
+Step 6 ends with an approved plan. This step does **not** build it here. It cuts the plan into a folder of
+one-task files and then walks that folder, handing **one task at a time** to its own sub-agent.
 
-**Use the `creatio-ui-guidelines` skill while building the page — not only when asked.** Consult it BEFORE and WHILE authoring any Freedom page or part (placing/ordering fields, choosing a component, grid `layoutConfig`/`colSpan`/nesting, container styling, captions/tooltips) and run its review on each page you build. It catches layout defects the migration engine does not model — overlapping ExpansionPanels, lone-field islands, spacing/color/border-radius mismatches, accessibility. Do not wait for the user to ask for a UI review.
+**Why it is not built in this context.** The build is hundreds of steps — the `⚠ Confirm` worklist, a page tree
+built leaf-first, the `creatio-ui-guidelines` gate twice per page, the re-bind, every ported handler — and held
+in one context it had one machine check, at the very end. A session that hit a usage limit lost the progress, and
+"done" was prose written by the same agent that did the work. Sliced, a lost session costs one task.
 
-1. Re-read `README.md`, `roadmap.md`, and the approved `plan.md` plus relevant sources to recover state. Record the approval in `decisions.md`.
-2. Whole-package → migrate one section at a time in the plan's dependency order (entities/data sources → own sections → replacing/extension deltas → backend); finish and validate each before the next; re-check existing Freedom artifacts before each create.
-3. **Migrate recursively — the migration is a page TREE, not one page.** Build each page from its design spec; each `Rebuild (child)` row has its OWN spec under `### Child page mappings` — build it exactly as the parent. Those child mappings are produced at PLAN time (step 4.2), so a `<FILL: recursive sub-migration>` slot must have been resolved *before* approval, never deferred to build. Per Contract rule 4, a child with a real Classic `*Page` is built regardless of size. Build order is **leaf-first**: deepest child pages → their parents' details → the top page's details — a related list's Add/Edit opens the child's own form, so the form must exist first.
-4. Subtask order within a page: package/app/page scaffolding → package placement setup → template creation or existing-page selection → entity/data-source adjustments → layout → business rules → **child edit pages, then the parent's related lists** → details/related lists/standard features → handlers/converters/validators → backend/service → localization/bindings → switch-over (only if approved).
-   - **Build every native feature UP FRONT as its native component — never build a generic Expanded-list/DataGrid first and "switch" it later.** A Visa = Approvals *because it is an Approval* — and Approvals is **TWO** components (`get-component-info` returns both): the approval **module** as a container **above the profile island** + the approval **list** (`crt.ApprovalList`, brings its own approve/reject actions). Add BOTH — list-only is incomplete. "The child has no edit page / it's view-only" does not reclassify a `standardFeatures` entry into a list. Confirm the components on-stand (`get-component-info`) before building. → the mapping reference's build recipes.
-   - Resolve any `detail-unresolved` (auto-named `SchemaNDetail`) by fetching the detail schema first. For every `detail-editpage` flag, confirm a Freedom form exists for the child entity or migrate it as a follow-on page.
-   - **Nothing is silently skipped:** anything you cannot build now is a loud `TODO`/`BLOCKED` in `worklog.md` with the reason. A page that migrated fields and rules but dropped its details/features (or their edit pages) is NOT done.
-5. Use the safest Clio operation: `create-page` only when the page does not exist; `get-page` before `update-page`; `validate-page` before saving; the business-rule creators for supported rules; `update-client-unit-schema` only for non-page schemas or when raw updates are explicitly needed.
-   - **A `success` from `validate-page`/`update-page` is NOT proof the page works** — clio reports `success` for bodies that fail at runtime. After saving a page, and always before building anything that depends on it (its details, child pages, dependent rules), open it in the browser (or run a runtime render check) and confirm it loads without console/render errors.
-   - **Run the `creatio-ui-guidelines` review on every page you build — this is a DONE-GATE, not optional.** Invoke the skill (via the Skill tool) the moment the page is saved, BEFORE you report it done or build anything on it. It may NOT be marked `PENDING`/"later" and skipped — an unrun gate leaves the page `TODO`/`BLOCKED`, never "done". Its mandatory core is the **style-parity step, done with tools not eyeballed**: open a SHIPPED reference page on the same template, run `get-component-info` on EACH component you added, and diff the concrete props against the native one (`color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` not raw `title`, `labelPosition`, widget size, column count). A screenshot/metadata glance is not the gate. Record the gate result in `worklog.md` as evidence — **which reference page you diffed against + which components you checked via `get-component-info`** — because that evidence is the step-8 UI-gate row. A page that is technically correct (bindings, data sources) but never run through `creatio-ui-guidelines`, or run only as a surface review, is NOT done — real runs keep deferring the gate and shipping unreviewed "smart-default" layouts, then fixing `toggleType`/`title`/island-style defects only after the user points at them.
-6. Compile only when C# / SQL / runtime-compiled artifacts changed, or Creatio reports a missing runtime schema.
-7. Keep the implementation scoped to the approved plan. New analysis that changes scope/strategy → stop, request re-approval, log it in `decisions.md`.
-8. After each artifact, update its `roadmap.md` status and append a `worklog.md` entry with runtime read-back evidence; refresh the README dashboard.
+**7.1 Record the approval, then slice the plan.**
+
+1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints (`**Plan version:**`).
+   Build only against the plan that entry names.
+2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each claiming the plan
+   rows it absorbs. This is a judgement and it is yours: put work that must be done together in one item (a related
+   list and the handler that filters it; a folded handler chain and its helpers; the containers before what goes in
+   them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish, and give an
+   item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns into a filename — lower-case
+   letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
+   whole file. Then:
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
+   The engine REFUSES a split that claims a row twice or names a row the plan does not have, and writes nothing at
+   all in that case. A plan row in NO item does not block the folder but is reported by name — the engine will not
+   pick an owner for it, because which item it belongs to is the judgement this file records. Once it resolves, the
+   file is copied into the folder and every later run reads that copy, so a re-slice is a reconciliation and not a
+   second opinion.
+   Skip `--split` entirely and the engine cuts by its own row budget — fine for a plan small enough that the seams
+   do not matter, and measured putting a related list and its filter in different tasks on one that was not.
+3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` (re-run after every status change)
+4. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
+   buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
+   plan changed, and slice then.
+5. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
+   hand-author a task list, a status table or a progress summary of your own beside it.
+
+**A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
+its coverage, its card actions, its rules, its handlers — writes the same thing, so the folder buckets them into
+ONE `Page build` task per page rather than five tasks racing over one page body. Each task publishes `writesTo:`
+(the artifact it writes, empty for a read-only task) and `dependsOn:` (the tasks that must close first). A page
+big enough to outgrow one sitting is cut into several `Page build` tasks that are chained to each other, so they
+are still never two writers at once. The run's first task is the `Reference cache`, and the second is
+`Scaffolding`.
+
+**A run small enough gets ONE build task and ONE review.** Below `TASK_BUDGET.run` the folder holds exactly two
+files: everything that writes the stand (app, package, section, every page) as a single `Whole migration` task, and
+the quality gates as a single read-only review that waits on it. There is no `Reference cache` in such a run — it
+exists to stop several fresh contexts re-fetching the same contracts, and here there is only one builder. A 31-row
+section came out as six tasks and five sub-agents before this, one of them caching contracts nobody else read.
+
+**7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
+
+1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
+   requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
+   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
+   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
+   guidance, contracts and component docs every later fresh context would otherwise refetch, and every other task
+   depends on it), then `Scaffolding` — the app, package, section and page shells that every other task needs to
+   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
+   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
+   the structure gate instead, so it never reaches a task.)
+2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run two build
+   sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and neither lists the other in
+   `dependsOn`, which in practice means a read-only task beside a build. Each sub-agent writes a value it mints
+   itself into `agentNonce:` before it finishes. You do not supply that value and you do not check it: the engine
+   reports the same nonce on two files, and a `done` task carrying none, on the index's `Attention` section. That
+   check exists because you are the wrong party to prove this rule held — in testing it was the orchestrator that
+   grouped twelve tasks onto five sub-agents and ten onto one.
+3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
+   the sub-agent reported to you: the file is what survives your own session ending. A task whose sub-agent died
+   without writing stays `todo`/`in-progress` and is re-dispatched.
+4. **Re-run `--tasks` after every task.** It refreshes `index.md` from the files, keeps the deliverable rows in
+   step with the plan, and fills the index's `Attention` section. Read that section — it is where an unrecognised
+   status, a task recorded `done` whose deliverables have since changed, and a task that left the plan surface.
+5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to hold two
+   separate pieces of work, or add one the plan does not model, by writing a new file with `origin: orchestrator`
+   (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. Give it
+   a `writesTo:` naming the artifact it writes (copy the value from the task whose page it touches) so the engine
+   chains it behind the other writers of that page; a repair task added for an already-built page is exactly this
+   case, and without the field it sits in the queue writing a page body with nothing sequencing it. You may NOT
+   delete or edit an engine task, and a deviation from the plan itself is a proposal to the user, recorded in
+   `decisions.md`, never an edit you make on their behalf.
+6. **Report after every task, and never report completion yourself.** Tell the user which task closed, what the
+   sub-agent recorded, what is still open, and anything under `Attention`. The run's completion report is step 8's
+   `--verify` table — a hand-authored "all done" summary in its place is the same defect this step exists to remove.
+
+**7.3 What each sub-agent is handed.** A fresh context knows nothing, and a workflow cannot go looking for a file,
+so pass all of it explicitly: the **path to its own task file** (it carries the contract, the deliverables, the
+artifact it writes and the tasks it waits on); the migration folder; the environment name; the manifest path and
+the resolved path to `engine/migrate.mjs`; the approved `plan.md`; the `refs/` folder the first task wrote —
+**paths, never pasted bodies**, because inlining the contracts into every build prompt costs more than fetching
+them does; `./references/build-task-execution.md` (its rules and the whole build procedure);
+`./references/classic-to-freedom-mapping.md` for how a construct maps; and for a task carrying imperative rows,
+the step-5.1 behaviour cards with their acceptance criteria — a handler is ported against its card's AC, never
+from its method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they answered
+on the stand is recorded there and is not repeated in its own file.
+
+**7.4 Assembling `--built` is YOURS, and it needs two contexts that did not build.** Step 8's gate reads a payload
+keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`, `judge`.
+No task produces it, and a builder must not assemble its own verdict, so:
+
+- **The read-back**: one sub-agent with stand access but NO write access runs `get-page` for every page key the
+  plan publishes and hands you the payload. It reads the stand, never a task's `## Notes` — the notes say what a
+  builder believes it did, and the point of this read is to find out what is actually there.
+- **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
+  reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
+  `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
+
+Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
+
+**7.5 Repair — the rows step 8 left open come back as tasks, not as a loop you run yourself.**
+`node engine/migrate.mjs <manifest> --verify --built built.json --tasks <migration-folder>/build-tasks` prints
+step 8's table AND writes that run's OPEN rows into the same folder as repair tasks. They are handed to
+sub-agents exactly like build tasks — same contract, same one-sub-agent rule, and they declare the page artifact
+they write, so the queue sequences them behind that page's build rather than beside it.
+
+- **Merged by (page, cause).** Sixteen handlers missing from one page is ONE task, not sixteen: a defect with
+  many symptoms is one defect, and sixteen tasks is sixteen sub-agent startups to make one edit each. A merged
+  task that outgrows the budget is cut like any other.
+- **A round is an ATTEMPT, not a verify run.** Re-verifying an unchanged page opens no second round — the rows
+  are still the work of the round already in the folder. A new round opens only after the previous one was closed
+  and the rows came back.
+- **Three rounds, then PARKED.** After three attempts at one cause the engine writes no fourth task and says so.
+  Take it to the user: at that point the plan, the stand or the expectation is wrong, not the build. Do not
+  hand-write a fourth task to get around this.
+- **What is YOURS in repair** is only what no sub-agent can do: proposing a PLAN change (to the user, recorded in
+  `decisions.md`), rolling back, and reporting. The rows themselves are the engine's to schedule.
+
+**7.6 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
+own sections → replacing/extension deltas → backend). Each section gets its own slice, its own task folder and its
+own step 8 before the next one starts.
 
 ### 8. Validate
 
 Validate narrowest-reliable-first, then broaden: page schema validation → package build → unit tests for helper logic → **render the built page in the browser** (schema validation + a save `success` do NOT catch runtime/render failures) → E2E for user-visible flows. Do this per page before anything depends on it, not just at the end.
 
 Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
+
+**A folder of `done` task files is not a completion report.** The task statuses are how the step-7 orchestrator
+schedules work and how a killed session resumes; they are recorded by the sub-agents that did the work, so a run
+closed on them alone would be arithmetic over self-assertion. The run closes on the `--verify` table below.
+Where the two disagree — every task `done` while `--verify` still names a MISSING row, or the reverse — the stand
+is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
 
 **The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --built <built-file>`, and `<built-file>` is a JSON **keyed BY PAGE**. The keys are the page keys the engine itself uses — the same ones `--checklist` groups its rows by: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). Read them off the checklist, never construct one: a key the engine did not publish is silently "not checked", not an error.
 
@@ -398,7 +552,7 @@ Report what passed, what could not run, and what stays risky (missing runtime, p
 
 **Where the evidence goes.** You do not assemble the AC list by hand: with `manifest.behaviourIndex` supplied (step 5.1), the plan's own **Described in** cell already names the card + AC list to walk for each row — walk that list, and treat a row still reading `⚠ not described` as one step 5.1 has not covered yet. The Evidence column carries your per-AC result lines, never the **Described in** citation copied across; a hand-authored summary table in its place is the rule-1 violation.
 
-**What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate, step 7.5).** They are TWO of the pre-seeded rows above (ENG-95859) — not extra rows you add — sharing ONE evidence id: file ONE record in `<built-file>.evidence[<id>]` naming the shipped reference page you diffed against AND the components you checked via `get-component-info` (e.g. `referencePage: "AccountPage"`, `components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and have it reviewed for `judge[<id>]` by a SEPARATE context wherever the host allows a sub-agent — a record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was. The first row closes when that record is complete; the second closes only when the judge entry marks it convincing — a record nobody reviewed leaves the second row open even if the first reads ✅. Either row left `☐`/not-`Done`, or the first marked `Done` with no reference-page + component evidence (a surface review), means **that page is NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
+**What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate — `./references/build-task-execution.md`, run inside the build task that touches the page).** They are TWO of the pre-seeded rows above (ENG-95859) — not extra rows you add — sharing ONE evidence id: file ONE record in `<built-file>.evidence[<id>]` naming the shipped reference page you diffed against AND the components you checked via `get-component-info` (e.g. `referencePage: "AccountPage"`, `components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and have it reviewed for `judge[<id>]` by a SEPARATE context wherever the host allows a sub-agent — a record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was. The first row closes when that record is complete; the second closes only when the judge entry marks it convincing — a record nobody reviewed leaves the second row open even if the first reads ✅. Either row left `☐`/not-`Done`, or the first marked `Done` with no reference-page + component evidence (a surface review), means **that page is NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
 
 **Two platform residues a run can leave on the stand, and neither is yours to remove silently (ENG-95850 / C1, C2).** Both are defects on the platform side: REPORT them and stop there — deleting records on a customer's stand is the operator's decision. Know they exist, because the Applicant run had to clear both by hand on top of a green build:
 
@@ -409,6 +563,7 @@ Report what passed, what could not run, and what stays risky (missing runtime, p
 Read each only when the step that names it says so:
 
 - `./references/classic-to-freedom-mapping.md` — classification categories, package placement, template/control/data/logic mapping, and the standard-features / widgets / actions table (Approvals, Activities/Emails, DCM, Run process). The single source of truth for *how to map a component*.
+- `./references/build-task-execution.md` — what a step-7 build sub-agent is bound by and the whole per-page build procedure (preflight, the `creatio-ui-guidelines` done-gate, clio safety, recursion, the re-bind). Handed to the sub-agent, not read by the orchestrator.
 - `./references/migration-plan-template.md` — what the generated `--plan` output contains, and the hand-authoring fallback for when Node is unavailable.
 - `./references/page-design-spec.md` — the per-page design-spec format the engine emits with `--spec`.
 - `./references/analysis-summary.md` — the format rules for the plan's user-facing `Overview`/`What it does`/`Main scope` header.
