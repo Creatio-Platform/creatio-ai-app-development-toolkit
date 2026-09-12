@@ -56,12 +56,15 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
   two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice
   or a row the plan does not have is refused with nothing written; a plan row in no item is reported by name and the
-  engine picks no owner. Items sharing a `writesTo` are chained automatically. Two seams are checked rather than
+  engine picks no owner. Items sharing a `writesTo` are chained automatically. Three seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
   that build the typed pages: routing binds each Type form by the Type column, so a form that is not built yet
-  cannot be bound — a 94-item split of a real plan put it second, ahead of both.
+  cannot be bound — a 94-item split of a real plan put it second, ahead of both. And an item carrying a page's
+  `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
+  still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
+  because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
   An item may claim a whole group (`@Form — Logic`) or the next N rows of one (`@Form — Logic[50]`), taken in plan
   order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
   hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row

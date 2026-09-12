@@ -214,7 +214,8 @@ export function resolveSplit(split, groups, identity = new Map()) {
       rows,
     });
   }
-  errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items), ...routingBeforeTypedPages(items));
+  errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
+    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -233,6 +234,27 @@ const CALLER = /^Handler — `([^`]+)`\s*$/;
 // It is a real mistake, not a hypothetical one: on the plan this rule was written against, a split placed the
 // routing item second — ahead of both typed pages — while its own summary said the item could only start once both
 // were built. Without the check that reaches a sub-agent as "bind a form that does not exist yet".
+// THE THIRD CHECKED SEAM, and the one with no legitimate exception. A late scaffolding item is fine — per-type
+// routing genuinely belongs after the typed pages. A review placed before a writer of the page it judges is never
+// fine: it would file a verdict on a page that is still being built. The `Quality gates` rows name the page, so
+// the engine can say so rather than leave it to the reader.
+const REVIEW_GROUP_NAME = "Quality gates";
+function reviewBeforeItsPage(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    const judged = new Set(it.rows.filter((r) => r.group === REVIEW_GROUP_NAME).map((r) => r.pageKey));
+    if (!judged.size) return;
+    const later = items.slice(i + 1).filter((o) => judged.has(o.declaredWritesTo));
+    if (!later.length) return;
+    const shown = later.slice(0, 3).map((o) => "`" + o.id + "`").join(", ");
+    const more = later.length > 3 ? `, …and ${later.length - 3} more` : "";
+    out.push(`\`${it.id}\` reviews ${[...judged].map((p) => "`" + p + "`").join(", ")} but sits BEFORE`
+      + ` ${later.length} item(s) that still write ${later.length === 1 ? "that page" : "those pages"} (${shown}${more})`
+      + " — a review files a verdict on a page that is finished, so it goes after every item that writes it.");
+  });
+  return out;
+}
+
 const ROUTING_ROW = /^Per-type page routing\b/;
 function routingBeforeTypedPages(items) {
   const typedAt = items

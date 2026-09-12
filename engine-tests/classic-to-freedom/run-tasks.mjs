@@ -1180,6 +1180,44 @@ check("split: NO split file falls back to the engine's own budget slicer — a p
     return !set.split && set.tasks.length === SET.tasks.length;
   });
 
+console.log("\n===== a review waits for the page it judges, and may not precede a writer of it =====");
+// A late scaffolding item is legitimate; a review before a writer of its page never is — it would file a verdict
+// on a page that is still being built. The `Quality gates` rows name the page, so the engine says so.
+{
+  const rows = allRows("main");
+  const gateRow = GROUPS.find((g) => g.pageKey === "main" && g.baseTitle === "Quality gates").rows[0].label;
+  const build = rows.filter((r) => r !== gateRow);
+  const REVIEW = splitItem("the-review", "main", "", [gateRow]);
+  const BUILD = splitItem("the-build", "main", "main", build);
+  const others = FULL_SPLIT.items.filter((i) => i.pageKey !== "main");
+  check("review (anti-vacuity): the fixture really separates the review row from the writing rows — otherwise 'a review is not a writer' is asserted about one item that is both",
+    () => build.length > 1 && !build.includes(gateRow) && /creatio-ui-guidelines/.test(gateRow),
+    () => ({ gateRow: gateRow.slice(0, 60), build: build.length }));
+  check("split: a review placed BEFORE an item that still writes the page it judges is REFUSED — the verdict would be filed on a page that is not finished",
+    () => {
+      const set = buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [REVIEW, ...others, BUILD] }, OPTS);
+      return set.refused && set.problems.some((p) => /reviews `main` but sits BEFORE/.test(p) && p.includes("the-build"));
+    }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [REVIEW, ...others, BUILD] }, OPTS).problems);
+  check("split: the same two in the right order pass, and the READ-ONLY review still waits on every writer of that page — with no `writesTo` it joins no chain, so without this dependency nothing would make it wait at all",
+    () => {
+      const set = mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), []);
+      const rev = set.tasks.find((t) => t.id === "the-review");
+      const at = new Map(set.tasks.map((t) => [t.id, t.step]));
+      return !set.refused && rev.writesTo === "" && rev.dependsOn.includes("the-build")
+        && set.tasks.every((t) => t.dependsOn.every((d) => !at.has(d) || at.get(d) < t.step));
+    }, () => mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [BUILD, ...others, REVIEW] }, OPTS), [])
+      .tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}→${t.dependsOn.join(",")}`));
+  check("split: an item that carries NO `Quality gates` row is never treated as a review — the rule reads the rows, not the item's name",
+    () => {
+      const set = buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [
+        splitItem("looks-like-a-review", "main", "", [rows[0]]),
+        ...others,
+        splitItem("later-writer", "main", "main", rows.slice(1)),
+      ] }, OPTS);
+      return !set.refused;
+    }, () => "an item named like a review but carrying no gate row");
+}
+
 console.log("\n===== a split may place SCAFFOLDING late, and the queue must still be walkable =====");
 // Per-type routing binds each Type's form by the Type column, so it belongs AFTER the typed pages even though it
 // is scaffolding. Depending on ALL scaffold tasks made every earlier task wait on that late one — 83 dependencies

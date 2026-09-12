@@ -387,6 +387,25 @@ function chunksOf(bucket, B) {
 // a package that does not exist), and a task that writes an artifact follows the previous task writing THAT SAME
 // artifact. The second is the one that makes `get-page → merge → update-page` safe: same-artifact chunks are
 // chained, so no parallel dispatch of them is ever legal, and a queue walked in `order` already satisfies it.
+// WHICH PAGES A TASK REVIEWS, as resolved artifact names. The mechanical slicer gives a review its own
+// `review:<identity>` artifact; a split has no such notion, so an item that carries `Quality gates` rows is
+// recognised by those rows. Without this a split whose review is correctly read-only waited on nothing at all and
+// could be handed out before the page it judges was written.
+const reviewedArtifacts = (t) => {
+  if (Array.isArray(t.reviewsArtifacts)) return t.reviewsArtifacts;
+  return t.artifact?.startsWith("review:") ? [`page:${t.artifact.slice("review:".length)}`] : [];
+};
+
+// A review reads the page it judges, so it follows the tasks that wrote that page. SEEN SO FAR, like the
+// scaffolding: depending on later writers too would point a dependency forward in the queue. A split that puts a
+// review ahead of a writer of its page is refused outright (see `split.mjs`), so in an admissible cut the two are
+// the same set — this keeps the graph walkable even when something slips past that check.
+function reviewDeps(t, writersSoFar) {
+  const want = reviewedArtifacts(t);
+  if (!want.length) return [];
+  return writersSoFar.filter((o) => want.includes(o.writesTo)).map((o) => o.id);
+}
+
 function withDependencies(tasks) {
   // SCAFFOLDING SEEN SO FAR, not all of it. The engine's own slicing puts every scaffold task at the front, but a
   // split may legitimately place one late — per-type routing binds each Type's form and so belongs AFTER the typed
@@ -399,6 +418,7 @@ function withDependencies(tasks) {
   // from the write target rather than being inferred from it.
   const refs = [];
   const lastOn = new Map();
+  const writersSoFar = [];
   return tasks.map((t) => {
     const deps = [];
     if (t.artifact !== ARTIFACT_REFS) deps.push(...refs);
@@ -412,11 +432,8 @@ function withDependencies(tasks) {
     const prev = lastOn.get(chainKey);
     if (prev) deps.push(prev);
     lastOn.set(chainKey, t.id);
-    // A review reads the page it judges, so it follows every task that wrote that page.
-    if (t.artifact.startsWith("review:")) {
-      const page = `page:${t.artifact.slice("review:".length)}`;
-      deps.push(...tasks.filter((o) => o.artifact === page).map((o) => o.id));
-    }
+    deps.push(...reviewDeps(t, writersSoFar));
+    if (t.writesTo) writersSoFar.push(t);
     return { ...t, dependsOn: [...new Set(deps)].filter((d) => d !== t.id) };
   });
 }
@@ -788,6 +805,7 @@ function chainMerged(ordered) {
   // `withDependencies` alone fixed nothing.
   const refs = [];
   const scaffolds = [];
+  const writersSoFar = [];
   const lastWriter = new Map();
   return ordered.map((t) => {
     const deps = [...(t.dependsOn || [])];
@@ -798,6 +816,8 @@ function chainMerged(ordered) {
       if (prev) deps.push(prev);
       lastWriter.set(t.writesTo, t.id);
     }
+    deps.push(...reviewDeps(t, writersSoFar));
+    if (t.writesTo) writersSoFar.push(t);
     if (t.artifact === ARTIFACT_REFS) refs.push(t.id);
     if (t.artifact === ARTIFACT_SCAFFOLD) scaffolds.push(t.id);
     return { ...t, dependsOn: [...new Set(deps)].filter((d) => d && d !== t.id) };
@@ -900,6 +920,9 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
       label: r.label, groupTitle: r.group, vk: r.vk, na: r.na,
+      // The row's OWN page, not the item's: an item may claim a `Quality gates` row from another page, and it is
+      // that page the review then has to wait for.
+      rowPageKey: r.pageKey,
       weight: rowWeight(r, r.group, B),
     }));
     const task = {
@@ -912,6 +935,11 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       group: it.title,
       title: it.title,
       groups: [...new Set(srcRows.map((r) => r.groupTitle))],
+      // A split has no `review:` artifact, so an item that judges a page is recognised by the `Quality gates` rows
+      // it carries. Read-only is the CORRECT thing for such an item — which is exactly why it needs this: with no
+      // `writesTo` it joins no chain, and without the review dependency nothing would make it wait for the page.
+      reviewsArtifacts: [...new Set(srcRows.filter((r) => r.groupTitle === REVIEW_GROUP)
+        .map((r) => `page:${identity.get(r.rowPageKey) || r.rowPageKey}`))],
       order: i + 2,                       // the reference cache keeps position 1
       phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE,
