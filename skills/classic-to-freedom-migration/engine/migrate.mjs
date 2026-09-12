@@ -1003,7 +1003,9 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // ENG-96327 (e5350b5) — `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
+    // the List-page block: a typed page is NOT its own section; the ONE list page is rendered once by the base fold.
+    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
@@ -2430,7 +2432,13 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  out.designSpec = renderDesignSpec(out, specOpts);
+  // ENG-96327 (e5350b5) — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
+  // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
+  // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
+  // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
+  // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
+  const isSubPageRun = opts.isChildPage || opts.isMiniPage || opts.formOnly;
+  out.designSpec = renderDesignSpec(out, isSubPageRun ? { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) } : specOpts);
   out.plan = renderPlan(out, specOpts);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;

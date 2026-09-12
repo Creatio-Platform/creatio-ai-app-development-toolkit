@@ -835,7 +835,10 @@ export function renderDesignSpec(result, opts = {}) {
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
     ...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
-    ...renderMemberLedger(result.coverage),
+    // ENG-96327 (e00abfa) — the Member ledger is dense per-kind coverage accounting, kept on the standalone `--spec`
+    // surface (QA / the build agent) but OUT of the embedded plan (`embedded`) a human approves. The coverage GATE is
+    // unaffected (computed in migrate.mjs) and any `unaccounted` gap still fires the ⛔ COVERAGE INCOMPLETE banner.
+    ...(opts.embedded ? [] : renderMemberLedger(result.coverage)),
   );
 
 
@@ -1596,7 +1599,7 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeSuffix = typedTypeSuffix(t); // ENG-96327 (c2ae185) — the RESOLVED Type name (typeName / typeColumnDisplayValue); a raw GUID only as a ⚠ fallback
     const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
     let tgt;
     if (t.bindOnly) tgt = "bind shared form by Type";
@@ -1936,7 +1939,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
+  for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE

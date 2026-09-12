@@ -4620,6 +4620,11 @@ check("typed-page FOLD: supplied typedPageSchemas → each per-type form's FULL 
   && /#### Typed form: XICPage/.test(docSecRun.plan) && docSecRun.plan.includes("SenderField")
   && /#### Typed form: XOCPage/.test(docSecRun.plan) && docSecRun.plan.includes("RecipientField"),
   () => docSecRun.plan.split("\n").filter((l) => /Typed form|SenderField|RecipientField|Typed page mappings/.test(l)));
+// ENG-96327 (e00abfa + e5350b5) — the embedded plan (main + folded sub-pages) carries NO Member ledger: it is dense
+// per-kind coverage accounting kept on the standalone `--spec` surface, not in the plan a human approves.
+check("ENG-96327: the human plan (embedded, incl. folded typed forms) carries NO Member ledger — it stays on the standalone --spec surface",
+  !/#### Member ledger/.test(docSecRun.plan),
+  () => docSecRun.plan.split("\n").filter((l) => /Member ledger/.test(l)));
 // ENG-96327/ENG-96553 (ec5e937) — the typed-form heading NAMES the Type: `typeName` (mapped from the tool's
 // `typeColumnDisplayValue`) shows the resolved NAME; a raw type-GUID with no name shows the GUID + a ⚠ to resolve it
 // (a bare GUID tells the approver nothing about which Type the form is for).
@@ -5091,13 +5096,12 @@ check("coverage: non-framework define() deps are surfaced ONCE (aggregated), and
       if (!page) return false;
       // ENG-96327 — ⚠ Confirm is only present when a HUMAN-facing decision remains after the shrink (cosmetic /
       // shown-in-a-table / builder-only / list-noise kinds are dropped), so include it in the order check only when
-      // it renders. Member ledger still closes the section on this engine.
+      // it renders. The Member ledger is suppressed in the human (embedded) plan (e00abfa).
       const base = ["#### Layout", "#### Business rules", "#### ⚠ Custom methods", "#### ⚠ Other declared logic"];
-      const seq = page.includes("#### ⚠ Confirm before I build")
-        ? [...base, "#### ⚠ Confirm before I build", "#### Member ledger"]
-        : [...base, "#### Member ledger"];
+      const seq = page.includes("#### ⚠ Confirm before I build") ? [...base, "#### ⚠ Confirm before I build"] : base;
       const order = seq.map((n) => page.indexOf(n));
-      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos);
+      return order.every((pos) => pos >= 0) && order.every((pos, n) => n === 0 || order[n - 1] < pos)
+        && !page.includes("#### Member ledger");   // ENG-96327: suppressed in the human (embedded) plan
     },
     () => impPlan.split("\n").filter((l) => l.startsWith("### ") || l.startsWith("#### ")));
   // `referenced-module` was the one member kind pinned nowhere on the ARRIVAL side — breaking its emission would
