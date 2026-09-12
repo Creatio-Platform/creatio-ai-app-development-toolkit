@@ -18,8 +18,6 @@
 //
 // So: the split file says WHERE the seams are. This module says whether that answer is admissible, and keeps it
 // answerable to a plan that moves.
-import { LIST_PAGE_KEY } from "./designspec.mjs";
-
 export const SPLIT_FILE = "split.json";
 export const SPLIT_SCAFFOLD = "scaffold";
 const PAGE_SEP = "::";
@@ -97,11 +95,35 @@ function planIndex(groups) {
   return byPage;
 }
 
-// RESOLVE the split against the plan as it is NOW. Three failures are refused and one is reported-but-survivable:
-//   - an entry matching NO plan row        → refused: the split describes work the plan does not
-//   - an entry matching MORE THAN ONE      → refused: the engine cannot tell which row the item meant
-//   - a row claimed by TWO items           → refused: two sub-agents would be sent to build one deliverable
-//   - a plan row claimed by NO item        → reported as `unplaced`; see `reconcile`
+// One entry against the plan: the row it names, or the reason it names none. Kept apart from the walk below so
+// that walk stays a routing of answers rather than a nest of failure cases.
+function claimRow(entry, pageKey, itemId, index, taken) {
+  const page = entryPage(entry, pageKey);
+  const key = rowKey(entryLabel(entry));
+  const found = index.get(page)?.get(key);
+  if (!found) {
+    return { error: `\`${itemId}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
+      + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page` };
+  }
+  const slot = `${page}|${key}`;
+  const owners = taken.get(slot) || [];
+  if (owners.length >= found.length) {
+    // The plan has N of this row and the split has now claimed N+1. With identical text there is no way to say
+    // WHICH claim is the extra one, so both the first owner and this one are named.
+    const already = [...new Set(owners)].join("`, `");
+    return { error: `row ${JSON.stringify(found[0].label.slice(0, 70))} on \`${page}\` is claimed ${owners.length + 1} times`
+      + ` (by \`${already}\` and \`${itemId}\`) but the plan has it ${found.length} time(s)`
+      + " — one deliverable, one item; drop the extra claim" };
+  }
+  owners.push(itemId);
+  taken.set(slot, owners);
+  return { row: found[owners.length - 1] };
+}
+
+// RESOLVE the split against the plan as it is NOW. Two failures are refused and one is reported-but-survivable:
+//   - an entry matching NO plan row                  → refused: the split describes work the plan does not
+//   - a row claimed more often than the plan has it  → refused: the extra claim sends a second sub-agent
+//   - a plan row claimed by NO item                  → reported as `unplaced`; see `reconcile`
 export function resolveSplit(split, groups, identity = new Map()) {
   const index = planIndex(groups);
   const errors = [];
@@ -111,27 +133,9 @@ export function resolveSplit(split, groups, identity = new Map()) {
     const pageKey = raw.pageKey || "main";
     const rows = [];
     for (const entry of raw.rows) {
-      const page = entryPage(entry, pageKey);
-      const key = rowKey(entryLabel(entry));
-      const found = index.get(page)?.get(key);
-      if (!found) {
-        errors.push(`\`${raw.id}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
-          + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page`);
-        continue;
-      }
-      const slot = `${page}|${key}`;
-      const owners = taken.get(slot) || [];
-      if (owners.length >= found.length) {
-        // The plan has N of this row and the split has now claimed N+1. With identical text there is no way to say
-        // WHICH claim is the extra one, so both the first owner and this one are named.
-        errors.push(`row ${JSON.stringify(found[0].label.slice(0, 70))} on \`${page}\` is claimed ${owners.length + 1} times`
-          + ` (by \`${[...new Set(owners)].join("`, `")}\` and \`${raw.id}\`) but the plan has it ${found.length} time(s)`
-          + " — one deliverable, one item; drop the extra claim");
-        continue;
-      }
-      owners.push(raw.id);
-      taken.set(slot, owners);
-      rows.push(found[owners.length - 1]);
+      const { row, error } = claimRow(entry, pageKey, raw.id, index, taken);
+      if (error) errors.push(error);
+      else rows.push(row);
     }
     items.push({
       id: raw.id,
@@ -145,7 +149,7 @@ export function resolveSplit(split, groups, identity = new Map()) {
   }
   // A page key named in `writesTo` that the plan does not publish is a typo the engine must not quietly honour:
   // the item would write an artifact nothing else is chained against.
-  const known = new Set([...index.keys()]);
+  const known = new Set(index.keys());
   for (const it of items) {
     const d = it.declaredWritesTo;
     if (d && d !== SPLIT_SCAFFOLD && !known.has(d)) {
@@ -205,4 +209,3 @@ export function splitProblems({ errors = [], unplaced = [], emptied = [] }) {
 
 export const SPLIT_SHAPE = `{"planVersion":"plan-…","items":[{"id":"kebab-slug","title":"…","pageKey":"main","writesTo":"main"|"${SPLIT_SCAFFOLD}"|"","stopGate":false,"rows":["<row text copied from the plan>","<otherPage>${PAGE_SEP}<row text>"]}]}`;
 
-export const LIST_KEY = LIST_PAGE_KEY;

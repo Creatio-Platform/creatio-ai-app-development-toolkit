@@ -869,7 +869,7 @@ function adoptOrchestrated(e) {
 // IDENTITY IS THE ITEM'S `id`, not a hash over its contents. The mechanical slicer had to derive ids from content
 // because it re-derived the whole cut on every run; a frozen split does not move, so the slug someone chose for an
 // item IS its identity and survives any change to the rows inside it.
-export function buildTaskSetFromSplit(result, opts = {}, split) {
+export function buildTaskSetFromSplit(result, split, opts = {}) {
   const groups = checklistGroups(result, opts);
   const identity = pageIdentities(result);
   const B = budgetOf(opts);
@@ -1064,7 +1064,8 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
           gatedRows: chunkSrc.filter((r) => r.vk).length, naRows: 0,
           rowsDigest: rowsDigest(chunkSrc), dependsOn: [], notes: "",
         };
-        t.file = `task-repair-round${round}-${slugify(`${pageKey}-${cause}`)}-${id}.md`;
+        const nameSlug = slugify(`${pageKey}-${cause}`);
+        t.file = `task-repair-round${round}-${nameSlug}-${id}.md`;
         tasks.push(t);
       });
     }
@@ -1133,7 +1134,7 @@ export function taskSetFor(dir, result, opts = {}, split = null) {
       problems: frozen.errors.map((e) => `${SPLIT_FILE} ${e}`) };
   }
   const use = split || frozen?.split || null;
-  return use ? buildTaskSetFromSplit(result, opts, use) : buildTaskSet(result, opts);
+  return use ? buildTaskSetFromSplit(result, use, opts) : buildTaskSet(result, opts);
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {

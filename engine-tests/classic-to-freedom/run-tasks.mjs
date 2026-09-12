@@ -909,23 +909,23 @@ check("split (anti-vacuity): the fixture split really covers EVERY plan row acro
   }, () => ({ split: FULL_SPLIT.items.flatMap((i) => i.rows).length, plan: GROUPS.flatMap((g) => g.rows).length }));
 check("split: a complete cut builds a task per ITEM — the seams are the file's, and the engine's own budget no longer decides them",
   () => {
-    const set = buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT);
+    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
     const build = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
     return !set.refused && build.length === FULL_SPLIT.items.length
       && build.every((t, i) => t.id === FULL_SPLIT.items[i].id);
-  }, () => buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT).problems
-    || buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT).tasks.map((t) => `${t.order}:${t.id}`));
+  }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems
+    || buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.order}:${t.id}`));
 check("split: the item's `id` IS the task's identity — a frozen cut does not move, so the slug someone chose survives any change to the rows inside it (the mechanical slicer had to hash content because it re-decided the cut every run)",
   () => {
-    const set = buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT);
-    const set3 = buildTaskSetFromSplit(RUN3, OPTS3, FULL_SPLIT);   // manifest C: one task's rows changed
+    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
+    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // manifest C: one task's rows changed
     const a = set.tasks.find((t) => t.id === "build-main");
     const c = set3.tasks.find((t) => t.id === "build-main");
     return a && c && a.id === c.id && a.rowsDigest !== c.rowsDigest;
   }, () => "see build-main across manifests A and C");
 check("split: EVERY plan row still lands in exactly one task — the guarantee the mechanical slicer gave is the one the engine keeps when the cut becomes a judgement",
   () => {
-    const set = buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT);
+    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
     const planRows = GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey} ${r.label}`)).sort((a, b) => a.localeCompare(b));
     const taskRows = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS)
       .flatMap((t) => t.rows.map((r) => `${t.pageKey} ${r.label}`)).sort((a, b) => a.localeCompare(b));
@@ -934,34 +934,34 @@ check("split: EVERY plan row still lands in exactly one task — the guarantee t
 check("split: a row claimed by TWO items is REFUSED and names both — one deliverable handed to two sub-agents is the failure the whole artifact model exists to prevent",
   () => {
     const dup = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("second-claim", "main", "main", [allRows("main")[0]])] };
-    const set = buildTaskSetFromSplit(RUN, OPTS, dup);
+    const set = buildTaskSetFromSplit(RUN, dup, OPTS);
     return set.refused && set.problems.some((p) => /is claimed 2 times/.test(p) && p.includes("second-claim"));
-  }, () => buildTaskSetFromSplit(RUN, OPTS, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("second-claim", "main", "main", [allRows("main")[0]])] }).problems);
+  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("second-claim", "main", "main", [allRows("main", OPTS)[0]])] }).problems);
 check("split: a row the plan does NOT have is REFUSED — a split naming work the plan never described would schedule a sub-agent against a deliverable nothing can verify",
   () => {
     const bogus = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("invented", "main", "main", ["Build the thing the plan forgot"])] };
-    const set = buildTaskSetFromSplit(RUN, OPTS, bogus);
+    const set = buildTaskSetFromSplit(RUN, bogus, OPTS);
     return set.refused && set.problems.some((p) => /claims a row the plan does not have/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, OPTS, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("invented", "main", "main", ["Build the thing the plan forgot"])] }).problems);
+  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("invented", "main", "main", ["Build the thing the plan forgot"], OPTS)] }).problems);
 check("split: a plan row in NO item is REPORTED by name and the engine picks no owner — which item a row belongs to is exactly the judgement the split records, so guessing would undo the point of having one",
   () => {
     const short = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) };
-    const set = buildTaskSetFromSplit(RUN, OPTS, short);
+    const set = buildTaskSetFromSplit(RUN, short, OPTS);
     return !set.refused && set.added.length === 1
       && set.problems.some((p) => /is in NO item/.test(p) && /will not pick an owner/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, OPTS, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }).problems);
+  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }).problems);
 check("split: the unplaced row reaches the INDEX too — a caller who reads the folder rather than the command output must meet the same gap",
   () => {
     const short = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) };
-    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, OPTS, short), []));
+    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, short, OPTS), []));
     return /## Attention/.test(idx) && /is in NO item/.test(idx);
-  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, OPTS, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }), [])));
+  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i) }), [])));
 check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
   () => {
-    const set3 = buildTaskSetFromSplit(RUN3, OPTS3, FULL_SPLIT);   // C: `Fields — 1 expected` became `2 expected`
+    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
     return !set3.refused && set3.added.length === 0
       && rowKey("Fields — 19 expected") === rowKey("Fields — 20 expected");
-  }, () => buildTaskSetFromSplit(RUN3, OPTS3, FULL_SPLIT).problems);
+  }, () => buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems);
 check("split: an item left with NO rows by a changed plan is reported and KEPT, never deleted — its file may hold the only record of work already done on a stand",
   () => {
     const extra = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("gone-from-plan", "main", "main", [])] };
@@ -978,7 +978,7 @@ check("split: two items writing ONE page are chained — the file says where the
       splitItem("main-a", "main", "main", rows.slice(0, 5)),
       splitItem("main-b", "main", "main", rows.slice(5)),
     ] };
-    const set = buildTaskSetFromSplit(RUN, OPTS, two);
+    const set = buildTaskSetFromSplit(RUN, two, OPTS);
     const b = set.tasks.find((t) => t.id === "main-b");
     return !set.refused && b.dependsOn.includes("main-a") && b.writesTo === set.tasks.find((t) => t.id === "main-a").writesTo;
   }, () => "see main-a / main-b chain");
@@ -990,16 +990,16 @@ check("split: a READ-ONLY item joins no chain and blocks nobody — a recon item
       ...FULL_SPLIT.items.filter((i) => i.pageKey !== "main"),
       splitItem("main-build", "main", "main", rows.slice(3)),
     ] };
-    const set = buildTaskSetFromSplit(RUN, OPTS, withRecon);
+    const set = buildTaskSetFromSplit(RUN, withRecon, OPTS);
     const recon = set.tasks.find((t) => t.id === "recon");
     return !set.refused && recon.writesTo === "" && !set.tasks.some((t) => t.id !== "recon" && t.dependsOn.includes("recon"));
-  }, () => buildTaskSetFromSplit(RUN, OPTS, FULL_SPLIT).tasks.map((t) => `${t.id}:${t.writesTo}`));
+  }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.id}:${t.writesTo}`));
 check("split: `writesTo` naming a page the plan does not publish is REFUSED — the item would write an artifact nothing else is chained against, which is the silent-collision case spelled as a typo",
   () => {
     const bad = { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, writesTo: "mian" } : i) };
-    const set = buildTaskSetFromSplit(RUN, OPTS, bad);
+    const set = buildTaskSetFromSplit(RUN, bad, OPTS);
     return set.refused && set.problems.some((p) => /which is not a page in this plan/.test(p));
-  }, () => buildTaskSetFromSplit(RUN, OPTS, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, writesTo: "mian" } : i) }).problems);
+  }, () => buildTaskSetFromSplit(RUN, { ...FULL_SPLIT, items: FULL_SPLIT.items.map((i, OPTS) => i.pageKey === "main" ? { ...i, writesTo: "mian" } : i) }).problems);
 check("parseSplit: a duplicate `id`, a missing `rows` array and a malformed id are each named — the file is authored by hand or by an agent, so the error has to say what to change",
   () => {
     const dup = parseSplit(JSON.stringify({ items: [splitItem("a", "main", "", ["x"]), splitItem("a", "main", "", ["y"])] }));
@@ -1033,7 +1033,7 @@ const VERIFY_PAGES = {
   ] },
 };
 check("repair (anti-vacuity): the fixture really carries 16 rows of ONE cause plus three of other causes — otherwise 'merged by cause' and 'not one task per row' are the same assertion",
-  () => VERIFY_PAGES.main.openRows.filter((r) => /^Handler —/.test(r.deliverable)).length === 16
+  () => VERIFY_PAGES.main.openRows.filter((r) => r.deliverable.startsWith("Handler —")).length === 16
     && new Set(VERIFY_PAGES.main.openRows.map((r) => r.outcome)).size === 2,
   () => VERIFY_PAGES.main.openRows.length);
 check("repair: 16 handlers missing from one page is ONE task, not 16 — a defect with many symptoms is one defect, and 16 tasks is 16 sub-agent startups to make one edit each, which the orchestrator would group anyway",
