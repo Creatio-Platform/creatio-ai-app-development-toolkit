@@ -14,6 +14,7 @@ node migrate.mjs <manifest.json> --plan   # render the migration plan (Markdown)
 node migrate.mjs <manifest.json> --spec   # render just the per-page design spec (Markdown)
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
+node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …and write this run's OPEN rows into <dir> as repair tasks
@@ -49,6 +50,15 @@ survive the next `--plan --out`.
 task per ARTIFACT so a caller can dispatch one sub-agent per task instead of holding every deliverable in one
 context. The properties that decide its behaviour are stated in full in `tasks.mjs`:
 
+- **`--split <file>` decides WHERE the seams go; the engine decides whether that answer is admissible.** Cutting a
+  plan is a judgement about the work — that a related list and the handler filtering it are one piece, that the tab
+  containers precede what goes in them, that an unresolved child entity is a reason to stop rather than a row to
+  report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
+  two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice
+  or a row the plan does not have is refused with nothing written; a plan row in no item is reported by name and the
+  engine picks no owner. Items sharing a `writesTo` are chained automatically. Row matching masks digits and the
+  plural they drive, so a plan that gains a field does not force a re-cut. With no split file the budget slicer
+  below stays as the degenerate path.
 - **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — layout,
   coverage, card actions, rules, handlers, the page's `⚠ Confirm` questions — writes the same thing, so they are
   ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes

@@ -1218,6 +1218,73 @@ const cliTasks = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", 
   fs.rmSync(base, { recursive: true, force: true });
 }
 
+console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then frozen =====");
+{
+  const base = tmp("cli-split");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
+  const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check("migrate.mjs --split: a resolving split cuts the folder and SAYS which cut it used — a caller must be able to tell a hand-decided folder from one the budget slicer produced",
+    () => run.status === 0 && /Cut by a frozen split of \d+ item\(s\)/.test(run.stdout || "")
+      && fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: run.status, stdout: run.stdout, stderr: run.stderr }));
+  check("migrate.mjs --split: the file is COPIED INTO the folder — that copy is what makes every later run a reconciliation instead of a second opinion, and it must not depend on the caller still having the original path",
+    () => fs.existsSync(path.join(dir, SPLIT_FILE))
+      && JSON.parse(fs.readFileSync(path.join(dir, SPLIT_FILE), "utf8")).items.length === FULL_SPLIT.items.length,
+    () => fs.readdirSync(dir));
+  check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy and produces the same tasks — the cut does not get re-decided, so a recorded `done` cannot move to a task that no longer exists",
+    () => {
+      const ids = () => fs.readdirSync(dir).filter((f) => f.startsWith("task-")).sort().join(",");
+      const before = ids();
+      const again = cliTasks(["--tasks", dir], MANIFEST);
+      return again.status === 0 && /Cut by a frozen split/.test(again.stdout || "") && ids() === before;
+    }, () => fs.readdirSync(dir));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  const base = tmp("cli-split-bad");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  // One item short of the plan: a row nobody is scheduled to build.
+  const short = FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i);
+  fs.writeFileSync(splitPath, JSON.stringify({ planVersion: RUN.planVersion, items: short }, null, 2));
+  const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check("migrate.mjs --split: an unplaced plan row does NOT block the folder but IS said on stdout — the work is schedulable, one row of it simply has no owner, and that has to be loud rather than fatal",
+    () => run.status === 0 && /are in NO item/.test(run.stdout || "")
+      && /will not pick an owner/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8")),
+    () => ({ stdout: run.stdout, idx: fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-500) }));
+  // A row claimed twice: refused, and NOTHING is written.
+  const base2 = tmp("cli-split-dup");
+  const dir2 = path.join(base2, "build-tasks");
+  const dupPath = path.join(base2, "split.json");
+  const mainRows = FULL_SPLIT.items.find((i) => i.pageKey === "main").rows;
+  fs.writeFileSync(dupPath, JSON.stringify({ planVersion: RUN.planVersion,
+    items: [...FULL_SPLIT.items, { id: "double-claim", title: "d", pageKey: "main", writesTo: "main", rows: [mainRows[0]] }] }, null, 2));
+  const bad = cliTasks(["--tasks", dir2, "--split", dupPath], MANIFEST);
+  check("migrate.mjs --split: a row claimed TWICE writes NOTHING at all — a folder built from half a split schedules part of a plan and drops the rest, which is the exact failure the coverage check exists to prevent",
+    () => /NOTHING WRITTEN/.test(bad.stdout || "") && /is claimed 2 times/.test(bad.stdout || "")
+      && !fs.existsSync(path.join(dir2, TASK_INDEX_FILE)),
+    () => ({ stdout: bad.stdout, exists: fs.existsSync(dir2) ? fs.readdirSync(dir2) : null }));
+  // A split cut against a DIFFERENT plan version.
+  const base3 = tmp("cli-split-ver");
+  const dir3 = path.join(base3, "build-tasks");
+  const verPath = path.join(base3, "split.json");
+  fs.writeFileSync(verPath, JSON.stringify({ planVersion: "plan-deadbeef0000", items: FULL_SPLIT.items }, null, 2));
+  const ver = cliTasks(["--tasks", dir3, "--split", verPath], MANIFEST);
+  check("migrate.mjs --split: a split cut against ANOTHER plan version is refused by name — the seams were decided against different deliverables, and honouring them would schedule a cut nobody made for this plan",
+    () => ver.status === 1 && /was cut against plan/.test(ver.stderr || "") && !fs.existsSync(dir3),
+    () => ({ status: ver.status, stderr: ver.stderr }));
+  check("migrate.mjs --split: `--split` without `--tasks` is refused — it names where a folder's seams are, and there is no folder to cut",
+    () => {
+      const r = cliTasks(["--split", verPath, "--plan"], MANIFEST);
+      return r.status === 1 && /only means something with/.test(r.stderr || "");
+    }, () => cliTasks(["--split", verPath, "--plan"], MANIFEST).stderr);
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.rmSync(base2, { recursive: true, force: true });
+  fs.rmSync(base3, { recursive: true, force: true });
+}
+
 console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round =====");
 {
   const base = tmp("cli-repair");

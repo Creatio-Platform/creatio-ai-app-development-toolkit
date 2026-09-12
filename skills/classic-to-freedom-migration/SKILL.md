@@ -359,11 +359,24 @@ in one context it had one machine check, at the very end. A session that hit a u
 
 1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints (`**Plan version:**`).
    Build only against the plan that entry names.
-2. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks`
-3. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
+2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each claiming the plan
+   rows it absorbs. This is a judgement and it is yours: put work that must be done together in one item (a related
+   list and the handler that filters it; a folded handler chain and its helpers; the containers before what goes in
+   them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish, and give an
+   item `"writesTo": ""` when it only reads. Then:
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
+   The engine REFUSES a split that claims a row twice or names a row the plan does not have, and writes nothing at
+   all in that case. A plan row in NO item does not block the folder but is reported by name — the engine will not
+   pick an owner for it, because which item it belongs to is the judgement this file records. Once it resolves, the
+   file is copied into the folder and every later run reads that copy, so a re-slice is a reconciliation and not a
+   second opinion.
+   Skip `--split` entirely and the engine cuts by its own row budget — fine for a plan small enough that the seams
+   do not matter, and measured putting a related list and its filter in different tasks on one that was not.
+3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` (re-run after every status change)
+4. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
    buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
    plan changed, and slice then.
-4. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
+5. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
    hand-author a task list, a status table or a progress summary of your own beside it.
 
 **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
