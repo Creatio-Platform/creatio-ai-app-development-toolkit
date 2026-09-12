@@ -1012,6 +1012,77 @@ const CHAIN_GROUPS = [{ pageKey: "main", baseTitle: "Form — Logic", rows: [
   { label: "Handler — `onSaved`" },
 ] }];
 const chainSplit = (items) => resolveSplit({ items }, CHAIN_GROUPS, new Map());
+// A GROUP claim. The plan this exists for carries 282 custom methods on one typed form and 188 on another; a split
+// naming several hundred rows verbatim is a file nobody authors and one typo refuses whole.
+const BULK_GROUPS = [{ pageKey: "main", baseTitle: "Form — Logic", rows:
+  Array.from({ length: 12 }, (_, i) => ({ label: `Handler — \`h${i}\`` })) },
+  { pageKey: "main", baseTitle: "Card actions", rows: [{ label: "Card action — Print" }] }];
+const bulkSplit = (items) => resolveSplit({ items }, BULK_GROUPS, new Map());
+check("split: `@<group>` claims every unclaimed row of that group — a plan whose checklist runs to several hundred rows has to be expressible in a file a person or an agent can actually write",
+  () => {
+    const r = bulkSplit([
+      { id: "logic", title: "l", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] },
+      { id: "actions", title: "a", pageKey: "main", writesTo: "main", rows: ["@Card actions"] },
+    ]);
+    return r.errors.length === 0 && r.unplaced.length === 0
+      && r.items[0].rows.length === 12 && r.items[1].rows.length === 1;
+  }, () => bulkSplit([{ id: "logic", title: "l", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] },
+    { id: "actions", title: "a", pageKey: "main", writesTo: "main", rows: ["@Card actions"] }]).errors);
+check("split: `@<group>[N]` takes the next N in PLAN ORDER, so repeated claims cut one long group into CONSECUTIVE chunks — an arbitrary selection would put two halves of a chain in different items, which is the defect the rows exist to avoid",
+  () => {
+    const r = bulkSplit([
+      { id: "logic-a", title: "a", pageKey: "main", writesTo: "main", rows: ["@Form — Logic[5]"] },
+      { id: "logic-b", title: "b", pageKey: "main", writesTo: "main", rows: ["@Form — Logic[5]"] },
+      { id: "logic-c", title: "c", pageKey: "main", writesTo: "main", rows: ["@Form — Logic", "@Card actions"] },
+    ]);
+    const labels = (i) => r.items[i].rows.map((x) => x.label);
+    return r.errors.length === 0 && r.unplaced.length === 0
+      && labels(0).join() === Array.from({ length: 5 }, (_, i) => `Handler — \`h${i}\``).join()
+      && labels(1).join() === Array.from({ length: 5 }, (_, i) => `Handler — \`h${i + 5}\``).join()
+      && r.items[2].rows.length === 3;
+  }, () => bulkSplit([{ id: "logic-a", title: "a", pageKey: "main", writesTo: "main", rows: ["@Form — Logic[5]"] },
+    { id: "logic-b", title: "b", pageKey: "main", writesTo: "main", rows: ["@Form — Logic[5]"] },
+    { id: "logic-c", title: "c", pageKey: "main", writesTo: "main", rows: ["@Form — Logic", "@Card actions"] }])
+    .items.map((i) => i.rows.map((x) => x.label)));
+check("split: naming a row explicitly still WINS over a later group claim — that is how the seams that matter stay expressible while the bulk of a long group is swept in one entry",
+  () => {
+    const r = bulkSplit([
+      { id: "pinned", title: "p", pageKey: "main", writesTo: "main", rows: ["Handler — `h7`", "@Card actions"] },
+      { id: "rest", title: "r", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] },
+    ]);
+    return r.errors.length === 0 && r.unplaced.length === 0
+      && r.items[0].rows.some((x) => x.label === "Handler — `h7`")
+      && r.items[1].rows.length === 11 && !r.items[1].rows.some((x) => x.label === "Handler — `h7`");
+  }, () => bulkSplit([{ id: "pinned", title: "p", pageKey: "main", writesTo: "main", rows: ["Handler — `h7`", "@Card actions"] },
+    { id: "rest", title: "r", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] }]).items.map((i) => i.rows.length));
+check("split: a group the plan does not have is REFUSED and the error LISTS the groups that page does have — a typo in a group name would otherwise silently claim nothing and leave the whole group unplaced",
+  () => {
+    const r = bulkSplit([{ id: "x", title: "x", pageKey: "main", writesTo: "main", rows: ["@Form — Logik"] }]);
+    return r.errors.length === 1 && /which the plan does not have/.test(r.errors[0])
+      && r.errors[0].includes("Form — Logic") && r.errors[0].includes("Card actions");
+  }, () => bulkSplit([{ id: "x", title: "x", pageKey: "main", writesTo: "main", rows: ["@Form — Logik"] }]).errors);
+check("split: a group claim that finds EVERYTHING already taken is refused — an item that ends up with no rows is work the plan does not describe, and silently emitting it would schedule a sub-agent with nothing to build",
+  () => {
+    const r = bulkSplit([
+      { id: "first", title: "f", pageKey: "main", writesTo: "main", rows: ["@Form — Logic", "@Card actions"] },
+      { id: "second", title: "s", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] },
+    ]);
+    return r.errors.length === 1 && /every row of it is already/.test(r.errors[0]) && r.errors[0].includes("second");
+  }, () => bulkSplit([{ id: "first", title: "f", pageKey: "main", writesTo: "main", rows: ["@Form — Logic", "@Card actions"] },
+    { id: "second", title: "s", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] }]).errors);
+check("split: the folded-chain rule still applies to rows claimed by GROUP — the guarantee is about where rows END UP, never about how the file happened to name them",
+  () => {
+    const groups = [{ pageKey: "main", baseTitle: "Form — Logic", rows: [
+      { label: "Handler — `onContactChange`" },
+      { label: "Handler — `setContactInfo` (ported with `onContactChange`)" },
+    ] }];
+    const r = resolveSplit({ items: [
+      { id: "one", title: "1", pageKey: "main", writesTo: "main", rows: ["Handler — `onContactChange`"] },
+      { id: "two", title: "2", pageKey: "main", writesTo: "main", rows: ["@Form — Logic"] },
+    ] }, groups, new Map());
+    return r.errors.length === 1 && /the plan folds it under/.test(r.errors[0]);
+  });
+
 check("split: a folded helper separated from its caller is REFUSED — the plan says in the row itself that the two are one piece of work, so this seam is one the engine can CHECK rather than trust, and it is the seam the row-count slicer actually got wrong",
   () => {
     const r = chainSplit([

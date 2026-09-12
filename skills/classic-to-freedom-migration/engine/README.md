@@ -59,8 +59,12 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   engine picks no owner. Items sharing a `writesTo` are chained automatically. ONE seam is checked rather than
   trusted: the plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong.
-  Row matching masks digits and the plural they drive, so a plan that gains a field does not force a re-cut. With
-  no split file the budget slicer below stays as the degenerate path.
+  An item may claim a whole group (`@Form — Logic`) or the next N rows of one (`@Form — Logic[50]`), taken in plan
+  order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
+  hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
+  matching masks COUNTS but not identifiers (a digit inside a code span is part of a name), so a plan that gains a
+  field does not force a re-cut while `ASPPricing2Page` stays distinct from its sibling. With no split file the
+  budget slicer below stays as the degenerate path.
 - **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — layout,
   coverage, card actions, rules, handlers, the page's `⚠ Confirm` questions — writes the same thing, so they are
   ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes

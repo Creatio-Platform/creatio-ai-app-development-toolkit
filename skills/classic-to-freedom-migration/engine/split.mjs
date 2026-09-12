@@ -30,10 +30,16 @@ const PAGE_SEP = "::";
 // and the two keys diverged on the very edit this masking exists to survive. The plural that FOLLOWS a masked
 // number is therefore folded too. A plural before the number (`Related lists — 4 expected`) is constant wording
 // and is left alone.
-export const rowKey = (label) => String(label)
-  .toLowerCase()
-  .replace(/\d+/g, "n")
-  .replace(/\bn ([a-z]+)s\b/g, "n $1")
+// AND IT MASKS COUNTS, NOT IDENTIFIERS. A digit inside a code span is part of a NAME — `ASPPricing2Page`,
+// `step1` — and masking it made every such row indistinguishable from its siblings, so a split could not address
+// one of them and a group claim re-took rows it had already handed out. Code spans are therefore left alone and
+// only the prose around them is masked, which is exactly where a count ever appears.
+const maskCounts = (s) => s
+  .split("`")
+  .map((part, i) => (i % 2 ? part : part.replace(/\d+/g, "n").replace(/\bn ([a-z]+)s\b/g, "n $1")))
+  .join("`");
+
+export const rowKey = (label) => maskCounts(String(label).toLowerCase())
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-/, "")
   .replace(/-$/, "")
@@ -83,21 +89,48 @@ export function parseSplit(text) {
 // says out loud — the row is not lost, it is reported as belonging to nobody.
 function planIndex(groups) {
   const byPage = new Map();
+  const byGroup = new Map();            // "page|group" -> rows in plan order
   for (const g of groups) {
     if (!byPage.has(g.pageKey)) byPage.set(g.pageKey, new Map());
     const m = byPage.get(g.pageKey);
+    const gk = `${g.pageKey}|${g.baseTitle}`;
+    if (!byGroup.has(gk)) byGroup.set(gk, []);
     for (const r of g.rows) {
       const k = rowKey(r.label);
       if (!m.has(k)) m.set(k, []);
-      m.get(k).push({ ...r, pageKey: g.pageKey, group: g.baseTitle });
+      const row = { ...r, pageKey: g.pageKey, group: g.baseTitle };
+      m.get(k).push(row);
+      byGroup.get(gk).push(row);
     }
   }
+  byPage.byGroup = byGroup;
   return byPage;
 }
 
+// A GROUP CLAIM, because a plan can be far larger than a file anyone will write by hand. One real plan carries
+// 282 custom methods on one typed form and 188 on another; its checklist runs to several hundred rows, and a split
+// that had to name each of them verbatim would be a file nobody could author and one typo could refuse whole.
+//
+//   `@Form — Logic`        every row of that group not already claimed
+//   `@Form — Logic[50]`    the next 50 unclaimed rows of it, in PLAN ORDER
+//
+// Entries resolve in the order the file lists them, so three `[50]` claims cut one long group across three items
+// and a bare `@…` afterwards sweeps the remainder. Naming individual rows still works and still wins — that is how
+// the seams that actually matter (a folded handler chain, a related list with its filter) stay expressible.
+const GROUP_MARK = "@";
+const groupClaim = (label) => {
+  if (!label.startsWith(GROUP_MARK)) return null;
+  const m = /^(.*?)\s*\[(\d+)\]$/.exec(label.slice(GROUP_MARK.length));
+  return m ? { group: m[1].trim(), take: Number(m[2]) } : { group: label.slice(GROUP_MARK.length).trim(), take: Infinity };
+};
+
 // One entry against the plan: the row it names, or the reason it names none. Kept apart from the walk below so
 // that walk stays a routing of answers rather than a nest of failure cases.
-function claimRow(entry, pageKey, itemId, index, taken) {
+// CLAIMED IS A MARK ON THE ROW, not a count against its key. Digit masking deliberately gives `Handler — h0` and
+// `Handler — h11` ONE key, so counting claims per key cannot say WHICH of them an item took — a second group claim
+// re-took the first five rows because the key still had capacity. Marking the row object settles it: `byPage` and
+// `byGroup` hold the same objects, so a row claimed by name is visibly gone from its group and the other way round.
+function claimRow(entry, pageKey, itemId, index) {
   const page = entryPage(entry, pageKey);
   const key = rowKey(entryLabel(entry));
   const found = index.get(page)?.get(key);
@@ -105,35 +138,64 @@ function claimRow(entry, pageKey, itemId, index, taken) {
     return { error: `\`${itemId}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
       + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page` };
   }
-  const slot = `${page}|${key}`;
-  const owners = taken.get(slot) || [];
-  if (owners.length >= found.length) {
-    // The plan has N of this row and the split has now claimed N+1. With identical text there is no way to say
-    // WHICH claim is the extra one, so both the first owner and this one are named.
-    const already = [...new Set(owners)].join("`, `");
-    return { error: `row ${JSON.stringify(found[0].label.slice(0, 70))} on \`${page}\` is claimed ${owners.length + 1} times`
+  const free = found.find((r) => !r.claimedBy);
+  if (!free) {
+    // Every occurrence the plan carries is already spoken for. With identical text there is no way to say WHICH
+    // claim is the extra one, so the earlier owners and this one are all named.
+    const already = [...new Set(found.map((r) => r.claimedBy))].join("`, `");
+    return { error: `row ${JSON.stringify(found[0].label.slice(0, 70))} on \`${page}\` is claimed ${found.length + 1} times`
       + ` (by \`${already}\` and \`${itemId}\`) but the plan has it ${found.length} time(s)`
       + " — one deliverable, one item; drop the extra claim" };
   }
-  owners.push(itemId);
-  taken.set(slot, owners);
-  return { row: found[owners.length - 1] };
+  free.claimedBy = itemId;
+  return { row: free };
 }
 
 // RESOLVE the split against the plan as it is NOW. Two failures are refused and one is reported-but-survivable:
 //   - an entry matching NO plan row                  → refused: the split describes work the plan does not
 //   - a row claimed more often than the plan has it  → refused: the extra claim sends a second sub-agent
 //   - a plan row claimed by NO item                  → reported as `unplaced`; see `reconcile`
+// Consume up to `take` rows of one group that no item has claimed yet. Walking the group in PLAN ORDER is what
+// makes `[50]` repeatable and predictable: the second claim continues where the first stopped, so a long group
+// cuts into consecutive chunks rather than an arbitrary selection.
+function claimGroup({ group, take }, page, itemId, index) {
+  const all = index.byGroup.get(`${page}|${group}`);
+  if (!all) {
+    const here = [...index.byGroup.keys()].filter((k) => k.startsWith(`${page}|`)).map((k) => k.split("|")[1]);
+    return { error: `\`${itemId}\` claims group \`${group}\` on page \`${page}\`, which the plan does not have`
+      + ` — groups on that page: ${here.join(" · ") || "(none)"}` };
+  }
+  const rows = [];
+  for (const row of all) {
+    if (rows.length >= take) break;
+    if (row.claimedBy) continue;
+    row.claimedBy = itemId;
+    rows.push(row);
+  }
+  if (!rows.length) {
+    return { error: `\`${itemId}\` claims group \`${group}\` on page \`${page}\` but every row of it is already`
+      + " claimed by an earlier item — an item that ends up with no rows is work the plan does not describe" };
+  }
+  return { rows };
+}
+
 export function resolveSplit(split, groups, identity = new Map()) {
   const index = planIndex(groups);
   const errors = [];
-  const taken = new Map();              // "page|key" -> [item id per consumed occurrence]
   const items = [];
   for (const raw of split.items) {
     const pageKey = raw.pageKey || "main";
     const rows = [];
     for (const entry of raw.rows) {
-      const { row, error } = claimRow(entry, pageKey, raw.id, index, taken);
+      const page = entryPage(entry, pageKey);
+      const g = groupClaim(entryLabel(entry));
+      if (g) {
+        const { rows: got, error } = claimGroup(g, page, raw.id, index);
+        if (error) errors.push(error);
+        else rows.push(...got);
+        continue;
+      }
+      const { row, error } = claimRow(entry, pageKey, raw.id, index);
       if (error) errors.push(error);
       else rows.push(row);
     }
@@ -149,7 +211,7 @@ export function resolveSplit(split, groups, identity = new Map()) {
   }
   errors.push(...unknownWriteTargets(items, index));
   errors.push(...splitFoldedChains(items));
-  return { items, errors, unplaced: unconsumed(index, taken) };
+  return { items, errors, unplaced: unconsumed(index) };
 }
 
 // ONE SEAM THE ENGINE CAN CHECK RATHER THAN TRUST. A helper the plan folded under a caller says so in its own row
@@ -197,12 +259,12 @@ function unknownWriteTargets(items, index) {
 
 // An occurrence nobody consumed. Reported per SLOT, so a row the plan carries twice and the split claims once
 // still says the second one has no owner.
-function unconsumed(index, taken) {
+function unconsumed(index) {
   const out = [];
   for (const [page, m] of index) {
     for (const [key, rows] of m) {
-      const consumed = (taken.get(`${page}|${key}`) || []).length;
-      if (consumed < rows.length) out.push({ pageKey: page, key, rows: rows.slice(consumed), unclaimed: rows.length - consumed });
+      const free = rows.filter((r) => !r.claimedBy);
+      if (free.length) out.push({ pageKey: page, key, rows: free, unclaimed: free.length });
     }
   }
   return out;
@@ -247,5 +309,5 @@ export function splitProblems({ errors = [], unplaced = [], emptied = [] }) {
   return out;
 }
 
-export const SPLIT_SHAPE = `{"planVersion":"plan-…","items":[{"id":"kebab-slug","title":"…","pageKey":"main","writesTo":"main"|"${SPLIT_SCAFFOLD}"|"","stopGate":false,"rows":["<row text copied from the plan>","<otherPage>${PAGE_SEP}<row text>"]}]}`;
+export const SPLIT_SHAPE = `{"planVersion":"plan-…","items":[{"id":"kebab-slug","title":"…","pageKey":"main","writesTo":"main"|"${SPLIT_SCAFFOLD}"|"","stopGate":false,"rows":["<row text copied from the plan>","<otherPage>${PAGE_SEP}<row text>","${GROUP_MARK}<group name>","${GROUP_MARK}<group name>[50]"]}]}`;
 

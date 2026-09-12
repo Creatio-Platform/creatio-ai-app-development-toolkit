@@ -164,10 +164,13 @@ const CONFIRM_GROUP = "⚠ Confirm worklist";
 // THE STRUCTURAL KEY of a row: everything about it EXCEPT the numbers. The numbers are what a growing plan moves
 // (`— 12 fields` becomes `— 13 fields`), so masking them is what lets a chunk keep its identity when the page it
 // starts at gains a field. Two rows that differ only in a count share a key, deliberately.
-const structuralKey = (label) => String(label)
-  .toLowerCase()
-  .replace(/\d+/g, "n")
-  .replace(/\bn ([a-z]+)s\b/g, "n $1")
+// Counts are masked, identifiers are not: a digit inside a code span is part of a NAME (`ASPPricing2Page`,
+// `step1`), and masking those made sibling rows indistinguishable. Only the prose around a code span is masked,
+// which is the only place a count ever appears.
+const structuralKey = (label) => String(label).toLowerCase()
+  .split("`")
+  .map((part, i) => (i % 2 ? part : part.replace(/\d+/g, "n").replace(/\bn ([a-z]+)s\b/g, "n $1")))
+  .join("`")
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-/, "")
   .replace(/-$/, "")
