@@ -711,11 +711,10 @@ function renderConfirmWorklist(cs) {
       && !BUILDER_ONLY_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind))
     .map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
       (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
-  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
-  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
-    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
+  // ENG-96327 (dd21d45) — the lookup-GUID prompt is NOT re-added here: resolving a business-rule condition's
+  // lookup-record GUID to its display name on-stand is the AGENT's build work (`lookup-value` is in
+  // BUILDER_ONLY_CONFIRM_KINDS above), so it is kept OUT of the human approval plan rather than pushed back in as a
+  // render-time bullet.
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }
@@ -1546,10 +1545,22 @@ function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
 }
 // The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
 // Returns the lines. Extracted for Sonar CC 15.
+// ENG-96327/ENG-96553 — the Type a per-type form is for, as a heading suffix. `list-entity-client-schemas` resolves
+// the Type NAME on-stand and the agent puts it on each `typedPages` entry as `typeName` (mapped from the tool's
+// `typeColumnDisplayValue`); `typeColumnDisplayValue` is ALSO accepted verbatim. When only the raw `typeColumnValue`
+// GUID is present, the plan shows it with a ⚠ to resolve it — a bare GUID tells the approver nothing about which Type
+// the form is for. A `type` that is already a readable string shows as-is.
+const TYPED_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function typedTypeSuffix(t) {
+  const label = t.typeName || t.typeColumnDisplayValue || t.type;
+  if (!label) return "";
+  const guid = !t.typeName && !t.typeColumnDisplayValue && typeof t.type === "string" && TYPED_GUID.test(t.type);
+  return ` — type "${esc(label)}"${guid ? " ⚠ resolve the type name on-stand" : ""}`;
+}
 function renderTypedPageRows(typed) {
   const P = ["### Typed page mappings", ""];
   for (const t of typed) {
-    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeNote = typedTypeSuffix(t);
     P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
     if (t.bindOnly) P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
     else if (t.cyclic) P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);

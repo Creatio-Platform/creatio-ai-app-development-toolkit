@@ -2901,8 +2901,8 @@ check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole
 // C2 — a business rule comparing against a lookup-record GUID prompts a [lookup-value] Confirm note
 const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
-check("C2: a rule condition comparing a lookup GUID prompts a [lookup-value] resolve-on-stand note",
-  /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+check("ENG-96327 (dd21d45): a rule condition comparing a lookup GUID does NOT surface a [lookup-value] note in the human ⚠ Confirm — resolving the GUID to a name on-stand is the agent's build work (BUILDER_ONLY), kept out of the approval plan",
+  !/\[lookup-value\]/.test(guidCs.designSpec));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
@@ -4620,6 +4620,24 @@ check("typed-page FOLD: supplied typedPageSchemas → each per-type form's FULL 
   && /#### Typed form: XICPage/.test(docSecRun.plan) && docSecRun.plan.includes("SenderField")
   && /#### Typed form: XOCPage/.test(docSecRun.plan) && docSecRun.plan.includes("RecipientField"),
   () => docSecRun.plan.split("\n").filter((l) => /Typed form|SenderField|RecipientField|Typed page mappings/.test(l)));
+// ENG-96327/ENG-96553 (ec5e937) — the typed-form heading NAMES the Type: `typeName` (mapped from the tool's
+// `typeColumnDisplayValue`) shows the resolved NAME; a raw type-GUID with no name shows the GUID + a ⚠ to resolve it
+// (a bare GUID tells the approver nothing about which Type the form is for).
+const typedNameRun = runMigration({
+  entity: "X",
+  schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",diff:[]};});` }],
+  section: [{ pkg: "S", body: docSecBody }],
+  typedPages: [
+    { schema: "XICPage", type: "1b2f4d6e-0000-4000-8000-000000000001", typeName: "Incoming document" },
+    { schema: "XOCPage", type: "1b2f4d6e-0000-4000-8000-000000000002" },
+  ],
+  typedPageSchemas: { XICPage: typedBundle("XICPage", "SenderField"), XOCPage: typedBundle("XOCPage", "RecipientField") },
+  addRecordMiniPage: false, planMeta: docPlanMeta, signals: FULL_SIGNALS,
+});
+check("ENG-96327/ENG-96553 (ec5e937): the typed-form heading shows the resolved Type NAME (typeName), and a raw type-GUID with no name shows the GUID + ⚠ resolve-on-stand",
+  /#### Typed form: XICPage — type "Incoming document"/.test(typedNameRun.plan)
+  && /#### Typed form: XOCPage — type "1b2f4d6e-0000-4000-8000-000000000002" ⚠ resolve the type name on-stand/.test(typedNameRun.plan),
+  () => typedNameRun.plan.split("\n").filter((l) => /#### Typed form:/.test(l)));
 const docFirstSize = docSecRun.plan.split("\n").find((l) => /\*\*Size:\*\*/.test(l)) || "";
 check("typed-page: base form spec SUPPRESSED (no general mapping) — only List page from the base + Overview Size counts typed forms (not base fields/0-rules)",
   !/^### X form page/m.test(docSecRun.plan)  // no top-level base/general form mapping for a typed entity (### heading)
