@@ -1180,6 +1180,31 @@ check("split: NO split file falls back to the engine's own budget slicer — a p
     return !set.split && set.tasks.length === SET.tasks.length;
   });
 
+console.log("\n===== a split may place SCAFFOLDING late, and the queue must still be walkable =====");
+// Per-type routing binds each Type's form by the Type column, so it belongs AFTER the typed pages even though it
+// is scaffolding. Depending on ALL scaffold tasks made every earlier task wait on that late one — 83 dependencies
+// pointing forward in one real 94-item queue, which is a deadlock and not an ordering.
+{
+  const rows = allRows("main");
+  const lateScaffold = { ...FULL_SPLIT, items: [
+    splitItem("scaffold-early", "main", "scaffold", rows.slice(0, 3)),
+    ...FULL_SPLIT.items.filter((i) => i.pageKey !== "main"),
+    splitItem("main-build", "main", "main", rows.slice(3)),
+    splitItem("scaffold-late", "main", "scaffold", []),
+  ].filter((i) => i.rows.length) };
+  const set = mergeTaskSet(buildTaskSetFromSplit(RUN, lateScaffold, OPTS), []);
+  const at = new Map(set.tasks.map((t) => [t.id, t.step]));
+  check("late scaffolding: NO dependency points forward in the queue — an orchestrator walking `Step` order must never meet a task whose precondition it has not reached yet",
+    () => set.tasks.every((t) => t.dependsOn.every((d) => !at.has(d) || at.get(d) < t.step)),
+    () => set.tasks.filter((t) => t.dependsOn.some((d) => at.has(d) && at.get(d) >= t.step))
+      .map((t) => `${t.step}:${t.id}→${t.dependsOn.join(",")}`));
+  check("late scaffolding: a task still waits on the scaffolding that PRECEDES it — the rule narrowed to what the split's own order declares, it did not stop enforcing the precondition",
+    () => {
+      const build = set.tasks.find((t) => t.id === "main-build");
+      return build.dependsOn.includes("scaffold-early");
+    }, () => set.tasks.map((t) => `${t.step}:${t.id}:${t.writesTo || "—"}→${t.dependsOn.join(",")}`));
+}
+
 console.log("\n===== repair: the rows `--verify` left open, merged by (page, cause) =====");
 // `--verify` publishes its open rows per page with the SAME text the reader saw. A repair task is cut from those,
 // not from the plan — so it is never rewritten by a re-slice and never retired for "not being in the plan".

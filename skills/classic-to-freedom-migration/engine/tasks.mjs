@@ -388,16 +388,23 @@ function chunksOf(bucket, B) {
 // artifact. The second is the one that makes `get-page → merge → update-page` safe: same-artifact chunks are
 // chained, so no parallel dispatch of them is ever legal, and a queue walked in `order` already satisfies it.
 function withDependencies(tasks) {
-  const scaffolds = tasks.filter((t) => t.artifact === ARTIFACT_SCAFFOLD).map((t) => t.id);
+  // SCAFFOLDING SEEN SO FAR, not all of it. The engine's own slicing puts every scaffold task at the front, but a
+  // split may legitimately place one late — per-type routing binds each Type's form and so belongs AFTER the typed
+  // pages, even though it is scaffolding. Depending on all of them made every earlier task wait on that late one:
+  // a dependency pointing FORWARD in the queue, which is a deadlock the orchestrator cannot walk out of. A task
+  // therefore waits on the scaffolding that precedes it, which is exactly what the split's own order declares.
+  const scaffolds = [];
   // The cache writes no stand artifact, so `writesTo` cannot express that it still blocks every builder: they all
   // read the files it produces. That is a DEPENDENCY, and it is the reason dependencies are published separately
   // from the write target rather than being inferred from it.
-  const refs = tasks.filter((t) => t.artifact === ARTIFACT_REFS).map((t) => t.id);
+  const refs = [];
   const lastOn = new Map();
   return tasks.map((t) => {
     const deps = [];
     if (t.artifact !== ARTIFACT_REFS) deps.push(...refs);
     if (t.artifact !== ARTIFACT_SCAFFOLD && t.writesTo) deps.push(...scaffolds);
+    if (t.artifact === ARTIFACT_REFS) refs.push(t.id);
+    if (t.artifact === ARTIFACT_SCAFFOLD) scaffolds.push(t.id);
     // Chained on the ARTIFACT, which is what two tasks would collide over. That covers the reference cache too:
     // its chunks write no stand artifact but they do write the same local files, so they are still a chain. A
     // read-only item from a split carries an artifact of its own precisely so it joins no chain at all.
@@ -774,8 +781,13 @@ export function mergeTaskSet(fresh, existing = []) {
 // points backwards. Declared dependencies are kept and added to, never replaced — the orchestrator knows things
 // about its own task that the engine does not.
 function chainMerged(ordered) {
-  const refs = ordered.filter((t) => t.artifact === ARTIFACT_REFS).map((t) => t.id);
-  const scaffolds = ordered.filter((t) => t.artifact === ARTIFACT_SCAFFOLD).map((t) => t.id);
+  // SEEN SO FAR, for the same reason `withDependencies` does it: a split may put a scaffolding item late on
+  // purpose (per-type routing binds forms that must already exist), and depending on ALL of them made every
+  // earlier task wait on that late one — 83 dependencies pointing forward in one real 94-item queue, which is a
+  // deadlock rather than an ordering. This function is what actually writes the files, so getting it right in
+  // `withDependencies` alone fixed nothing.
+  const refs = [];
+  const scaffolds = [];
   const lastWriter = new Map();
   return ordered.map((t) => {
     const deps = [...(t.dependsOn || [])];
@@ -786,6 +798,8 @@ function chainMerged(ordered) {
       if (prev) deps.push(prev);
       lastWriter.set(t.writesTo, t.id);
     }
+    if (t.artifact === ARTIFACT_REFS) refs.push(t.id);
+    if (t.artifact === ARTIFACT_SCAFFOLD) scaffolds.push(t.id);
     return { ...t, dependsOn: [...new Set(deps)].filter((d) => d && d !== t.id) };
   });
 }
