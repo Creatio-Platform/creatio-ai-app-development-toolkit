@@ -1149,19 +1149,22 @@ check("split: a plan with NO typed pages is never reported — the rule fires on
       rows: ["Per-type page routing — bind EACH Type's form by the Type column"] }] }, groups, new Map());
     return r.errors.length === 0;
   });
+// SIX blocking items, so the truncation is actually exercised: with three or fewer the "…and N more" tail never
+// appears and the check would pass without testing anything.
+const MANY_TYPED = (() => {
+  const labels = Array.from({ length: 6 }, (_, i) => `Region ${i} — 3 fields`);
+  const groups = [TYPED_GROUPS[0], { pageKey: "typed:P1Page", baseTitle: "Form — Layout (by tab/region)",
+    rows: labels.map((label) => ({ label })) }];
+  const items = [ROUTE_ITEM, ...labels.map((label, i) => ({
+    id: `typed-${i}`, title: "t", pageKey: "typed:P1Page", writesTo: "typed:P1Page", rows: [label] }))];
+  return { groups, items };
+})();
 check("split: the message NAMES a few of the blocking items and COUNTS the rest — a plan with two typed forms puts fifty items after the routing one, and a message listing them all is one nobody reads",
   () => {
-    const many = [ROUTE_ITEM, ...Array.from({ length: 6 }, (_, i) => ({
-      id: `typed-${i}`, title: "t", pageKey: "typed:P1Page", writesTo: "typed:P1Page",
-      rows: i === 0 ? ["Side profile — 3 fields"] : [] }))].filter((x) => x.rows.length || x.id === "routing");
-    const groups = [TYPED_GROUPS[0], { pageKey: "typed:P1Page", baseTitle: "Form — Layout (by tab/region)",
-      rows: [{ label: "Side profile — 3 fields" }, { label: "Header — 2 fields" }] }];
-    const items = [ROUTE_ITEM,
-      { id: "typed-a", title: "a", pageKey: "typed:P1Page", writesTo: "typed:P1Page", rows: ["Side profile — 3 fields"] },
-      { id: "typed-b", title: "b", pageKey: "typed:P1Page", writesTo: "typed:P1Page", rows: ["Header — 2 fields"] }];
-    const r = resolveSplit({ items }, groups, new Map());
-    return r.errors.length === 1 && r.errors[0].length < 340;
-  }, () => "message length");
+    const r = resolveSplit({ items: MANY_TYPED.items }, MANY_TYPED.groups, new Map());
+    return r.errors.length === 1 && /sits BEFORE 6 item\(s\)/.test(r.errors[0])
+      && /…and 3 more/.test(r.errors[0]) && r.errors[0].length < 340;
+  }, () => resolveSplit({ items: MANY_TYPED.items }, MANY_TYPED.groups, new Map()).errors);
 
 check("parseSplit: a duplicate `id`, a missing `rows` array and a malformed id are each named — the file is authored by hand or by an agent, so the error has to say what to change",
   () => {
