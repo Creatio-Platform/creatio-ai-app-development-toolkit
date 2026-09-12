@@ -172,7 +172,10 @@ function rowsForDetails(details, tabRegion) {
     let editNote = "";
     if (d.editable) {
       const editCols = (d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : "";
-      editNote = `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${editCols}`;
+      // ENG-96327 (81305bd) — the human fact only: inline-editable + which columns. HOW to enable it on a
+      // crt.DataGrid (`features.editable.enable` / `itemsCreation`, resolved via get-component-info) is builder
+      // mechanics, not plan content.
+      editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
     const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };

@@ -1225,9 +1225,11 @@ function mapFields(ctx, containers) {
 function detectDetailAddMechanism(dinfo) {
   const am = dinfo?.addMode;
   if (!am?.editableGrid) return null;
+  // ENG-96327 (81305bd) — no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
+  // editable/itemsCreation properties, resolved via get-component-info) is builder mechanics the build step owns —
+  // the plan states the human fact (this detail is inline-editable, and WHICH columns), not the component wiring.
   return {
     columns: am.editableColumns?.length ? am.editableColumns : null,
-    enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
     addVia: am.lookup ? "add existing via lookup" : null,
   };
 }

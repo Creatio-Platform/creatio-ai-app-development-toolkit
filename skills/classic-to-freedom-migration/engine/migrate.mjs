@@ -1099,7 +1099,9 @@ function addModeGuidance(am) {
   else if (openCardIsTheWholeStory(am)) g.push("Reproduce the overridden add-card flow with a CUSTOM add request-handler that performs the same open-card logic; do not fall back to the default related-list add.");
   else if (am.addDisabled && !am.customAction) g.push("There is no add flow to reproduce: build it as a read-only / attach-only related list, with no add button.");
   if (am.service) g.push("VERIFY that service is deployed on-stand (else port its logic to a process/service).");
-  if (am.editableGrid) g.push("Confirm the Freedom list supports inline edit for those columns via `get-component-info`.");
+  // ENG-96327 (81305bd) — no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
+  // property, resolved via get-component-info) is builder mechanics, not plan content. The human fact (this detail
+  // is inline-editable, and WHICH columns) is already stated by `describeAddMode`.
   return g;
 }
 

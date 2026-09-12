@@ -576,8 +576,10 @@ check("unmapped-component: template-owned items are NOT flagged (payload = clien
   check("detail-add-mechanism: the service check appears only when a service is actually called",
     () => /VERIFY that service is deployed/.test(svc.reason) && !/VERIFY that service is deployed/.test(disabled.reason),
     () => [svc.reason, disabled.reason]);
-  check("detail-add-mechanism: the inline-edit check appears only for an editable grid",
-    () => /supports inline edit/.test(dam({ editableGrid: true }).reason) && !/supports inline edit/.test(disabled.reason));
+  check("ENG-96327 (81305bd): an editable grid is IDENTIFIED (INLINE-EDITABLE grid + columns) but carries NO crt.DataGrid build recipe — HOW to enable it is builder mechanics",
+    () => /INLINE-EDITABLE grid/.test(dam({ editableGrid: true }).reason)
+      && !/supports inline edit/.test(dam({ editableGrid: true }).reason)
+      && !/get-component-info/.test(dam({ editableGrid: true }).reason));
   // A custom grid action already carries its own instruction — the guidance must not state a second, conflicting one.
   const custom = dam({ addDisabled: true, customAction: true });
   check("detail-add-mechanism: an add-DISABLED detail with a CUSTOM grid action keeps only that action's instruction",
@@ -6125,13 +6127,14 @@ check("#13 DCM: a single case version → NO multi-version note",
 // ENG-93929 EMISSION: an editable-grid detail is emitted as an EDITABLE list (not a read-only Expanded list),
 // carrying the editable columns + the concept-level enable directive (`features.editable.enable`, resolved via
 // get-component-info at build). A lookup+service detail WITHOUT an editable grid stays a read-only list.
-check("editable-grid emission: editable-grid detail → composite 'Editable list' + editable columns + features.editable.enable directive",
+check("ENG-96327 (81305bd): editable-grid detail → composite 'Editable list' + editable columns, and NO features.editable.enable build recipe (enableVia dropped)",
   clDetail?.composite === "Editable list"
   && (clDetail.editable?.columns || []).join(",") === "Correspondence,Quantity,Comment"
-  && /features\.editable\.enable/.test(clDetail.editable?.enableVia || ""),
+  && !clDetail.editable?.enableVia,
   () => ({ composite: clDetail?.composite, editable: clDetail?.editable }));
-check("editable-grid emission: the plan Layout renders 'Editable list' + the features.editable.enable directive (not read-only)",
-  /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan) && /features\.editable\.enable/.test(dmRun.plan));
+check("ENG-96327 (81305bd): the plan Layout renders 'Editable list' + ⚠ INLINE-EDITABLE, and NO crt.DataGrid build recipe (features.editable.enable / get-component-info)",
+  /\| Editable list \|/.test(dmRun.plan) && /INLINE-EDITABLE/.test(dmRun.plan)
+  && !/features\.editable\.enable/.test(dmRun.plan) && !/get-component-info/.test(dmRun.plan));
 check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
   regDetail?.composite === "Expanded list" && !regDetail?.editable);
 
