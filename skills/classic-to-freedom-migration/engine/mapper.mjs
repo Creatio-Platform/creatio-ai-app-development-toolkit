@@ -747,7 +747,7 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
 // this function rather than against the loop that fills the accumulators (Sonar S3776, CC 15). Pure: it reads the
 // accumulators and RETURNS the decisions, so the caller keeps ownership of `needsDecision`.
 function foldFieldSummaries(acc) {
-  const { collisionByContainer, fieldControlCols, secretCols, splitIslands, distinctProfileIslands,
+  const { collisionByContainer, fieldControlCols, secretCols, dupBoundCols, splitIslands, distinctProfileIslands,
     payloadFields, fieldsWithTitle } = acc;
   const out = [];
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
@@ -759,6 +759,15 @@ function foldFieldSummaries(acc) {
   // so it doesn't nag pages with a stray collision or two.
   if (totalCollisions >= 12) out.push({ kind: "layout-density", item: "(page layout)",
     reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
+  // The same entity column bound by several classic items. Freedom gives each control its own NAME but they
+  // share the attribute, so the value is editable in two places at once and the Layout table lists the column
+  // twice, in two regions, with nothing saying they are one field. Classic did this routinely (a header field
+  // repeated on a tab); Freedom is a narrower page and the repeat is usually not wanted. The engine keeps both —
+  // dropping one silently is worse — and asks.
+  if (dupBoundCols?.length) {
+    out.push({ kind: "duplicate-binding", item: `(${dupBoundCols.length} column(s))`,
+      reason: `${dupBoundCols.join(", ")} — each is bound by MORE THAN ONE classic item, so the Freedom page carries a second control (\`<col>_2\`) on the SAME attribute: one value, two editable places, and two Layout rows in different regions that nothing connects. Both are emitted rather than one dropped silently. DECIDE per column: keep both (the classic page deliberately showed it twice), or keep one and say which region loses it.` });
+  }
   if (fieldControlCols.length) {
     const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
     out.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
@@ -811,6 +820,7 @@ function mapFields(ctx, containers) {
   // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
   const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
+  const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
@@ -946,6 +956,12 @@ function mapFields(ctx, containers) {
     // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+    // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
+    // built page shows one value in two places and the plan's Layout table lists the column twice in two
+    // different regions, where nothing connects them. The per-field line this used to emit was folded away and
+    // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
+    // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
+    if (nameCount[col] === 2) dupBoundCols.push(col);
     return { col, meta, missingColumn, nearMissing, c, elName };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
@@ -1200,7 +1216,7 @@ function mapFields(ctx, containers) {
   };
   emitFromTable();
 
-  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols,
+  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols, dupBoundCols,
     splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the

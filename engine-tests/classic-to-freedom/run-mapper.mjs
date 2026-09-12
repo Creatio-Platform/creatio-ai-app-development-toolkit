@@ -4081,9 +4081,20 @@ const dvBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[`
   + `{operation:"insert",name:"F2",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
   + `{operation:"insert",name:"F3",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Vis",visible:{bindTo:"IsShown"}}}]};});`;
 const dv = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: dvBody }] }, { baseDir: FIX });
-check("T3: two classic items on one column → emitted with UNIQUE names (Amt, Amt_2), NO duplicate-binding ⚠ (a normal configurator pattern resolved at design time)",
-  dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt") && dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt_2")
-  && !dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding"));
+// Both controls are still emitted — dropping one silently is worse — but the ⚠ is back, FOLDED to one entry
+// naming every such column instead of the per-field line that made a dense page unreadable. Unique element names
+// were never the whole answer: `Amt` and `Amt_2` share the attribute, so the built page is editable in two places
+// and the plan's Layout table lists the column twice in two regions with nothing connecting them. A live run
+// shipped exactly that (`UsrNotes` in the top area, `UsrNotes_2` on a tab, both on `$UsrNotes`) and it was found
+// by reading the built page, not the plan.
+check("T3: two classic items on one column → emitted with UNIQUE names (Amt, Amt_2) AND one folded duplicate-binding ⚠ naming the column — they share the attribute, so this is a decision, not a silent design-time resolution",
+  () => {
+    const dup = dv.changeSet.needsDecision.filter((n) => n.kind === "duplicate-binding");
+    return dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt")
+      && dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt_2")
+      && dup.length === 1 && /\bAmt\b/.test(dup[0].reason);
+  },
+  () => dv.changeSet.needsDecision.map((n) => `${n.kind}:${n.item}`));
 check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision",
   dv.changeSet.needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Vis"));
 // s48 — FOLD the per-field noise on a DENSE page. A classic page packing many fields into a 24-col grid collapses

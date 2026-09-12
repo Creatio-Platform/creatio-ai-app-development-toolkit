@@ -338,6 +338,16 @@ Run it BEFORE the final `--plan --out` and before approval, so the plan the user
 
 **A page on a non-default template is an orphan until it is RE-BOUND to the object** — the scaffolded default keeps opening instead, for the record page, each typed per-type page and each child edit page alike. That re-bind is build work (step 7), gated by the engine's reachability rows (`sectionRegistered`, `typedRouting`, `miniPageWired`, `reuseBindings`); what this step owes it is a named template per page, not the wiring.
 
+**Re-templating the scaffolded form page: the sequence, so nobody improvises it.** Neither `create-app` nor `create-app-section` accepts a template argument — the form page always arrives on `PageWithTabsFreedomTemplate`. When the table above names a different one, the build does this, in this order, inside the ONE task that owns the page:
+
+1. `get-page` the scaffolded form page and keep its body somewhere outside the repo — everything after this is destructive.
+2. `delete-schema` that page.
+3. `create-page` with the SAME schema name, the target `--template`, the target `--package-name` and `--entity-schema-name`. It gets a NEW `schemaUId`; nothing that referenced the old one follows it.
+4. `create-related-page-addon` for the entity, in the target package, pointing the default page at the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read back as you set them — the list page opens whatever this record says, and a build that skips it leaves a section whose rows open nothing.
+5. Only now author the layout into the new page.
+
+A re-template that stops after step 3 is the failure this sequence exists to prevent. If the Classic signal is weak — a header with one or two fields, no progress bar — prefer the scaffolded template and place those fields in the side profile: the re-template costs a delete, a re-bind and a page whose id changed, and that is not worth buying a top area for two fields.
+
 For every Classic item choose one target: direct Freedom analog · configurable business rule · handler/converter/validator · backend/service dependency · unsupported/manual decision. Prefer declarative Freedom configuration over custom handlers when equivalent.
 
 **Generate the per-page design spec — do not hand-write it.** For every Rebuild/Delta page, run `node engine/migrate.mjs <manifest> --spec`: it prints the whole spec as Markdown straight from the ChangeSet — one `Layout` table (`Region · Element · Type · Source · Rule · Additional`), a `Logic` table (business rules/filters/process launch), the `⚠ Imperative logic` method worklist, the `⚠ Imperative members` member worklist and the `⚠ Confirm before I build` worklist, in the format of `./references/page-design-spec.md`. **You generate it and present it verbatim; the build consumes it as its per-page INPUT** (each page's own block, including the nested `### Child page mappings` / `### Typed page mappings` / `### Add mini-page mapping`). Your only additions go in the `⚠ Confirm` list — never into the Layout/Logic tables (Contract rule 2). Hand-writing it is the recurring failure — loose prose, no per-field placement, features mislabelled (Activities→"Timeline", Approvals→"Expanded list") the engine had already resolved.
