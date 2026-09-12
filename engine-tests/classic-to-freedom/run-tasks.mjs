@@ -74,7 +74,7 @@ const mainBody = ({ extraChild, extraField, renameField, bulk }) => {
   const f1 = renameField ? "MainRenamed" : "MainF";
   items.push(`{operation:"insert",name:"${f1}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"${f1}"}}`);
   if (extraField) items.push('{operation:"insert",name:"MainF2",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF2"}}');
-  for (let i = 0; bulk && i < bulk; i++) {
+  for (let i = 0; i < (bulk || 0); i++) {
     items.push(`{operation:"insert",name:"BulkF${i}",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"BulkF${i}"}}`);
   }
   // Handlers are the heaviest row kind per unit, so a handful of them is what pushes a bucket over the budget
@@ -176,8 +176,8 @@ check("fixture: manifest C changes ONE task's deliverable rows and NO page — s
 console.log("\n===== buildTaskSet: one task per ARTIFACT, rows verbatim, nothing lost =====");
 check("buildTaskSet: EVERY plan row lands in exactly one task — bucketing by artifact regroups who builds a row and must never drop one or hand the same one to two sub-agents",
   () => {
-    const planRows = GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey} ${g.baseTitle} ${r.label}`)).sort();
-    const taskRows = pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey} ${r.group} ${r.label}`)).sort();
+    const planRows = GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey} ${g.baseTitle} ${r.label}`)).sort((a, b) => a.localeCompare(b));
+    const taskRows = pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey} ${r.group} ${r.label}`)).sort((a, b) => a.localeCompare(b));
     return planRows.length === taskRows.length && planRows.every((k, i) => k === taskRows[i]);
   }, () => ({ plan: GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey}·${g.baseTitle}·${r.label}`)).length,
     tasks: pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey}·${r.group}·${r.label}`)).length }));
@@ -189,7 +189,7 @@ check("buildTaskSet: rows inside a task are in the plan's own build order — bu
   () => {
     const t = taskAt(SET, "main", DRIFT_GROUP);
     const seen = t.rows.map((r) => r.group);
-    return seen.indexOf("⚠ Confirm worklist") === 0 && seen.lastIndexOf("⚠ Confirm worklist") < seen.indexOf("Form — Layout (by tab/region)");
+    return seen[0] === "⚠ Confirm worklist" && seen.lastIndexOf("⚠ Confirm worklist") < seen.indexOf("Form — Layout (by tab/region)");
   }, () => taskAt(SET, "main", DRIFT_GROUP).rows.map((r) => `${r.group} :: ${r.label.slice(0, 40)}`));
 check("buildTaskSet: `gatedRows` / `naRows` are COUNTED off the task's own rows, not restated — each equals the number of rows carrying a `vk` / an `na`",
   () => SET.tasks.every((t) => t.gatedRows === t.rows.filter((r) => r.vk).length && t.naRows === t.rows.filter((r) => r.na).length),
@@ -232,7 +232,7 @@ console.log("\n===== the reference cache: fetched once per run, and it blocks wi
 // docs the previous one just read. One read-only task fetches them once and the rest are handed paths.
 const REFS = SET.tasks.find((t) => t.artifact === ARTIFACT_REFS);
 check("refs: the cache is the FIRST task of the run — a builder that starts before it has nothing to read and refetches everything, which is the cost the cache exists to remove",
-  () => REFS && REFS.order === 1 && REFS.group === "Reference cache",
+  () => REFS?.order === 1 && REFS.group === "Reference cache",
   () => SET.tasks.slice(0, 3).map((t) => `${t.order}:${t.artifact}`));
 check("refs: it writes NOTHING on the stand, yet EVERY other task depends on it — that pair is why a dependency is published separately from the write target instead of being inferred from it",
   () => REFS.writesTo === "" && REFS.dependsOn.length === 0
@@ -928,7 +928,7 @@ check("repair: DIFFERENT causes are different tasks — a missing handler and an
     const { tasks } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []);
     const causes = tasks.map((t) => t.cause);
     return new Set(causes).size === causes.length && causes.length === 4
-      && causes.some((c) => c.startsWith("unverified:")) && causes.some((c) => c === "missing:fields");
+      && causes.some((c) => c.startsWith("unverified:")) && causes.includes("missing:fields");
   }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => t.cause));
 check("repair: a repair task WRITES the page's artifact, so it is chained behind the build tasks for that page — a repair that raced the build it repairs is the same clobber as two builders",
   () => {
@@ -979,7 +979,7 @@ check("repair: a repair file is ADOPTED by a later plain re-slice — never rewr
         cause: t.cause, repairRound: "1", writesTo: t.writesTo } };
     const m = mergeTaskSet(SET, [asFile]);
     const got = m.tasks.find((x) => x.id === t.id);
-    return got && got.status === "in-progress" && got.notes === "fixed 12 of 19"
+    return got?.status === "in-progress" && got.notes === "fixed 12 of 19"
       && (m.stale || []).length === 0 && (m.blocked || []).length === 0;
   }, () => mergeTaskSet(SET, [{ file: "x.md", notes: "", malformed: null,
       meta: { id: "zz", status: "todo", origin: "engine", pageKey: "main", kind: "repair", cause: "c", repairRound: "1" } }]));
@@ -991,7 +991,7 @@ check("repair: an adopted repair file joins the WRITE CHAIN of the page it repai
         cause: t.cause, repairRound: "1", writesTo: t.writesTo, order: "999" } };
     const m = mergeTaskSet(SET, [asFile]);
     const got = m.tasks.find((x) => x.id === t.id);
-    const lastBuild = m.tasks.filter((x) => x.writesTo === t.writesTo && x.id !== t.id).at(-1);
+    const lastBuild = m.tasks.findLast((x) => x.writesTo === t.writesTo && x.id !== t.id);
     return got.dependsOn.includes(lastBuild.id);
   }, () => "see the merged queue");
 check("repair: syncRepairDir ADDS to the folder and never overwrites — the plan tasks are untouched, and re-verifying an UNCHANGED page opens no second round, because a round is an ATTEMPT and counting verify runs would burn the cap with nobody having run",

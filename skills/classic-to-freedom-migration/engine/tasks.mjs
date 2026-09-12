@@ -143,7 +143,7 @@ export const TASK_BUDGET = {
   confirm: 2,       // one on-stand question answered before the build
   row: 2,           // anything else
 };
-const budgetOf = (opts) => ({ ...TASK_BUDGET, ...(opts.taskBudget || {}) });
+const budgetOf = (opts) => ({ ...TASK_BUDGET, ...opts.taskBudget });
 
 // A row's weight is read off what the plan already says about it. `Side profile — 12 fields` is twelve fields of
 // work and `Handler — onSaved` is one handler of it; treating both as "one row" is what made a 10-row page and a
@@ -156,8 +156,7 @@ function rowWeight(row, baseTitle, B) {
   if (fields) return Number(fields[1]) * B.field;
   if (/\brelated list\b/i.test(label)) return B.relatedList;
   if (/^Handler\s+—/.test(label)) return B.handler;
-  if (baseTitle === CONFIRM_GROUP) return B.confirm;
-  return B.row;
+  return baseTitle === CONFIRM_GROUP ? B.confirm : B.row;
 }
 const CONFIRM_GROUP = "⚠ Confirm worklist";
 
@@ -168,7 +167,8 @@ const structuralKey = (label) => String(label)
   .toLowerCase()
   .replace(/\d+/g, "n")
   .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-/, "").replace(/-$/, "")
+  .replace(/^-/, "")
+  .replace(/-$/, "")
   .slice(0, 60) || "row";
 
 // ---8<--- THE REFERENCE CACHE: fetched ONCE per run, not once per fresh context ---8<---
@@ -283,13 +283,14 @@ function taskOf(chunk, order) {
 // THE LABEL a human reads in the index and in the file name. An artifact that was NOT cut keeps the plain artifact
 // name; a chunk is named after the structural unit it starts at, so two chunks of one page are told apart by where
 // they begin rather than by a number that moves when the page grows.
+const ARTIFACT_LABEL = new Map([[ARTIFACT_REFS, REFS_GROUP], [ARTIFACT_SCAFFOLD, "Scaffolding"]]);
+const artifactLabel = (artifact) =>
+  ARTIFACT_LABEL.get(artifact) || (artifact.startsWith("review:") ? REVIEW_GROUP : "Page build");
+
 function chunkLabel(artifact, rows, cut) {
-  const base = artifact === ARTIFACT_REFS ? REFS_GROUP
-    : artifact === ARTIFACT_SCAFFOLD ? "Scaffolding"
-    : artifact.startsWith("review:") ? REVIEW_GROUP
-    : "Page build";
+  const base = artifactLabel(artifact);
   if (!cut) return base;
-  const head = String(rows[0].label).split(/\s+—\s+/)[0].replace(/[`*]/g, "").trim();
+  const head = String(rows[0].label).split("—")[0].replace(/[`*]/g, "").trim();
   return `${base} — from ${head.slice(0, 48)}`;
 }
 
@@ -495,7 +496,8 @@ function oneAgentBlock(task) {
     L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
   }
   if (task.dependsOn?.length) {
-    L.push(`- **Depends on:** ${task.dependsOn.map((d) => `\`${d}\``).join(" · ")} — each must read \`done\` before`
+    const deps = task.dependsOn.map((d) => "`" + d + "`").join(" · ");
+    L.push(`- **Depends on:** ${deps} — each must read \`done\` before`
       + " this starts. Read their `## Notes` first: what they answered on the stand is not repeated here.");
   }
   L.push("- **One sub-agent, one task:** do not pick up another task file in this session. Before finishing, put a"
@@ -866,17 +868,21 @@ const REPAIR_KIND = "repair";
 // The CAUSE is what a single sub-agent can fix in one pass. `unverified` is separated from `missing` first,
 // because they need opposite work: `missing` is a thing to build, `unverified` is a record to file about a thing
 // that may well be there. Beyond that the kind is read off the same row shapes the weights use.
+// Ordered: the FIRST pattern that matches names the cause, so a row reading both ways (a related list counted in
+// a coverage row, say) lands on the more specific kind rather than on whichever test happened to run last.
+const CAUSE_KINDS = [
+  [/—\s*\d+\s+fields?\b|^Fields?\s+—/, "fields"],
+  [/^Handler\s+—/, "handlers"],
+  [/business rules/i, "rules"],
+  [/related list/i, "related-lists"],
+  [/template\s*→/i, "template"],
+  [/^Card action/i, "card-actions"],
+];
 function causeOf(row) {
   const label = String(row.deliverable || "");
-  const kind =
-    /—\s*\d+\s+fields?\b|^Fields?\s+—/.test(label) ? "fields"
-    : /^Handler\s+—/.test(label) ? "handlers"
-    : /business rules/i.test(label) ? "rules"
-    : /related list/i.test(label) ? "related-lists"
-    : /template\s*→/i.test(label) ? "template"
-    : /^Card action/i.test(label) ? "card-actions"
-    : "other";
-  return `${row.outcome === "unverified" ? "unverified" : "missing"}:${kind}`;
+  const kind = CAUSE_KINDS.find(([re]) => re.test(label))?.[1] || "other";
+  const outcome = row.outcome === "unverified" ? "unverified" : "missing";
+  return `${outcome}:${kind}`;
 }
 const CAUSE_TEXT = {
   "missing:fields": "expected fields are not on the built page",
@@ -920,6 +926,14 @@ const ROUND_ATTEMPTED = new Set([S_DONE, S_NA]);
 
 // Build the repair tasks one verify run calls for. `verifyPages` is `renderVerify`'s `pages` map: each entry
 // carries the rows that run left open, with the text the reader saw rather than a paraphrase of it.
+// What this cause gets from THIS verify run: the next round, or a reason it gets nothing. A round already open is
+// still somebody's work, and a cause that has had its rounds is a decision for a person.
+function nextRound(prior) {
+  if (prior && !ROUND_ATTEMPTED.has(prior.status)) return { hold: "pending", round: prior.round, status: prior.status };
+  const round = (prior?.round || 0) + 1;
+  return round > REPAIR_ROUND_CAP ? { hold: "parked", round } : { hold: null, round };
+}
+
 export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
   const B = budgetOf(opts);
   const identity = pageIdentities(result);
@@ -937,16 +951,16 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       byCause.get(cause).push(row);
     }
     for (const [cause, rows] of byCause) {
-      const prior = rounds.get(`${pageKey} ${cause}`);
-      if (prior && !ROUND_ATTEMPTED.has(prior.status)) {
-        pending.push({ pageKey, cause, rows: rows.length, round: prior.round, status: prior.status });
+      const next = nextRound(rounds.get(`${pageKey} ${cause}`));
+      if (next.hold === "pending") {
+        pending.push({ pageKey, cause, rows: rows.length, round: next.round, status: next.status });
         continue;
       }
-      const round = (prior?.round || 0) + 1;
-      if (round > REPAIR_ROUND_CAP) {
+      if (next.hold === "parked") {
         parked.push({ pageKey, cause, rows: rows.length, rounds: REPAIR_ROUND_CAP });
         continue;
       }
+      const round = next.round;
       const identityKey = identity.get(pageKey) || pageKey;
       const artifact = `page:${identityKey}`;
       const srcRows = rows.map((r) => ({
@@ -956,9 +970,10 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       }));
       chunkRows(srcRows, B).forEach((chunkSrc, i) => {
         const id = shortHash(`${identityKey} repair ${cause} round${round} ${i}`);
+      const suffix = i ? `#${i + 1}` : "";
         const t = {
           id, pageKey, artifact, writesTo: writesToOf(artifact),
-          anchor: `repair-${cause}-round${round}${i ? `#${i + 1}` : ""}`,
+          anchor: `repair-${cause}-round${round}${suffix}`,
           kind: REPAIR_KIND, cause, repairRound: round,
           group: `Repair round ${round} — ${causeText(cause)}`,
           title: `Repair round ${round} — ${causeText(cause)}`,

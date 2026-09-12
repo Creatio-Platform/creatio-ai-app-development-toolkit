@@ -2557,7 +2557,7 @@ function runRepairMode(result, dir, verifyRes, opts) {
   catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
   const lines = [];
   if (res.written.length) {
-    const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort();
+    const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
     lines.push(`migrate.mjs: wrote ${res.written.length} repair task(s) (round ${byRound.join(", ")}) to ${dir}`
       + ` — the open rows of THIS verify run, merged by (page, cause). Hand ONE to a sub-agent, same contract as a`
       + ` build task, then re-verify. Re-verifying opens a NEW round; it does not rewrite these files.`);
