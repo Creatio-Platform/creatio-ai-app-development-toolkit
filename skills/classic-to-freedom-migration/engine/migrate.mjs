@@ -55,7 +55,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
-import { syncTaskDir, syncRepairDir, REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
+import { syncTaskDir, syncRepairDir, freezeSplit, REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
+import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2490,7 +2491,8 @@ function provenanceIssue(pages) {
 // `--out plan.md` would read `plan.md` as the manifest). Mode flags (`--plan`, `--verify`, …) take no value and
 // belong in NEITHER list.
 const TASKS_FLAG = "--tasks";
-const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG]);
+const SPLIT_FLAG = "--split";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -2520,18 +2522,29 @@ function valueFlagArg(argv, flag, example, onBad) {
 // A PLAN-LEVEL GAP WRITES NOTHING. `gate` / `structure` / `coverage` describe the PLAN, and no build round closes
 // one — slicing a broken plan into tasks would hand sub-agents write access to a stand against deliverables the
 // plan cannot state. So this mode refuses BEFORE it creates the folder, rather than after a builder has run.
-function runTaskMode(result, dir, opts) {
+function runTaskMode(result, dir, opts, split = null, splitText = null) {
   const gaps = planGaps(result);
   if (gaps.length) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
       + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
   }
-  const set = syncTaskDir(dir, result, opts);
+  const set = syncTaskDir(dir, result, opts, split);
+  // A split that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
+  // half-applied cut can never schedule part of a plan and drop the rest.
+  if (set.refused) {
+    return "migrate.mjs: ⛔ NOTHING WRITTEN — the split does not resolve against this plan:\n"
+      + set.problems.map((p) => "  · " + p).join("\n")
+      + `\nFix ${SPLIT_FILE} and re-run. Expected shape: ${SPLIT_SHAPE}\n`;
+  }
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
     + (set.stale?.length || 0);
+  // FROZEN ONLY ONCE IT RESOLVED. Copying the file in before validation would leave a folder whose frozen cut is
+  // one the engine already refused, and every later run would read it back and refuse again.
+  if (splitText) freezeSplit(dir, splitText);
+  const cut = set.split ? `a frozen split of ${set.split.items} item(s)` : "the built-in budget slicer";
   const lines = [
-    `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not.`,
+    `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not. Cut by ${cut}.`,
     `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Hand ONE task file at a time to a build sub-agent, in the \`Step\` order that index lists, and re-run this mode after each status change.`,
   ];
   const refused = set.blocked?.length || 0;
@@ -2539,6 +2552,16 @@ function runTaskMode(result, dir, opts) {
     lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
   }
   if (attention) lines.push(`⚠ ${attention} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  // A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
+  // scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
+  if (set.added?.length) {
+    lines.push(`⚠ ${set.added.length} plan row group(s) are in NO item — nobody is scheduled to build them.`
+      + ` Place them in ${SPLIT_FILE}; the engine will not pick an owner, because which item a row belongs to is`
+      + ` the judgement the split records. See the "Attention" section of ${TASK_INDEX_FILE}.`);
+  }
+  if (set.emptied?.length) {
+    lines.push(`⚠ ${set.emptied.length} split item(s) have no rows left in the current plan: ${set.emptied.map((e) => "`" + e.id + "`").join(", ")}. Their files are kept.`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -2597,6 +2620,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
   const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
   let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
+  let splitText = null;                       // the `--split` file's bytes, frozen into the folder once it resolves
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
@@ -2620,10 +2644,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--tasks <dir>`: the DIRECTORY the task files and the index are written into. It is created if missing, and
   // nothing already in it is deleted — see tasks.mjs.
   const tasksDir = valueFlagArg(argv, TASKS_FLAG, `${TASKS_FLAG} ./build-tasks`, fail);
+  // `--split <file>`: WHERE the seams are, decided once and frozen into the folder. Without it the engine falls
+  // back to its own budget slicer — which is fine for a plan small enough that the seams do not matter, and was
+  // measured putting a related list and its filter in different tasks on one that was not.
+  const splitFile = valueFlagArg(argv, SPLIT_FLAG, `${SPLIT_FLAG} ./split.json`, fail);
   // `--out <file>`: WRITE the output to a file so the agent presents the file, not a hand-paste.
   const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
   // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
   // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
+  if (splitFile && !tasksMode) fail(`\`${SPLIT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it says where that folder's seams are.`);
   if (tasksMode && !verifyMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
@@ -2680,7 +2709,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // rows are written. Matched the other way round, `--verify --tasks <dir>` re-sliced the plan and printed no
   // table at all — the caller asked for a verification and got a task folder.
   else if (tasksMode && !verifyMode) {
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest)); }
+    let split = null;
+    if (splitFile) {
+      let text; try { text = fs.readFileSync(splitFile, "utf8"); }
+      catch (e) { fail(`cannot read ${SPLIT_FLAG} '${splitFile}': ${e.message}`); }
+      const parsed = parseSplit(text);
+      // Refused BEFORE anything is written: a malformed split must not leave a folder half-cut behind it.
+      if (!parsed.split) fail(`${SPLIT_FLAG} '${splitFile}' ${parsed.errors.join("; ")}. Expected shape: ${SPLIT_SHAPE}`);
+      split = parsed.split;
+      if (split.planVersion && result.planVersion && split.planVersion !== result.planVersion) {
+        fail(`${SPLIT_FLAG} '${splitFile}' was cut against plan \`${split.planVersion}\` but this manifest renders \`${result.planVersion}\``
+          + " — the seams were decided against different deliverables. Re-cut the split against the current plan, or re-plan against the one it names.");
+      }
+      splitText = text;
+    }
+    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {

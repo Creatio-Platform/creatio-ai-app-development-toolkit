@@ -39,6 +39,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY } from "./designspec.mjs";
+import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -166,6 +167,7 @@ const CONFIRM_GROUP = "⚠ Confirm worklist";
 const structuralKey = (label) => String(label)
   .toLowerCase()
   .replace(/\d+/g, "n")
+  .replace(/\bn ([a-z]+)s\b/g, "n $1")
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-/, "")
   .replace(/-$/, "")
@@ -393,9 +395,13 @@ function withDependencies(tasks) {
     const deps = [];
     if (t.artifact !== ARTIFACT_REFS) deps.push(...refs);
     if (t.artifact !== ARTIFACT_SCAFFOLD && t.writesTo) deps.push(...scaffolds);
-    const prev = lastOn.get(t.artifact);
+    // Chained on the ARTIFACT, which is what two tasks would collide over. That covers the reference cache too:
+    // its chunks write no stand artifact but they do write the same local files, so they are still a chain. A
+    // read-only item from a split carries an artifact of its own precisely so it joins no chain at all.
+    const chainKey = t.artifact;
+    const prev = lastOn.get(chainKey);
     if (prev) deps.push(prev);
-    lastOn.set(t.artifact, t.id);
+    lastOn.set(chainKey, t.id);
     // A review reads the page it judges, so it follows every task that wrote that page.
     if (t.artifact.startsWith("review:")) {
       const page = `page:${t.artifact.slice("review:".length)}`;
@@ -655,6 +661,10 @@ function nonceAttention(tasks) {
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
   out.push(...nonceAttention(set.tasks));
+  // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
+  // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
+  // is exactly the judgement the split file records.
+  for (const p of set.problems || []) out.push(`- ${p}`);
   for (const b of set.blocked || []) {
     out.push(`- \`${b.file}\` — NOT READ and NOT WRITTEN: ${b.reason}. Its task got no file this run, and this file was`
       + " left exactly as it is — it may hold the only record of work already done on the stand. Fix its front matter"
@@ -850,6 +860,74 @@ function adoptOrchestrated(e) {
   };
 }
 
+// ---8<--- THE SPLIT: a cut decided once, validated here, and frozen ---8<---
+
+// Same task shape as the mechanical slicer produces, so everything downstream — the file, the index, the merge,
+// the repair rounds, the write chain — is unchanged. Only WHERE the seams fall is different, and that is the one
+// question a row-count budget answered badly.
+//
+// IDENTITY IS THE ITEM'S `id`, not a hash over its contents. The mechanical slicer had to derive ids from content
+// because it re-derived the whole cut on every run; a frozen split does not move, so the slug someone chose for an
+// item IS its identity and survives any change to the rows inside it.
+export function buildTaskSetFromSplit(result, opts = {}, split) {
+  const groups = checklistGroups(result, opts);
+  const identity = pageIdentities(result);
+  const B = budgetOf(opts);
+  const resolved = resolveSplit(split, groups, identity);
+  const { emptied, added } = reconcile(resolved);
+  const problems = splitProblems({ errors: resolved.errors, unplaced: resolved.unplaced, emptied });
+  // A split that does not resolve is REFUSED, not partially honoured: a folder built from half a split schedules
+  // some of the plan and silently drops the rest, which is the failure the coverage check exists to prevent.
+  if (resolved.errors.length) return { refused: true, problems, tasks: [], planVersion: result.planVersion || null };
+
+  const tasks = resolved.items.map((it, i) => {
+    const srcRows = it.rows.map((r) => ({
+      label: r.label, groupTitle: r.group, vk: r.vk, na: r.na,
+      weight: rowWeight(r, r.group, B),
+    }));
+    const task = {
+      id: it.id,
+      pageKey: it.pageKey,
+      artifact: it.writesTo || `readonly:${it.id}`,
+      writesTo: it.writesTo,
+      anchor: it.id,
+      stopGate: it.stopGate,
+      group: it.title,
+      title: it.title,
+      groups: [...new Set(srcRows.map((r) => r.groupTitle))],
+      order: i + 2,                       // the reference cache keeps position 1
+      phase: DEFAULT_PHASE,
+      origin: TASK_ORIGIN_ENGINE,
+      status: S_TODO,
+      rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null })),
+      weight: srcRows.reduce((a, r) => a + r.weight, 0),
+      gatedRows: srcRows.filter((r) => r.vk).length,
+      naRows: srcRows.filter((r) => r.na).length,
+      rowsDigest: rowsDigest(srcRows),
+      dependsOn: [],
+      notes: "",
+    };
+    task.file = taskFileName(task);
+    return task;
+  });
+  // The reference cache is the engine's own preparation, not a plan row, so it is never in the split and always
+  // leads the queue.
+  const refsChunk = chunksOf({
+    artifact: ARTIFACT_REFS, pageKey: "run", identityKey: "run",
+    groups: [{ pageKey: "run", baseTitle: REFS_GROUP, title: REFS_GROUP, rows: refsRows(result) }],
+  }, B).map((c, i) => taskOf(c, i + 1));
+  return {
+    entity: result.entity || null,
+    planVersion: result.planVersion || null,
+    budget: B,
+    split: { source: "file", items: resolved.items.length },
+    problems,
+    added,
+    emptied,
+    tasks: withDependencies([...refsChunk, ...tasks]),
+  };
+}
+
 // ---8<--- REPAIR: the rows `--verify` found open, cut into tasks the same way ---8<---
 //
 // A REPAIR TASK IS NOT A PLAN TASK, and the difference decides everything below. A plan task is derived from the
@@ -1030,8 +1108,40 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   return { written, parked, pending, set: merged };
 }
 
-export function syncTaskDir(dir, result, opts = {}) {
-  const merged = mergeTaskSet(buildTaskSet(result, opts), readExisting(dir));
+// THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
+// re-slice reads the copy. That is what makes a later run a RECONCILIATION rather than a second opinion: the cut
+// is not re-decided, so a recorded `done` cannot move to a task that no longer exists.
+export function readFrozenSplit(dir) {
+  const p = path.join(dir, SPLIT_FILE);
+  if (!fs.existsSync(p)) return null;
+  const { split, errors } = parseSplit(fs.readFileSync(p, "utf8"));
+  return { split, errors, file: p };
+}
+
+export function freezeSplit(dir, text) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
+}
+
+// The cut this run uses: the one just handed in, else the one frozen in the folder, else none — and none means
+// the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
+// fall does not matter.
+export function taskSetFor(dir, result, opts = {}, split = null) {
+  const frozen = split ? null : readFrozenSplit(dir);
+  if (frozen?.errors?.length) {
+    return { refused: true, planVersion: result.planVersion || null, tasks: [],
+      problems: frozen.errors.map((e) => `${SPLIT_FILE} ${e}`) };
+  }
+  const use = split || frozen?.split || null;
+  return use ? buildTaskSetFromSplit(result, opts, use) : buildTaskSet(result, opts);
+}
+
+export function syncTaskDir(dir, result, opts = {}, split = null) {
+  const fresh = taskSetFor(dir, result, opts, split);
+  // A refused split writes NOTHING. Half a folder schedules half a plan and silently drops the rest, which is the
+  // failure the coverage check exists to prevent.
+  if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
+  const merged = mergeTaskSet(fresh, readExisting(dir));
   const untouchable = new Set(merged.blocked.map((b) => b.file));
   fs.mkdirSync(dir, { recursive: true });
   for (const t of merged.tasks) {
