@@ -14,7 +14,7 @@ import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../sk
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, REFS_DIR, buildRepairTasks, syncRepairDir,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -152,6 +152,10 @@ const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
 const tasksOn = (set, artifact) => set.tasks.filter((t) => t.artifact === artifact);
 const tmp = (label) => fs.mkdtempSync(path.join(os.tmpdir(), `c2f_tasks_${label}_`));
+// The (file, id) pairs actually on disk — what the regenerated index has to keep describing.
+const readExistingMeta = (dir) => fs.readdirSync(dir)
+  .filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE)
+  .map((f) => ({ file: f, id: parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")).meta?.id || null }));
 const readIndex = (dir) => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
 
 console.log("\n===== fixture preconditions (anti-vacuity) =====");
@@ -1372,6 +1376,50 @@ check("repair: syncRepairDir ADDS to the folder and never overwrites — the pla
       pending: again.pending };
     fs.rmSync(dir, { recursive: true, force: true });
     return out;
+  });
+check("repair: with a FROZEN split in the folder, syncRepairDir regenerates the index from that split — deriving it from the engine's own cut instead would hand the merge content-hash ids while every file on disk carries the split's slug ids, so nothing would match and the whole folder would be rewritten back to `todo`",
+  () => {
+    const dir = tmp("repair-split");
+    freezeSplit(dir, JSON.stringify(FULL_SPLIT));
+    syncTaskDir(dir, RUN, OPTS);
+    const before = readExistingMeta(dir);
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const after = readExistingMeta(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const splitIds = new Set(FULL_SPLIT.items.map((i) => i.id));
+    // Every build task the split named is still in the regenerated index, under the SLUG id the files carry.
+    const keptSplitIds = [...splitIds].every((id) => res.set.tasks.some((t) => t.id === id));
+    // And the files themselves were neither renamed nor reset by the repair round.
+    const untouched = before.every((b) => after.some((a) => a.file === b.file && a.id === b.id));
+    return keptSplitIds && untouched && res.written.length > 0;
+  }, () => {
+    const dir = tmp("repair-split-dbg");
+    freezeSplit(dir, JSON.stringify(FULL_SPLIT));
+    syncTaskDir(dir, RUN, OPTS);
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const out = { splitIds: FULL_SPLIT.items.map((i) => i.id),
+      indexIds: res.set.tasks.map((t) => t.id), files: fs.readdirSync(dir) };
+    fs.rmSync(dir, { recursive: true, force: true });
+    return out;
+  });
+check("repair: an UNREADABLE frozen split writes nothing at all — a folder repaired against a cut that cannot be parsed would be renumbered wholesale, which is the same reason a build run refuses it",
+  () => {
+    const dir = tmp("repair-bad-split");
+    syncTaskDir(dir, RUN, OPTS);
+    const before = fs.readdirSync(dir).sort();
+    freezeSplit(dir, "{ this is not json");
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    const after = fs.readdirSync(dir).sort();
+    fs.rmSync(dir, { recursive: true, force: true });
+    return res.refused === true && res.written.length === 0
+      && JSON.stringify(before) === JSON.stringify(after.filter((f) => f !== SPLIT_FILE));
+  }, () => {
+    const dir = tmp("repair-bad-split-dbg");
+    syncTaskDir(dir, RUN, OPTS);
+    freezeSplit(dir, "{ this is not json");
+    const res = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { refused: res.refused, problems: res.problems, written: res.written };
   });
 check("repair: a round that was ATTEMPTED and came back opens the next one — `done` with the rows still open is the repeat failure the cap is about, while `todo` / `in-progress` / `blocked` are the round that is still somebody's work",
   () => {

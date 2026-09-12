@@ -1136,6 +1136,14 @@ function readExisting(dir) {
 // Write the repair round one `--verify` run calls for. It ADDS to the folder: the plan tasks already there are
 // untouched, and a repair file from an earlier round is a record of that round, never overwritten.
 export function syncRepairDir(dir, result, verifyPages, opts = {}) {
+  // WHICH tasks the plan contributes is decided by the frozen split when the folder has one, exactly as
+  // `syncTaskDir` decides it. Deriving them from `buildTaskSet` instead would hand the merge below content-hash
+  // ids while every file on disk carries the split's slug ids, so nothing would match, every task would read as
+  // stale, and the index would be rewritten with all of them back at `todo` — an index describing a folder that
+  // does not exist. `taskSetFor` falls back to `buildTaskSet` on its own when there is no split.
+  const fresh = taskSetFor(dir, result, opts);
+  // A refused split writes NOTHING, for the reason `syncTaskDir` refuses: half a folder schedules half a plan.
+  if (fresh.refused) return { ...fresh, written: [], parked: [], pending: [], set: { ...fresh, tasks: [] } };
   const existing = readExisting(dir);
   const { tasks, parked, pending } = buildRepairTasks(result, verifyPages, opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
@@ -1149,7 +1157,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     written.push(t);
   }
   // The index is derived from the FILES, so re-deriving it now picks the new repair files up with everything else.
-  const merged = mergeTaskSet(buildTaskSet(result, opts), readExisting(dir));
+  const merged = mergeTaskSet(fresh, readExisting(dir));
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { written, parked, pending, set: merged };
 }

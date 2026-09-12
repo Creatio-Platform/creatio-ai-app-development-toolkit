@@ -2578,6 +2578,12 @@ function runRepairMode(result, dir, verifyRes, opts) {
   let res;
   try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
   catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
+  // The frozen split is unreadable, so the folder's task ids cannot be derived — nothing was written, the same
+  // refusal a build run makes. Repairing against a split that cannot be parsed would renumber the whole folder.
+  if (res.refused) {
+    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
+      + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`;
+  }
   const lines = [];
   if (res.written.length) {
     const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
