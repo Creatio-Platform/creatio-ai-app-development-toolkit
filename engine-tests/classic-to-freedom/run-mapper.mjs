@@ -1487,10 +1487,11 @@ check("ENG-95218 / ENG-96327: the command-bar set does NOT claim to be complete 
     && /- \*\*Command-bar actions:\*\* 1 found/.test(lpRun.designSpec)
     && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
-check("ENG-95218: the design spec renders the list page as POSITIONED tables (columns in order, filters with container+index, actions) instead of the old prose bullets",
-  () => /#### List columns \(in order\)/.test(lpRun.designSpec) && /#### Quick filters/.test(lpRun.designSpec)
+check("ENG-95218 / ENG-96327 (134fe62): the list page renders POSITIONED tables for filters + command bar; the detailed List-columns table is dropped to the plain `- **List columns:**` line, and the old prose bullets stay gone",
+  () => !/#### List columns \(in order\)/.test(lpRun.designSpec)     // detailed columns table dropped (134fe62)
+    && /- \*\*List columns:\*\*/.test(lpRun.designSpec)               // …still carried by the plain line
+    && /#### Quick filters/.test(lpRun.designSpec)
     && /#### Command-bar actions/.test(lpRun.designSpec)
-    && /\| 1 \| Name \| `PDS_Name` \| PDS\.Name \| Text \(`dataValueType` 1\) \|/.test(lpRun.designSpec)
     && /`LeftFilterContainerInner` · index 1/.test(lpRun.designSpec)
     && !/- \*\*Quick filters:\*\*/.test(lpRun.designSpec) && !/- \*\*Section actions:\*\*/.test(lpRun.designSpec),
   () => lpRun.designSpec.split("\n").filter((l) => /List columns|Quick filter|Command-bar|Section actions/.test(l)).slice(0, 12));

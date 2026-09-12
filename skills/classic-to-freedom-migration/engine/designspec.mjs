@@ -419,19 +419,6 @@ function listColumnLine(section) {
 // `Region | Element | Type | Source | Rule | Additional` table.
 // ONE table per function: each surface reads as its own shape, and no single function carries every branch.
 // The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
-function listColumnsTable(columns) {
-  if (!columns.length) return [];
-  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
-  columns.forEach((c, i) => {
-    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
-    const type = c.dataValueType == null
-      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
-      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
-    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
-    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
-  });
-  return L;
-}
 // A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
 function listFiltersTable(filters) {
   if (!filters.length) return [];
@@ -477,8 +464,10 @@ function listCommandBarTable(actions) {
   return L;
 }
 function renderListLayoutTables(lcs) {
+  // ENG-96327 (134fe62) — the detailed "List columns (in order)" table is dropped from the human plan: the plain
+  // `- **List columns:**` line + the form Layout already carry it for the approver, and the columns still travel on
+  // `result.listChangeSet` for the builder. Quick filters / row actions / command bar still render as tables.
   return [
-    ...listColumnsTable(lcs.columns),
     ...listFiltersTable(lcs.quickFilters),
     ...listRowActionsTable(lcs.rowActions),
     ...listCommandBarTable(lcs.commandBarActions),
@@ -491,9 +480,8 @@ function renderListLayoutTables(lcs) {
 // `list-filter-attributes` ⚠ Confirm item, where it is gated rather than merely printed.)
 function renderListBuildNotes(lcs) {
   const L = [];
-  if (lcs.columnIdsAssignedByBuilder) {
-    L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
-  }
+  // ENG-96327 (134fe62) — the "column ids" build note is dropped from the human plan (builder detail; the fact
+  // stays on the ChangeSet as `columnIdsAssignedByBuilder`).
   if (lcs.quickFilterConfigCompletedByBuilder) {
     L.push("", "> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its container and index, the filtered column and the control — the engine's resolvable facts. `crt.QuickFilter` also needs its own nested filter config and value binding, and it is `compositeOnly` with no published composite recipe, so complete it from that component's documentation (`get-component-info crt.QuickFilter`) rather than treating these `values` as the whole body.");
   }
@@ -628,8 +616,12 @@ function childFormRecommendation(cs, fields, opts) {
 // field-count rule (childFormRecommendation → Mini vs Grid), and a top-area-template steer there both conflicts
 // with that (a mini page has no header area) and mis-fires on a flat child whose fields merely sit in a Header
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
-function headerTemplateRecommendation(cs, opts) {
+function headerTemplateRecommendation(cs, opts, result) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // ENG-96327 (134fe62) — when the object HAS a DCM case, the DCM progress-bar template banner is the SINGLE
+  // template steer; a second top-area recommendation here only competes with it. Defer to the DCM banner.
+  const dcmPresent = result?.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  if (dcmPresent) return [];
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
@@ -843,7 +835,7 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    ...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
     ...renderMemberLedger(result.coverage),
   );
 
