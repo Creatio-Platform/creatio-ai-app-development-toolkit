@@ -438,6 +438,15 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
    never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
    the structure gate instead, so it never reaches a task.)
+
+   **Mark it started BEFORE you dispatch:**
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
+   That sets the task `in-progress`, stamps its clock and regenerates `index.md` — so the index moves when the
+   work BEGINS, not only when an agent finishes. Until it existed a run in flight was indistinguishable from one
+   that had not started. The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after
+   every dispatch and every status change, so the user sees which task is running, how long it has been running,
+   what it is expected to take and what is left. Do not write a progress summary of your own — the block is
+   rendered from the folder, and a hand-written one drifts from it within two tasks.
 2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run two build
    sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and neither lists the other in
    `dependsOn`, which in practice means a read-only task beside a build. Each sub-agent writes a value it mints

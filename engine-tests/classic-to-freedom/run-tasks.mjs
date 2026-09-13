@@ -14,6 +14,7 @@ import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../sk
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
+  startTask, readTimings, forecastMinutes, renderProgress, TIMINGS_FILE,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -1519,6 +1520,98 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
         && back.meta.writesTo === ARTIFACT_WHOLE && tableRows === writers[0].rows.length;
     },
     () => parseTaskFile(renderTaskFile(writers[0], small)).meta);
+}
+
+console.log("\n===== the clock: what has started, what it cost, what the next one costs =====");
+{
+  const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+  const fresh = () => { const d = path.join(tmp("clock"), "build-tasks"); syncTaskDir(d, RUN, OPTS); return d; };
+  const idOf = (d, pred) => syncTaskDir(d, RUN, OPTS).tasks.find(pred).id;
+  const taskOfId = (d, id) => syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === id);
+
+  // 1 — the whole point: the index has to move when the orchestrator DISPATCHES, not only when an agent finishes.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    const before = readIndex(d);
+    const res = startTask(d, id, RUN, OPTS, null, at(0));
+    const t = taskOfId(d, id);
+    check("clock: `--start` marks the task in-progress and stamps `startedAt` BEFORE the agent runs — until this existed a run in flight looked identical to one that had not begun",
+      () => res.started?.id === id && t.status === "in-progress" && t.startedAt === at(0) && !t.endedAt
+        && /▶ in-progress/.test(readIndex(d)) && !/▶ in-progress/.test(before),
+      () => ({ status: t.status, startedAt: t.startedAt, row: readIndex(d).split("\n").find((l) => l.includes(id)) }));
+    check("clock: an id the folder does not hold marks nothing and says so — a typo must not silently start the wrong task",
+      () => { const r = startTask(d, "nosuchid", RUN, OPTS, null, at(0)); return r.started === null && r.unknownId === "nosuchid"; },
+      () => startTask(d, "nosuchid", RUN, OPTS, null, at(0)).started);
+  }
+
+  // 2 — the duration is recorded ONCE, by the first regeneration that sees the task closed.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    const f = path.join(d, taskOfId(d, id).file);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("status: in-progress", "status: done"));
+    syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+    const one = readTimings(d);
+    syncTaskDir(d, RUN, { ...OPTS, now: at(30) });          // a later re-slice must not move or duplicate it
+    const two = readTimings(d);
+    check("clock: closing a started task records exactly ONE sample, and a later re-slice neither duplicates it nor moves its `endedAt` — a duration that drifts with every regeneration measures the regenerations",
+      () => one.length === 1 && one[0].minutes === 12 && one[0].weight > 0
+        && two.length === 1 && two[0].minutes === 12 && taskOfId(d, id).endedAt === at(12),
+      () => ({ one, two, endedAt: taskOfId(d, id).endedAt }));
+  }
+
+  // 3 — a task closed without ever being started has no duration to record. Inventing one poisons every later
+  // forecast with a number nobody measured.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    const f = path.join(d, taskOfId(d, id).file);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("status: todo", "status: done"));
+    syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+    check("clock: a task closed without ever being STARTED records no sample — the folder has no start to measure from, and a guessed duration would poison every later forecast",
+      () => readTimings(d).length === 0 && !fs.existsSync(path.join(d, TIMINGS_FILE)),
+      () => readTimings(d));
+  }
+
+  // 4 — the forecast is a RANGE, and it comes from this run once this run has data.
+  check("forecast: with no samples it is the engine's calibrated rate ±50% — a single number would claim a precision the measured spread (0.49-1.00 min per weight unit) does not have",
+    () => {
+      const f = forecastMinutes(40, []);
+      return f.n === 0 && f.low === Math.round(40 * TASK_BUDGET.minutesPerWeight * 0.5)
+        && f.high === Math.round(40 * TASK_BUDGET.minutesPerWeight * 1.5) && f.low < f.high;
+    }, () => forecastMinutes(40, []));
+  check("forecast: from four samples on it uses THIS run's observed quartiles instead of the constant — the constant is one run's median and the folder in front of it is not",
+    () => {
+      const slow = [1, 2, 3, 4].map((i) => ({ weight: 10, minutes: 100 + i }));
+      const f = forecastMinutes(10, slow);
+      return f.n === 4 && f.low >= 100 && f.high >= f.low && f.low > forecastMinutes(10, []).high;
+    }, () => forecastMinutes(10, [1, 2, 3, 4].map((i) => ({ weight: 10, minutes: 100 + i }))));
+  check("forecast: a weightless task gets no forecast at all rather than a zero — nothing is not the same claim as instant",
+    () => forecastMinutes(0, []) === null && forecastMinutes(undefined, []) === null,
+    () => [forecastMinutes(0, []), forecastMinutes(undefined, [])]);
+
+  // 5 — the progress block, and the index's freedom from the clock.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    const set = syncTaskDir(d, RUN, { ...OPTS, now: at(7) });
+    const text = renderProgress(set, d, at(7));
+    check("progress: the block names the running task, how long it has been running and what it is expected to take, plus the counts and the remaining estimate — one paste, rendered by the engine so the chat and the folder cannot drift apart",
+      () => /RUNNING/.test(text) && /running 7 min/.test(text) && /expected \d+-\d+ min/.test(text)
+        && /done 0 · running 1 · todo/.test(text) && /min left/.test(text),
+      () => text);
+    check("progress: it says WHICH basis the estimate rests on — this run's own closed tasks, or the calibrated rate when none has closed yet",
+      () => /no task of this run has closed yet/.test(text), () => text);
+    check("index.md carries NO clock — it is a DERIVED file the goldens compare byte for byte, so a timestamp in it would make every regeneration a different file; the times live in the task files and the progress block",
+      () => {
+        const a = readIndex(d);
+        const b = (syncTaskDir(d, RUN, { ...OPTS, now: at(99) }), readIndex(d));
+        return a === b && !/\d{4}-\d{2}-\d{2}T/.test(a) && / min/.test(text);
+      }, () => readIndex(d).slice(0, 400));
+  }
 }
 
 console.log("\n===== migrate.mjs --tasks <dir> (CLI) =====");

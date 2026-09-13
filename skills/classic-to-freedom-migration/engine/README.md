@@ -15,6 +15,7 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
+node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress and stamping its clock (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …and write this run's OPEN rows into <dir> as repair tasks
@@ -77,6 +78,16 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   ONE task rather than five sub-agents doing `get-page → merge → update-page` over each other. Each task publishes
   `writesTo:` (empty = read-only) and `dependsOn:`, so the orchestrator's parallelism rule is a field comparison
   rather than a judgement: two tasks may overlap only when their `writesTo` differ and neither depends on the other.
+- **`--start <id>` moves the index when the work BEGINS.** Every `--tasks` run regenerates `index.md`, but until
+  this flag existed the only thing that ever changed it was a sub-agent finishing, so a run in flight read exactly
+  like a run that had not begun. `--start` marks the task `in-progress`, stamps `startedAt`, and the first
+  regeneration that sees the task closed stamps `endedAt` and appends `{id, artifact, weight, minutes}` to
+  `timings.json` beside the tasks — once, so a later re-slice neither moves nor duplicates it. Every run of the
+  mode then prints a `--- progress ---` block for the chat: the running task, its elapsed time, its expected range
+  and what is left. The FORECAST is a range because the measurement is: one live run put five sub-agents between
+  0.49 and 1.00 minutes per weight unit, so `TASK_BUDGET.minutesPerWeight` (0.79, that run's median) is the cold
+  start and this run's own closed tasks replace it as soon as there are four. The clock lives in the task files
+  and the progress block, never in `index.md` — the index is derived and compared byte for byte.
 - **Under the budget a bucket is ONE task; over it, it is cut on a structural seam.** The monolithic case is one
   chunk of the same contract, not a second code path. Chunks pack greedily along the seams the plan already
   publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row

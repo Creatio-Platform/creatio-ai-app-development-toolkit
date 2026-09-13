@@ -55,7 +55,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
-import { syncTaskDir, syncRepairDir, freezeSplit, REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES } from "./tasks.mjs";
+import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
+  TASK_STATUSES } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2492,7 +2493,8 @@ function provenanceIssue(pages) {
 // belong in NEITHER list.
 const TASKS_FLAG = "--tasks";
 const SPLIT_FLAG = "--split";
-const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG]);
+const START_FLAG = "--start";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG]);
 // EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
@@ -2527,19 +2529,25 @@ function valueFlagArg(argv, flag, example, onBad) {
 // A PLAN-LEVEL GAP WRITES NOTHING. `gate` / `structure` / `coverage` describe the PLAN, and no build round closes
 // one — slicing a broken plan into tasks would hand sub-agents write access to a stand against deliverables the
 // plan cannot state. So this mode refuses BEFORE it creates the folder, rather than after a builder has run.
-function runTaskMode(result, dir, opts, split = null, splitText = null) {
+function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   const gaps = planGaps(result);
   if (gaps.length) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
       + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
   }
-  const set = syncTaskDir(dir, result, opts, split);
+  // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
+  // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
+  // indistinguishable from a run that has not begun.
+  const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
   // A split that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
   // half-applied cut can never schedule part of a plan and drop the rest.
   if (set.refused) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — the split does not resolve against this plan:\n"
       + set.problems.map((p) => "  · " + p).join("\n")
       + `\nFix ${SPLIT_FILE} and re-run. Expected shape: ${SPLIT_SHAPE}\n`;
+  }
+  if (startId && !set.started) {
+    return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
   }
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
@@ -2557,6 +2565,9 @@ function runTaskMode(result, dir, opts, split = null, splitText = null) {
     lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
   }
   if (attention) lines.push(`⚠ ${attention} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  // THE PROGRESS BLOCK, for the chat. Engine-rendered so what the user reads and what the folder holds cannot
+  // drift apart, and printed on every run of the mode so the picture is current whenever the orchestrator speaks.
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd());
   // A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
   // scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
   if (set.added?.length) {
@@ -2666,6 +2677,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
   // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
   if (splitFile && !tasksMode) fail(`\`${SPLIT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it says where that folder's seams are.`);
+  // `--start <id>`: mark that task in-progress and stamp its clock, THEN regenerate. Only with `--tasks <dir>`,
+  // and never with `--verify`, whose folder writes are repair rounds rather than a dispatch.
+  const startId = valueFlagArg(argv, START_FLAG, `${START_FLAG} <task-id>`, fail);
+  if (startId && (!tasksMode || verifyMode)) fail(`\`${START_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` on its own — it marks the task you are about to dispatch.`);
   if (tasksMode && !verifyMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
@@ -2736,7 +2751,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText); }
+    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
