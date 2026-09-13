@@ -7095,6 +7095,31 @@ check("collection gate: HALF-wired is still ❌, and the reason names only what 
   () => flHalf.missing === 1 && /carries no items/.test(flHalf.markdown) && !/no columns/.test(flHalf.markdown),
   () => flHalf.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 220)));
 
+/* ---- The page with no primary data source. `create-page` leaves the template's `#PrimaryDataSourceName()#`
+   unexpanded — the Interface DESIGNER resolves that macro when a data source is added there, and
+   `--entity-schema-name` only records a dependency — so a re-templated page has none until someone declares one.
+   `update-page` accepts the body, and the card hangs the browser. A live run spent 18.6 minutes of browser
+   probing finding it. ---- */
+{
+  const pdsRes = { changeSet: { viewConfigDiff: [{ name: "Name", values: { control: "$Name" } }], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+  const pdsPage = (modelConfig) => ({ pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate",
+    ...(modelConfig ? { modelConfig } : {}),
+    viewConfig: { items: [{ name: "Name", type: "crt.Input" }] } } }, ...QG_EVIDENCE });
+  const pdsOpts = { planMeta: { formTemplate: "PageWithTabsFreedomTemplate" } };
+  const noPds = renderVerify(pdsRes, pdsOpts, pdsPage({ dataSources: {} }));
+  const withPds = renderVerify(pdsRes, pdsOpts, pdsPage({ primaryDataSourceName: "PDS", dataSources: { PDS: {} } }));
+  const silent = renderVerify(pdsRes, pdsOpts, pdsPage(null));
+  check("primary data source: a built page whose `modelConfig` names no `primaryDataSourceName` while its fields bind attributes is ❌ MISSING — that page hangs the browser, and `update-page` and `validate-page` both accept it",
+    () => noPds.missing >= 1 && /primaryDataSourceName/.test(noPds.markdown) && /hangs the browser/.test(noPds.markdown),
+    () => noPds.markdown.split("\n").filter((l) => /template/i.test(l)).map((l) => l.slice(0, 200)));
+  check("primary data source (anti-vacuity): the same page WITH one closes the template row normally — the check is about the data source, not about the template row",
+    () => withPds.missing === 0 && !/hangs the browser/.test(withPds.markdown),
+    () => ({ missing: withPds.missing }));
+  check("primary data source: a payload that carries no `modelConfig` at all is NOT punished — the key is outside the `--built` required shape, so the check is a bonus for the caller that supplies it, never a new demand",
+    () => silent.missing === 0 && !/hangs the browser/.test(silent.markdown),
+    () => ({ missing: silent.missing }));
+}
+
 /* ---- Feed. `base` says the CLASSIC page got the widget from its base template; the layout row read that as
    "the FREEDOM template provides it" and a live run believed it, shipped no Feed, and paid a 21-minute user
    question plus a second sub-agent when verify caught it. The mapping row said `templateProvided: false` all

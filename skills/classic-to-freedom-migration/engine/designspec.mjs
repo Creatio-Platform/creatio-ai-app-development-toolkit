@@ -2452,9 +2452,28 @@ function resolveFormPageVk(ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the form page");
   return ["❌ MISSING", "get-page returned no components for the form page", "missing"];
 }
+// A page `create-page` makes from a template carries the template's `#PrimaryDataSourceName()#` unexpanded —
+// that macro is resolved by the Interface DESIGNER when a data source is added there, not by `create-page` and
+// not at runtime; `--entity-schema-name` only records a dependency. So a page built through the re-template
+// sequence has no data source until someone declares one, `update-page` accepts the body anyway, and the card
+// HANGS THE BROWSER with `$Id` undefined. Measured on a live run: 18.6 minutes of browser probing to find it.
+// Checked only when the payload carries `modelConfig` — it is not in the `--built` contract's required shape, so
+// a caller that omits it is not punished; one that supplies it gets the check for free.
+function primaryDataSourceGap(ctx) {
+  const mc = entryObject(ctx.page)?.modelConfig;
+  if (!mc || typeof mc !== "object") return null;
+  if (mc.primaryDataSourceName) return null;
+  const bound = ctx.ops.some((o) => VERIFY_FIELD_RE.test(o.type || ""));
+  return bound ? "the page declares NO `primaryDataSourceName` while its fields bind to page attributes — the"
+    + " template's `#PrimaryDataSourceName()#` was never expanded, so `$Id` is undefined and the card hangs the"
+    + " browser. Declare an entity data source (scope `page`) over the entity in `modelConfig`, name it in"
+    + " `primaryDataSourceName`, and point every attribute path at it" : null;
+}
 function resolveTemplateVk(vk, ctx) {
   const tpl = entryObject(ctx.page)?.parentSchemaName;
   if (!tpl) return ["⚠ verify", "get-page `parentSchemaName` not provided for this page — confirm the built page's template", "unverified"];
+  const gap = primaryDataSourceGap(ctx);
+  if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
   return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
 }
