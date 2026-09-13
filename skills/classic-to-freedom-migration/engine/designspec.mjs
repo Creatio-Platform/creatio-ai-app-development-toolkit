@@ -326,7 +326,7 @@ function entityFilterRows(cs) {
   });
 }
 // Build the Logic-table rows (declarative page rules → entity/lookup filters → process launch).
-// Logic carries what the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the
+// Business rules carry what the engine MAPPED. Methods belong to `⚠ Custom methods` only — one method, one row, in the
 // table that carries the port obligation and traces the trigger from the data.
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [trigger, behaviour, effect, target].
 function buildLogicRows(cs) {
@@ -626,11 +626,11 @@ function headerTemplateRecommendation(cs, opts, result) {
 }
 
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
-// ⚠ Imperative logic worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
+// ⚠ Custom methods worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
 // appears in the Logic table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
-// The ⚠ Imperative members worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
+// The ⚠ Other declared logic worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
 // methods: each is a port unit that must end up ported / dropped / blocked, not a question with an on-stand answer.
 // `attribute-dependency` is deliberately absent — it is the trigger of a method that already has its own row.
 // What each kind IS, stated ONCE above the table instead of repeated verbatim on every row of that kind.
@@ -652,11 +652,11 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
-  // Imperative MEMBERS have their own worklist (⚠ Imperative members), for the same reason methods do: they are work
+  // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
   // `attribute-dependency` is normally the trigger of a handler method, and that method already has an ⚠ Imperative
-  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
+  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Other declared logic
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
 // ENG-96327 — WHO the ⚠ Confirm block is for. It is read by the HUMAN approver, but a caption/label/hint to fetch
@@ -698,7 +698,7 @@ function renderConfirmWorklist(cs) {
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
-  // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
+  // no `described in` and no card tally — those belong to the ⚠ Other declared logic / ⚠ Custom methods worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   // ENG-96327 — the RENDERED list is the shrink, but ONLY of what is genuinely NOISE for THIS engine: cosmetic kinds
   // the agent resolves on-stand (COSMETIC), decisions already printed in a table (SHOWN_IN_TABLE), and list-page
@@ -822,11 +822,11 @@ export function renderDesignSpec(result, opts = {}) {
   }
 
   // ---- The rest of the page, in render order, in ONE push (S7778) ----
-  //  • ⚠ Imperative logic — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
+  //  • ⚠ Custom methods — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
   //    split in two, what the engine mapped and then what it could not. Methods stay out of the ⚠ Confirm list
   //    (that one holds open questions needing an on-stand answer); this is where each method gets its ported /
   //    dropped / blocked mark, with the evidence the engine read from the body.
-  //  • ⚠ Imperative members — the same worklist contract for the NON-method imperative members. Beside the method
+  //  • ⚠ Other declared logic — the same worklist contract for the NON-method imperative members. Beside the method
   //    worklist because they are the same kind of thing: declared here, defined elsewhere, each a port unit.
   //    These three worklists together are "the ⚠ worklist" the SKILL's rules refer to.
   //  • child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist — GENUINE open
@@ -889,7 +889,7 @@ function triggerText(t) {
 // type from prose instead of from the engine's own output. `attribute-*` joins them for the same reason: the
 // declaration is here, the behaviour it drives is not. Lives here (not in migrate.mjs) because both the renderer and
 // the handoff digest key off it, and migrate.mjs already imports this module.
-// DERIVED, not re-spelled: every kind the ⚠ Imperative members worklist renders must also be requested in the
+// DERIVED, not re-spelled: every kind the ⚠ Other declared logic worklist renders must also be requested in the
 // step-5.1 handoff digest. Hand-keeping a second identical list means a kind added to `MEMBER_KIND_NOTE` reaches the
 // table and prints a `⚠ not described` cell that no run can ever fill, because the digest never asked for it.
 export const HANDOFF_MEMBER_KINDS = MEMBER_WORKLIST_KINDS;
@@ -1801,7 +1801,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
@@ -2423,7 +2423,7 @@ export function checklistGroups(result, opts = {}) {
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
   G("Card actions", actItems);
-  // ⚠ Imperative members worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
+  // ⚠ Other declared logic worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
   // like the `Handler — …` rows above and unlike the evidence rows below: work to record, not open questions closed
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
