@@ -510,9 +510,13 @@ export function rowForItemType(itemType) {
 // ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
 // The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
 // the data has one home and the builders did not have to be rewritten around a new shape.
+// Each widget def carries its ROW's `templateProvided` down with it. The design spec used to infer template
+// provision from the CLASSIC side — "this came from the Classic base template" — and print "provided by the
+// Freedom template" for Feed, whose row says `templateProvided: false`. A live run believed the spec, shipped a
+// form page with no Feed, and the gap surfaced at verify: a 21-minute user question and a second sub-agent.
 export function widgetsByMatch(by) {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === by && r.meta?.widgets)
-    .map((r) => [r.match[by], r.meta.widgets]));
+    .map((r) => [r.match[by], r.meta.widgets.map((w) => ({ templateProvided: r.meta.templateProvided ?? null, ...w }))]));
 }
 export function profileCardsByEntity() {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === MATCH.PROFILE_ENTITY)

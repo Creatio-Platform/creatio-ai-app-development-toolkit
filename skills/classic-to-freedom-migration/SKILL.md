@@ -344,7 +344,8 @@ Run it BEFORE the final `--plan --out` and before approval, so the plan the user
 2. `delete-schema` that page.
 3. `create-page` with the SAME schema name, the target `--template`, the target `--package-name` and `--entity-schema-name`. It gets a NEW `schemaUId`; nothing that referenced the old one follows it.
 4. `create-related-page-addon` for the entity, in the target package, pointing the default page at the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read back as you set them — the list page opens whatever this record says, and a build that skips it leaves a section whose rows open nothing.
-5. Only now author the layout into the new page.
+5. **Give the new page a primary data source before anything binds to it.** A page `create-page` made from a template carries the template's `#PrimaryDataSourceName()#` macro UNEXPANDED, so it has no data source of its own: declare a `crt.EntityDataSource` (scope `page`) over the entity in `modelConfig`, set `primaryDataSourceName` to it, and point every attribute path at it (`PDS.<Column>`, including `Id`). Skipping this is not a validation error — `update-page` accepts the body, and the card then **hangs the browser** with `$Id` undefined. Measured on a live run.
+6. Only now author the layout into the new page.
 
 A re-template that stops after step 3 is the failure this sequence exists to prevent. If the Classic signal is weak — a header with one or two fields, no progress bar — prefer the scaffolded template and place those fields in the side profile: the re-template costs a delete, a re-bind and a page whose id changed, and that is not worth buying a top area for two fields.
 
@@ -439,10 +440,15 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
    the structure gate instead, so it never reaches a task.)
 
-   **Mark it started BEFORE you dispatch:**
+   **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
-   That sets the task `in-progress`, stamps its clock and regenerates `index.md` — so the index moves when the
-   work BEGINS, not only when an agent finishes. Until it existed a run in flight was indistinguishable from one
+   That sets the task `in-progress`, opens its clock in `timings.json` and regenerates `index.md` — so the index
+   moves when the work BEGINS, not only when an agent finishes. A task that reaches `done` without ever being
+   started is reported by name in the index's Attention section: nobody dispatched a sub-agent for it through the
+   engine. On the first live run that was the `Quality gates` task, closed by the orchestrator that had just
+   judged its own build — which is precisely what a separate review task exists to prevent. The clock is in
+   `timings.json`, never in the task file: it used to sit beside `status` and `agentNonce`, and the first builder
+   to meet it filled `endedAt` in itself with a rounded time, costing the run its only measurement. Until it existed a run in flight was indistinguishable from one
    that had not started. The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after
    every dispatch and every status change, so the user sees which task is running, how long it has been running,
    what it is expected to take and what is left. Do not write a progress summary of your own — the block is

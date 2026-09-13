@@ -2188,10 +2188,14 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null,
+      placement: w.placement || null, templateProvided: w.templateProvided ?? null });
     let tail;
     if (w.note) tail = ` — ${w.note}`;
-    else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    // `base` says the CLASSIC source was base chrome. It says nothing about the FREEDOM template, and the mapping
+    // row does: a widget whose row declares `templateProvided: false` must never be described as inherited.
+    else if (base && w.templateProvided !== false) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    else if (base) tail = " — ⚠ BUILD IT: the Freedom template does not provide this one, whatever the Classic template did";
     else tail = "; confirm the Freedom component";
     needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
   };

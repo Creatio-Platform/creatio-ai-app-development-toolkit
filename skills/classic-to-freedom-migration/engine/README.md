@@ -80,9 +80,14 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   rather than a judgement: two tasks may overlap only when their `writesTo` differ and neither depends on the other.
 - **`--start <id>` moves the index when the work BEGINS.** Every `--tasks` run regenerates `index.md`, but until
   this flag existed the only thing that ever changed it was a sub-agent finishing, so a run in flight read exactly
-  like a run that had not begun. `--start` marks the task `in-progress`, stamps `startedAt`, and the first
-  regeneration that sees the task closed stamps `endedAt` and appends `{id, artifact, weight, minutes}` to
-  `timings.json` beside the tasks — once, so a later re-slice neither moves nor duplicates it. Every run of the
+  like a run that had not begun. `--start` marks the task `in-progress` and opens its clock in
+  `timings.json`; the first regeneration that sees the task closed turns that clock into a
+  `{id, artifact, weight, minutes}` sample — once, so a later re-slice neither moves nor duplicates it. The times
+  are NOT in the task file: they were, next to `status` and `agentNonce`, and the first live builder to meet them
+  wrote `endedAt` itself with a value rounded to the minute, so the engine recorded nothing and the progress block
+  went on citing the cold-start rate over `done 1`. A task that reaches `done` with no clock ever opened is
+  reported by name in the index's Attention section — nobody dispatched a sub-agent for it through the engine, and
+  for a review task that is the failure the task exists to prevent. Every run of the
   mode then prints a `--- progress ---` block for the chat: the running task, its elapsed time, its expected range
   and what is left. The FORECAST is a range because the measurement is: one live run put five sub-agents between
   0.49 and 1.00 minutes per weight unit, so `TASK_BUDGET.minutesPerWeight` (0.79, that run's median) is the cold

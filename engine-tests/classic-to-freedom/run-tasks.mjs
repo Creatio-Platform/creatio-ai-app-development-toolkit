@@ -14,7 +14,7 @@ import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../sk
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
-  startTask, readTimings, forecastMinutes, renderProgress, TIMINGS_FILE,
+  startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -1536,10 +1536,13 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     const before = readIndex(d);
     const res = startTask(d, id, RUN, OPTS, null, at(0));
     const t = taskOfId(d, id);
-    check("clock: `--start` marks the task in-progress and stamps `startedAt` BEFORE the agent runs — until this existed a run in flight looked identical to one that had not begun",
-      () => res.started?.id === id && t.status === "in-progress" && t.startedAt === at(0) && !t.endedAt
+    check("clock: `--start` marks the task in-progress and opens its clock BEFORE the agent runs — until this existed a run in flight looked identical to one that had not begun",
+      () => res.started?.id === id && t.status === "in-progress" && readTimingsFile(d).running[id] === at(0)
         && /▶ in-progress/.test(readIndex(d)) && !/▶ in-progress/.test(before),
-      () => ({ status: t.status, startedAt: t.startedAt, row: readIndex(d).split("\n").find((l) => l.includes(id)) }));
+      () => ({ status: t.status, running: readTimingsFile(d).running, row: readIndex(d).split("\n").find((l) => l.includes(id)) }));
+    check("clock: the times are NOT in the task file — the sub-agent legitimately edits that front matter, and on the first live run it filled `endedAt` in itself with a rounded value, which cost the run its only measurement",
+      () => { const raw = fs.readFileSync(path.join(d, t.file), "utf8"); return !/startedAt|endedAt/.test(raw); },
+      () => fs.readFileSync(path.join(d, t.file), "utf8").split("---")[1]);
     check("clock: an id the folder does not hold marks nothing and says so — a typo must not silently start the wrong task",
       () => { const r = startTask(d, "nosuchid", RUN, OPTS, null, at(0)); return r.started === null && r.unknownId === "nosuchid"; },
       () => startTask(d, "nosuchid", RUN, OPTS, null, at(0)).started);
@@ -1556,10 +1559,10 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     const one = readTimings(d);
     syncTaskDir(d, RUN, { ...OPTS, now: at(30) });          // a later re-slice must not move or duplicate it
     const two = readTimings(d);
-    check("clock: closing a started task records exactly ONE sample, and a later re-slice neither duplicates it nor moves its `endedAt` — a duration that drifts with every regeneration measures the regenerations",
+    check("clock: closing a started task records exactly ONE sample and closes its open clock, and a later re-slice neither duplicates nor re-times it — a duration that drifts with every regeneration measures the regenerations",
       () => one.length === 1 && one[0].minutes === 12 && one[0].weight > 0
-        && two.length === 1 && two[0].minutes === 12 && taskOfId(d, id).endedAt === at(12),
-      () => ({ one, two, endedAt: taskOfId(d, id).endedAt }));
+        && two.length === 1 && two[0].minutes === 12 && !readTimingsFile(d).running[id],
+      () => ({ one, two, running: readTimingsFile(d).running }));
   }
 
   // 3 — a task closed without ever being started has no duration to record. Inventing one poisons every later
@@ -1573,6 +1576,30 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     check("clock: a task closed without ever being STARTED records no sample — the folder has no start to measure from, and a guessed duration would poison every later forecast",
       () => readTimings(d).length === 0 && !fs.existsSync(path.join(d, TIMINGS_FILE)),
       () => readTimings(d));
+  }
+
+  // 3b — closed without ever being dispatched. The nonce only proves two tasks were not closed by the SAME
+  // context; it cannot tell the orchestrator from a sub-agent. On the first live run of `--start` the review task
+  // was closed by the orchestrator that had just judged its own build, and nothing in the folder objected.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    const f = path.join(d, taskOfId(d, id).file);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("status: todo", "status: done"));
+    const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+    check("attention: a task recorded `done` that was never STARTED is reported by name — nobody dispatched a sub-agent for it through the engine, and for a review that is exactly the failure the task exists to prevent",
+      () => set.undispatched.some((t) => t.id === id)
+        && /never STARTED through/.test(readIndex(d)) && readIndex(d).includes(taskOfId(d, id).file),
+      () => ({ undispatched: set.undispatched.map((t) => t.id), attention: readIndex(d).split("## Attention")[1]?.slice(0, 300) }));
+    check("attention (anti-vacuity): the SAME task closed after a `--start` raises nothing — the check is about the dispatch, not about the status",
+      () => {
+        const d2 = fresh();
+        const id2 = idOf(d2, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+        startTask(d2, id2, RUN, OPTS, null, at(0));
+        const f2 = path.join(d2, taskOfId(d2, id2).file);
+        fs.writeFileSync(f2, fs.readFileSync(f2, "utf8").replace("status: in-progress", "status: done"));
+        return syncTaskDir(d2, RUN, { ...OPTS, now: at(9) }).undispatched.length === 0;
+      }, () => "see above");
   }
 
   // 4 — the forecast is a RANGE, and it comes from this run once this run has data.

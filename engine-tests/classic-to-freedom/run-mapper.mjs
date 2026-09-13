@@ -7095,6 +7095,42 @@ check("collection gate: HALF-wired is still ❌, and the reason names only what 
   () => flHalf.missing === 1 && /carries no items/.test(flHalf.markdown) && !/no columns/.test(flHalf.markdown),
   () => flHalf.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 220)));
 
+/* ---- Feed. `base` says the CLASSIC page got the widget from its base template; the layout row read that as
+   "the FREEDOM template provides it" and a live run believed it, shipped no Feed, and paid a 21-minute user
+   question plus a second sub-agent when verify caught it. The mapping row said `templateProvided: false` all
+   along, and nothing carried it to the renderer. Checked at the table, which is where the answer lives; the
+   rendered row was verified against a recorded plan (Applicants), where it changed from "template context —
+   provided by the Freedom template" to "⚠ ADD — the Freedom template does NOT provide this; build it". ---- */
+{
+  const byContainer = widgetsByMatch(MATCH.CONTAINER_NAME);
+  const feedDefs = byContainer.ESNFeedContainer || [];
+  check("widgets: every widget def carries its mapping row's `templateProvided` — Feed's row says false, and before this the renderer could only guess from the CLASSIC side, which says nothing about what the Freedom template ships",
+    () => feedDefs.length > 0 && feedDefs.every((w) => w.templateProvided === false),
+    () => feedDefs);
+  check("widgets (anti-vacuity): the field is carried, not hardcoded to false — a row that declares nothing leaves it null rather than asserting the template does not provide it",
+    () => Object.values(byContainer).flat().some((w) => w.templateProvided === null)
+      || Object.values(widgetsByMatch(MATCH.MODULE_KEY)).flat().some((w) => w.templateProvided === null),
+    () => ({ container: Object.values(byContainer).flat().map((w) => [w.widget, w.templateProvided]),
+      module: Object.values(widgetsByMatch(MATCH.MODULE_KEY)).flat().map((w) => [w.widget, w.templateProvided]) }));
+}
+
+/* ---- A planMeta template that is not a template SCHEMA NAME. Twice on live runs it was a description — `"list"`
+   once, `"BaseListPage"` the next — while the page was built on `ListPageV3Template`, so the template row came
+   back unconfirmable and stayed that way through two reports. ---- */
+const TN_BODY = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F1",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const tnSpec = (t) => {
+  const manifest = { entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: TN_BODY }], planMeta: { formTemplate: t } };
+  return checklistGroups(runMigration(manifest, { baseDir: FIX }), { planMeta: manifest.planMeta })
+    .flatMap((g) => g.rows.map((r) => r.label)).join("\n");
+};
+check("planMeta: a form template that is not a schema name carries the reason IN THE PLAN — nothing a stand can build will ever match it, so the row is unconfirmable and the approver is the only one who can fix it",
+  () => /not a Freedom template schema name/.test(tnSpec("BaseListPage")),
+  () => tnSpec("BaseListPage").split("\n").filter((l) => /Form template/.test(l)));
+check("planMeta (anti-vacuity): a real template name carries no such note — the check is about the NAME, not about every template row",
+  () => !/not a Freedom template schema name/.test(tnSpec("PageWithTabsFreedomTemplate"))
+    && /PageWithTabsFreedomTemplate/.test(tnSpec("PageWithTabsFreedomTemplate")),
+  () => tnSpec("PageWithTabsFreedomTemplate").split("\n").filter((l) => /Form template/.test(l)));
+
 /* ---- D7: evidence + an INDEPENDENT judge. Two writers must agree; silence is not consent. ---- */
 const evRec = { evidence: { "main#quality-gates": { referencePage: "an existing Freedom page", components: ["crt.Input"] } } };
 const evPage = { pages: { main: { parentSchemaName: "FormPageTemplate", viewConfig: { items: [{ name: "Contact", type: "crt.ComboBox" }] } } } };

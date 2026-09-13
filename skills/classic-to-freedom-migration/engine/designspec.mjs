@@ -196,6 +196,11 @@ function widgetSource(w) {
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
+  // `w.base` is a fact about the CLASSIC page — the widget came from its base template. Reading that as "the
+  // FREEDOM template provides it" is the leap that cost a live run its Feed tab: the mapping row for Feed says
+  // `templateProvided: false`, the layout row said "provided by the Freedom template", and the builder believed
+  // the row it was reading. Where the row has an answer, it wins.
+  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it";
   if (w.base) return "template context — provided by the Freedom template";
   return "native — confirm on-stand";
 }
@@ -1796,9 +1801,20 @@ function standardFeatureRows(cs) {
   return rows;
 }
 
+// A Freedom template is a platform SCHEMA NAME (package `CrtUIv2`) and they all end in `Template`. Twice on live
+// runs `planMeta` carried a description instead — `"list"` once, `"BaseListPage"` the next time — and the built
+// page was on `ListPageV3Template` both times, so the template row came back UNCONFIRMABLE: nothing built can
+// ever match a name no stand has. The row is still emitted (the deliverable is real); it says what is wrong with
+// the name it was given, in the plan, where the approver reads it.
+function templateNameNote(name) {
+  if (/Template$/.test(String(name || ""))) return "";
+  return " — ⚠ that is not a Freedom template schema name (they end in `Template`, e.g. `ListPageV3Template`); fix"
+    + " `planMeta` and re-plan, or this row can never be confirmed against a built page";
+}
+
 function buildCoverageRows(cs, pm, result) {
   const cover = [];
-  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
+  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
@@ -1996,7 +2012,7 @@ function buildListItems(pm, section, result, isMain) {
   // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
   // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
   if (pm.listTemplate && items.some((r) => r.vk)) {
-    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\`${templateNameNote(pm.listTemplate)}`, vk: { type: "template", exp: pm.listTemplate } });
   }
   return items;
 }

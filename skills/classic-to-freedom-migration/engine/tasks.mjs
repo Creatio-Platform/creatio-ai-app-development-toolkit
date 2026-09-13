@@ -534,7 +534,7 @@ function pageIdentities(result) {
 // ---8<--- THE TASK FILE ---8<---
 
 const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest",
-  "writesTo", "dependsOn", "agentNonce", "startedAt", "endedAt"];
+  "writesTo", "dependsOn", "agentNonce"];
 // A repair task carries two more, and they are what the NEXT verify run reads: which cause it was opened for and
 // which round of it this is. Both live in the file because the folder is the state — counting rounds from a
 // session's memory is how a capped cause quietly gets a fourth sub-agent.
@@ -557,10 +557,6 @@ function renderFrontMatter(task, set) {
     // proves the contract held. A nonce the sub-agent mints itself, appearing on two files, is one sub-agent
     // having closed two tasks — the engine sees it without asking either of them.
     agentNonce: task.agentNonce || "",
-    // The clock. Engine-written, and empty until `--tasks --start <id>` stamps it — an empty pair is a task that
-    // was never dispatched through the engine, which is a fact worth keeping rather than a gap worth filling.
-    startedAt: task.startedAt || "",
-    endedAt: task.endedAt || "",
   };
   const keys = [...FRONT_MATTER_KEYS];
   if (task.kind === REPAIR_KIND) {
@@ -772,6 +768,15 @@ function nonceAttention(tasks) {
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
   out.push(...nonceAttention(set.tasks));
+  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
+  // nobody asked it to start one — and on the first live run of `--start` that was the review task, closed by the
+  // orchestrator that had just judged its own build. Reported, never coerced: the status stands as recorded.
+  for (const t of set.undispatched || []) {
+    out.push(`- \`${t.file}\` — recorded \`${t.status}\` but never STARTED through \`--tasks --start ${t.id}\`, so no`
+      + " sub-agent was dispatched for it through the engine and its duration was never measured. For a review task"
+      + " this is the thing the task exists to prevent: a verdict filed by the context that did the work is not a"
+      + " verdict. Re-open it (`status: todo`), start it, and hand it to its own sub-agent.");
+  }
   // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
   // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
   // is exactly the judgement the split file records.
@@ -952,11 +957,6 @@ function carryOver(task, prev) {
     // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
     // engine's, and rewriting it away would erase the one fact that shows a task was closed by a shared session.
     agentNonce: prev.meta.agentNonce || "",
-    // The CLOCK, written by the engine and nobody else: `--tasks --start <id>` stamps `startedAt` when the
-    // orchestrator is about to dispatch, and the first regeneration that sees the task CLOSED stamps `endedAt`.
-    // Carried through the merge like the status it belongs to — a re-slice must not reset a running task's clock.
-    startedAt: prev.meta.startedAt || "",
-    endedAt: prev.meta.endedAt || "",
     recordedDigest: held,
     drifted: held !== task.rowsDigest,
   };
@@ -1287,14 +1287,6 @@ export function taskSetFor(dir, result, opts = {}, split = null) {
 export const TIMINGS_FILE = "timings.json";
 const TIMINGS_VERSION = 1;
 
-export function readTimings(dir) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
-    const samples = Array.isArray(raw?.samples) ? raw.samples : [];
-    return samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0);
-  } catch { return []; }          // absent, unreadable or malformed — a forecast is not worth an exception
-}
-
 const median = (xs) => {
   const v = [...xs].sort((a, b) => a - b);
   const m = Math.floor(v.length / 2);
@@ -1317,32 +1309,51 @@ export function forecastMinutes(weight, samples, B = TASK_BUDGET) {
   return { low: Math.max(1, Math.round(w * at(0.25))), high: Math.round(w * at(0.75)), n: rates.length };
 }
 
-// A CLOSED task whose clock started and never stopped. `endedAt` is stamped once, by the first regeneration that
-// sees the task closed, so a later re-slice cannot move it and a task closed without ever being started records
-// no sample at all rather than a made-up one.
+// THE CLOCK LIVES IN `timings.json`, NOT IN THE TASK FILE. It began in the front matter, next to `status` and
+// `agentNonce` — the two fields a sub-agent is SUPPOSED to write — and on the first live run the builder duly
+// filled `endedAt` in as well, with a time it rounded to the minute. The engine then saw the field set, recorded
+// no sample, and the progress block went on saying "no task of this run has closed yet" over `done 1`. A field
+// the caller must not touch does not belong in the file the caller edits.
 const CLOSED = new Set([S_DONE, S_NA]);
-function stampEndings(tasks, now) {
-  const closed = [];
-  for (const t of tasks) {
-    if (!CLOSED.has(t.status) || !t.startedAt || t.endedAt) continue;
-    t.endedAt = now;
-    const minutes = (new Date(now) - new Date(t.startedAt)) / 60000;
-    if (Number.isFinite(minutes) && minutes > 0) closed.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(minutes.toFixed(2)) });
-  }
-  return closed;
-}
 
-function appendTimings(dir, closed) {
-  if (!closed.length) return;
-  const samples = [...readTimings(dir), ...closed];
-  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, samples }, null, 2) + "\n");
+// `running` is the open clocks, keyed by task id; `samples` the closed ones. Both in one file so a run's timing
+// state is one thing to read, write and delete.
+export function readTimingsFile(dir) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
+    const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0) : [];
+    const running = raw?.running && typeof raw.running === "object" ? raw.running : {};
+    return { samples, running };
+  } catch { return { samples: [], running: {} }; }   // absent or malformed — a forecast is not worth an exception
+}
+export const readTimings = (dir) => readTimingsFile(dir).samples;
+const writeTimings = (dir, state) =>
+  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+
+// CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
+// nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.
+function closeClocks(dir, tasks, now) {
+  const state = readTimingsFile(dir);
+  let changed = false;
+  for (const t of tasks) {
+    const startedAt = state.running[t.id];
+    if (!CLOSED.has(t.status) || !startedAt) continue;
+    delete state.running[t.id];
+    changed = true;
+    const minutes = (new Date(now) - new Date(startedAt)) / 60000;
+    if (Number.isFinite(minutes) && minutes > 0) {
+      state.samples.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(minutes.toFixed(2)) });
+    }
+  }
+  if (changed) writeTimings(dir, state);
+  return state;
 }
 
 // THE PROGRESS BLOCK the orchestrator pastes into the chat, rendered HERE so the text and the folder cannot drift
 // apart. It is stdout, never `index.md`: the index is a derived file compared byte-for-byte by the goldens, and a
 // clock in it would make every regeneration a different file.
 export function renderProgress(set, dir, now = new Date().toISOString()) {
-  const samples = readTimings(dir);
+  const { samples, running: clocks } = readTimingsFile(dir);
   const tasks = [...set.tasks].sort((a, b) => Number(a.order) - Number(b.order));
   const done = tasks.filter((t) => CLOSED.has(t.status));
   const running = tasks.filter((t) => t.status === S_IN_PROGRESS);
@@ -1350,8 +1361,8 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
   const L = [];
   for (const t of running) {
     const f = forecastMinutes(t.weight, samples);
-    const mins = t.startedAt ? Math.round((new Date(now) - new Date(t.startedAt)) / 60000) : null;
-    const elapsed = mins == null ? "" : `, running ${mins} min`;
+    const startedAt = clocks[t.id];
+    const elapsed = startedAt ? `, running ${Math.round((new Date(now) - new Date(startedAt)) / 60000)} min` : "";
     const eta = f ? `, expected ${f.low}-${f.high} min` : "";
     L.push(`[${Number(t.order)}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
   }
@@ -1365,19 +1376,30 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
 
 // MARK A TASK STARTED, then regenerate. The orchestrator calls this immediately BEFORE it dispatches the
 // sub-agent, which is the whole point: until it existed, `index.md` only ever moved when an agent FINISHED, so a
-// run in flight looked identical to a run that had not begun. A fresh `startedAt` on every call is deliberate —
-// a task re-dispatched after a kill is timing a new attempt, and the abandoned one records no sample.
+// run in flight looked identical to a run that had not begun. A fresh clock on every call is deliberate — a task
+// re-dispatched after a kill is timing a new attempt, and the abandoned one records no sample.
 export function startTask(dir, id, result, opts = {}, split = null, now = new Date().toISOString()) {
   const merged = syncTaskDir(dir, result, opts, split);
   if (merged.refused) return { ...merged, started: null };
   const t = merged.tasks.find((x) => x.id === id);
   if (!t) return { ...merged, started: null, unknownId: id };
   t.status = S_IN_PROGRESS;
-  t.startedAt = now;
-  t.endedAt = "";
+  const state = readTimingsFile(dir);
+  state.running[t.id] = now;
+  writeTimings(dir, state);
   fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { ...merged, started: t };
+}
+
+// CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two
+// tasks were not closed by the SAME one — but it can see that a task went to `done` without ever being started
+// through `--start`. On the first live run that was the review task, closed by the orchestrator that had just
+// judged its own build, and nothing in the folder objected.
+function undispatched(set, dir) {
+  const { running, samples } = readTimingsFile(dir);
+  const timed = new Set([...Object.keys(running), ...samples.map((x) => x.id)]);
+  return set.tasks.filter((t) => CLOSED.has(t.status) && t.origin === TASK_ORIGIN_ENGINE && !timed.has(t.id));
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {
@@ -1388,9 +1410,9 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
   const untouchable = new Set(merged.blocked.map((b) => b.file));
   fs.mkdirSync(dir, { recursive: true });
-  // Stamp before the files are written, so the `endedAt` that closes a task's clock lands in the same pass that
-  // records its duration — the alternative is a sample whose file says the task is still running.
-  appendTimings(dir, stampEndings(merged.tasks, opts.now || new Date().toISOString()));
+  // Close the clocks of everything that finished since the last pass, before the files are written.
+  closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
+  merged.undispatched = undispatched(merged, dir);
   for (const t of merged.tasks) {
     // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
