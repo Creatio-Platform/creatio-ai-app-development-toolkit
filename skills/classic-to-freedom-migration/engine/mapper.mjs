@@ -741,6 +741,10 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   if (f.visible === "dynamic" && !isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
     reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
   if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
+    // `container` + `ancestorState` are structured so the renderer can FOLD one row per (container, state) instead of
+    // repeating the same container fact once per contained field. The `reason` stays self-contained for any reader
+    // that shows rows unfolded (checklist / raw needsDecision).
+    container: hiddenAncestor.name, ancestorState: hiddenAncestor.visible === false ? "hidden" : "dynamic",
     reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
   return vis;
 }

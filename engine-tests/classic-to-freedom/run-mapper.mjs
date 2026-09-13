@@ -1169,15 +1169,19 @@ const profileRun = listColumnGateRun({ success: true, sectionSchema: "Applicant1
 check("ENG-95850 (D): a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
   () => !gatedOn(profileRun, /malformed: source/) && !gatedOn(profileRun, /list-column/),
   () => profileRun.structure?.issues);
-check("ENG-95850 (D): the profile columns are the ones the plan RENDERS, and the design spec says they came from the profile rather than the static declaration",
-  () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec)
-    && /read from the saved grid PROFILE/.test(profileRun.designSpec),
+check("ENG-95850 (D): the profile columns are the ones the plan RENDERS (accepted + used, not re-read to fewer columns)",
+  () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
-check("ENG-95850 (D) / ENG-96327: a profile-sourced set's caveat rides the `- **List columns:**` line (confirm every user should get it), and the `list-columns` decision is DROPPED from the human ⚠ Confirm as noise",
-  () => /read from the saved grid PROFILE/.test(profileRun.designSpec)
-    && /confirm this is the set every user should get/.test(profileRun.designSpec)
-    && !/profile-sourced list column set/.test(profileRun.designSpec),
-  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile/i.test(l)).join("\n"));
+// ENG-96327 — the columns are shown and editable, so the profile-provenance caveat (and clio's own profile note)
+// is noise on the bullet: a wrong set is something the user changes. The bullet renders the columns plainly, the
+// same way any resolved set does — no "read from the saved grid PROFILE / every user should get" lecture — and the
+// `list-columns` decision stays out of the human ⚠ Confirm (it was already dropped there as noise).
+check("ENG-96327: a profile-sourced set shows its columns with NO profile caveat on the `- **List columns:**` line, and no `list-columns` row in the human ⚠ Confirm",
+  () => !/read from the saved grid PROFILE/.test(profileRun.designSpec)
+    && !/every user should get/.test(profileRun.designSpec)
+    && !/profile-sourced list column set/.test(profileRun.designSpec)
+    && /the Classic list shows these columns; confirm this set is kept in Freedom/.test(profileRun.designSpec),
+  () => (profileRun.designSpec || "").split("\n").filter((l) => /profile|List columns/i.test(l)).join("\n"));
 // ENG-96327 — the human ⚠ Confirm shrink: a genuine decision (map-or-drop a component) stays, while cosmetic
 // (field-labels) and builder-only (visibility-rule) kinds are dropped from the plan the approver reads. A DENYLIST.
 {
@@ -1191,6 +1195,31 @@ check("ENG-95850 (D) / ENG-96327: a profile-sourced set's caveat rides the `- **
       && /\*\*\[visibility-rule\]\*\*/.test(shrinkSpec)
       && !/\[field-labels\]/.test(shrinkSpec),
     () => shrinkSpec.split("\n").filter((l) => /\[component\]|\[field-labels\]|\[visibility-rule\]|Confirm before/.test(l)));
+}
+// ENG-96327 — the two per-field VISIBILITY confirms FOLD: a field's own bound `visible` (visibility-rule) and its
+// container's conditional/hidden `visible` (ancestor-visibility) each state a bound-visibility fact surfaced nowhere
+// else in the plan — so they are KEPT, but repeating one container's fact once per contained field is noise. Each
+// kind collapses to ONE summary row listing the fields; ancestor-visibility groups per (container, state).
+{
+  const foldSpec = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+    { kind: "visibility-rule", item: "OfficeCaption", reason: "field 'OfficeCaption' visibility is dynamic" },
+    { kind: "visibility-rule", item: "OfficeName", reason: "field 'OfficeName' visibility is dynamic" },
+    { kind: "ancestor-visibility", item: "OfficeCaption", container: "ActionButtonsContainer", ancestorState: "dynamic", reason: "field 'OfficeCaption' sits inside container 'ActionButtonsContainer' which is conditionally shown" },
+    { kind: "ancestor-visibility", item: "OfficeName", container: "ActionButtonsContainer", ancestorState: "dynamic", reason: "field 'OfficeName' sits inside container 'ActionButtonsContainer' which is conditionally shown" },
+    { kind: "ancestor-visibility", item: "SecretField", container: "HiddenPanel", ancestorState: "hidden", reason: "field 'SecretField' sits inside container 'HiddenPanel' which is hidden (static)" },
+  ] } }, { embedded: true });
+  const count = (re) => (foldSpec.match(re) || []).length;
+  check("ENG-96327 fold: two visibility-rule fields collapse to ONE row that lists BOTH fields (no per-field repetition)",
+    count(/\*\*\[visibility-rule\]\*\*/g) === 1
+      && /\*\*\[visibility-rule\]\*\* OfficeCaption, OfficeName — these fields' visibility is dynamic/.test(foldSpec),
+    () => foldSpec.split("\n").filter((l) => /\[visibility-rule\]|\[ancestor-visibility\]|Confirm before/.test(l)));
+  check("ENG-96327 fold: ancestor-visibility groups per (container, state) — ActionButtonsContainer (dynamic, 2 fields) and HiddenPanel (hidden, 1) are 2 rows, not 3",
+    count(/\*\*\[ancestor-visibility\]\*\*/g) === 2
+      && /\*\*\[ancestor-visibility\]\*\* ActionButtonsContainer — OfficeCaption, OfficeName sit inside container 'ActionButtonsContainer' which is conditionally shown/.test(foldSpec)
+      && /\*\*\[ancestor-visibility\]\*\* HiddenPanel — SecretField sits inside container 'HiddenPanel' which is hidden \(static\) — the field is mapped hidden too/.test(foldSpec),
+    () => foldSpec.split("\n").filter((l) => /\[ancestor-visibility\]/.test(l)));
+  check("ENG-96327 fold: the folded block is 3 rows total (1 visibility + 2 ancestor), reflected in the ⚠ Confirm count",
+    /#### ⚠ Confirm before I build \(3\)/.test(foldSpec));
 }
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
@@ -2197,9 +2226,13 @@ check("--plan: Size counts are pre-filled by the engine (not a FILL placeholder)
   /\*\*Size:\*\* \d+ fields/.test(cli.plan));
 check("--plan: verbatim / Adjustments guardrail present (agent must not edit generated tables)",
   /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
-check("child pages (recursion): custom details → result.childPages + `Rebuild (child)` rows inside the Pages table",
+// This fixture records no child editPage, so its children are `⚠ resolve` (NOT Rebuild) — a real Rebuild (child)
+// row is covered by recCs (#7b) with a folded child. Here we only guard that recursion surfaces childPages AND
+// renders their rows inside Main scope, not a separate section. (Was a false positive: it matched `Rebuild (child)`
+// from the unconditional Call legend, which the conditional legend no longer prints when no such row exists.)
+check("child pages (recursion): custom details → result.childPages + child scope rows inside the Main scope table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
-  && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
+  && /opened by detail/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
 // resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
 // (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
@@ -3090,6 +3123,22 @@ check("#7b Main scope: a small child (1 field) row shows the Mini page template 
   && !/Freedom form template \/ resolve via list-pages/.test(recCs.plan));
 check("#7b Main scope: the meaningless 'entity · details · lookups · backend / Reuse' row is removed",
   !/reused as-is \| Reuse/.test(recCs.plan) && !/entity · details · lookups · backend/.test(recCs.plan));
+// Conditional Call legend: recCs has a `Rebuild (child)` row (ChildA folded) AND a `⚠ resolve` row (ChildB
+// unverified), so its legend defines BOTH — and NOTHING it doesn't have (no Reuse (Freedom)/(Classic) lecture).
+check("Call legend: only the calls present in this plan are defined (Rebuild + resolve here, no Reuse-kind lecture)",
+  /\*\*`Rebuild \(child\)`\*\* = recursive sub-migration/.test(recCs.plan)
+  && /\*\*`⚠ resolve`\*\* = not yet verified/.test(recCs.plan)
+  && !/\*\*`Reuse \(Freedom\)`\*\* =/.test(recCs.plan)
+  && !/\*\*`Reuse \(Classic\)`\*\* =/.test(recCs.plan)
+  && !/\*\*`Without edit page`\*\* =/.test(recCs.plan));
+// The all-resolve fixture (cli — no child editPage recorded) prints ONLY the resolve definition: this is the
+// "so much text, nothing to resolve" noise the conditional legend removes (an unconditional legend lectured about
+// Rebuild/Reuse states the plan never contains).
+check("Call legend: an all-`⚠ resolve` plan defines resolve ALONE (no Rebuild/Reuse definitions it never uses)",
+  /\*\*`⚠ resolve`\*\* = not yet verified/.test(cli.plan)
+  && !/\*\*`Rebuild \(child\)`\*\* =/.test(cli.plan)
+  && !/\*\*`Without edit page`\*\* =/.test(cli.plan)
+  && !/\*\*`Reuse \(Freedom\)`\*\* =/.test(cli.plan));
 
 // #7c — a child whose detail names a REAL Classic edit page (getEditPageName) gets a MANDATORY-map slot
 // that closes the "view-only / native / out of scope" escape hatches a real run used to dodge the mapping.
@@ -3134,9 +3183,9 @@ check("ENG-95021: renderer and gate AGREE on a read-only child — the note says
   /Read\/attach-only — the child page question is still OPEN/.test(roDeclared.plan)
   && /Read-only ALONE does not resolve this child/.test(roDeclared.plan)
   && roDeclared.structure.issues.some((i) => /VoEntity/.test(i)));
-check("ENG-95021: the Main-scope ROW agrees too — a read-only child the gate blocks on is `⚠ resolve`, not `Reuse`",
+check("ENG-95021: the Main-scope ROW agrees too — a read-only child the gate blocks on is `⚠ resolve`, not `Without edit page`",
   /\| VoEntity — opened by detail "VoDetail" · view\/attach-only \| ⚠ verify[^|]*\| ⚠ resolve \|/.test(roDeclared.plan)
-  && !/\| VoEntity[^|]*\|[^|]*\| Reuse \|/.test(roDeclared.plan),
+  && !/\| VoEntity[^|]*\|[^|]*\| Without edit page \|/.test(roDeclared.plan),
   () => (roDeclared.plan.match(/^\| VoEntity .*$/m) || [])[0]);
 
 // (2) Pairing read-only with the page-existence answer DOES resolve it — gate AND scope row.
@@ -3148,8 +3197,8 @@ check("ENG-95021: `editable:false` PAIRED with `editPage:false` resolves the chi
   roPaired.childPages.some((c) => c.entity === "VoEntity" && c.editPage === false)
   && !roPaired.structure.issues.some((i) => /VoEntity/.test(i)),
   () => ({ children: roPaired.childPages.map((c) => c.entity), issues: roPaired.structure.issues }));
-check("ENG-95021: a child with `editPage:false` recorded IS still `Reuse` in the Main-scope row",
-  /\| VoEntity[^|]*\|[^|]*\| Reuse \|/.test(roPaired.plan),
+check("ENG-95021: a child with `editPage:false` recorded IS `Without edit page` in the Main-scope row",
+  /\| VoEntity[^|]*\|[^|]*\| Without edit page \|/.test(roPaired.plan),
   () => (roPaired.plan.match(/^\| VoEntity .*$/m) || [])[0]);
 
 // (3) The blocking message is the contract an agent follows, so it must enumerate every answer the gate honours —
@@ -3433,13 +3482,13 @@ const stUnverified = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stB
   detailSchemas: { MyDetailV2: { entity: "Child" } } }, { baseDir: FIX });
 check("STRUCTURE: detail supplied but child page UNVERIFIED → structure.complete=false (must verify, not assume)",
   stUnverified.structure.complete === false && stUnverified.structure.issues.some((i) => /NOT verified/.test(i)));
-// (c2) recording editPage:false (agent verified no *Page on-stand) → COMPLETE, and Main scope shows 'Reuse'
+// (c2) recording editPage:false (agent verified no *Page on-stand) → COMPLETE, and Main scope shows 'Without edit page'
 //      (the resolved reality) instead of a contradictory 'Rebuild (child)'.
 const stVerifiedNone = runMigration({ entity: "X", schemas: [{ pkg: "P", body: stBody }],
   detailSchemas: { MyDetailV2: { entity: "Child", editPage: false } } }, { baseDir: FIX });
-check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'Reuse', no banner",
+check("STRUCTURE: detail with editPage:false (verified no page) → complete=true + Main scope 'Without edit page', no banner",
   stVerifiedNone.structure.complete === true && !/STRUCTURE INCOMPLETE/.test(stVerifiedNone.plan)
-  && /\| Reuse \|/.test(stVerifiedNone.plan));
+  && /\| Without edit page \|/.test(stVerifiedNone.plan));
 // (c3) a NON-typed top-level Rebuild form that folds to 0 FIELDS is a HOLLOW page (the section / its edit page
 // didn't resolve) → hard BLOCK, not a silent 0-field plan. This is the Employee-section miss: 0 fields + details,
 // yet the agent produced a plan + fabricated signals. 0 fields blocks even WITH details (details ≠ form fields).

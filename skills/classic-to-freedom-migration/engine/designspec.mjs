@@ -405,11 +405,13 @@ function listColumnLine(section) {
   if (section.listColumnSource === "entity-default") {
     return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
   }
-  // ENG-95850 (D) — say WHERE a profile-sourced set came from. It is the set the list actually renders (which is why
-  // the engine takes it over the static declaration), and it is also profile data that can be scoped — the reader
-  // has to know which of the two they are confirming.
+  // ENG-95850 (D) — a profile-sourced set is the one the list actually renders (which is why the engine takes it
+  // over the static declaration). The bullet's job is just to SHOW that set: the columns are visible and editable,
+  // so a wrong one is something the user changes. The "a profile can be scoped — confirm this is the set every
+  // user should get" caveat (and clio's own profile note) is noise here; the actionable question survives as the
+  // `profile-sourced list column set` ⚠ Confirm decision. So render the columns plainly, without the note tail.
   if (section.listColumnSource === "profile") {
-    return `- **List columns:** ${rendered}${why} — read from the saved grid PROFILE the Classic list actually renders (Classic keeps each user's visible set as per-user list/profile data), NOT from the section's static declaration, which usually names fewer columns; a profile can be scoped, so confirm this is the set every user should get in Freedom`;
+    return `- **List columns:** ${rendered} — the Classic list shows these columns; confirm this set is kept in Freedom`;
   }
   return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
 }
@@ -676,17 +678,65 @@ const COSMETIC_CONFIRM_KINDS = new Set([
 // service verify — beyond the Layout table's `⚠ INLINE-EDITABLE` note) has no other home in the plan, so it stays a
 // ⚠ Confirm row on this engine.
 const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter"]);
+// Decisions ALREADY stated by a BANNER above the ⚠ Confirm list, so a confirm row only re-asks "sure?" of a choice
+// the plan just made. Both fire off a signal the banner also reads, so they are strict duplicates:
+//   `layout-type` — a WIDE Classic Header fires the header **Template recommendation** banner (headerLayout === "wide"),
+//     which names the exact top-area template + `TopAreaProfileContainer` ("not the narrow left profile"); the column
+//     grid is also in the Layout table (HeaderContainer). The confirm added nothing but "confirm you use a header region".
+//   `typed-page` — restated verbatim by the ⚠ Typed entity banner AND separately gated by the "Per-type page routing"
+//     Plan-vs-Done checklist row (with an on-stand verify), so the routing is both visible and enforced without it.
+const SHOWN_IN_BANNER_CONFIRM_KINDS = new Set(["layout-type", "typed-page"]);
 // NB there is deliberately NO BUILDER_ONLY denylist on this engine: builder/analyst decisions (visibility-rule,
-// rule-target-missing, unmapped-component, parse-gap, registry-composite-only, layout-type, base-tab-placement,
-// lookup-value) are KEPT visible in ⚠ Confirm. Without a `--units` machine channel, `plan.md`'s ⚠ Confirm IS the
-// build agent's worklist (SKILL step 7), so hiding a real decision here would lose it — the only kinds dropped are
-// genuine noise whose information the plan already carries elsewhere (COSMETIC / SHOWN_IN_TABLE / LIST_PAGE_NOISE).
+// rule-target-missing, unmapped-component, parse-gap, registry-composite-only, base-tab-placement, lookup-value)
+// are KEPT visible in ⚠ Confirm. Without a `--units` machine channel, `plan.md`'s ⚠ Confirm IS the build agent's
+// worklist (SKILL step 7), so hiding a real decision here would lose it — the only kinds dropped are genuine noise
+// whose information the plan already carries elsewhere (COSMETIC / SHOWN_IN_TABLE / SHOWN_IN_BANNER / LIST_PAGE_NOISE).
 // ENG-96327 — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in the List-page
 // block: `list-columns` (profile caveat on the `- **List columns:**` line), `list-column-path` (a builder detail),
 // `list-command-bar` / `list-add-routing` (stated in the List-page bullets), and `list-row-action` / `list-process`
 // (BINARY — the Row-actions table / `- **Section process:**` bullet state found-or-not).
 const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing",
   "list-row-action", "list-process"]);
+
+// The two per-field VISIBILITY confirms (`visibility-rule` = a field's own bound `visible`; `ancestor-visibility` =
+// the field's container has a bound/hidden `visible`) each state a bound-visibility fact that lives NOWHERE else in
+// the plan (not in Business rules — those are declarative `BusinessRule_*`; not in Custom methods / Other declared
+// logic — those carry body members). So they must not be dropped — but repeating one container's fact once per
+// contained field is pure noise. These fold each kind into ONE summary row listing the fields. Module scope: Sonar
+// counts a nested function's branching against its encloser, and these close over none of renderConfirmWorklist's locals.
+function visibilityRuleRow(fields) {
+  const n = fields.length, list = fields.join(", ");
+  return `- **[visibility-rule]** ${list} — ${n === 1 ? "this field's" : "these fields'"} visibility is dynamic (bound/rule/feature) in classic — confirm ${n === 1 ? "the" : "each"} Freedom visibility rule (static mapping shows ${n === 1 ? "it" : "them"})`;
+}
+function ancestorVisibilityRow(g) {
+  const n = g.fields.length, list = g.fields.join(", "), c = g.container, sit = n === 1 ? "sits" : "sit";
+  return g.state === "hidden"
+    ? `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is hidden (static) — ${n === 1 ? "the field is" : "the fields are"} mapped hidden too`
+    : `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is conditionally shown (dynamic/rule) in classic — wire the container's visibility condition onto the Freedom group instead of leaving it unconditionally visible`;
+}
+// Fold the two visibility kinds (one summary row each; `ancestor-visibility` grouped per container+state), and map
+// every other kept decision 1:1 — order preserved, a folded row landing at its first member's position.
+function foldedConfirmRows(kept) {
+  const visFields = kept.filter((d) => d.kind === "visibility-rule").map((d) => esc(d.item));
+  const ancGroups = new Map();
+  for (const d of kept.filter((d) => d.kind === "ancestor-visibility")) {
+    const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
+    if (!ancGroups.has(key)) ancGroups.set(key, { container: esc(d.container || ""), state: d.ancestorState || "dynamic", fields: [] });
+    ancGroups.get(key).fields.push(esc(d.item));
+  }
+  const emitted = new Set();
+  const rows = [];
+  for (const d of kept) {
+    if (d.kind === "visibility-rule") { if (!emitted.has("vis")) { emitted.add("vis"); rows.push(visibilityRuleRow(visFields)); } continue; }
+    if (d.kind === "ancestor-visibility") {
+      const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
+      if (!emitted.has(key)) { emitted.add(key); rows.push(ancestorVisibilityRow(ancGroups.get(key))); }
+      continue;
+    }
+    rows.push(`- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` + (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+  }
+  return rows;
+}
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Custom methods worklist are not re-listed; cosmetic / shown-in-a-table / builder-only / list-noise kinds
@@ -701,15 +751,14 @@ function renderConfirmWorklist(cs) {
   // no `described in` and no card tally — those belong to the ⚠ Other declared logic / ⚠ Custom methods worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
   // ENG-96327 — the RENDERED list is the shrink, but ONLY of what is genuinely NOISE for THIS engine: cosmetic kinds
-  // the agent resolves on-stand (COSMETIC), decisions already printed in a table (SHOWN_IN_TABLE), and list-page
-  // decisions already stated by a bullet/table (LIST_PAGE_NOISE). Builder/analyst decisions are NOT dropped: this
+  // the agent resolves on-stand (COSMETIC), decisions already printed in a table (SHOWN_IN_TABLE), decisions already
+  // stated by a banner above the list (SHOWN_IN_BANNER), and list-page decisions already stated by a bullet/table
+  // (LIST_PAGE_NOISE). Builder/analyst decisions are NOT dropped: this
   // engine has no `--units` machine channel, so `plan.md`'s ⚠ Confirm IS the build agent's worklist (SKILL step 7) —
   // hiding a real decision here would lose it. A DENYLIST: a new kind stays visible by default.
-  const confirm = nd
-    .filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
-      && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind))
-    .map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-      (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+  const kept = nd.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
+    && !SHOWN_IN_BANNER_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind));
+  const confirm = foldedConfirmRows(kept);
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec shows
   // "required (conditional)" but the raw GUID is unreadable. The build agent resolves it on-stand, and with no
   // `--units` channel this prompt is how it reaches the agent — so it stays in the worklist.
@@ -1627,40 +1676,57 @@ function boundaryScopeTarget(c) {
 }
 
 // Child edit pages belong in Main scope too — each related list's child entity opens its OWN form on add/edit.
-// Honest label by resolution state (mapped/real page → Rebuild; verified-none → Reuse; shipped Freedom form →
-// Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped above;
-// else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a page
-// exists).
+// Honest label by resolution state (mapped/real page → Rebuild; verified-none → Without edit page; shipped Freedom
+// form → Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped
+// above; else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a
+// page exists). Returns { target, call, label } so both the scope row AND the Call legend read the same value.
+function childScopeMeta(c) {
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage)
+    return { target: `existing Freedom form \`${esc(c.reuseFreedomPage)}\``, call: "Reuse (Freedom)", label: esc(c.entity) };
+  // ENG-95861 — the section boundary. Resolved exactly as the other three are (the structure gate agrees), and
+  // rendered as its OWN call: `Without edit page` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom
+  // form took over", and both are false here — the Classic card stays, and this list keeps opening it.
+  if (boundaryChild(c))
+    return { target: boundaryScopeTarget(c), call: "Reuse (Classic)", label: esc(c.entity) };
+  // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
+  // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
+  if (c.cyclic)
+    return { target: "↩ already mapped above (cycle) — same page, mapped higher in this plan", call: "Mapped above", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
+  // recommendation banner. Unknown count (unmapped real page) → generic.
+  if (c.spec || (typeof c.editPage === "string" && c.editPage))
+    return { target: rebuildChildTarget(c), call: "Rebuild (child)", label: esc(c.editPage || (c.entity + " form page")) };
+  // Only a recorded "no *Page exists" is `Without edit page` — `editable:false` does NOT reach this arm. The scope
+  // table must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
+  if (c.editPage === false)
+    return { target: "— no separate page (read/attach-only)", call: "Without edit page", label: esc(c.entity) };
+  return { target: "⚠ verify — does a Classic `*Page` exist for this child?", call: "⚠ resolve", label: esc(c.entity) };
+}
 function buildChildScopeRows(childs) {
   return childs.map((c) => {
-    let target, call, label;
-    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-      target = `existing Freedom form \`${esc(c.reuseFreedomPage)}\``;
-      call = "Reuse (Freedom)"; label = esc(c.entity);
-    } else if (boundaryChild(c)) {
-      // ENG-95861 — the section boundary. Resolved exactly as the other three are (the structure gate agrees), and
-      // rendered as its OWN call: `Reuse` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom form
-      // took over", and both are false here — the Classic card stays, and this list keeps opening it.
-      target = boundaryScopeTarget(c); call = "Reuse (Classic)"; label = esc(c.entity);
-    } else if (c.cyclic) {
-      // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
-      // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
-      target = "↩ already mapped above (cycle) — same page, mapped higher in this plan";
-      call = "Mapped above"; label = esc(c.resolvedFrom || c.editPage || c.entity);
-    } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
-      // recommendation banner. Unknown count (unmapped real page) → generic.
-      target = rebuildChildTarget(c);
-      call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
-    } else if (c.editPage === false) {
-      // Only a recorded "no *Page exists" is a Reuse — `editable:false` does NOT reach this arm. The scope table
-      // must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
-      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
-    } else {
-      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
-    }
+    const { target, call, label } = childScopeMeta(c);
     return `| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`;
   });
+}
+// The Call-column glossary. Only the values that ACTUALLY occur in this plan's child rows are printed — an
+// unconditional full glossary lectured about states (⚠ resolve / the two Reuse kinds / a cycle) a plan with every
+// child described never contains, which read as noise ("what is there to resolve?"). Fixed order regardless of
+// appearance so the legend reads the same across plans; `Mapped above` is defined here too (it used to be emitted
+// as a Call with no glossary entry).
+const CHILD_CALL_LEGEND = {
+  "Rebuild (child)": "**`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below).",
+  "Without edit page": "**`Without edit page`** = read/attach-only related list, no separate child page.",
+  "Reuse (Freedom)": "**`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped).",
+  "Reuse (Classic)": "**`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable.",
+  "Mapped above": "**`Mapped above`** = the same child page is already mapped higher in this plan (a cycle) — nothing is rebuilt here.",
+  "⚠ resolve": "**`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).",
+};
+const CHILD_CALL_ORDER = ["Rebuild (child)", "Without edit page", "Reuse (Freedom)", "Reuse (Classic)", "Mapped above", "⚠ resolve"];
+function renderChildScopeLegend(childs) {
+  if (!childs.length) return [];
+  const present = new Set(childs.map((c) => childScopeMeta(c).call));
+  const defs = CHILD_CALL_ORDER.filter((k) => present.has(k)).map((k) => CHILD_CALL_LEGEND[k]);
+  return defs.length ? ["> " + defs.join(" ")] : [];
 }
 
 // The "Add mini-page mapping" block (folded mini-page spec, or a ⚠ parse-error note). Empty when no mini page.
@@ -1780,7 +1846,7 @@ export function renderPlan(result, opts = {}) {
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
   P.push(...buildChildScopeRows(childs), "");
-  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
+  P.push(...renderChildScopeLegend(childs));
   // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
   // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
   // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
