@@ -7075,6 +7075,26 @@ check("ENG-94975 D6: template-provided components nested 4 levels deep in the me
   () => ({ deep: { m: tplProvidedDeep.missing, u: tplProvidedDeep.unverified }, shallow: { m: tplProvidedShallow.missing },
     rows: tplProvidedDeep.markdown.split("\n").filter((l) => /crt\./.test(l)).map((l) => l.slice(0, 110)) }));
 
+/* ---- A COLLECTION component's element is not the deliverable: the rows are. A `crt.FileList` built with no
+   `columns` and no `items` answered `hasType`, closed its row ✅, and threw `TypeError: … is not iterable` out of
+   the platform's column preprocessor the moment the page opened — it reads `viewConfig.columns` before anything
+   else runs. Measured on a live stand. ---- */
+const flRes = { changeSet: { viewConfigDiff: [], standardFeatures: [{ feature: "Attachments" }], details: [], cardActions: [] }, signals: {} };
+const flPage = (values) => renderVerify(flRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
+  viewConfig: { items: [{ name: "Wrap", type: "crt.GridContainer", items: [{ name: "FL", type: "crt.FileList", ...values }] }] } } }, ...QG_EVIDENCE });
+const flBare = flPage({});
+const flWired = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }], items: "$FLItems" });
+const flHalf = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }] });
+check("collection gate: a crt.FileList with NO `columns` and NO `items` is ❌ MISSING, not ✅ — the type is present and the component still renders nothing and throws on open",
+  () => flBare.missing === 1 && /carries no columns and no items/.test(flBare.markdown),
+  () => ({ missing: flBare.missing, row: flBare.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 200)) }));
+check("collection gate (anti-vacuity): the SAME element wired with `columns` + `items` closes the row ✅ — the check measures the wiring, not the component's name",
+  () => flWired.missing === 0 && flWired.unverified === 0 && flWired.complete === true,
+  () => ({ missing: flWired.missing, unverified: flWired.unverified }));
+check("collection gate: HALF-wired is still ❌, and the reason names only what is absent — `columns` present, `items` not",
+  () => flHalf.missing === 1 && /carries no items/.test(flHalf.markdown) && !/no columns/.test(flHalf.markdown),
+  () => flHalf.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 220)));
+
 /* ---- D7: evidence + an INDEPENDENT judge. Two writers must agree; silence is not consent. ---- */
 const evRec = { evidence: { "main#quality-gates": { referencePage: "an existing Freedom page", components: ["crt.Input"] } } };
 const evPage = { pages: { main: { parentSchemaName: "FormPageTemplate", viewConfig: { items: [{ name: "Contact", type: "crt.ComboBox" }] } } } };

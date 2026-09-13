@@ -2581,8 +2581,32 @@ export function componentAnalogsOf(ftype) {
 // builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
 // row. Own fn so `resolveComponentVk` keeps one level of nesting (Sonar CC 15). The not-checkable (⚠ unverified)
 // case is `ctx.entryAbsent`, handled by the caller before this runs — a page the payload cannot see is never ❌.
+// A COLLECTION component renders rows, and the rows come from two properties the element itself must carry:
+// `columns` (the definitions the platform iterates) and `items` (the collection attribute it binds). Presence of
+// the TYPE says nothing about either. A `crt.FileList` built with neither answered `hasType`, closed its row ✅,
+// and threw `TypeError: … is not iterable` out of the platform's own column preprocessor the moment the page was
+// opened — the preprocessor does `for (const column of viewConfig.columns)` before anything else runs. This is
+// the one component check that looks INSIDE the element, because for these two the element alone is not the
+// deliverable.
+const COLLECTION_PROPS = new Map([["crt.FileList", ["columns", "items"]], ["crt.DataGrid", ["columns", "items"]]]);
+const missingCollectionProps = (ctx, type) => {
+  const want = COLLECTION_PROPS.get(type);
+  if (!want) return null;
+  const built = ctx.ops.filter((o) => (o.type || "") === type);
+  if (!built.length) return null;
+  // ANY complete one satisfies the row: a page may carry several of a type and the plan counts the feature once.
+  const gaps = built.map((o) => want.filter((k) => {
+    const v = o[k];
+    return v == null || (Array.isArray(v) && v.length === 0) || v === "";
+  }));
+  return gaps.some((g) => !g.length) ? null : [...new Set(gaps.flat())];
+};
 function resolveFeatureVk(vk, ctx) {
-  if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  if (ctx.hasType(vk.ftype)) {
+    const gaps = missingCollectionProps(ctx, vk.ftype);
+    if (gaps) return ["❌ MISSING", `${vk.ftype} is on the page but carries no ${gaps.map((g) => esc(g)).join(" and no ")} — it renders no rows and the platform throws while reading its column definitions. Add the \`columns\` array (each column an \`id\` GUID, \`code\`, \`caption\`, \`dataValueType\`), bind \`items\` to an \`isCollection\` attribute, and feed that attribute from the element's own entity data source`, "missing"];
+    return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  }
   const alts = componentAnalogsOf(vk.ftype);
   const analog = alts.find((t) => ctx.hasType(t));
   if (analog) return ["✅ Done", `found ${analog} — the Freedom analog of ${vk.ftype}`, "ok"];
@@ -2948,7 +2972,14 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
+  if (node.name != null || node.type != null) {
+    // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
+    // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
+    // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
+    const cols = columnsOf(node);
+    const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
+    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}) });
+  }
   return walkViewConfig(node.items, out);
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
