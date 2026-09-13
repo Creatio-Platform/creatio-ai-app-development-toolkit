@@ -2626,7 +2626,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const argv = process.argv.slice(2);
   const unknown = argv.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a));
-  if (unknown.length) fail(`unknown flag ${unknown.join(" / ")} — this CLI accepts ${[...KNOWN_FLAGS].sort().join(" ")}. Nothing was written: an ignored flag makes a wrong invocation report success (\`--spec --page main\` and \`--spec --page list\` returned the same whole spec twice).`);
+  if (unknown.length) fail(`unknown flag ${unknown.join(" / ")} — this CLI accepts ${[...KNOWN_FLAGS].sort((a, b) => a.localeCompare(b)).join(" ")}. Nothing was written: an ignored flag makes a wrong invocation report success (\`--spec --page main\` and \`--spec --page list\` returned the same whole spec twice).`);
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)

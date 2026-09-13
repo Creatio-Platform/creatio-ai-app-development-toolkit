@@ -196,16 +196,17 @@ const structuralKey = (label) => String(label).toLowerCase()
 
 // ---8<--- THE REFERENCE CACHE: fetched ONCE per run, not once per fresh context ---8<---
 
-// EVERY BUILD SUB-AGENT STARTS EMPTY. It re-reads the same guidance, the same tool contracts and the same
-// component docs the previous one just read, because a fresh context has none of it — measured at 3.5× the tool
-// lookups of the planning phase for work that is identical every time. So one read-only task fetches them once
-// into `refs/` and every later task is handed PATHS.
+// EVERY BUILD SUB-AGENT STARTS EMPTY. It re-reads what the previous one just read, because a fresh context has
+// none of it — measured at 3.5× the tool lookups of the planning phase for work that is identical every time. So
+// one read-only task fetches the shared material once into `refs/` and every later task is handed PATHS.
 //
-// Three properties, taken from the workflow prototype that proved the saving and kept unchanged here:
-//   PATHS, NEVER PASTED BODIES. Inlining the contracts into every build prompt cost more than fetching them did.
+//   PATHS, NEVER PASTED BODIES. Inlining a cached file into every build prompt cost more than fetching it did.
 //   THE CACHE IS A SHORTCUT, NOT A RESTRICTION. A sub-agent needing something the cache does not hold calls the
 //     tool as usual — a cache that FORBIDS is a defect generator.
-//   IT IS STAND-SPECIFIC. `components.md` records the environment it came from; another stand must not trust it.
+//   IT HOLDS ONLY WHAT A BUILDER CANNOT FETCH FOR ITSELF. Tool contracts and component docs were cached once and
+//     both lost the part that mattered, because one `get-tool-contract` call for eight tools returns ~55KB: a copy
+//     every builder can afford to read is a summary, and the summary is the defect. Those are read per task from
+//     the tools; what stays here is the guidance articles and the design spec.
 function refsRows(result) {
   const pages = [...new Set([...subPageNodes(result).map((n) => n.pageKey).filter(Boolean), "main", LIST_PAGE_KEY])];
   return [
