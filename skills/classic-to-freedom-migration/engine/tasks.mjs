@@ -210,18 +210,23 @@ function refsRows(result) {
   const pages = [...new Set([...subPageNodes(result).map((n) => n.pageKey).filter(Boolean), "main", LIST_PAGE_KEY])];
   return [
     { label: `\`${REFS_DIR}/index.md\` — what was cached and which TIER each entry belongs to: \`stable-docs\``
-      + " (the same on every run), `host` (this machine), `environment` (this stand), `plan` (this plan version)."
-      + " The tier is the invalidation story: a `plan` entry is stale the moment the plan version changes, an"
-      + " `environment` entry the moment the stand does, and a `stable-docs` entry effectively never." },
-    { label: `\`${REFS_DIR}/contracts.md\` — the tool contracts a page build calls, fetched BY NAME and written`
-      + " VERBATIM: every parameter with its OWN description, every default, every rejected alias, every output"
-      + " field. Never argument-less (that dumps the whole catalogue into a file every builder reads) and never"
-      + " condensed into a list of argument NAMES. Summarising is what this file cannot do: one run shortened"
-      + " `create-app`'s `optional-template-data-json` to the bare name, so the builder reading the cache could"
-      + " not know it is the argument that binds the app's section to an object that already exists — and took"
-      + " the two-call path the same file records as the anti-pattern, shipping three pages that migrate nothing." },
-    { label: `\`${REFS_DIR}/components.md\` — \`get-component-info\` per component type this plan builds, headed`
-      + " with the ENVIRONMENT it was read from, because a component's contract is stand-specific." },
+      + " (the same on every run — the guidance articles) and `plan` (this plan version — the design spec). The"
+      + " tier is the invalidation story: a `plan` entry is stale the moment the plan version changes and a"
+      + " `stable-docs` entry effectively never. There is no `environment` tier any more: what was stand-specific"
+      + " here was the component docs, and those are read per task from the stand instead of copied once." },
+    // NO tool contracts and NO component docs here, deliberately. Both were cached once and both lost the part
+    // that mattered: `create-app`'s `optional-template-data-json` became a bare name, so the builder could not see
+    // it is what binds the app's section to an existing object; the Attachments recipe kept "needs its own data
+    // source" and dropped the `columns` the platform throws without. The cause is not carelessness that a firmer
+    // instruction fixes — ONE `get-tool-contract` call for eight tools returns ~55KB, so a faithful copy is
+    // ~14k tokens in EVERY builder's context and a readable one is a summary, which is the defect. A builder
+    // instead asks for exactly the two or three tools and the handful of components its own task touches, and
+    // gets the authoritative answer. What a cache is genuinely for is what a builder CANNOT fetch for itself.
+    { label: "Tool contracts and component docs are NOT cached: each build task calls `get-tool-contract` for the"
+      + " tools it will invoke and `get-component-info` for the component types it will build, BY NAME, and reads"
+      + " the answer whole. One call for eight tools returns about 55KB — a copy small enough for every builder to"
+      + " read is a summary, and summarising is what lost `optional-template-data-json` and the file list's"
+      + " `columns` on a measured run. Ask for your own surface; do not write a digest for the next agent." },
     { label: `\`${REFS_DIR}/guidance-<topic>.md\` — one file per clio guidance topic this build needs. Resolve the`
       + " set from the routing map (`get-guidance name=routing`), not from a list written down here — the map is"
       + " what knows which guide a given kind of work needs." },

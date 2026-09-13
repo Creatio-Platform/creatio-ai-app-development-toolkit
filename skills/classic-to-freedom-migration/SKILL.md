@@ -424,8 +424,8 @@ are still never two writers at once. The run's first task is the `Reference cach
 **A run small enough gets ONE build task and ONE review.** Below `TASK_BUDGET.run` the folder holds exactly two
 files: everything that writes the stand (app, package, section, every page) as a single `Whole migration` task, and
 the quality gates as a single read-only review that waits on it. There is no `Reference cache` in such a run — it
-exists to stop several fresh contexts re-fetching the same contracts, and here there is only one builder. A 31-row
-section came out as six tasks and five sub-agents before this, one of them caching contracts nobody else read.
+exists to stop several fresh contexts re-fetching the same guidance, and here there is only one builder. A 31-row
+section came out as six tasks and five sub-agents before this, one of them caching material nobody else read.
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
@@ -433,8 +433,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
    before the parent list that opens it, and the list page comes after the form page it is gated off. Three
    deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
-   guidance, contracts and component docs every later fresh context would otherwise refetch, and every other task
-   depends on it), then `Scaffolding` — the app, package, section and page shells that every other task needs to
+   clio guidance articles and the design spec, and every other task depends on it — it does NOT cache tool
+   contracts or component docs; each build task reads its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task needs to
    exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
    never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
    the structure gate instead, so it never reaches a task.)

@@ -256,17 +256,17 @@ check("refs: it names ONE spec file and names every page it covers — the engin
       && keysOf(SET).every((k) => spec[0].label.includes(`\`${k}\``));
   },
   () => ({ keys: keysOf(SET), rows: REFS.rows.map((r) => r.label.slice(0, 60)) }));
-check("refs: it names the shared files by PATH — contracts, components and the guidance topics, plus the index whose TIERS are the invalidation story",
-  () => [`${REFS_DIR}/contracts.md`, `${REFS_DIR}/components.md`, `${REFS_DIR}/guidance-`, `${REFS_DIR}/index.md`]
+check("refs: it names the shared files by PATH — the guidance topics and the design spec, plus the index whose TIERS are the invalidation story",
+  () => [`${REFS_DIR}/guidance-`, `${REFS_DIR}/spec.md`, `${REFS_DIR}/index.md`]
     .every((f) => REFS.rows.some((r) => r.label.includes(f)))
-    && REFS.rows.some((r) => /stable-docs/.test(r.label) && /environment/.test(r.label) && /plan/.test(r.label)),
+    && REFS.rows.some((r) => /stable-docs/.test(r.label) && /plan/.test(r.label)),
   () => REFS.rows.map((r) => r.label.slice(0, 80)));
-check("refs: the rendered file carries the three rules that keep the cache from becoming a defect — contracts are fetched BY NAME (argument-less dumps the whole catalogue into a file every builder reads) and written VERBATIM rather than condensed to argument names (a run that shortened `optional-template-data-json` to the bare name then took the anti-pattern path the same file records), and the component doc names the STAND it came from because a component contract is environment-specific",
+check("refs: the cache holds NOTHING a builder can fetch for itself — no tool contracts and no component docs, because one `get-tool-contract` call for eight tools returns ~55KB: a copy every builder can read is a summary, and summarising is what lost `optional-template-data-json` and a file list's `columns` on measured runs",
   () => {
     const text = renderTaskFile(REFS, SET);
-    return /ENVIRONMENT it was read from/.test(text) && /Never argument-less/.test(text)
-      && /VERBATIM: every parameter with its OWN description/.test(text)
-      && /never\s+condensed into a list of argument NAMES/.test(text);
+    return !/contracts\.md/.test(text) && !/components\.md/.test(text)
+      && /Tool contracts and component docs are NOT cached/.test(text)
+      && /get-tool-contract/.test(text) && /get-component-info/.test(text);
   }, () => renderTaskFile(REFS, SET));
 check("refs: a cache big enough to be CUT is chained like any other artifact — chunk 2 waits on chunk 1, and every build task still waits on the whole cache rather than on whichever chunk happened to be last",
   () => {

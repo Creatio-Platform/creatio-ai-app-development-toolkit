@@ -89,10 +89,14 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   0.78M for work no second builder read. The collapsed build writes one artifact (`whole`), so the parallelism rule
   still reads off `writesTo` unchanged; the review keeps its own read-only task, because a verdict filed by the
   agent that just built the page is not a verdict at any size. No reference cache is written for such a run.
-- **Above it, the run's FIRST task is the reference cache.** One read-only sub-agent fetches the guidance, tool
-  contracts and component docs every fresh-context builder would otherwise refetch, plus the design spec, into
-  `refs/`, and every later task is handed PATHS. It writes no stand artifact and blocks everything — which is why a dependency
-  is published separately from the write target rather than inferred from it.
+- **Above it, the run's FIRST task is the reference cache.** One read-only sub-agent fetches the clio guidance
+  articles and the design spec into `refs/`, and every later task is handed PATHS. It writes no stand artifact and
+  blocks everything — which is why a dependency is published separately from the write target rather than inferred
+  from it. It does NOT cache tool contracts or component docs: one `get-tool-contract` call for eight tools returns
+  about 55KB, so a copy every builder can afford to read is a summary — and summarising is what dropped
+  `create-app`'s `optional-template-data-json` to a bare name and kept "the file list needs its own data source"
+  while losing the `columns` the platform throws without. Each build task asks for its own two or three tools and
+  its own handful of components instead, and gets the authoritative answer.
 - **`agentNonce` is written by the sub-agent and checked by the engine.** The same value on two files, or a `done`
   task carrying none, is reported on the index. The orchestrator composes the prompt and reads the reply, so it
   cannot also be the evidence that it dispatched one sub-agent per task.
