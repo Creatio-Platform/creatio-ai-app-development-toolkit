@@ -50,7 +50,7 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
-import { GATE_KIND } from "./mapping-table.mjs";
+import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
@@ -2068,12 +2068,20 @@ export function registrySettleGuidance(finding) {
 // those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
 // type the engine chose — the same rule the registry-target check already honours. Extracted from
 // reportRegistryFindings (Sonar S3776) alongside `collectResolvedGates`.
-function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
+export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
   const enginePositioned = new Set();
   for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
   for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
+  // ENG-96327 — a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
+  // ALREADY a row in the Layout table ("template-provided" / "native"), and that these features are composite
+  // (built via their recipe, not dragged from a toolbar) is general Creatio knowledge the skill already carries.
+  // Re-stating it as a per-plan ⚠ Confirm just duplicates the Layout, so skip a composite-only advisory whose type
+  // is a standard feature present on this page. A NON-standard composite-only type the agent must place standalone
+  // has no Layout row and keeps its advisory.
+  const featureTypes = new Set();
+  for (const f of changeSet.standardFeatures || []) { const t = featureVerifyType(f.feature); if (t) featureTypes.add(t); }
   for (const a of regRun.advisories || []) {
-    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
+    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType) || featureTypes.has(a.componentType)) continue;
     changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
       reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${sourceNote}.` });
   }

@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
@@ -8785,48 +8785,48 @@ try {
     { componentRegistry: { resolvedTargetVersion: "8.3.9",
       components: [{ componentType: "crt.Input", inputs: {}, outputs: {} },
         { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
+  // ENG-96327 — crt.CommunicationOptions IS a standard feature ("Communication options") shown in the Layout, so its
+  // composite-only advisory is now SUPPRESSED end-to-end (the Layout standard-feature row + skill knowledge cover it,
+  // and its reason ends by admitting the union-of-versions check does not prove the stand carries it). Re-stating it
+  // as a ⚠ Confirm just duplicated the Layout.
   const coWarn = compOnlyRun.changeSet.needsDecision.find((d) => d.kind === "registry-composite-only" && d.item === "crt.CommunicationOptions");
-  check("ENG-95683 (item 2/R1): a compositeOnly type the run emits reaches changeSet.needsDecision as `registry-composite-only` with GENERIC guidance (reach it via its composite host/recipe) and NO install/enable instruction",
-    !!coWarn && /COMPOSITE-ONLY/.test(coWarn.reason) && /composite host\/recipe/.test(coWarn.reason)
-    && /cannot be inserted directly/.test(coWarn.reason)
-    && !/\binstall\b/i.test(coWarn.reason) && !/\benable\b/i.test(coWarn.reason) && !/re-run the BUILD/.test(coWarn.reason),
+  check("ENG-96327: a STANDARD-FEATURE composite-only gate type (crt.CommunicationOptions = Communication options, shown in the Layout) is NOT re-stated as a registry-composite-only confirm",
+    !coWarn && (compOnlyRun.changeSet.standardFeatures || []).some((f) => f.feature === "Communication options"),
     () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
-  check("ENG-95683 (item 2/R1, negative control): a compositeOnly item carries NO structured gate, and a NON-compositeOnly present type (crt.Input) yields NO `registry-composite-only` item",
-    coWarn && coWarn.gate === undefined
-    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === "crt.Input")
-    // ...and a compositeOnly type that resolves is NOT ALSO reported as a missing `registry-target` (it is present).
-    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions"),
+  check("ENG-95683 (item 2/R1, negative control): a resolved compositeOnly type is NOT reported as a missing `registry-target`, and crt.Input yields no registry-composite-only item",
+    !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions")
+    && !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === "crt.Input"),
     () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
 
-  // ENG-95683 (item 2/R1, negative control — the `enginePositioned` SKIP branch itself): a compositeOnly type the
-  // ENGINE positioned (a container/field it placed in `viewConfigDiff` / `tableElements` — and the MAJORITY of
-  // registry types are compositeOnly) must NOT reach needsDecision; only a compositeOnly type the build agent must
-  // place STANDALONE does. Without this control the skip clause `|| enginePositioned.has(a.componentType)` is
-  // untested: the R1 case above emits `crt.CommunicationOptions` as a standalone detail (never engine-positioned),
-  // so deleting the clause keeps every assertion green while the worklist floods with engine-picked types. Here a
-  // COMPLETE radio group emits `crt.IconRadioButton` into `viewConfigDiff` (values.type) — the engine positioned it —
-  // and marking it compositeOnly makes it a composite-only advisory candidate the skip must drop; the SAME run still
-  // emits the standalone `crt.CommunicationOptions` detail, which must still surface. So deleting the skip fails on
-  // IconRadioButton, and inverting it (skip the standalone, keep the positioned) fails on CommunicationOptions.
-  const engPosRun = gmRun([
-    `{operation:"insert",name:"IsPrimary",parentName:"Header",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.RADIO_GROUP,value:{bindTo:"IsPrimary"},caption:{bindTo:"Resources.Strings.IsPrimaryCaption"}}}`,
-    `{operation:"insert",name:"OptYes",parentName:"IsPrimary",propertyName:"items",values:{value:true,caption:{bindTo:"Resources.Strings.YesCaption"}}}`,
-    `{operation:"insert",name:"OptNo",parentName:"IsPrimary",propertyName:"items",values:{value:false,caption:{bindTo:"Resources.Strings.NoCaption"}}}`,
-    compOnlyDetail,
-  ].join(","), compOnlyDetails,
-    { entityColumns: { Name: { type: "ShortText" }, IsPrimary: { type: "Boolean" } },
-      resources: { IsPrimaryCaption: "Is primary", YesCaption: "Yes", NoCaption: "No" },
-      componentRegistry: { resolvedTargetVersion: "8.3.9", components: [
-        { componentType: "crt.Input", inputs: {}, outputs: {} },
-        { componentType: "crt.IconRadioButton", compositeOnly: true, inputs: {}, outputs: {} },
-        { componentType: "crt.CommunicationOptions", compositeOnly: true, inputs: {}, outputs: {} }] } });
-  const engPosCompOnly = (item) => engPosRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === item);
-  check("ENG-95683 (item 2/R1, negative control): an ENGINE-POSITIONED compositeOnly type (crt.IconRadioButton, placed in viewConfigDiff) is dropped by the enginePositioned skip, while a STANDALONE compositeOnly type (crt.CommunicationOptions) in the same run still surfaces — deleting the skip clause fails here, inverting it fails on the standalone one",
-    engPosRun.changeSet.viewConfigDiff.some((o) => o.values?.type === "crt.IconRadioButton") // the type WAS engine-positioned (non-vacuous)
-    && !engPosCompOnly("crt.IconRadioButton")                                                 // ...so the skip drops it
-    && engPosCompOnly("crt.CommunicationOptions"),                                            // ...but the standalone one is untouched
-    () => ({ view: engPosRun.changeSet.viewConfigDiff.map((o) => ({ name: o.name, type: o.values?.type })),
-      registry: engPosRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")) }));
+  // ENG-95683 (item 2/R1) + ENG-96327, driven through the exported `buildCompositeOnlyDecisions` for full control over
+  // the advisory set. A STANDALONE compositeOnly type (a profile card — not a standard feature, not engine-positioned)
+  // surfaces with GENERIC guidance and NO gate / install / enable.
+  const bcod = (changeSet, advisories) => { const cs = { needsDecision: [], ...changeSet }; buildCompositeOnlyDecisions(cs, { advisories }, "supply `manifest.componentRegistry`"); return cs.needsDecision; };
+  const standalone = bcod({ profileCards: [{ type: "crt.CustomProfileCard", entity: "Contact" }] },
+    [{ kind: "composite-only", componentType: "crt.CustomProfileCard", why: "the Contact profile card" }]);
+  const soItem = standalone.find((d) => d.kind === "registry-composite-only" && d.item === "crt.CustomProfileCard");
+  check("ENG-95683 (item 2/R1) unit: a standalone compositeOnly type surfaces with GENERIC guidance, NO gate, no install/enable",
+    !!soItem && /COMPOSITE-ONLY/.test(soItem.reason) && /composite host\/recipe/.test(soItem.reason)
+    && /cannot be inserted directly/.test(soItem.reason) && soItem.gate === undefined
+    && !/\binstall\b/i.test(soItem.reason) && !/\benable\b/i.test(soItem.reason),
+    () => standalone);
+  check("ENG-95683 unit: a NON-compositeOnly advisory kind yields no registry-composite-only item",
+    bcod({}, [{ kind: "registry-target", componentType: "crt.Input" }]).length === 0);
+  // The two SKIP branches, isolated in one run: engine-positioned (viewConfigDiff) AND standard-feature (crt.FileList
+  // with Attachments present) are both dropped; a standalone profile-card type in the same run still surfaces.
+  const mixed = bcod({
+    viewConfigDiff: [{ name: "IsPrimary", values: { type: "crt.IconRadioButton" } }],
+    standardFeatures: [{ feature: "Attachments" }],
+    profileCards: [{ type: "crt.CustomProfileCard", entity: "Contact" }],
+  }, [
+    { kind: "composite-only", componentType: "crt.IconRadioButton", why: "engine-positioned" },
+    { kind: "composite-only", componentType: "crt.FileList", why: "the Attachments feature's gate type" },
+    { kind: "composite-only", componentType: "crt.CustomProfileCard", why: "the Contact profile card" },
+  ]);
+  const mixedHas = (t) => mixed.some((d) => d.kind === "registry-composite-only" && d.item === t);
+  check("ENG-95683/ENG-96327: engine-positioned (crt.IconRadioButton) AND standard-feature (crt.FileList) composite-only types are dropped; a standalone profile-card type still surfaces",
+    !mixedHas("crt.IconRadioButton") && !mixedHas("crt.FileList") && mixedHas("crt.CustomProfileCard"),
+    () => mixed.map((d) => d.item));
 
   // ENG-95683 (item 2/R1, negative control — the `tableElements` SOURCE of enginePositioned, in ISOLATION): the skip
   // set is built from TWO sources — `viewConfigDiff[].values.type` (the radio-group test above) AND
