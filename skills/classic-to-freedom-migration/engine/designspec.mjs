@@ -726,8 +726,9 @@ function visibilityRuleRow(fields) {
 }
 function ancestorVisibilityRow(g) {
   const n = g.fields.length, list = g.fields.join(", "), c = g.container, sit = n === 1 ? "sits" : "sit";
+  const mapped = n === 1 ? "the field is" : "the fields are";
   return g.state === "hidden"
-    ? `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is hidden (static) — ${n === 1 ? "the field is" : "the fields are"} mapped hidden too`
+    ? `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is hidden (static) — ${mapped} mapped hidden too`
     : `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is conditionally shown (dynamic/rule) in classic — wire the container's visibility condition onto the Freedom group instead of leaving it unconditionally visible`;
 }
 // `rule-target-missing` = a business rule names a target with no element on the page. Each row states the same fact
@@ -739,30 +740,34 @@ function ruleTargetMissingRow(items) {
     ? `- **[rule-target-missing]** ${list} — a business rule targets it but the page has no element for it — neither a mapped field nor a tab/group/container. It is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`
     : `- **[rule-target-missing]** ${list} — business rules target these but the page has no element for them — neither a mapped field nor a tab/group/container. Each is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`;
 }
-// Fold the two visibility kinds (one summary row each; `ancestor-visibility` grouped per container+state), and map
-// every other kept decision 1:1 — order preserved, a folded row landing at its first member's position.
+// The ancestor-visibility group key — one folded row per (container, state).
+const ancKey = (d) => `anc|${d.container || ""}|${d.ancestorState || "dynamic"}`;
+// Fold the summary kinds (one row each: visibility-rule, rule-target-missing folded across all items; ancestor-visibility
+// grouped per container+state), and map every other kept decision 1:1 — order preserved, a folded row landing at its
+// first member's position. Table-driven so a new folded kind is one SUMMARY_ROW entry, not another branch (Sonar S3776).
 function foldedConfirmRows(kept) {
-  const visFields = kept.filter((d) => d.kind === "visibility-rule").map((d) => esc(d.item));
-  const rtmItems = kept.filter((d) => d.kind === "rule-target-missing").map((d) => esc(d.item));
-  const ancGroups = new Map();
-  for (const d of kept.filter((d) => d.kind === "ancestor-visibility")) {
-    const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
-    if (!ancGroups.has(key)) ancGroups.set(key, { container: esc(d.container || ""), state: d.ancestorState || "dynamic", fields: [] });
-    ancGroups.get(key).fields.push(esc(d.item));
-  }
+  const itemsOf = (kind) => kept.filter((d) => d.kind === kind).map((d) => esc(d.item));
+  // kind -> { key, build } : a folded row built once from ALL its items (key dedupes so it emits at first occurrence).
+  const SUMMARY_ROW = {
+    "visibility-rule": { key: () => "vis", build: () => visibilityRuleRow(itemsOf("visibility-rule")) },
+    "rule-target-missing": { key: () => "rtm", build: () => ruleTargetMissingRow(itemsOf("rule-target-missing")) },
+    "ancestor-visibility": { key: ancKey, build: (d) => ancestorVisibilityRow(ancGroupOf(kept, d)) },
+  };
   const emitted = new Set();
+  const plainRow = (d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` + (d.describedIn ? ` · **described in** ${describedInText(d)}` : "");
   const rows = [];
   for (const d of kept) {
-    if (d.kind === "visibility-rule") { if (!emitted.has("vis")) { emitted.add("vis"); rows.push(visibilityRuleRow(visFields)); } continue; }
-    if (d.kind === "rule-target-missing") { if (!emitted.has("rtm")) { emitted.add("rtm"); rows.push(ruleTargetMissingRow(rtmItems)); } continue; }
-    if (d.kind === "ancestor-visibility") {
-      const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
-      if (!emitted.has(key)) { emitted.add(key); rows.push(ancestorVisibilityRow(ancGroups.get(key))); }
-      continue;
-    }
-    rows.push(`- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` + (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
+    const fold = SUMMARY_ROW[d.kind];
+    if (!fold) { rows.push(plainRow(d)); continue; }
+    const key = fold.key(d);
+    if (!emitted.has(key)) { emitted.add(key); rows.push(fold.build(d)); }
   }
   return rows;
+}
+// The (container, state) group a given ancestor-visibility decision folds into, with all sibling fields collected.
+function ancGroupOf(kept, d) {
+  const fields = kept.filter((x) => x.kind === "ancestor-visibility" && ancKey(x) === ancKey(d)).map((x) => esc(x.item));
+  return { container: esc(d.container || ""), state: d.ancestorState || "dynamic", fields };
 }
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
@@ -797,6 +802,27 @@ function renderConfirmWorklist(cs) {
     confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+}
+
+// The form-page Layout block — heading + the one Layout table (rows grouped by region, reading order) + the
+// cross-datasource `↳ linked` recipe printed once. Extracted from renderDesignSpec so its region loops don't
+// count against that function's cognitive complexity (Sonar S3776); skipped entirely in `logicOnly` mode.
+function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
+  const out = [
+    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
+    "#### Layout",
+    "| Region | Element | Type | Source | Rule | Additional |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const region of order) {
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
+    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} |`);
+  }
+  out.push("");
+  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+    out.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  }
+  return out;
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -869,24 +895,7 @@ export function renderDesignSpec(result, opts = {}) {
   // `logicOnly` (ENG-96327) — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
   // / ⚠ Confirm), NOT the form-page Layout. Used for a formless INLINE-GRID child: it has no form page, so a Layout
   // table (empty, or listing grid-only bits) would misdescribe it — its logic IS the deliverable to port.
-  if (!opts.logicOnly) {
-    L.push(
-      opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
-      "#### Layout",
-      "| Region | Element | Type | Source | Rule | Additional |",
-      "| --- | --- | --- | --- | --- | --- |",
-    );
-    for (const region of order) {
-      const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-      for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
-    }
-    L.push("");
-    // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
-    // paragraph in every linked field's Additional cell.
-    if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
-      L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
-    }
-  }
+  if (!opts.logicOnly) L.push(...renderFormLayoutBlock(entity, opts, order, byRegion, cs));
 
   L.push(...renderLogicSection(cs));
 
@@ -992,7 +1001,10 @@ function describedInText(h) {
   // ac)` and render `? AC-1`, a citation naming no card the operator can open, while the ⚠ that exists for that
   // row went quiet. `describedInOf` (migrate.mjs) no longer produces one; this leg refuses it too, so a plan
   // rendered from an older `behaviour-index.json` reads honestly rather than citing a question mark.
-  if (!d || (!d.card && !d.bodyCard)) return "⚠ not described";
+  // No card to cite. If the analysis still authored plain-language What/Use-case prose for this row, the row IS
+  // described (just not by a citable card) — say so, rather than the self-contradicting `⚠ not described` beside two
+  // filled prose cells (review #1). Only a row with neither a card NOR prose is genuinely not described.
+  if (!d || (!d.card && !d.bodyCard)) return (d?.whatItDoes || d?.useCase) ? "plain-language only" : "⚠ not described";
   const cite = (card, ac) => {
     const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
     return esc(card || "?") + acText;
@@ -1559,45 +1571,41 @@ function boundaryChildLines(c) {
   ];
 }
 
+// The lines for ONE child mapping (the arm-specific body under the child heading) plus whether this arm EMBEDS the
+// child's own spec and so must recurse into grandchildren. Module-level so its arm chain doesn't count against
+// renderChildMappings' cognitive complexity (Sonar S3776); the recursion + blank-line spacing stay in renderChild.
+function childBodyLines(c, lvl) {
+  const h = "#".repeat(Math.min(6, lvl));
+  const head = `${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
+  const arm = (body, recurse = false) => ({ lines: [head, ...body], recurse });
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return arm([
+    `> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
+    ">",
+    `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`]);
+  if (boundaryChild(c)) return arm(boundaryChildLines(c));
+  if (c.cyclic) return arm([`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`]);
+  // ENG-96327 — inline-grid: show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT a form-page mapping; the
+  // intro just said there is no form page. Fall back to the full spec if `logicSpec` is (defensively) absent. Recurses.
+  if (c.formless === "inline-grid") return arm([
+    `> ⚠ **No separate form page — inline-editable grid (confirm on-stand).** \`${esc(c.resolvedFrom || c.editPage)}\` folded to **0 form fields** while carrying behaviour (an attribute lookup-filter + column-render methods), which reads as a ConfigurationGrid detail edited INLINE in the related-list rows. This rests on the fold seeing no fields — if the fields layer was simply not captured (a bad/partial child bundle) the reading is wrong, so CONFIRM the Classic detail really is inline-editable (no separate edit page) before skipping the form. If it is: do NOT build a Freedom form page — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
+    "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2)], true);
+  if (c.formless === "empty") return arm([`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, ""]);
+  if (c.spec) return arm(["", demoteHeadings(c.spec, lvl - 2)], true); // nest the child's own headings; EMBED grandchildren
+  if (c.specError) return arm([`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`]);
+  if (typeof c.editPage === "string" && c.editPage) return arm([`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`]);
+  if (c.editPage === false) return arm([`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`]);
+  // Read-only is a fact about add-record, not page existence, so this row stays OPEN (the gate blocks on it).
+  if (c.editable === false) return arm([`> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`]);
+  return arm([`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`]);
+}
+
 function renderChildMappings(childs) {
   if (!childs.length) return [];
   const P = ["### Child page mappings", ""];
   const renderChild = (c, lvl) => {
-    const h = "#".repeat(Math.min(6, lvl));
-    P.push(`${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`);
-    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-      P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
-        ">",
-        `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`);
-    } else if (boundaryChild(c)) {
-      P.push(...boundaryChildLines(c));
-    } else if (c.cyclic) {
-      P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
-    } else if (c.formless === "inline-grid") {
-      // ENG-96327 — show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT a full form-page mapping: the intro
-      // just said there is no form page. `c.logicSpec` is produced by `foldOneChildPage`; fall back to the full spec
-      // if (defensively) absent. Recurse into grandchildren. (One push: intro + the demoted logic sections.)
-      P.push(`> ⚠ **No separate form page — inline-editable grid (confirm on-stand).** \`${esc(c.resolvedFrom || c.editPage)}\` folded to **0 form fields** while carrying behaviour (an attribute lookup-filter + column-render methods), which reads as a ConfigurationGrid detail edited INLINE in the related-list rows. This rests on the fold seeing no fields — if the fields layer was simply not captured (a bad/partial child bundle) the reading is wrong, so CONFIRM the Classic detail really is inline-editable (no separate edit page) before skipping the form. If it is: do NOT build a Freedom form page — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
-        "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2));
-      for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
-    } else if (c.formless === "empty") {
-      P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");
-    } else if (c.spec) {
-      P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
-      for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
-    } else if (c.specError) {
-      P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
-    } else if (typeof c.editPage === "string" && c.editPage) {
-      P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
-    } else if (c.editPage === false) {
-      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
-    } else if (c.editable === false) {
-      // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
-      // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
-      P.push(`> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`);
-    } else {
-      P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`);
-    }
+    const { lines, recurse } = childBodyLines(c, lvl);
+    P.push(...lines);
+    if (recurse) for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
     P.push("");
   };
   for (const c of childs) renderChild(c, 4);
@@ -1900,16 +1908,12 @@ export function renderPlan(result, opts = {}) {
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  P.push(...buildChildScopeRows(childs), "");
-  P.push(...renderChildScopeLegend(childs));
-  // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
-  // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
-  // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
-  // is the FALLBACK. This steer applies to BOTH typed and NON-typed pages (it used to be typed-only, so a
-  // non-typed DCM page silently kept whatever plain form template the agent picked).
-  // Template banner, then the LIST PAGE first (so the Add mini-page mapping sits right after it), then the
-  // add-mini-page mapping — one combined push (Sonar S7778); the form / per-type mappings follow below.
+  // Main-scope rows + Call legend, then the DCM template banner, then the LIST PAGE first (so the Add mini-page
+  // mapping sits right after it), then the add-mini-page mapping — ONE combined push (Sonar S7778); the form /
+  // per-type mappings follow below. (DCM present → the banner steers to `PageWithTabsAndProgressBarTemplate`, which
+  // ships the stage progress bar the plain templates lack; hand-adding `crt.EntityStageProgressBar` is the fallback.)
   P.push(
+    ...buildChildScopeRows(childs), "", ...renderChildScopeLegend(childs),
     ...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl),
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
     ...renderMiniPageMapping(result),

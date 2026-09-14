@@ -1222,7 +1222,7 @@ check("ENG-96327: a profile-sourced set shows its columns with NO profile caveat
     { kind: "ancestor-visibility", item: "OfficeName", container: "ActionButtonsContainer", ancestorState: "dynamic", reason: "field 'OfficeName' sits inside container 'ActionButtonsContainer' which is conditionally shown" },
     { kind: "ancestor-visibility", item: "SecretField", container: "HiddenPanel", ancestorState: "hidden", reason: "field 'SecretField' sits inside container 'HiddenPanel' which is hidden (static)" },
   ] } }, { embedded: true });
-  const count = (re) => (foldSpec.match(re) || []).length;
+  const count = (re) => [...foldSpec.matchAll(re)].length;
   check("ENG-96327 fold: two visibility-rule fields collapse to ONE row that lists BOTH fields (no per-field repetition)",
     count(/\*\*\[visibility-rule\]\*\*/g) === 1
       && /\*\*\[visibility-rule\]\*\* OfficeCaption, OfficeName — these fields' visibility is dynamic/.test(foldSpec),
@@ -2359,7 +2359,7 @@ check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeho
   check("ENG-96327 (8abee97): with NO planMeta.listTemplate the Main-scope list-page row shows the DEFAULT ListPageV3Template — not a `<FILL:>`, not blank, and listTemplate is NOT a missing planMeta key",
     /\| XSection \(list page\) \| ListPageV3Template \| Rebuild \|/.test(noLtRun.plan)
     && !/<FILL: Freedom list template>/.test(noLtRun.plan)
-    && (noLtRun.planMetaMissing || []).indexOf("listTemplate") === -1,
+    && !(noLtRun.planMetaMissing || []).includes("listTemplate"),
     () => noLtRun.plan.split("\n").filter((l) => /\(list page\)/.test(l)));
 }
 // reconcile-aware Main-scope: the default (no Freedom counterpart) is Rebuild; `freedomExists:true` flips the
@@ -6650,6 +6650,21 @@ check("handoff BACK: an undescribed row reads ⚠, not a blank",
   /⚠ not described/.test(renderPlan(ho, {})));
 check("handoff BACK: unmatched keys surface as a plan banner",
   /matched no imperative row/.test(hoPlan));
+// review #2 (PR #179) — pin the PROSE-ONLY / ASYMMETRIC branches: describedInOf sets `describedIn` on prose alone (no
+// card), hasPlainLanguage counts a row described only when BOTH cells carry prose, and describedInText says
+// `plain-language only` when there is prose but no card (not the self-contradicting `⚠ not described`). onStageChanged
+// carries both fields (described); privateHelper carries only whatItDoes (asymmetric).
+const hoMixed = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
+  onStageChanged: { whatItDoes: "Recomputes the deal amount", useCase: "When Stage changes the amount is recalculated" }, // both, no card
+  privateHelper: { whatItDoes: "Reads the current amount" }, // asymmetric — whatItDoes only, no useCase, no card
+} }), {});
+check("review #2: a prose-only row (no card) shows `plain-language only` in Described-in, not the self-contradicting `⚠ not described`",
+  /\| onStageChanged \|[^|]*\| Recomputes the deal amount \| When Stage changes the amount is recalculated \|[^|]*\| plain-language only \|/.test(hoMixed),
+  () => hoMixed.split("\n").filter((l) => /onStageChanged/.test(l)));
+check("review #2: an asymmetric row (one prose field) renders the filled cell + `⚠ not described` for the empty half, `plain-language only` in Described-in, AND is counted undescribed by the banner (banner/cells agree on the BOTH-cells rule)",
+  /\| privateHelper \|[^|]*\| Reads the current amount \| ⚠ not described \|[^|]*\| plain-language only \|/.test(hoMixed)
+    && /could not identify and describe the logic of 1 of 2 method/.test(hoMixed),
+  () => hoMixed.split("\n").filter((l) => /privateHelper|could not/.test(l)));
 
 // CHAIN ROOTS: a helper resolved only to its caller is the weakest trigger the engine emits, and the header counts
 // it as still open. Once the caller is answered the helper's answer is one hop away in the same table — but the
@@ -8805,9 +8820,9 @@ try {
   // composite-only advisory is now SUPPRESSED end-to-end (the Layout standard-feature row + skill knowledge cover it,
   // and its reason ends by admitting the union-of-versions check does not prove the stand carries it). Re-stating it
   // as a ⚠ Confirm just duplicated the Layout.
-  const coWarn = compOnlyRun.changeSet.needsDecision.find((d) => d.kind === "registry-composite-only" && d.item === "crt.CommunicationOptions");
+  const coHasCommWarn = compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-composite-only" && d.item === "crt.CommunicationOptions");
   check("ENG-96327: a STANDARD-FEATURE composite-only gate type (crt.CommunicationOptions = Communication options, shown in the Layout) is NOT re-stated as a registry-composite-only confirm",
-    !coWarn && (compOnlyRun.changeSet.standardFeatures || []).some((f) => f.feature === "Communication options"),
+    !coHasCommWarn && (compOnlyRun.changeSet.standardFeatures || []).some((f) => f.feature === "Communication options"),
     () => compOnlyRun.changeSet.needsDecision.filter((d) => d.kind.startsWith("registry-")));
   check("ENG-95683 (item 2/R1, negative control): a resolved compositeOnly type is NOT reported as a missing `registry-target`, and crt.Input yields no registry-composite-only item",
     !compOnlyRun.changeSet.needsDecision.some((d) => d.kind === "registry-target" && d.item === "crt.CommunicationOptions")

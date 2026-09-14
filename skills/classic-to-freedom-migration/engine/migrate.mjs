@@ -944,6 +944,9 @@ function publishUnfoldedChild(c, pageKey) {
   // that reach the SAME base key stay one entry, exactly as before. The disambiguator is the detail it opens from.
   publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
 }
+// The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
+// advisories) — used to tell a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
+const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency", "rule", "entity-filter", "method"]);
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
@@ -981,7 +984,11 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // bundle by whether it carries behaviour. Marked so the plan does not mislabel it `Rebuild (child) → form page`
   // with an EMPTY Layout; the unit still publishes below — its checklist rows ARE the logic to port.
   if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
-    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0 || (res.changeSet?.needsDecision?.length || 0) > 0;
+    // "Behaviour" here means REAL ported logic (methods, imperative members, business rules) — NOT any needsDecision:
+    // `needsDecision` is a catch-all that also carries widget / registry / cosmetic / placement advisories, and a
+    // 0-field child whose only decision is such noise is a bad/empty bundle (`empty` → ⚠ verify), not an inline grid.
+    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0
+      || (res.changeSet?.needsDecision || []).some((d) => LOGIC_BEARING_KINDS.has(d.kind));
     c.formless = hasBehaviour ? "inline-grid" : "empty";
     // Inline grid → no form page, so the plan shows only its LOGIC (Business rules / ⚠ Custom methods / ⚠ Other
     // declared logic), not a form-page mapping. Render that logic-only spec here (renderChild prefers c.logicSpec).
@@ -2151,24 +2158,28 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   buildCompositeOnlyDecisions(changeSet, regRun, REG_SOURCE_NOTE[reg.source]);
 }
 
+// Read one schema entry's body — inline `body`, else its `file` read from under `baseDir`. Module-level so its
+// path-safety branches don't count against runMigration's cognitive complexity (Sonar S3776).
+function readSchemaBody(e, baseDir) {
+  if (e?.body != null) return String(e.body);
+  // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither an
+  // inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
+  if (!e || typeof e.file !== "string" || !e.file)
+    throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, e.file);
+  // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
+  // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
+  // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
+  // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
+  if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
+    throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
+  return fs.readFileSync(resolved, "utf8");
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
-  const bodyOf = (e) => {
-    if (e?.body != null) return String(e.body);
-    // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
-    // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
-    if (!e || typeof e.file !== "string" || !e.file)
-      throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
-    const base = path.resolve(baseDir);
-    const resolved = path.resolve(base, e.file);
-    // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
-    // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
-    // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
-    // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
-    if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
-      throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
-    return fs.readFileSync(resolved, "utf8");
-  };
+  const bodyOf = (e) => readSchemaBody(e, baseDir);
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseSchema(bodyOf(e), e.pkg));
   const schemas = parse(manifest.schemas);
   const seedTemplate = parse(manifest.seed);
