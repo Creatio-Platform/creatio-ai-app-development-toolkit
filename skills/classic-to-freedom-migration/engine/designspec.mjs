@@ -730,10 +730,20 @@ function ancestorVisibilityRow(g) {
     ? `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is hidden (static) — ${n === 1 ? "the field is" : "the fields are"} mapped hidden too`
     : `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is conditionally shown (dynamic/rule) in classic — wire the container's visibility condition onto the Freedom group instead of leaving it unconditionally visible`;
 }
+// `rule-target-missing` = a business rule names a target with no element on the page. Each row states the same fact
+// and the same verify-or-drop action, differing only in the attribute name — repeating the paragraph per target is
+// noise. Fold into ONE summary row listing the targets (the fact lives nowhere else, so it is folded, not dropped).
+function ruleTargetMissingRow(items) {
+  const n = items.length, list = items.join(", ");
+  return n === 1
+    ? `- **[rule-target-missing]** ${list} — a business rule targets it but the page has no element for it — neither a mapped field nor a tab/group/container. It is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`
+    : `- **[rule-target-missing]** ${list} — business rules target these but the page has no element for them — neither a mapped field nor a tab/group/container. Each is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`;
+}
 // Fold the two visibility kinds (one summary row each; `ancestor-visibility` grouped per container+state), and map
 // every other kept decision 1:1 — order preserved, a folded row landing at its first member's position.
 function foldedConfirmRows(kept) {
   const visFields = kept.filter((d) => d.kind === "visibility-rule").map((d) => esc(d.item));
+  const rtmItems = kept.filter((d) => d.kind === "rule-target-missing").map((d) => esc(d.item));
   const ancGroups = new Map();
   for (const d of kept.filter((d) => d.kind === "ancestor-visibility")) {
     const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
@@ -744,6 +754,7 @@ function foldedConfirmRows(kept) {
   const rows = [];
   for (const d of kept) {
     if (d.kind === "visibility-rule") { if (!emitted.has("vis")) { emitted.add("vis"); rows.push(visibilityRuleRow(visFields)); } continue; }
+    if (d.kind === "rule-target-missing") { if (!emitted.has("rtm")) { emitted.add("rtm"); rows.push(ruleTargetMissingRow(rtmItems)); } continue; }
     if (d.kind === "ancestor-visibility") {
       const key = `${d.container || ""}|${d.ancestorState || "dynamic"}`;
       if (!emitted.has(key)) { emitted.add(key); rows.push(ancestorVisibilityRow(ancGroups.get(key))); }

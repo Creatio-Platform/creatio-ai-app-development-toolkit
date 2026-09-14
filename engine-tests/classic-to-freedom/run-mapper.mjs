@@ -1235,6 +1235,25 @@ check("ENG-96327: a profile-sourced set shows its columns with NO profile caveat
   check("ENG-96327 fold: the folded block is 3 rows total (1 visibility + 2 ancestor), reflected in the ⚠ Confirm count",
     /#### ⚠ Confirm before I build \(3\)/.test(foldSpec));
 }
+// ENG-96327 — `rule-target-missing` (a business rule names a target with no element on the page) states the same
+// fact + verify-or-drop action per target, differing only in the attribute name → fold to ONE summary row listing
+// the targets. Singular phrasing when there is just one.
+{
+  const rtmMany = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+    { kind: "rule-target-missing", item: "CurrencyRate", reason: "business rule targets 'CurrencyRate' but the page has no element for it" },
+    { kind: "rule-target-missing", item: "Currency", reason: "business rule targets 'Currency' but the page has no element for it" },
+    { kind: "rule-target-missing", item: "Contact", reason: "business rule targets 'Contact' but the page has no element for it" },
+  ] } }, { embedded: true });
+  check("ENG-96327 fold: three rule-target-missing collapse to ONE row listing all targets (no per-target repetition)",
+    (rtmMany.match(/\*\*\[rule-target-missing\]\*\*/g) || []).length === 1
+      && /\*\*\[rule-target-missing\]\*\* CurrencyRate, Currency, Contact — business rules target these but the page has no element for them/.test(rtmMany),
+    () => rtmMany.split("\n").filter((l) => /\[rule-target-missing\]|Confirm before/.test(l)));
+  const rtmOne = renderDesignSpec({ entity: "S", changeSet: { needsDecision: [
+    { kind: "rule-target-missing", item: "Comment", reason: "x" },
+  ] } }, { embedded: true });
+  check("ENG-96327 fold: a single rule-target-missing keeps singular phrasing",
+    /\*\*\[rule-target-missing\]\*\* Comment — a business rule targets it but the page has no element for it/.test(rtmOne));
+}
 check("ENG-95229: a non-none source with an empty column set is gated by its own named check",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [] }), /declares source 'schema-default' but carries no columns/));
