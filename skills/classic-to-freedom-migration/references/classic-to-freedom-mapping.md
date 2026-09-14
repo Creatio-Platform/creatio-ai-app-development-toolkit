@@ -278,9 +278,6 @@ client unit schema, and *which store* it uses is decided by the `TargetPackageNa
 | passed | `SysSchema`, inside that package | prefixed with the `SchemaNamePrefix` system setting — e.g. `UsrTest01_0957AC8FB1_8x` |
 | omitted | `SysUserLevelSchema`, in **no** package | unprefixed — e.g. `Test10_D4FA19580A_8x` |
 
-Omitting the parameter is therefore a **supported route, not a missing input**: it is the migrator's original
-and for a long time only behaviour, and it stores the schema somewhere else rather than skipping it.
-
 **Which package, and who chooses.** The package passed is always **`manifest.targetPackage`** — the one this
 migration builds everything else into, and the only one `placement` proved writable. Never the package the 7x
 dashboard happens to ship from today: that is usually a product package, locked against design-time writes, and
@@ -289,23 +286,12 @@ nothing in the plan ever checked it. Which dashboards take the packaged route is
 when the user asks — the discovered `sourcePackage` picks the default and decides nothing else.
 
 **Absence from `SysSchema` is NOT absence.** A stand-only migrated dashboard is in a different table, so
-checking `SysSchema` alone reports a *successful* migration as a no-op — and the conclusion that follows from
-that ("name a package for these dashboards") silently converts stand-only sources into packaged ones, which is
-precisely the delivery regression this whole section exists to prevent. Read the migrator's own verdict from
-`DashboardsMigrationLog` / `DashboardMigrationLog` first: a `Success` row with a schema you cannot find means
-you are looking in the wrong store.
+checking `SysSchema` alone reports a *successful* migration as a no-op. Read the per-dashboard
+`DashboardMigrationLog` first: a `Success` row with a schema you cannot find means you are looking in the
+wrong store.
 
-**Resolution order.** Both chains run at PLAN time and their answer is recorded in `manifest.signals.dashboards`
-(the engine gates the plan on it). Read them with **`execute-esq`**, not `odata-read`: `SectionSchemaUId` is a
-plain-Guid column the OData endpoint drops from `select` and rejects in `filter`, while DataService handles it.
-
-1. `SysSchema` by `Name = '<SectionSchema>'` → the `UId`s of the section schema's layers.
-2. `SysModule` filtered `SectionSchemaUId` ∈ those UIds → `SysModule.Id`.
-3. `SysDashboard` filtered `Section` = that `SysModule.Id` → the items (`Id` + `Caption`).
-4. Per item: the `SysPackageSchemaData` binding of `SysDashboard` whose bound rows carry that `Id` → its
-   package is the item's `sourcePackage`; no binding ⇒ the dashboard is stand data only, and the field is
-   omitted. This answers "was it delivered as product content, or was it local" — which is what the
-   `saveInPackage` default reads, and the only thing this step decides.
+**Resolution order.** Two chains run at PLAN time and their answers are recorded in `manifest.signals.dashboards`,
+which the engine gates the plan on: the section's dashboards, and the package that ships each one.
 
 The executable form of both chains — which layer's `UId` the module actually points at, the shape of a
 binding's `Data` JSON, and the per-check caveats (strict `Section` filter, record-level administration, no
@@ -325,14 +311,10 @@ element named **`Dashboards`** of type `crt.Dashboards`. On any other list templ
 and element to the same page yourself, and a hand-added element carries the designer's own name —
 `Dashboards_<slug>` — rather than the template's `Dashboards`.
 
-**Run contract.** `MigrateDashboardsProcess` (from `CrtDashboardsMigratorApp`) does the migration — the agent
-never re-authors the widgets. Its five parameters carry the section's `SysModule.Id`, the built list page's
-`SysSchema.Id` (its **primary key** — the process filters `SysSchema` by primary column, so a `UId` matches
-no row and degrades to `Guid.Empty`; resolve it with `execute-esq` on `SysSchema` by `Name` and pick the
-layer whose `UId` is the `schemaUId` `get-page` reported), a serialized ESQ filter selecting the dashboards
-to migrate (its name is the contract, and a bare list of ids is not one — the skill carries the template), the `crt.Dashboards`
-element's name and the target package. The rest of the procedure — why the run repeats once per delivery
-group, how to read the verdict, and when a re-run is safe — is the skill's dashboards hand-off step.
+**Run contract.** `MigrateDashboardsProcess` (from `CrtDashboardsMigratorApp`) does the migration. Its five parameters carry the section's `SysModule.Id`, the built list page's
+`SysSchema.Id`, a serialized ESQ filter selecting the dashboards to migrate, the `crt.Dashboards` element's
+name, and the target package. Resolving each of them, and the order the runs go in, is the skill's
+dashboards hand-off step.
 
 **What this migration does NOT cover** — state this explicitly rather than letting it be assumed:
 

@@ -4758,7 +4758,7 @@ const DASH_TWO = { resolved: true, present: true, items: [
 const dashTwo = runMigration(dashMani(DASH_TWO));
 check("T3 dashboards plan: the split is rendered as the DECISION it is - into the run's OWN target package, or stand-only",
   /\*\*Section dashboards:\*\* 2 found on-stand · 2 to migrate/.test(dashTwo.plan)
-  && /The split below is a DECISION, not a reading/.test(dashTwo.plan)
+  && /The split below is a decision, not a reading/.test(dashTwo.plan)
   && /^ {2}- saved into `P` \(1\):\n {4}- ML model analytics\n {2}- left stand-only, as a user-level schema \(1\):\n {4}- test dashboard 1$/m.test(dashTwo.plan),
   () => dashTwo.plan.split("\n").filter((l) => /dashboard/i.test(l)));
 // The default is DERIVED, never stored: `sourcePackage` decides it and the user overrides it. Both
@@ -4823,9 +4823,9 @@ check("T5 dashboards checklist: an all-stand-only section STILL gets the deliver
   () => dashStandOnly.checklist.split("\n").filter((l) => /Dashboard|Delivery/.test(l)));
 // A malformed item can no longer take the row away with it - it forces the row to say so instead.
 const dashMalformed = runMigration(dashMani({ resolved: true, present: true, items: ["just a caption string"] }));
-check("T5 dashboards checklist: an item that records no delivery keeps the row and names the gap",
+check("T5 dashboards checklist: a bare-string item keeps the row and names what is wrong with it",
   /Delivery as planned/.test(dashMalformed.checklist)
-  && /1 item\(s\) record no delivery at all/.test(dashMalformed.checklist),
+  && /1 item\(s\) are written as bare strings/.test(dashMalformed.checklist),
   () => dashMalformed.checklist.split("\n").filter((l) => /Delivery/.test(l)));
 const dashBuiltOps = [{ name: "Dashboards", type: "crt.Dashboards", parentName: "DashboardsContainer" }];
 // The gate reads the migrator's own log, one entry per dashboard the plan lists, instead of one boolean for
@@ -4940,17 +4940,21 @@ const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migra
 const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
 const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
 const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
-check("F1 docs: SysSchemasSelectedId is documented as the SysSchema PRIMARY KEY, never as the get-page UId",
+// One fact, one owner. The trap and its recipe are PROCEDURE, so they live in the skill that executes them;
+// the reference names the parameter and points there. Requiring BOTH documents to carry it, as this pair of
+// goldens used to, locked the duplication in place - a reader then has two copies to keep in step, and the
+// reference is the copy nobody updates.
+check("F1 docs: the SysSchemasSelectedId trap and its recipe are documented ONCE, in the skill",
   skillFlat.includes("**`SysSchema.Id`** — its PRIMARY KEY")
-  && !skillFlat.includes("the built list page's schema UId")
-  && mappingFlat.includes("`SysSchema.Id` (its **primary key**")
-  && !mappingFlat.includes("the built list page's schema UId"),
-  () => "SKILL.md/mapping still describe SysSchemasSelectedId as a UId");
-check("F1 docs: both documents say how to RESOLVE that Id and which replacing layer row to take",
-  skillFlat.includes("`execute-esq` on `SysSchema` filtered `Name")
+  && skillFlat.includes("`execute-esq` on `SysSchema` filtered `Name")
   && skillFlat.includes("whose `UId` equals the `schemaUId`")
-  && mappingFlat.includes("`SysSchema` by `Name` and pick the layer whose `UId` is the `schemaUId`"),
-  () => "the Id-resolution recipe or the layer-selection rule is missing");
+  && !skillFlat.includes("the built list page's schema UId"),
+  () => "the skill lost the primary-key trap, its resolution recipe, or the layer-selection rule");
+check("F1 docs: the reference does NOT restate it - it names the parameter and points at the skill",
+  !mappingFlat.includes("its **primary key**")
+  && !mappingFlat.includes("pick the layer whose `UId`")
+  && mappingFlat.includes("Resolving each of them, and the order the runs go in, is the skill's"),
+  () => "the reference is repeating the skill's parameter recipe again");
 // The regression this locks (ENG-95807 / B1): the migrator briefly accepted a bare JSON array of ids on
 // SysDashboardsSelectionStateFilter, and the skill documented that notation. The second notation was reverted as
 // undiscoverable, so a skill that still teaches it hands the process a value that does not deserialize into a
