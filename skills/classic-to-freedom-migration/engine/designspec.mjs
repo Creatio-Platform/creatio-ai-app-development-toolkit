@@ -1001,10 +1001,11 @@ function describedInText(h) {
   // ac)` and render `? AC-1`, a citation naming no card the operator can open, while the ⚠ that exists for that
   // row went quiet. `describedInOf` (migrate.mjs) no longer produces one; this leg refuses it too, so a plan
   // rendered from an older `behaviour-index.json` reads honestly rather than citing a question mark.
-  // No card to cite. If the analysis still authored plain-language What/Use-case prose for this row, the row IS
-  // described (just not by a citable card) — say so, rather than the self-contradicting `⚠ not described` beside two
-  // filled prose cells (review #1). Only a row with neither a card NOR prose is genuinely not described.
-  if (!d || (!d.card && !d.bodyCard)) return (d?.whatItDoes || d?.useCase) ? "plain-language only" : "⚠ not described";
+  // No card to cite. A row is "described in plain language" iff BOTH prose cells are filled — the SAME `&&` rule
+  // `hasPlainLanguage` uses for the "could not describe N of M" banner, so the Described-in column, the banner count
+  // and the per-cell `⚠ not described` all agree on one row (review — Rita/m-dymytrova). Both filled → say so instead
+  // of the self-contradicting `⚠ not described` beside two filled cells (review — kbondarenko); one or none → ⚠.
+  if (!d || (!d.card && !d.bodyCard)) return (d?.whatItDoes && d?.useCase) ? "plain-language only" : "⚠ not described";
   const cite = (card, ac) => {
     const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
     return esc(card || "?") + acText;

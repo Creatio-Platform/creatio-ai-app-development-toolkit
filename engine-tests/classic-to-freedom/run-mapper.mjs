@@ -6661,8 +6661,8 @@ const hoMixed = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
 check("review #2: a prose-only row (no card) shows `plain-language only` in Described-in, not the self-contradicting `⚠ not described`",
   /\| onStageChanged \|[^|]*\| Recomputes the deal amount \| When Stage changes the amount is recalculated \|[^|]*\| plain-language only \|/.test(hoMixed),
   () => hoMixed.split("\n").filter((l) => /onStageChanged/.test(l)));
-check("review #2: an asymmetric row (one prose field) renders the filled cell + `⚠ not described` for the empty half, `plain-language only` in Described-in, AND is counted undescribed by the banner (banner/cells agree on the BOTH-cells rule)",
-  /\| privateHelper \|[^|]*\| Reads the current amount \| ⚠ not described \|[^|]*\| plain-language only \|/.test(hoMixed)
+check("review #2: an asymmetric row (one prose field) renders the filled cell + `⚠ not described` for the empty half, AND `⚠ not described` in Described-in — the same BOTH-cells rule the banner uses, so all three surfaces agree (banner counts it undescribed)",
+  /\| privateHelper \|[^|]*\| Reads the current amount \| ⚠ not described \|[^|]*\| ⚠ not described \|/.test(hoMixed)
     && /could not identify and describe the logic of 1 of 2 method/.test(hoMixed),
   () => hoMixed.split("\n").filter((l) => /privateHelper|could not/.test(l)));
 

@@ -2195,6 +2195,14 @@ function assignRootIndexKeys(behaviourIndex, scopeSchema, behaviourIndexInput, s
 function resolveRunEntity(manifest, eff) {
   return manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
 }
+// The design-spec options for a SUB-PAGE render (child / mini / typed per-type form): always `embedded` (it is only
+// ever nested into the parent plan), with `formOnly` propagated for the typed fold (checklistOpts carries
+// isChildPage/isMiniPage but NOT formOnly). A record page (none of these) renders with the plain specOpts. Module-
+// level so its branching does not count against runMigration's cognitive complexity (Sonar S3776 — review Rita).
+function subPageSpecOpts(specOpts, opts) {
+  if (!(opts.isChildPage || opts.isMiniPage || opts.formOnly)) return specOpts;
+  return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) };
+}
 // Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
 function tallyByKind(decisions) {
   const out = {};
@@ -2490,8 +2498,7 @@ export function runMigration(manifest, opts = {}) {
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
-  const isSubPageRun = opts.isChildPage || opts.isMiniPage || opts.formOnly;
-  out.designSpec = renderDesignSpec(out, isSubPageRun ? { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) } : specOpts);
+  out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
   out.plan = renderPlan(out, specOpts);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
