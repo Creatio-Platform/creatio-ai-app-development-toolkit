@@ -281,6 +281,13 @@ client unit schema, and *which store* it uses is decided by the `TargetPackageNa
 Omitting the parameter is therefore a **supported route, not a missing input**: it is the migrator's original
 and for a long time only behaviour, and it stores the schema somewhere else rather than skipping it.
 
+**Which package, and who chooses.** The package passed is always **`manifest.targetPackage`** — the one this
+migration builds everything else into, and the only one `placement` proved writable. Never the package the 7x
+dashboard happens to ship from today: that is usually a product package, locked against design-time writes, and
+nothing in the plan ever checked it. Which dashboards take the packaged route is a DECISION recorded per item
+(`saveInPackage`, defaulting to "it shipped in a package before"), approved with the plan, and changed only
+when the user asks — the discovered `sourcePackage` picks the default and decides nothing else.
+
 **Absence from `SysSchema` is NOT absence.** A stand-only migrated dashboard is in a different table, so
 checking `SysSchema` alone reports a *successful* migration as a no-op — and the conclusion that follows from
 that ("name a package for these dashboards") silently converts stand-only sources into packaged ones, which is
@@ -296,7 +303,9 @@ plain-Guid column the OData endpoint drops from `select` and rejects in `filter`
 2. `SysModule` filtered `SectionSchemaUId` ∈ those UIds → `SysModule.Id`.
 3. `SysDashboard` filtered `Section` = that `SysModule.Id` → the items (`Id` + `Caption`).
 4. Per item: the `SysPackageSchemaData` binding of `SysDashboard` whose bound rows carry that `Id` → its
-   package is the dashboard's delivery; no binding ⇒ **stand-only**.
+   package is the item's `sourcePackage`; no binding ⇒ the dashboard is stand data only, and the field is
+   omitted. This answers "was it delivered as product content, or was it local" — which is what the
+   `saveInPackage` default reads, and the only thing this step decides.
 
 The executable form of both chains — which layer's `UId` the module actually points at, the shape of a
 binding's `Data` JSON, and the per-check caveats (strict `Section` filter, record-level administration, no
