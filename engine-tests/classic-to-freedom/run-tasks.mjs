@@ -1607,8 +1607,8 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         const ok = res3.started?.id === rep.id
           && after3 === before3.replace(/^status: .*$/m, "status: in-progress")
           && res3.started.origin === "orchestrator"
-          && (before3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length === (after3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length
-          && (after3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length > 0;
+          && (before3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length === (after3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length
+          && (after3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length > 0;
         fs.rmSync(d3, { recursive: true, force: true });
         return ok;
       }, () => "see the adopted repair file before/after --start");

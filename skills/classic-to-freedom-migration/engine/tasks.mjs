@@ -1444,7 +1444,7 @@ function setFrontMatterStatus(dir, file, status) {
   if (lines[0]?.trim() !== "---") return false;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") break;
-    if (/^status:/.test(lines[i])) {
+    if (lines[i].startsWith("status:")) {
       lines[i] = `status: ${status}`;
       fs.writeFileSync(full, lines.join("\n"));
       return true;
