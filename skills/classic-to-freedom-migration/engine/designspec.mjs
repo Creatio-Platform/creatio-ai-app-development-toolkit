@@ -1807,7 +1807,7 @@ function standardFeatureRows(cs) {
 // ever match a name no stand has. The row is still emitted (the deliverable is real); it says what is wrong with
 // the name it was given, in the plan, where the approver reads it.
 function templateNameNote(name) {
-  if (/Template$/.test(String(name || ""))) return "";
+  if (String(name || "").endsWith("Template")) return "";
   return " — ⚠ that is not a Freedom template schema name (they end in `Template`, e.g. `ListPageV3Template`); fix"
     + " `planMeta` and re-plan, or this row can never be confirmed against a built page";
 }
