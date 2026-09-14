@@ -4379,10 +4379,10 @@ check("review/major: the menu fold is ORDER-INDEPENDENT — declaring the items 
       listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
       { baseDir: FIX });
     const view = reversed.section?.sectionView;
-    const folded = ["BulkActionsMenu", "BulkAssignMenuItem", "BulkExportMenuItem"];
+    const folded = new Set(["BulkActionsMenu", "BulkAssignMenuItem", "BulkExportMenuItem"]);
     const action = (reversed.listChangeSet?.commandBarActions || []).find((a) => a.name === "BulkActionsButton");
     return !!buttonOp && !!action && (action.menuItems || []).length === 2
-      && !(view?.openItems || []).some((i) => folded.includes(i.name)); },
+      && !(view?.openItems || []).some((i) => folded.has(i.name)); },
   () => "the same four ops with the owning button declared LAST");
 
 /* --- ENG-94714: the list gate is SCOPED — a section-side gap stops the list deliverable, never the form one.
