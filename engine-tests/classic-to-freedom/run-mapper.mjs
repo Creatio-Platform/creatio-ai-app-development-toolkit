@@ -12300,6 +12300,20 @@ const n2RunCli = (manifest, ...flags) => spawnSync(process.execPath,
     && edgeSlugKeys.includes("main#confirm:handler-on-save-click")
     && edgeSlugKeys.every((k) => !/(^|[#:])-|-($|[#:])|--/.test(k)),
     () => edgeSlugKeys.filter((k) => /typedFormsBuilt|handler|-{2}/.test(k)));
+  // ENG-94756 — THE SAME INVARIANT, AT THE 96-CHARACTER CUT, which is where it was actually false. The edge trim
+  // ran BEFORE the slice, so a label longer than the cut could land the cut on a separator and hand back a key
+  // ending in `-` — the trim above had already run and there was nothing left to remove it. It went unnoticed
+  // because every long label in the engine belongs to a row carrying an explicit evidence `id`, which never
+  // reaches `rowSlug`; the first long vk-less NOTE row (the ENG-94756 tagging line) produced exactly such a key and
+  // turned the check above red. Both branches are covered: the plain slug, and the digest branch, which slices a
+  // second time to make room for `x<hash>` and would otherwise read `--` before it. The loop exists because the
+  // digest's length varies with the hash, so no single hand-picked length is guaranteed to land on the boundary.
+  const cutLabels = [`${"a".repeat(95)} bcd`, `${"a".repeat(96)} bcd`, `${"word ".repeat(40)}end`];
+  for (let n = 80; n <= 120; n++) cutLabels.push(`Регіон ${"b".repeat(n)} end`);   // forces the digest branch (a LETTER is lost)
+  const cutSlugs = cutLabels.map((l) => rowSlug(l));
+  check("ENG-94756: `rowSlug` keeps its no-edge-dash invariant ACROSS THE 96-CHARACTER CUT — the trim runs after the slice, so a label longer than the cut cannot yield a key ending in `-` (nor `--` before the digest), for the plain branch and the lost-letter digest branch alike",
+    cutSlugs.every((s) => s.length > 0 && !/^-|-$|--/.test(s)),
+    () => ({ offenders: cutSlugs.filter((s) => !s.length || /^-|-$|--/.test(s)).slice(0, 5), sample: cutSlugs.slice(0, 3) }));
   check("PR #157 review (Blocker 1): the quality-gate deliverable's TWO rows share one evidence id and are still distinct — the `part` (filed / judged) is the row's identity inside the id",
     injKeys.includes("main#quality-gates:filed") && injKeys.includes("main#quality-gates:judged"),
     () => injKeys.filter((k) => k.includes("quality-gates")));
@@ -14331,6 +14345,126 @@ check("ENG-94756 T4 control: the expected-count label T4 asserts is ABSENT for a
     return rows.some((l) => l.includes("`crt.Feed`")) && rows.some((l) => l.includes("`crt.FileList`")); },
   () => ({ template: FA_ABSENT_TPL, matched: faRows(FA_ABSENT_TPL).filter((l) => FA_EXPECTED_COUNT_RE.test(l)),
     allRows: faRows(FA_ABSENT_TPL) }));
+
+/* ================================================================================================================
+   ENG-94756 — TAGS ARE A DIFFERENT DEFECT FROM FEED AND ATTACHMENTS, AND ARE ANSWERED DIFFERENTLY.
+
+   The user-visible symptom is the same shape ("the Tags data source is not propagated"), and the mechanism is not.
+   What is established:
+     * `crt.TagSelect` is SHIPPED by the measured templates — including `PageWithTopAreaAndTabsFreedomTemplate`,
+       which ships neither Feed nor Attachments — in a minimal form carrying little more than the record binding.
+       So there is never a merge-vs-insert decision for Tags and there is no ABSENT path: the verdict machinery
+       T1-T4 exercise answers a question Tags does not ask, and modelling Tags on Feed/Attachments — a canonical
+       value set, a companion artifact, an expected count — would be modelling it wrong.
+     * No tag data source exists in any page schema. The designer's properties panel generates the list, the CRUD
+       handlers and the bindings; only the record binding reaches the saved schema. There is nothing to insert.
+     * The platform has TWO tag models: the control's default source is the ENTITY-AGNOSTIC one, and an older
+       per-object model also exists. So the open question is about DATA, not about the page.
+
+   A PREMISE WAS WITHDRAWN MID-WORK, AND THESE CHECKS PIN THE WITHDRAWAL. The first version of this work gated on a
+   per-object `<Entity>InTag` junction and read its absence as proof that a page's tag control was dead. That is
+   wrong: the default model needs no per-object schema, so an absent one proves nothing, and the gate would have
+   fired falsely on every object using the default. The junction check was removed, not softened, and the last
+   check below asserts the engine names no such object anywhere — a briefing that was believed once can be
+   rediscovered, and a comment saying "do not rederive this" is not a check.
+
+   WHY A CONFIRM-ON-STAND LINE AND NOT A GATE. The plan is rendered OFFLINE from the captured classic schema
+   bodies, the migrated object's OWN columns (`manifest.entityColumns`), the detail / child / section bundles and
+   the component registry. Not one of those says whether this object's records carry tag data today, let alone
+   which model it is in — so the engine states what it measured, names the open question, and routes to the
+   guidance item that owns the detail. It is a NOTE rather than a gate because nothing in the run conditions the
+   question: it follows from the TEMPLATE alone, so gating it would hold open every run on that template,
+   including the majority with no tag data at all.
+
+   WHAT THESE CHECKS DELIBERATELY DO NOT ASSERT: the reported symptom (not observed first-hand), whether tag data
+   ever has to move between the two models, and whose job that would be. They pin the wording of a question, not a
+   verdict nobody has reached.
+   ================================================================================================================ */
+// The measured tags-shipping template IS `FA_ABSENT_TPL`: the same template that ships neither Feed nor
+// Attachments ships `crt.TagSelect`. That single fact is the whole argument for treating Tags separately, and the
+// fixture states it by using one template for both.
+const tagSentence = (tpl, entity) =>
+  `Tagging — \`${tpl}\` ships a \`crt.TagSelect\` (measured) and this migration builds and configures nothing for it, so the page carries the control either way.`
+  + ` What does NOT come with it is the DATA: the platform has two tag models — the control's default source is the entity-agnostic one, and an older per-object model also exists — and nothing this engine reads says whether \`${entity}\`'s records carry tag data today or which model it is in.`
+  + " CONFIRM ON-STAND if tagging is in use, and decide there whether anything has to move; a page build moves no data."
+  + ` settings: \`get-guidance name=${FA_GUIDANCE_ID}\``;
+const tagRow = (tpl, result) => checklistGroups(result, faOpts(tpl)).flatMap((g) => g.rows)
+  .find((r) => /^Tagging —/.test(r.label)) || null;
+
+check("ENG-94756 T5 (Tags): for a template MEASURED to ship `crt.TagSelect`, the spec carries ONE Tagging line — byte-exact — saying the migration configures nothing for the control, that the DATA is the open question (two tag models), and where the detail is published",
+  () => { const r = tagRow(FA_ABSENT_TPL, faResult);
+    return !!r && r.label === tagSentence(FA_ABSENT_TPL, FA_ENTITY); },
+  () => ({ template: FA_ABSENT_TPL, row: tagRow(FA_ABSENT_TPL, faResult),
+    expected: tagSentence(FA_ABSENT_TPL, FA_ENTITY) }));
+
+// IT IS IN THE PLAN DOCUMENT, not only in the control table — and that is the whole point of the line. The
+// checklist is the build-time skeleton; the PLAN is what a human approves, and "is tagging in use on this object,
+// and does its data have to move" is a question to raise before the build, not to discover during it.
+check("ENG-94756 T5 (Tags) — the same sentence is in the PLAN document the human approves, not only in the checklist the builder reads",
+  () => faPlan(FA_ABSENT_TPL).includes(tagSentence(FA_ABSENT_TPL, FA_ENTITY)),
+  () => ({ tagLines: faPlan(FA_ABSENT_TPL).split("\n").filter((l) => /Tagging/.test(l)),
+    expected: tagSentence(FA_ABSENT_TPL, FA_ENTITY) }));
+
+// AND IT IS THE ENGINE'S THIRD STATE — a note that tallies `skip` — NOT a gate. This assertion exists to stop the
+// line being "upgraded" by someone who reads a ☐ as a weakness. `AttachmentListDS` is gated because the page
+// genuinely OWES it: the classic page carried an attachments feature. Nothing conditions this question — it
+// follows from the TEMPLATE alone, so a gated row would be open on every page built on that template, including
+// the majority with no stake in tagging. A first draft did exactly that and the existing goldens caught it: runs
+// that are correct and complete (`pages-only-no-menu`, the scaffold rows) could no longer report complete. A
+// permanent false red is not a stronger gate, it is a broken one. The day a runtime observation establishes WHEN
+// tag data must move, that is what can be gated — asked only of the pages it applies to.
+check("ENG-94756 T5 (Tags) — the line is the engine's THIRD STATE: no `vk`, so it renders `☐ confirm on-stand` and tallies `skip`. A question nothing in the run conditions must not hold every run on this template open",
+  () => { const r = tagRow(FA_ABSENT_TPL, faResult);
+    if (!r || r.vk || r.human) return false;
+    const [status, , outcome] = resolveVk(r.vk, {});
+    return status === "☐ confirm on-stand" && outcome === "skip"; },
+  () => ({ row: tagRow(FA_ABSENT_TPL, faResult), resolved: resolveVk(tagRow(FA_ABSENT_TPL, faResult)?.vk, {}) }));
+
+// AND IT FILES NO EXPECTED COUNT, for exactly the reason R4 forbids one for a template-provided component: the
+// template already ships `crt.TagSelect`, so demanding a build for it would be the ENG-96445 false promise in a new
+// place — and `componentTypes` must not list it either, or the executor fetches documentation to build a control
+// that is already there.
+check("ENG-94756 T5 (Tags) — no expected count and no component type is filed for `crt.TagSelect`: the template ships it, so nothing builds it",
+  () => { const rows = faRows(FA_ABSENT_TPL);
+    const units = pageUnits(faResult, faOpts(FA_ABSENT_TPL));
+    const main = (units.pages || []).find((p) => p.key === "main");
+    return !rows.some((l) => /TagSelect[^\n]*expected/.test(l))
+      && !(main?.componentTypes || []).includes("crt.TagSelect"); },
+  () => ({ tagRows: faRows(FA_ABSENT_TPL).filter((l) => /Tag/.test(l)),
+    componentTypes: (pageUnits(faResult, faOpts(FA_ABSENT_TPL)).pages || []).find((p) => p.key === "main")?.componentTypes }));
+
+// THE HONESTY BOUNDARY, and it is the same one T4 draws. A template nobody has measured may or may not ship
+// `crt.TagSelect`; claiming the built page will carry one — and raising a data question on the strength of that
+// claim — is exactly the unmeasured assertion ENG-96457 removed. Say nothing instead.
+check("ENG-94756 T5 (Tags) — an UNMEASURED template emits NO tagging line at all: whether it ships `crt.TagSelect` is unknown, so the plan asserts nothing about tags",
+  () => !tagRow(FA_UNMEASURED_TPL, faResult) && !faPlan(FA_UNMEASURED_TPL).includes("Tagging —"),
+  () => ({ template: FA_UNMEASURED_TPL, row: tagRow(FA_UNMEASURED_TPL, faResult),
+    rows: faRows(FA_UNMEASURED_TPL).filter((l) => /Tag/i.test(l)) }));
+
+// The object named in the question is the MIGRATED one, never a constant: the reader has to know which object to
+// go and look at, and a hardcoded name would send every run to the same wrong one — the `entitySchemaName` mistake
+// T2 guards against, one layer down.
+const tagOtherResult = { entity: "UsrContract", changeSet: faCs, signals: {} };
+check("ENG-94756 T5 (Tags) — the object asked about is the MIGRATED one: a different entity yields a different sentence, naming it",
+  () => { const r = tagRow(FA_ABSENT_TPL, tagOtherResult);
+    return !!r && r.label === tagSentence(FA_ABSENT_TPL, "UsrContract")
+      && r.label.includes("`UsrContract`") && !r.label.includes(FA_ENTITY); },
+  () => ({ row: tagRow(FA_ABSENT_TPL, tagOtherResult), expected: tagSentence(FA_ABSENT_TPL, "UsrContract") }));
+
+// THE WITHDRAWN PREMISE, MADE UNREDERIVABLE. An earlier version of this work gated tagging on a per-object
+// `<Entity>InTag` junction (a `BaseEntityInTag` descendant) and treated its absence as proof that a page's tag
+// control was dead. The schemas say otherwise: the control's default source is entity-agnostic, so it reads no
+// per-object object at all and an absent one proves nothing — the gate would have fired falsely on every object
+// using the default. It was removed. This check is the removal, stated as an assertion rather than as a comment
+// nobody runs: no engine source may name a per-object tag junction, and neither may the rendered plan. Reinstating
+// one needs a runtime observation that establishes it is required — and this check going red is that conversation.
+const TAG_WITHDRAWN_TOKENS = ["InTag", "BaseEntityInTag"];
+check("ENG-94756 T5 (Tags) — the WITHDRAWN per-object junction premise is gone and stays gone: no engine source and no rendered plan names an `<Entity>InTag` / `BaseEntityInTag` object, because the control's default source reads none",
+  () => faEngineSources.every((s) => TAG_WITHDRAWN_TOKENS.every((t) => !s.text.includes(t)))
+    && TAG_WITHDRAWN_TOKENS.every((t) => !faSpec(FA_ABSENT_TPL).includes(t)),
+  () => ({ sourceHits: faEngineSources.flatMap((s) => TAG_WITHDRAWN_TOKENS.filter((t) => s.text.includes(t)).map((t) => `${s.file}: ${t}`)),
+    specHits: TAG_WITHDRAWN_TOKENS.filter((t) => faSpec(FA_ABSENT_TPL).includes(t)) }));
+
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
