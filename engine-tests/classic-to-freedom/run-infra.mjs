@@ -509,6 +509,28 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // Suffix classes the COMPONENT index cannot judge: requests and Angular services live in the CDN's
   // separate RequestRegistry, and a `*Handler` is platform-registered against a request, never placed on a page.
   const NON_COMPONENT_SUFFIX = /(?:Request|Service|Handler)$/;
+// The browser-check reference exists to stop ONE measured loop: eight minutes of re-probing a page whose main
+// thread was blocked, where no script could ever have answered. The rule and the order are what the file is for,
+// so the doc lint holds it to both, and SKILL.md must actually send a builder there.
+{
+  const p = "skills/classic-to-freedom-migration/references/freedom-ui-browser-check.md";
+  const doc = readFileSync(fileURLToPath(new URL("../../" + p, import.meta.url)), "utf8");
+  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+  check("browser-check doc: it states the ORDER — console, then the error boundary, then structure — because a component census tells you the page is absent while the console tells you why, which is the only actionable half",
+    () => /READ THE CONSOLE FIRST/.test(doc) && /error boundary/i.test(doc) && /STRUCTURE, LAST/.test(doc),
+    () => doc.slice(0, 400));
+  check("browser-check doc: it states that a TIMEOUT is the diagnosis, not a reason to retry — `execute_javascript` runs on the page's main thread, so a blocked page cannot answer even `document.title`",
+    () => /A TIMEOUT IS THE ANSWER, NOT A REASON TO RETRY/.test(doc) && /main thread/.test(doc),
+    () => doc.split("\n").filter((l) => /timeout/i.test(l)).slice(0, 4));
+  check("browser-check doc: it names the three runtime failures that shipped past `validate-page`, each with the place to look — a symptom table nobody can act on is a story, not a reference",
+    () => /primaryDataSourceName/.test(doc) && /_setPredefinedColumnDefinitions/.test(doc)
+      && /items attribute binding value/.test(doc) && /get-page/.test(doc),
+    () => doc.split("\n").filter((l) => /\|/.test(l)).slice(0, 6));
+  check("SKILL.md points a builder at it, in the step that opens a page — a reference nothing links to is a file nobody reads",
+    () => skill.includes("references/freedom-ui-browser-check.md"),
+    () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
+}
+
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();

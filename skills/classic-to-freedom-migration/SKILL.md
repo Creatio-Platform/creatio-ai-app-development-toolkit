@@ -528,6 +528,8 @@ own step 8 before the next one starts.
 
 Validate narrowest-reliable-first, then broaden: page schema validation → package build → unit tests for helper logic → **render the built page in the browser** (schema validation + a save `success` do NOT catch runtime/render failures) → E2E for user-visible flows. Do this per page before anything depends on it, not just at the end.
 
+**How to do the browser check: `./references/freedom-ui-browser-check.md`.** Read it BEFORE opening a page, not after it misbehaves. Console first, error boundary second, component census last — and **one `Request timed out` from a tab that was answering is the diagnosis, not a reason to retry**: `execute_javascript` runs on the page's main thread, so a blocked page can never answer anything, including `document.title`. A measured run spent 8 of its 18.6 browser minutes re-probing a frozen tab.
+
 Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
 
 **A folder of `done` task files is not a completion report.** The task statuses are how the step-7 orchestrator
