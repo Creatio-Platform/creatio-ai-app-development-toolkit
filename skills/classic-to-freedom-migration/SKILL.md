@@ -395,7 +395,8 @@ in one context it had one machine check, at the very end. A session that hit a u
 2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each claiming the plan
    rows it absorbs. This is a judgement and it is yours: put work that must be done together in one item (a related
    list and the handler that filters it; a folded handler chain and its helpers; the containers before what goes in
-   them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish, and give an
+   them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish (it is carried into the
+   task's front matter and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and give an
    item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns into a filename — lower-case
    letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
    whole file. Then:

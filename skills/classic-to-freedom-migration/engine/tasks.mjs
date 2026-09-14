@@ -534,7 +534,7 @@ function pageIdentities(result) {
 // ---8<--- THE TASK FILE ---8<---
 
 const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest",
-  "writesTo", "dependsOn", "agentNonce"];
+  "writesTo", "dependsOn", "stopGate", "agentNonce"];
 // A repair task carries two more, and they are what the NEXT verify run reads: which cause it was opened for and
 // which round of it this is. Both live in the file because the folder is the state — counting rounds from a
 // session's memory is how a capped cause quietly gets a fourth sub-agent.
@@ -552,6 +552,10 @@ function renderFrontMatter(task, set) {
     // only when these differ, which is a comparison and not a judgement call.
     writesTo: task.writesTo || "",
     dependsOn: (task.dependsOn || []).join(" "),
+    // The split author marks an item that may legitimately halt the run rather than finish. It is carried into the
+    // file and shown in the index so the orchestrator sees it before it dispatches — a flag nothing reads is a flag
+    // the SKILL asks for and then ignores.
+    stopGate: task.stopGate ? "true" : "false",
     // WRITTEN BY THE SUB-AGENT, checked by the engine. One sub-agent per task is the contract; the orchestrator
     // that composes the prompt is also the one that grouped tasks in testing, so it cannot be the thing that
     // proves the contract held. A nonce the sub-agent mints itself, appearing on two files, is one sub-agent
@@ -673,7 +677,20 @@ export function parseTaskFile(text) {
     if (m) meta[m[1]] = m[2].trim();
   }
   if (i >= lines.length) return { meta, notes: "", malformed: "front matter is not terminated" };
-  return { meta, notes: notesOf(lines.slice(i + 1)), malformed: null };
+  const body = lines.slice(i + 1);
+  return { meta, notes: notesOf(body), rowCount: countDeliverableRows(body), malformed: null };
+}
+
+// HOW MANY DELIVERABLES an adopted file lists. The engine never parses an orchestrator-authored body into `rows`,
+// so without this the index reported `0` for a repair task carrying two — and a repair row reading `0` is one the
+// user is invited to skip. Counted off the rendered table's leading ordinal column, which every row of both table
+// shapes starts with; a file whose body has no such table reports null and the index shows `—`, not `0`.
+function countDeliverableRows(bodyLines) {
+  let count = 0;
+  for (const line of bodyLines) {
+    if (/^\s*\|\s*\d+\s*\|/.test(line)) count++;
+  }
+  return count > 0 ? count : null;
 }
 
 // Only the engine's OWN guidance line is stripped. Dropping every `<!-- … -->` line took the caller's comments
@@ -705,10 +722,14 @@ function indexRows(tasks) {
   const L = ["| Step | Task | Page | Writes | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
     const gatedNote = t.gatedRows ? ` (${t.gatedRows} gated)` : "";
-    const rows = `${t.rows.length}${gatedNote}`;
+    // An adopted file's rows are counted off the file, because the engine never parsed them into `t.rows`.
+    const rows = t.origin === TASK_ORIGIN_ORCHESTRATOR
+      ? (t.adoptedRowCount ?? "—")
+      : `${t.rows.length}${gatedNote}`;
     const mark = t.unread ? "⚠ unread" : statusMark(t.status);
     const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
-    L.push(`| ${t.step ?? t.order} | ${t.group} | \`${t.pageKey}\` | ${writes} | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
+    const gate = t.stopGate ? " ⏸ stop-gate" : "";
+    L.push(`| ${t.step ?? t.order} | ${t.group}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
@@ -972,9 +993,14 @@ function adoptOrchestrated(e) {
     order: Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER,
     phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR, status: e.meta.status || S_TODO,
     rows: [], gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
+    // The engine does not own this body, so `rows` stays empty — but the index still has to say how many
+    // deliverables the file lists. Null when the file carries no readable table: the index shows `—` for that,
+    // never `0`.
+    adoptedRowCount: e.rowCount ?? null,
     // An orchestrator task declares its own artifact and its own nonce. Both are READ, never authored here: a
     // repair task the orchestrator added writes a page like any other task, and it must take part in the same
     // parallelism rule and the same one-sub-agent check as the engine's own.
+    stopGate: e.meta.stopGate === "true",
     kind: e.meta.kind || null,
     cause: e.meta.cause || null,
     repairRound: Number(e.meta.repairRound) || null,
@@ -1383,13 +1409,48 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   if (merged.refused) return { ...merged, started: null };
   const t = merged.tasks.find((x) => x.id === id);
   if (!t) return { ...merged, started: null, unknownId: id };
+  // A file the engine REFUSED to read is not started. `--start` used to re-render it, which is exactly what
+  // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
+  // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
+  if (t.unread) {
+    return { ...merged, started: null, unread: t.file };
+  }
   t.status = S_IN_PROGRESS;
   const state = readTimingsFile(dir);
   state.running[t.id] = now;
   writeTimings(dir, state);
-  fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
+  // The SAME guard set `syncTaskDir` applies on its write. An adopted file (`origin: orchestrator`, which every
+  // repair task carries) has a body the engine never authored: its Deliverables come from the file, not from
+  // `t.rows`, which `adoptOrchestrated` leaves empty. Re-rendering it emptied the table and flipped the origin,
+  // so the sub-agent was dispatched with no deliverables. Only the `status:` line moves here.
+  const untouchable = new Set((merged.blocked || []).map((b) => b.file));
+  if (t.origin === TASK_ORIGIN_ORCHESTRATOR || untouchable.has(t.file)) {
+    setFrontMatterStatus(dir, t.file, S_IN_PROGRESS);
+  } else {
+    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
+  }
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { ...merged, started: t };
+}
+
+// REWRITES ONE LINE OF AN EXISTING FILE. The whole point is that everything else in the file — an authored body,
+// a Deliverables table the engine never parsed, the `## Notes` — is byte-identical afterwards. Only the first
+// `status:` line inside the opening front-matter block is replaced; a `status:` in prose further down is not
+// front matter and is left alone.
+function setFrontMatterStatus(dir, file, status) {
+  const full = path.join(dir, file);
+  if (!fs.existsSync(full)) return false;
+  const lines = fs.readFileSync(full, "utf8").split("\n");
+  if (lines[0]?.trim() !== "---") return false;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") break;
+    if (/^status:/.test(lines[i])) {
+      lines[i] = `status: ${status}`;
+      fs.writeFileSync(full, lines.join("\n"));
+      return true;
+    }
+  }
+  return false;
 }
 
 // CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two

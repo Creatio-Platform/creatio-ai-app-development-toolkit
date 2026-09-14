@@ -2546,6 +2546,9 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
       + set.problems.map((p) => "  · " + p).join("\n")
       + `\nFix ${SPLIT_FILE} and re-run. Expected shape: ${SPLIT_SHAPE}\n`;
   }
+  if (startId && set.unread) {
+    return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
+  }
   if (startId && !set.started) {
     return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
   }

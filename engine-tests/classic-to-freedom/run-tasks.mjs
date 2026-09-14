@@ -1591,6 +1591,52 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       () => set.undispatched.some((t) => t.id === id)
         && /never STARTED through/.test(readIndex(d)) && readIndex(d).includes(taskOfId(d, id).file),
       () => ({ undispatched: set.undispatched.map((t) => t.id), attention: readIndex(d).split("## Attention")[1]?.slice(0, 300) }));
+    // 3b — `--start` applies the SAME write guards `syncTaskDir` owns. Until it did, the prescribed
+    // "--start before every dispatch" re-rendered an adopted repair file through `renderTaskFile`, whose
+    // `rows` are empty for an adopted task: the Deliverables table came back empty and the sub-agent was
+    // dispatched with nothing to build.
+    check("start: `--start` on an ADOPTED repair task moves only its `status:` line — its Deliverables, its origin and its authored body are byte-identical afterwards, because the engine never parsed that body and re-rendering it empties the table the sub-agent is dispatched against",
+      () => {
+        const d3 = tmp("start-adopted");
+        syncTaskDir(d3, RUN, OPTS);
+        const rep = syncRepairDir(d3, RUN, VERIFY_PAGES, OPTS).written[0];
+        const f3 = path.join(d3, rep.file);
+        const before3 = fs.readFileSync(f3, "utf8");
+        const res3 = startTask(d3, rep.id, RUN, OPTS, null, at(0));
+        const after3 = fs.readFileSync(f3, "utf8");
+        const ok = res3.started?.id === rep.id
+          && after3 === before3.replace(/^status: .*$/m, "status: in-progress")
+          && res3.started.origin === "orchestrator"
+          && (before3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length === (after3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length
+          && (after3.match(/^\s*\|\s*\d+\s*\|/gm) || []).length > 0;
+        fs.rmSync(d3, { recursive: true, force: true });
+        return ok;
+      }, () => "see the adopted repair file before/after --start");
+    check("start: `--start` REFUSES a file the engine could not read rather than overwriting it — that file's `## Notes` are the only record of work already done on a stand, which is why the plain merge leaves it byte-identical too",
+      () => {
+        const d4 = tmp("start-unread");
+        const set4 = syncTaskDir(d4, RUN, OPTS);
+        const victim = set4.tasks[0];
+        const f4 = path.join(d4, victim.file);
+        // Unterminated front matter plus notes that exist nowhere else.
+        fs.writeFileSync(f4, `---\nid: ${victim.id}\nstatus: todo\n\n## Notes\nthe stand already has the handler wired\n`);
+        const before4 = fs.readFileSync(f4, "utf8");
+        const res4 = startTask(d4, victim.id, RUN, OPTS, null, at(0));
+        const after4 = fs.readFileSync(f4, "utf8");
+        const ok = res4.started === null && res4.unread === victim.file && after4 === before4;
+        fs.rmSync(d4, { recursive: true, force: true });
+        return ok;
+      }, () => "see the unread task file before/after --start");
+    check("index: an adopted repair task reports the rows ITS OWN FILE lists, not the empty `rows` the engine carries for it — a repair row reading `0` is one the user is invited to skip",
+      () => {
+        const d5 = tmp("adopted-rows");
+        syncTaskDir(d5, RUN, OPTS);
+        syncRepairDir(d5, RUN, VERIFY_PAGES, OPTS);
+        const row = readIndex(d5).split("\n").find((l) => /Repair round 1/.test(l));
+        fs.rmSync(d5, { recursive: true, force: true });
+        return row && !/\|\s*0\s*\|/.test(row);
+      }, () => "see the Repair round 1 row of index.md");
+
     check("attention (anti-vacuity): the SAME task closed after a `--start` raises nothing — the check is about the dispatch, not about the status",
       () => {
         const d2 = fresh();
