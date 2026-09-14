@@ -4360,10 +4360,30 @@ check("review/minor: a plain BUTTON under a command-bar container reaches `comma
   () => !!svMenuAction("ApplyFilterButton")
     && !(svMenuView?.openItems || []).some((i) => i.name === "ApplyFilterButton"),
   () => ({ actions: (svMenuList?.commandBarActions || []).map((a) => a.name), open: svMenuView?.openItems }));
-check("review/minor: a standalone LABEL is carried WITH its caption, as its LIST_ROWS row states — it used to fall to `openItems` under the reason \"the list vocabulary has no reading for it\", which was false, and the open-item shape dropped the caption the row promised",
+check("review/minor: a standalone LABEL is carried WITH its caption, as its LIST_ROWS row states — the open-item shape used to drop the caption the row promised",
   () => (svMenuView?.labels || []).some((l) => l.name === "HintLabel" && l.caption === "HintCaption")
-    && !(svMenuView?.openItems || []).some((i) => i.name === "HintLabel"),
+    && (svMenuView?.openItems || []).some((i) => i.name === "HintLabel" && i.caption === "HintCaption"),
   () => ({ labels: svMenuView?.labels, open: svMenuView?.openItems }));
+check("review/blocker: …and the label REACHES THE RENDERED PLAN, not just the `labels` field — nothing reads `sectionView.labels`, so pinning the field alone passed while the element was computed and discarded",
+  () => { const plan = renderPlan(svMenuRun, {});
+    return /HintLabel/.test(plan) && /HintCaption/.test(plan); },
+  () => (renderPlan(svMenuRun, {}).split("\n").filter((l) => /Hint/.test(l))));
+check("review/major: the menu fold is ORDER-INDEPENDENT — declaring the items and the menu BEFORE the owning button must not double-report them as open items while they also ride in the button's `menuItems`",
+  () => { const ops = svMenuSection[0].body.match(/\{"operation":"insert".*?\}\}(?=,\{"operation"|\]\};\};\)|\])/g) || [];
+    // The button op moved to the END: its menu and both items are then visited before it, which is exactly
+    // the order the in-loop `foldedIntoMenus` guard could not survive.
+    const buttonOp = ops.find((o) => o.includes('"name":"BulkActionsButton"'));
+    const reorderedOps = [...ops.filter((o) => o !== buttonOp), buttonOp];
+    const reversedBody = `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:[${reorderedOps.join(",")}]};});`;
+    const reversed = runMigration({ ...svManifest(), section: { schemas: [{ pkg: "OrderInSales", body: reversedBody }], seed: svSeed,
+      listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+      { baseDir: FIX });
+    const view = reversed.section?.sectionView;
+    const folded = ["BulkActionsMenu", "BulkAssignMenuItem", "BulkExportMenuItem"];
+    const action = (reversed.listChangeSet?.commandBarActions || []).find((a) => a.name === "BulkActionsButton");
+    return !!buttonOp && !!action && (action.menuItems || []).length === 2
+      && !(view?.openItems || []).some((i) => folded.includes(i.name)); },
+  () => "the same four ops with the owning button declared LAST");
 
 /* --- ENG-94714: the list gate is SCOPED — a section-side gap stops the list deliverable, never the form one.
    The form-page block this replaces was a real defect once (a section body that would not parse blocked a plan

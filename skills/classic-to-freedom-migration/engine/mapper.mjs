@@ -2565,11 +2565,12 @@ function listSectionElementDecisions(section) {
     const where = e.region === LIST_REGION.UNRESOLVED
       ? "its ancestry reaches no recognised list container, which usually means the section's own template seed (`section.seed`) was not supplied"
       : `it sits on the ${e.region} surface`;
+    const captioned = e.caption ? ` Its caption is \`${e.caption}\`, which has to reach the Freedom list surface somehow — carry it, or record that it is dropped on purpose.` : "";
     const cond = e.conditions?.length
       ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
       : "";
     return { kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
-      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${cond}` };
+      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${captioned}${cond}` };
   });
 }
 function listProcessDecision(section) {
@@ -2790,9 +2791,10 @@ function isAccountedForOnListSurface(region, row) {
 }
 // An element the list vocabulary has NO row for, named rather than dropped — the arm that makes "nothing is
 // silently dropped" true.
-function sectionViewOpenItem(item, region) {
+function sectionViewOpenItem(item, region, caption = null) {
   return { name: item.name, region,
     kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
+    caption,
     conditions: listConditionsOf(item),
     package: lastProvenancePackage(item) };
 }
@@ -2810,32 +2812,46 @@ export function mapSectionView(sectionEff) {
   for (const item of items) {
     if (!isSectionDeclared(item)) { out.counts.chrome++; continue; }
     out.counts.sectionDeclared++;
-    const region = listRegionOf(item, index);
-    const openProps = listOpenProps(item);
-    // Unmodelled configuration is reported per ELEMENT, not per key: the real Opportunity grid declares eighteen
-    // such keys and one row naming all of them is answerable, while eighteen rows are a wall. It is reported for
-    // any list element that carries some, not only the grid — `controlColumnName` is the case the ticket names,
-    // not the only case there is.
-    if (openProps.length) out.gridConfig.push({ name: item.name, region, props: openProps,
-      package: lastProvenancePackage(item) });
-    if (region === LIST_REGION.ROW_ACTIONS) { out.rowActions.push(sectionDiffRowAction(item)); continue; }
-    const row = listRowForItemType(item.itemType);
-    if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
-      out.commandBarActions.push(sectionDiffAction(item, listMenuEntriesOf(item, childrenByParent, foldedIntoMenus)));
-      continue;
-    }
-    if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
-      out.labels ??= [];
-      out.labels.push(sectionViewLabel(item, region));
-      continue;
-    }
-    // A menu the fold above already claimed is accounted for on its owning button and stays silent. One that no
-    // button claimed falls through to `openItems` below with its kind named.
-    if (foldedIntoMenus.has(item.name)) continue;
-    if (isAccountedForOnListSurface(region, row)) continue;
-    out.openItems.push(sectionViewOpenItem(item, region));
+    foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus });
   }
+  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it (PR #176 review).
+  // `foldedIntoMenus` is filled as the loop runs, so a MENU / MENU_ITEM declared BEFORE its owning button reached
+  // the in-loop guard with the set still empty: it landed in `openItems` and was folded into the button's
+  // `menuItems` a few iterations later, so the same section body produced two different worklists depending on the
+  // order its `diff` array happens to be written in — and `items` order is replay order, not `index` order.
+  // Filtering afterwards is order-independent by construction.
+  out.openItems = out.openItems.filter((e) => !foldedIntoMenus.has(e.name));
   return out;
+}
+// One section-declared element, routed to the surface that can read it. Extracted from `mapSectionView`'s loop so
+// each arm stands on its own: the loop was over the cognitive-complexity bound with the label arm added, and the
+// routing rules are the part a reader actually needs to follow.
+function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }) {
+  const region = listRegionOf(item, index);
+  const openProps = listOpenProps(item);
+  // Unmodelled configuration is reported per ELEMENT, not per key: the real Opportunity grid declares eighteen
+  // such keys and one row naming all of them is answerable, while eighteen rows are a wall. It is reported for
+  // any list element that carries some, not only the grid — `controlColumnName` is the case the ticket names,
+  // not the only case there is.
+  if (openProps.length) out.gridConfig.push({ name: item.name, region, props: openProps,
+    package: lastProvenancePackage(item) });
+  if (region === LIST_REGION.ROW_ACTIONS) { out.rowActions.push(sectionDiffRowAction(item)); return; }
+  if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
+    out.commandBarActions.push(sectionDiffAction(item, listMenuEntriesOf(item, childrenByParent, foldedIntoMenus)));
+    return;
+  }
+  if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
+    out.labels ??= [];
+    out.labels.push(sectionViewLabel(item, region));
+    // AND an open item, with its caption (PR #176 review). `labels` is a structured field with no reader in
+    // `designspec.mjs`, `migrate.mjs` or any decision list, so a section-declared LABEL was computed and then
+    // discarded — the same "silently dropped" failure the MENU fold was raised for, arriving on another element
+    // kind. The field stays for a structured consumer; the open item is what puts the label on the ⚠ worklist.
+    out.openItems.push(sectionViewOpenItem(item, region, item.caption ? resourceKey(item.caption) : null));
+    return;
+  }
+  if (isAccountedForOnListSurface(region, listRowForItemType(item.itemType))) return;
+  out.openItems.push(sectionViewOpenItem(item, region));
 }
 // THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
 // that does not exist must not appear as a build deliverable.
