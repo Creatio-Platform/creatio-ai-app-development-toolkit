@@ -202,8 +202,16 @@ function widgetSource(w) {
   if (w.base) return "template context — provided by the Freedom template";
   return "native — confirm on-stand";
 }
-function rowsForWidgets(widgets) {
-  return (widgets || []).map((w) => {
+function rowsForWidgets(widgets, dcmActive) {
+  // When the DCM case is resolved present on-stand (`dcmActive`), the DCM widgets (case progress bar + Next steps)
+  // are template/on-stand chrome, NOT page-body layout, and are already covered where it matters: the `### On-stand
+  // signals` DCM line ("present → build it"), the DCM template banner (use the progress-bar template that SHIPS
+  // them), the skill's mapping reference, and the GATED `DCM case progress bar` / `DCM Next steps` checklist rows.
+  // Re-listing them here — esp. "⚠ ADD — not template-provided", which is wrong once the DCM template is used — is
+  // redundant noise, so they are dropped from the Layout table. Gate on `dcmActive`: when a DCM widget instead comes
+  // from CLASSIC EVIDENCE in the page body with no resolved case (dcmActive false), the checklist does NOT cover it,
+  // so this row is its only mention and MUST stay. Non-DCM widgets (Timeline, Recommendations, Duplicates) always stay.
+  return (widgets || []).filter((w) => !(dcmActive && w.signal === "dcm")).map((w) => {
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
   });
@@ -800,7 +808,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion),
-    ...rowsForWidgets(cs.widgets),
+    ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present)),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
     ...rowsForTableElements(cs.tableElements, regionOf),

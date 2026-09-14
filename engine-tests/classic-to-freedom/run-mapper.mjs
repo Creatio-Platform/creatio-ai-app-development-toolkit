@@ -2995,6 +2995,23 @@ check("#8 DCM: design spec places Next steps as a new tab (ADD) and the progress
   && /Case progress bar \| Component \| provided by `PageWithTabsAndProgressBarTemplate`/.test(dcmCs.designSpec)
   && !/Case progress bar \| Component \| ⚠ ADD/.test(dcmCs.designSpec),
   () => dcmCs.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
+// #8b — ENG-96327: when the DCM case is RESOLVED PRESENT on-stand (dcmActive), the DCM widgets are template/on-stand
+// chrome, not page-body layout — covered by `### On-stand signals`, the DCM template banner, the mapping doc, and the
+// GATED `DCM case progress bar` / `DCM Next steps` checklist rows. So they are DROPPED from the Layout table (the
+// "⚠ ADD — not template-provided" row is wrong once the progress-bar template is used) — but still emitted + gated.
+const dcmHidden = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",modules:{M:{moduleName:"DcmActionsDashboardModule"}},diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
+  signals: { dcm: { resolved: true, present: true } } }, { baseDir: FIX });
+check("#8b DCM (on-stand present): DCM widgets are HIDDEN from the Layout table but still emitted + dcmActive gates the checklist",
+  dcmHidden.changeSet.dcmActive === true
+  && dcmHidden.changeSet.widgets.some((w) => w.widget === "Case progress bar")
+  && dcmHidden.changeSet.widgets.some((w) => w.widget === "Next steps")
+  && !/\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmHidden.designSpec)
+  && !/Case progress bar \| Component \|/.test(dcmHidden.designSpec),
+  () => dcmHidden.designSpec.split("\n").filter((l) => /progress bar|Next steps/.test(l)));
+check("#8b DCM (classic evidence, no on-stand case): the widget stays visible — it is the only mention, the checklist does not cover it",
+  dcmCs.changeSet.dcmActive === false
+  && /\| Tab · Next steps \(new\) \| Next steps \|/.test(dcmCs.designSpec));
 check("#8 DCM: the widget PLACEMENT recipe (PageWithTabsAndProgressBarTemplate re-bind / MainContainer fallback, tools slot, flag-icon) lives in the mapping doc, not the plan note",
   /PageWithTabsAndProgressBarTemplate/.test(MAPPING_DOC) && /flag-icon/.test(MAPPING_DOC) && /MainContainer/.test(MAPPING_DOC)
   && !/flag-icon/.test(dcmCs.designSpec)
