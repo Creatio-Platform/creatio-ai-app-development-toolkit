@@ -324,10 +324,10 @@ above) — it is a different store, and only these `SysWidgetDashboard` card wid
 recognises each one and emits `changeSet.cardWidgets[]` plus a `card-widget` ⚠ item; this section is the build
 recipe.
 
-> The migrator process `ConvertCardWidgetsProcess` and the clio `run-process` MCP tool are separate, sibling
-> subtasks. **Every process/tool name, parameter, and result field below is the ASSUMED contract — verify each
-> against the released migrator before relying on it.** If either dependency is not yet available on the stand,
-> the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
+> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app, ENG-95805) and the clio
+> `run-process` MCP tool are separate, sibling subtasks. The contract below is **verified against the released
+> migrator (ENG-95805)** — re-confirm the field names on each migrator release. If either dependency is not yet
+> available on the stand, the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
 
 **Recognise it — the Classic side.** In the page's `modules` block, a `CardWidgetModule` whose
 `config.parameters.viewModelConfig` carries **both** `widgetKey` and `recordId`:
@@ -347,24 +347,42 @@ modules: /**SCHEMA_MODULES*/{
 A module missing **either** coordinate cannot be converted, so the engine deliberately leaves it as the old
 generic `component` ⚠ item (no silent drop) — do not treat that as a card widget.
 
-**Ordered steps (assumed contract — verify against the released migrator).**
+**Ordered steps (contract verified against the released migrator, ENG-95805).**
 
 1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)
    / the `card-widget` ⚠ items. Do not re-derive the coordinates by hand.
 2. **Group by `recordId`.** All widgets that share one `recordId` are one `SysWidgetDashboard` record, so they
    convert in **one** process call — batch their `widgetKeys` together. N distinct `recordId`s ⇒ N calls.
-3. **Call the migrator once per group** via the clio `run-process` MCP tool (*verify the tool name/shape*):
-   run `ConvertCardWidgetsProcess` (*verify the process name*) with inputs `SysWidgetDashboardId` = the group's
-   `recordId` and `WidgetKeys` = the batched keys, requesting the `["ConversionResult"]` output parameter
-   (*verify these input/output parameter names*).
-4. **Read `ConversionResult` per widget** (*verify the result shape — assumed: a per-widget `status` in
-   `{Success, Partial, Failed}`, a `freedomElementConfig` carrying view/viewModel/model diffs, and a `reason`*):
-   - `Success` / `Partial` → **place the returned `freedomElementConfig`** into the widget's `region`. Placement
-     follows `creatio-ui-guidelines`; you merge the returned diffs and **build nothing by hand**.
-   - `Failed` → leave the widget **`TODO`/`BLOCKED`** in `worklog.md` with the migrator's `reason`. **Never
-     substitute a hand-built chart/list** — a failed conversion stays blocked until the migrator can convert it.
-5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<widgetKey>` to `true` (placed) or `false`
-   (failed-and-blocked) so `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one.
+3. **Call the migrator once per group** via the clio `run-process` MCP tool: run `ConvertCardWidgetsProcess`
+   with inputs `SysWidgetDashboardId` = the group's `recordId` and `WidgetKeys` = the group's keys as a
+   **comma-separated string** (empty ⇒ the migrator converts every widget on the record), requesting the
+   `["ConversionResult"]` output parameter. The caller must hold the **`CanMigrateDashboard`** operation right
+   (a denied call comes back as a whole-call failure — see step 4).
+4. **Read `ConversionResult`** — a camelCase JSON envelope (null fields omitted):
+
+   ```
+   { success, error, stack, widgets: [ { widgetKey, status, freedomElementConfig, issues[], stack } ] }
+   freedomElementConfig = { viewConfigDiff, viewModelConfigDiff, modelConfigDiff, localizableStrings[], issues[] }
+   ```
+
+   - **Whole-call failure — `success:false`** (empty/unknown `recordId`, invalid `Items`, no widgets on the
+     record, access denied, or an unhandled error): `widgets` is empty. **Mark every requested widget in this
+     group `TODO`/`BLOCKED`** in `worklog.md` with the top-level `error`. Nothing is placed; do not retry by hand.
+   - Otherwise iterate `widgets[]`. Each widget's `status` is one of **`Success` / `Failed` / `Skipped`** (there
+     is no `Partial` for card widgets):
+     - **`Success`** → **place `freedomElementConfig`**: merge its `viewConfigDiff` / `viewModelConfigDiff` /
+       `modelConfigDiff` into the widget's `region` **and apply its `localizableStrings[]`** (localized captions).
+       Placement follows `creatio-ui-guidelines`; you **build nothing by hand**. (A non-empty per-element
+       `issues[]` on a `Success` is advisory — note it, still place.)
+     - **`Failed`** (widget key absent from the record, missing widget type, converter error, or record-context
+       could not be bound) or **`Skipped`** (widget type unsupported on the platform version, or unknown type) →
+       leave the widget **`TODO`/`BLOCKED`** in `worklog.md` with its `issues[]` (and `stack` for diagnosis).
+       **Never substitute a hand-built chart/list.**
+     - A **requested `widgetKey` that is absent from `widgets[]`** is likewise **`TODO`/`BLOCKED`** — it was not
+       converted.
+5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<widgetKey>` to `true` (placed on a
+   `Success`) or `false` (blocked — `Failed`/`Skipped`/whole-call failure/absent) so
+   `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one.
 
 ## Data And Binding Mapping
 
