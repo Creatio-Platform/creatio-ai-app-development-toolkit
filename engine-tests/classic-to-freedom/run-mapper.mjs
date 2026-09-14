@@ -3221,6 +3221,22 @@ check("formless empty: 0-field child with NO behaviour is marked empty (no logic
   && /\| CEPage[^|]*\| ⚠ folded to 0 fields with no behaviour[^|]*\| ⚠ verify \|/.test(formlessEmpty.plan)
   && /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(formlessEmpty.plan),
   () => ({ formless: ceChild.formless, hasLogicSpec: !!ceChild.logicSpec }));
+// ENG-96327 — the Call-legend PROSE for the two formless calls (the scope-table value assertions above would not
+// catch a typo in the legend definition text).
+check("formless: the `Inline grid` Call-legend definition renders when an inline-grid child is present",
+  /\*\*`Inline grid`\*\* = the child edit page folded to 0 form fields/.test(formlessGrid.plan),
+  () => formlessGrid.plan.split("\n").filter((l) => /Inline grid/.test(l)));
+check("formless: the `⚠ verify` Call-legend definition renders when an empty child is present",
+  /\*\*`⚠ verify`\*\* = the child folded to 0 fields with no behaviour/.test(formlessEmpty.plan),
+  () => formlessEmpty.plan.split("\n").filter((l) => /verify/.test(l)));
+// ENG-96327 — `logicOnly` (the inline-grid child's logicSpec) suppresses FORM-PAGE framing: the Base-field overrides
+// section renders normally but vanishes under logicOnly (it is a build instruction on the template's fields, not logic).
+{
+  const bfoCs = { entity: "X", changeSet: { baseFieldOverrides: [{ field: "Amount", change: "moved to Header" }] } };
+  check("ENG-96327 logicOnly: the Base-field overrides section renders normally but is suppressed under logicOnly",
+    /#### Base-field overrides/.test(renderDesignSpec(bfoCs, { embedded: true }))
+      && !/#### Base-field overrides/.test(renderDesignSpec(bfoCs, { embedded: true, logicOnly: true })));
+}
 
 // #7c — a child whose detail names a REAL Classic edit page (getEditPageName) gets a MANDATORY-map slot
 // that closes the "view-only / native / out of scope" escape hatches a real run used to dodge the mapping.
