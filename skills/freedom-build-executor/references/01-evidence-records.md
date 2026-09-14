@@ -26,7 +26,7 @@ Run `--units`. It publishes every id you may file under:
 }
 ```
 
-Three id shapes exist, each built from raw values (page key, `kind`, `item`), never from a rendered
+These id shapes exist, each built from raw values (page key, `kind`, `item`), never from a rendered
 label:
 
 | Shape | Emitted for | How many |
@@ -34,6 +34,7 @@ label:
 | `<pageKey>#quality-gates` | the mandatory `creatio-ui-guidelines` page-design pass | one per published page key |
 | `<pageKey>#confirm:<kind>:<item>` | one per `⚠ Confirm worklist` item on that page | zero or more |
 | `<pageKey>#childpage` | a child page whose Classic source was never folded | zero or more |
+| `<pageKey>#datasource:<name>` | a data source a component on the page reads from (ENG-94756) | zero or more |
 
 An id you invented matches nothing. The row stays `⚠ unverified` and the run cannot exit 0 —
 the engine reports no error for it, so an invented id reads as silence, not as a mistake.
@@ -99,6 +100,15 @@ different repair.
   the page (or shipped reference) you resolved it against, and the components the answer produced
   or ruled out. A `kind` of `detail-add-mechanism` closes when the record names the lookup /
   service / editable-grid components you actually built.
+- **`<pageKey>#datasource:<name>`** — the page you read the data source off (`referencePage`) and
+  the components that read from it (`components`). It exists because a data source is NOT a view
+  item: it lives in the page's model configuration, so nothing in the `--built` page body can prove
+  it and no count can gate it. The row asks only whether the named data source EXISTS on the built
+  page — its property values belong to the `get-guidance` item the plan row points at, and the
+  agent that read that item is who checks them. Emitted today for `AttachmentListDS`, when the
+  chosen template was MEASURED not to ship the attachments component and the page therefore builds
+  it explicitly; a component that lists nothing because its data source was skipped is the exact
+  failure this row exists to stop.
 - **`<pageKey>#childpage`** — the reference page the unfolded child was built from and the
   components it carries. This key exists precisely because the plan derives nothing about that
   page, so the structural row can only ask "did the key return any component at all". A one-key

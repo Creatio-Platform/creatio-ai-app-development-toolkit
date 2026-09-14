@@ -668,13 +668,16 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
    FIELDS. `tabs` — the template ships a tab container. `feed` / `attachments` — it ships THAT tab/component
    (so a classic page's Feed is genuinely template context). `topAreaColumns` — how many columns its top area has
    (`null` = it has no top area), which is what decides whether a multi-column Classic Header survives the move.
-   `profileIsland` — it ships a left profile island.                                                              */
+   `profileIsland` — it ships a left profile island. `tags` — it ships the tag control (see TAGGING below: that one
+   is never a build decision, it changes what the plan must ASK about the migrated object).                       */
 export const FREEDOM_TEMPLATE_CAPABILITIES = Object.freeze({
   // Measured on the ENG-96445 stand: the template ships tabs and a ONE-column top area, and ships neither Feed nor
   // Attachments — both had to be built explicitly (the workflow run lost Feed; the inline run hand-built it).
+  // `tags` was read separately and later, which is why `measuredIn` names two occasions: the same template that
+  // ships NEITHER Feed NOR Attachments does ship the tag control, for free, in `CardToolsContainer`.
   PageWithTopAreaAndTabsFreedomTemplate: Object.freeze({
-    tabs: true, feed: false, attachments: false, topAreaColumns: 1, profileIsland: false,
-    measuredIn: "ENG-96445 / ENG-96444 (2026-09-02, paired migration run)",
+    tabs: true, feed: false, attachments: false, topAreaColumns: 1, profileIsland: false, tags: true,
+    measuredIn: "ENG-96445 / ENG-96444 (2026-09-02, paired migration run); `tags` from the ENG-94756 read-only template read (2026-09-14)",
   }),
   // NOT A STAND MEASUREMENT — a named fixture, kept in the table for one reason: every template measured so far
   // ships NO Feed and NO Attachments, so the `provided` verdict (and the "ships … (measured); re-bind it, do not
@@ -705,6 +708,67 @@ export function templateProvides(name, capability) {
   if (!caps || typeof caps[capability] !== "boolean") return null;
   return caps[capability];
 }
+
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+   The table above answers WHETHER a template ships Feed / Attachments. It deliberately does NOT answer HOW the
+   component is configured once it has to be built — and neither does anything else in this repository. The property
+   values the section/app CREATION flow produces are published ONCE, as clio-knowledge guidance, and read at build
+   time through `get-guidance`; `get-component-info` stays authoritative for the property VOCABULARY. So the plan
+   ROUTES a builder to that item by its stable id and asserts nothing about the values themselves.
+
+   WHY A POINTER AND NOT A COPY (approved requirement R7). A table of values here would be a SECOND source of truth
+   for the same knowledge, free to drift from the one the builder actually reads — the duplication this ticket
+   exists to end. And the engine could not maintain it honestly even if that were wanted: `migrate.mjs` renders the
+   plan OFFLINE, under plain `node`, with no clio and no stand, so it can never check a value it printed. Naming
+   the item costs one string and keeps the run's only claim a true one: here is the component you owe, and here is
+   where its settings are defined.
+
+   The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`,
+   served under `docs://knowledge/com.creatio.clio/page-modification-standard-components`. Renaming it there
+   without renaming it here produces a plan that points at nothing, which is why the engine tests spell the literal
+   out rather than importing this constant. Note that only RUNTIME consumption needs the clio release that carries
+   the item; the plan needs the id alone.                                                                          */
+export const STANDARD_COMPONENTS_GUIDANCE_ID = "page-modification-standard-components";
+// The companion data source an inserted attachments component is inert without: it is what the component reads its
+// records from, so a page built with the component and without this lists nothing — and a gate that counted only
+// the component would call that page done. This is a deliverable NAME, not one of the property values: the plan has
+// to be able to say WHICH artifact is owed and `--verify` has to be able to gate it. Its SHAPE — the entity it
+// binds, its scope, its attribute — stays in the guidance item, with everything else the builder configures.
+export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
+
+/* ---- TAGGING IS A DIFFERENT SHAPE OF DEFECT, AND GETS A DIFFERENT ANSWER (ENG-94756) -----------------------------
+   The reported symptom reads like the Attachments one and the mechanism is not the same. What is established:
+     * The tag control is SHIPPED by the measured templates — including the one that ships neither Feed nor
+       Attachments — always in the same container, always in a minimal form carrying little more than the record
+       binding. So there is no merge-vs-insert decision here and no ABSENT path: the verdicts above answer a
+       question Tags never asks, and the `tags` field drives no build row. It is read for ONE purpose — to know
+       that the built page will carry the control whether or not anything was migrated into it.
+     * No tag data source exists in any page schema. The designer's properties panel generates the list, the CRUD
+       handlers and the bindings; only the record binding reaches the saved schema. There is nothing for a plan to
+       insert and nothing for a canonical value set to say, which is why Tags is NOT modelled on Feed/Attachments.
+     * The platform has TWO tag models, and the component's default source is the ENTITY-AGNOSTIC one (a shared
+       record→tag table keyed by record id and schema name). An older per-object model, with its own per-object tag
+       dictionary, also exists. Which model a given object's existing tag data sits in is a DATA question.
+
+   A WITHDRAWN PREMISE, RECORDED SO IT IS NOT REDERIVED. An earlier draft of this work derived a per-object tag
+   junction name from the migrated entity and gated on that object's existence, reading its absence as proof that a
+   page's tag control was dead. That premise is WRONG: the default model needs no per-object schema, so the absence
+   of one proves nothing, and a gate built on it would fire falsely on every object using the default. It was
+   removed rather than softened, and an engine test now forbids either engine file from naming such an object —
+   which is why the name is not written out here. Do not reintroduce that check without a runtime observation that
+   establishes a per-object schema is required.
+
+   WHAT THE ENGINE CAN AND CANNOT SAY. The plan is rendered OFFLINE from the captured classic schema bodies, the
+   migrated object's OWN columns, the detail/child/section bundles and the component registry. Not one of those
+   says whether this object's records carry tag data today, or which model it is in — so the engine states what it
+   measured (the template ships the control; this migration builds and configures nothing for it), names the open
+   question, and routes to the guidance item that owns the detail. `designspec.mjs` (`taggingRows`) renders it in
+   the engine's third state — visible in the plan and the control table, gating nothing — because a question
+   nothing in the run conditions must not hold every run on this template open.
+
+   NOT ASSERTED ANYWHERE, because none of it is established: what the reported symptom looks like at runtime,
+   whether migrating tag DATA between the two models is ever required, and whose job it would be.                  */
+export const TAGGING_COMPONENT_TYPE = "crt.TagSelect";
 
 // ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
 //
