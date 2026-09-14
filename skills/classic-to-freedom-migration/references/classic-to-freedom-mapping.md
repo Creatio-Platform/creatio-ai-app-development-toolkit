@@ -164,7 +164,7 @@ is what shows the current approval state/actions. Read `get-component-info` for 
 required config before building, and add both.
 
 **Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes,
-printables, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
+printables, section dashboards, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
 alone doesn't say. Run each query at plan time and act on the result; never build "faithful to the classic
 body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
 the section has no case/process.
