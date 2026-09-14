@@ -2177,6 +2177,26 @@ function readSchemaBody(e, baseDir) {
   return fs.readFileSync(resolved, "utf8");
 }
 
+// The parse-diagnostic POOL — every schema body's AST diagnostics, tagged by owner (main/seed, detail:<n>,
+// profile:<n>, section) so each routes back to the body it came from. Module-level so its per-source `|| []` guards
+// don't count against runMigration's cognitive complexity (Sonar S3776). Detail/profile structural diagnostics
+// block the gate like a main one; section diagnostics carry `role:"section"` and are advisory (never merged).
+// Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
+function tallyByKind(decisions) {
+  const out = {};
+  for (const d of decisions) out[d.kind] = (out[d.kind] || 0) + 1;
+  return out;
+}
+function collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors) {
+  return [
+    ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
+    ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
+    ...Object.entries(profileSchemas).flatMap(([name, p]) => (p.astDiagnostics || []).map((x) => ({ pkg: `profile:${name}`, ...x }))),
+    ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
+    ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
+  ];
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
   const bodyOf = (e) => readSchemaBody(e, baseDir);
@@ -2235,19 +2255,7 @@ export function runMigration(manifest, opts = {}) {
   // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
-  const parseDiagnostics = [
-    ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
-    // Major 4 — detail-schema diagnostics join the pool tagged `detail:<name>`; a structural one (an unresolved
-    // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
-    ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
-    // profile-schema diagnostics join the pool tagged `profile:<name>` — a structural one (its `diff` built via
-    // an unresolved construct) blocks the gate, instead of emptying the card's column list unnoticed.
-    ...Object.entries(profileSchemas).flatMap(([name, p]) => (p.astDiagnostics || []).map((x) => ({ pkg: `profile:${name}`, ...x }))),
-    // Section diagnostics are tagged `role:"section"` and are EXCLUDED from the structural gate below (their
-    // `diff` is never merged) — advisory only, so they surface without hard-blocking a valid form-page plan.
-    ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
-    ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
-  ];
+  const parseDiagnostics = collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors);
   // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
   // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
@@ -2368,8 +2376,7 @@ export function runMigration(manifest, opts = {}) {
   behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
   behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
-  const decisionSummary = {};
-  for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
+  const decisionSummary = tallyByKind(changeSet.needsDecision);
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
