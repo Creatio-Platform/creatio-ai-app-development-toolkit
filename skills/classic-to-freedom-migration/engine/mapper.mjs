@@ -2247,7 +2247,10 @@ function mapWidgets(eff, opts = {}) {
   for (const c of (eff.components || [])) {
     // A card-widget-shaped module is handled here and NEVER falls to the generic widget path; an inherited
     // (`fromTemplate`) one is base-template chrome and is recognised but not emitted (no per-page leak).
-    if (isCardWidgetModule(c)) { if (!c.fromTemplate) emitCardWidget(c); continue; }
+    if (isCardWidgetModule(c)) {
+      if (!c.fromTemplate) emitCardWidget(c);
+      continue;
+    }
     addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   }
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
