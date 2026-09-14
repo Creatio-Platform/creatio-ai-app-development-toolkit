@@ -320,7 +320,8 @@ and element to the same page yourself, and a hand-added element carries the desi
 never re-authors the widgets. Its five parameters carry the section's `SysModule.Id`, the built list page's
 `SysSchema.Id` (its **primary key** — the process filters `SysSchema` by primary column, so a `UId` matches
 no row and degrades to `Guid.Empty`; resolve it with `execute-esq` on `SysSchema` by `Name` and pick the
-layer whose `UId` is the `schemaUId` `get-page` reported), the dashboard ids to migrate, the `crt.Dashboards`
+layer whose `UId` is the `schemaUId` `get-page` reported), a serialized ESQ filter selecting the dashboards
+to migrate (its name is the contract, and a bare list of ids is not one — the skill carries the template), the `crt.Dashboards`
 element's name and the target package. The rest of the procedure — why the run repeats once per delivery
 group, how to read the verdict, and when a re-run is safe — is the skill's dashboards hand-off step.
 

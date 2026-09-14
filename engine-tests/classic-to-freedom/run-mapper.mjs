@@ -4845,6 +4845,18 @@ check("F1 docs: both documents say how to RESOLVE that Id and which replacing la
   && skillFlat.includes("whose `UId` equals the `schemaUId`")
   && mappingFlat.includes("`SysSchema` by `Name` and pick the layer whose `UId` is the `schemaUId`"),
   () => "the Id-resolution recipe or the layer-selection rule is missing");
+// The regression this locks (ENG-95807 / B1): the migrator briefly accepted a bare JSON array of ids on
+// SysDashboardsSelectionStateFilter, and the skill documented that notation. The second notation was reverted as
+// undiscoverable, so a skill that still teaches it hands the process a value that does not deserialize into a
+// filter - selecting nothing and reporting no error, the same silent no-op as the Guid.Empty trap above.
+check("B1 docs: the dashboard selection is documented as a serialized ESQ filter, with the stand-verified template",
+  skillFlat.includes("takes a SERIALIZED ESQ FILTER, not a list of ids")
+  && skillFlat.includes('"className":"Terrasoft.InFilter"')
+  && skillFlat.includes('"rootSchemaName":"SysDashboard"')
+  && !skillFlat.includes("the dashboard **ids** to migrate")
+  && !skillFlat.includes("passing the ids as an array")
+  && mappingFlat.includes("a serialized ESQ filter selecting the dashboards"),
+  () => "the skill still documents a bare id array, or lost the verified filter template");
 check("OBS1 docs: the delivery-mode scan covers EVERY SysDashboard binding, with no section-package shortcut",
   skillFlat.includes("Scan EVERY `SysDashboard` binding")
   && skillFlat.includes("Do NOT narrow the scan to the packages that own the section's schema layers")
