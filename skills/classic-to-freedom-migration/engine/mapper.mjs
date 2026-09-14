@@ -2758,16 +2758,49 @@ function sectionDiffRowAction(item) {
 //   gridConfig        — per element, the declared keys the engine models nowhere (the `controlColumnName` family)
 //   openItems         — section-declared elements the list vocabulary has no reading for, named rather than dropped
 //   counts            — how much of the folded tree was section-declared vs inherited chrome
-export function mapSectionView(sectionEff) {
-  if (!sectionEff) return null;
-  const items = sectionEff.items || [];
-  const index = new Map(items.map((i) => [i.name, i]));
+// Groups the folded items under their declaring parent, in declared order. Own fn so `mapSectionView` stays under
+// Sonar CC 15; the ordering matters because a menu's items must reach its button in the order Classic declared them.
+function indexChildrenByParent(items) {
   const childrenByParent = new Map();
   for (const i of [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
     if (!i.parent) continue;
     if (!childrenByParent.has(i.parent)) childrenByParent.set(i.parent, []);
     childrenByParent.get(i.parent).push(i);
   }
+  return childrenByParent;
+}
+// The package that last touched an element — the tail of its provenance chain, or null when it carries none.
+function lastProvenancePackage(item) {
+  return item.provenance?.[item.provenance.length - 1] || null;
+}
+// A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
+// carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
+function sectionViewLabel(item, region) {
+  return { name: item.name, region,
+    caption: item.caption ? resourceKey(item.caption) : null,
+    conditions: listConditionsOf(item),
+    package: lastProvenancePackage(item) };
+}
+// The grid itself and the containers are already owned by the list surface or are layout, so they are accounted for
+// and silent. `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a
+// section-declared MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold
+// exists now, and what it claimed is skipped by the caller — so reaching here means nothing folded this element.
+function isAccountedForOnListSurface(region, row) {
+  return region === LIST_REGION.GRID || row?.ownedBy === OWNER.CONTAINER || row?.ownedBy === OWNER.CHROME;
+}
+// An element the list vocabulary has NO row for, named rather than dropped — the arm that makes "nothing is
+// silently dropped" true.
+function sectionViewOpenItem(item, region) {
+  return { name: item.name, region,
+    kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
+    conditions: listConditionsOf(item),
+    package: lastProvenancePackage(item) };
+}
+export function mapSectionView(sectionEff) {
+  if (!sectionEff) return null;
+  const items = sectionEff.items || [];
+  const index = new Map(items.map((i) => [i.name, i]));
+  const childrenByParent = indexChildrenByParent(items);
   // Names a command-bar button folded into its own `menuItems`. Anything MENU-shaped that is NOT in here belongs
   // to no button on this surface and becomes a named open item — that is what makes "nothing is silently dropped"
   // true for the menu family, which the blanket `OWNER.FOLDED` skip used to swallow.
@@ -2784,38 +2817,23 @@ export function mapSectionView(sectionEff) {
     // any list element that carries some, not only the grid — `controlColumnName` is the case the ticket names,
     // not the only case there is.
     if (openProps.length) out.gridConfig.push({ name: item.name, region, props: openProps,
-      package: item.provenance?.[item.provenance.length - 1] || null });
+      package: lastProvenancePackage(item) });
     if (region === LIST_REGION.ROW_ACTIONS) { out.rowActions.push(sectionDiffRowAction(item)); continue; }
     const row = listRowForItemType(item.itemType);
     if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
       out.commandBarActions.push(sectionDiffAction(item, listMenuEntriesOf(item, childrenByParent, foldedIntoMenus)));
       continue;
     }
-    // A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
-    // carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
     if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
       out.labels ??= [];
-      out.labels.push({ name: item.name, region,
-        caption: item.caption ? resourceKey(item.caption) : null,
-        conditions: listConditionsOf(item),
-        package: item.provenance?.[item.provenance.length - 1] || null });
+      out.labels.push(sectionViewLabel(item, region));
       continue;
     }
     // A menu the fold above already claimed is accounted for on its owning button and stays silent. One that no
     // button claimed falls through to `openItems` below with its kind named.
     if (foldedIntoMenus.has(item.name)) continue;
-    // Everything else: the grid itself and the containers are already owned by the list surface or are layout, so
-    // they are accounted for and silent. Anything the list vocabulary has NO row for, or that resolved to no
-    // region, becomes a named open item — this is the arm that makes "nothing is silently dropped" true.
-    // `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a section-declared
-    // MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold exists now,
-    // and what it claimed is skipped above — so reaching here means nothing folded this element.
-    if (region === LIST_REGION.GRID || row?.ownedBy === OWNER.CONTAINER
-      || row?.ownedBy === OWNER.CHROME) continue;
-    out.openItems.push({ name: item.name, region,
-      kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
-      conditions: listConditionsOf(item),
-      package: item.provenance?.[item.provenance.length - 1] || null });
+    if (isAccountedForOnListSurface(region, row)) continue;
+    out.openItems.push(sectionViewOpenItem(item, region));
   }
   return out;
 }

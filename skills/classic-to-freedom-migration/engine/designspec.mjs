@@ -468,6 +468,36 @@ function listRowActionsTable(rowActions) {
 }
 // The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
 // folded — the ⚠ Confirm item carries the question.
+// The condition cell of the command-bar table. Own fn so `listCommandBarTable` stays under Sonar CC 15: a bound
+// condition, several bound conditions, and a STATIC `visible: false` / `enabled: false` are three separate readings
+// of the same cell, and a button may carry both kinds at once.
+function commandBarConditionCell(a) {
+  let cond = "⚠ none declared — confirm on-stand";
+  if (a.conditions?.length) {
+    cond = a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state";
+  } else if (a.condition) {
+    cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
+  }
+  // A STATIC `visible: false` / `enabled: false` is not a bound condition and never reached the cell above, so a
+  // button Classic hides by default read here as always-visible — and the built Freedom list showed it.
+  const statics = [
+    a.staticVisible === false ? "`visible: false` (static)" : null,
+    a.staticEnabled === false ? "`enabled: false` (static)" : null,
+  ].filter(Boolean);
+  if (!statics.length) return cond;
+  return (a.conditions?.length || a.condition ? cond + " · " : "") + statics.join(" · ") + " — Classic hides/disables it by default";
+}
+
+// The `Menu position` cell: the separator-delimited group, the submenu container, and the folded menu. Naming the
+// items (and the classic handler behind each) is the whole difference between a menu that reaches the plan and one
+// that vanishes with its handlers.
+function commandBarPlacementCell(a) {
+  const menu = (a.menuItems || []).length
+    ? " · menu: " + a.menuItems.map((m) => `\`${esc(m.caption || m.name)}\`` + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")).join(", ")
+    : "";
+  return [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
+}
+
 function listCommandBarTable(actions) {
   if (!actions.length) return [];
   const L = ["", "#### Command-bar actions",
@@ -475,34 +505,9 @@ function listCommandBarTable(actions) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const a of actions) {
     // Same columns the Row actions table publishes: a name alone cannot build a button, and an action ported
-    // without its `Enabled` condition ships always-enabled. `Menu position` carries the separator-delimited
-    // group and the submenu container, which are the only record of the classic menu's shape.
+    // without its `Enabled` condition ships always-enabled.
     const cap = a.caption ? `\`${esc(a.caption)}\`` : "⚠ none read — confirm on-stand";
-    // Same rule as the Row actions table above: the bound property is part of the condition, not a detail. A
-    // button may carry BOTH (the real `SagRequestCombinedSectionButton` binds one method to `visible` and another
-    // to `enabled`), so every one this run resolved is rendered rather than only the first.
-    let cond = "⚠ none declared — confirm on-stand";
-    if (a.conditions?.length) {
-      cond = a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state";
-    } else if (a.condition) {
-      cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
-    }
-    // A STATIC `visible: false` / `enabled: false` is not a bound condition and never reached the cell above, so a
-    // button Classic hides by default read here as always-visible — and the built Freedom list showed it.
-    const statics = [
-      a.staticVisible === false ? "`visible: false` (static)" : null,
-      a.staticEnabled === false ? "`enabled: false` (static)" : null,
-    ].filter(Boolean);
-    if (statics.length) {
-      cond = (a.conditions?.length || a.condition ? cond + " · " : "") + statics.join(" · ") + " — Classic hides/disables it by default";
-    }
-    // The folded menu. Naming the items (and the classic handler behind each) is the whole difference between a
-    // menu that reaches the plan and one that vanishes with its handlers.
-    const menu = (a.menuItems || []).length
-      ? " · menu: " + a.menuItems.map((m) => `\`${esc(m.caption || m.name)}\`` + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")).join(", ")
-      : "";
-    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
-    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
+    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${commandBarConditionCell(a)} | ${commandBarPlacementCell(a)}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
   }
   return L;

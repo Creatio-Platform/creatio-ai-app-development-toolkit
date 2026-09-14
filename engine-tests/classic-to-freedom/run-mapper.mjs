@@ -4337,12 +4337,12 @@ const svMenuAction = (n) => (svMenuList?.commandBarActions || []).find((a) => a.
 
 check("review/blocker: a section-declared MENU and its MENU_ITEMs fold into the owning command-bar button's `menuItems` — the LIST_ROWS notes promised that fold and the list path did not have it, so the menu and both items reached NO surface at all",
   () => { const b = svMenuAction("BulkActionsButton");
-    const captions = (b?.menuItems || []).map((m) => m.caption);
-    return captions.includes("BulkAssignCaption") && captions.includes("BulkExportCaption"); },
+    const captions = new Set((b?.menuItems || []).map((m) => m.caption));
+    return captions.has("BulkAssignCaption") && captions.has("BulkExportCaption"); },
   () => ({ action: svMenuAction("BulkActionsButton"), open: svMenuView?.openItems?.map((i) => i.name) }));
 check("review/blocker: each folded item keeps the CLASSIC handler behind it — `onBulkAssign` / `onBulkExport` vanished with the menu that carried them",
-  () => { const handlers = (svMenuAction("BulkActionsButton")?.menuItems || []).map((m) => m.classicHandler);
-    return handlers.includes("onBulkAssign") && handlers.includes("onBulkExport"); },
+  () => { const handlers = new Set((svMenuAction("BulkActionsButton")?.menuItems || []).map((m) => m.classicHandler));
+    return handlers.has("onBulkAssign") && handlers.has("onBulkExport"); },
   () => svMenuAction("BulkActionsButton")?.menuItems);
 check("review/blocker (anti-vacuity): a MENU_ITEM that NO button folded is still disclosed as a named open item rather than silently skipped — that is the half of AC1 the blanket `OWNER.FOLDED` skip removed",
   () => (svMenuView?.openItems || []).some((i) => i.name === "OrphanMenuItem"),
