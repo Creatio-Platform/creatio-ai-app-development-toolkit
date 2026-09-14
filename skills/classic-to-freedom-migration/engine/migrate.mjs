@@ -2181,6 +2181,20 @@ function readSchemaBody(e, baseDir) {
 // profile:<n>, section) so each routes back to the body it came from. Module-level so its per-source `|| []` guards
 // don't count against runMigration's cognitive complexity (Sonar S3776). Detail/profile structural diagnostics
 // block the gate like a main one; section diagnostics carry `role:"section"` and are advisory (never merged).
+// The "matched nothing on the whole surface" index reports — only the ROOT run can judge them (a folded scope sees
+// one page's rows, so a sibling's answer would look unmatched). Assigns all three so its three root/else branches
+// don't count against runMigration's cognitive complexity (Sonar S3776).
+function assignRootIndexKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
+  const root = !scopeSchema;
+  behaviourIndex.unmatched = root ? unmatchedIndexKeys(behaviourIndexInput, stubIndex) : [];
+  behaviourIndex.sectionOnly = root ? sectionOnlyIndexKeys(behaviourIndexInput, stubIndex) : [];
+  behaviourIndex.wiringOnly = root ? wiringOnlyKeys(behaviourIndexInput, stubIndex) : [];
+}
+// THE run's entity: the manifest's own value when it named a real one, else the entity the merged schema chain
+// reports. The list page's data-source and the result's `entity` must name the SAME object. Module-level (S3776).
+function resolveRunEntity(manifest, eff) {
+  return manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+}
 // Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
 function tallyByKind(decisions) {
   const out = {};
@@ -2293,7 +2307,7 @@ export function runMigration(manifest, opts = {}) {
   // schema chain reports. Hoisted rather than repeated at each consumer, because the list page's data-source op and
   // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
   // states is a page built on the wrong table.
-  const resolvedEntity = manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+  const resolvedEntity = resolveRunEntity(manifest, eff);
   const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
@@ -2371,11 +2385,7 @@ export function runMigration(manifest, opts = {}) {
     // as the record page and nested runs slice(1) for child scopes — a section entry must not shift those.
     ...sectionScopes,
   ]);
-  // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
-  // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
-  behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
+  assignRootIndexKeys(behaviourIndex, opts.scopeSchema, behaviourIndexInput, stubIndex);
   const decisionSummary = tallyByKind(changeSet.needsDecision);
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
