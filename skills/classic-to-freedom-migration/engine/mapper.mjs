@@ -379,6 +379,10 @@ function isProfileCardModule(c) {
 // record) and `widgetKey` (which widget in it) must be present. A module missing EITHER cannot be converted, so
 // it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
 // the widget catalog already owns is excluded so a known base-chrome widget is never mistaken for a card widget.
+// Recognition is by the two COORDINATES, not by `moduleName`: in a classic body only a CardWidgetModule carries
+// both `recordId` and `widgetKey` on `viewModelConfig`, so the name is intentionally not re-checked here — a
+// differently-named module carrying both coordinates is a card widget by construction. This name-independence is
+// documented in `references/classic-to-freedom-mapping.md` ("Recognise it") and pinned by a golden test.
 function isCardWidgetModule(c) {
   if (!c?.recordId || !c?.widgetKey) return false;
   // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
@@ -2213,11 +2217,14 @@ function mapWidgets(eff, opts = {}) {
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
-  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it emits unconditionally (no seenWidget dedup,
-  // no base-chrome evidence gate). Resolve its region by climbing the host diff item's parent chain (mirrors
-  // mapProfileCards); an unresolved chain (or no host diff item, e.g. a module-only declaration) falls back to
-  // the top area, where analytical indicators sit. Account for BOTH the module key AND the host diff-item name so
-  // mapUnmappedDrop does not later re-report the widget as an unknown dropped component (the double-report trap).
+  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
+  // and the base-chrome evidence gate. It must NOT leak an inherited one, though: a module carried in from a base /
+  // seed layer (`fromTemplate`) is base-template chrome, and the dispatch loop below gates on `!c.fromTemplate` so
+  // it never emits a per-page card-widget decision — that gate replaces the base-chrome evidence gate this branch
+  // otherwise bypasses, which is why the payload records no template origin. Resolve its region by climbing the host
+  // diff item's parent chain (mirrors mapProfileCards); an unresolved chain (or no host diff item, e.g. a module-only
+  // declaration) falls back to the top area, where analytical indicators sit. Account for BOTH the module key AND the
+  // host diff-item name so mapUnmappedDrop does not later re-report the widget as an unknown dropped component.
   const emitCardWidget = (c) => {
     const host = index.get(c.key);
     const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : null;
@@ -2227,7 +2234,7 @@ function mapWidgets(eff, opts = {}) {
     else region = HEADER_TOP_REGION;
     accountedFor.push(c.key);
     if (host?.name) accountedFor.push(host.name);
-    cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region, fromTemplate: !!c.fromTemplate });
+    cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region });
     // The decision names the CONCRETE conversion action (convert via ConvertCardWidgetsProcess and place the
     // returned Freedom element) — NOT the old "propose the closest component". The migrator's result-envelope
     // contract has ONE canonical home (the "Card widgets" recipe in references/classic-to-freedom-mapping.md);
@@ -2238,7 +2245,9 @@ function mapWidgets(eff, opts = {}) {
     });
   };
   for (const c of (eff.components || [])) {
-    if (isCardWidgetModule(c)) { emitCardWidget(c); continue; }
+    // A card-widget-shaped module is handled here and NEVER falls to the generic widget path; an inherited
+    // (`fromTemplate`) one is base-template chrome and is recognised but not emitted (no per-page leak).
+    if (isCardWidgetModule(c)) { if (!c.fromTemplate) emitCardWidget(c); continue; }
     addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
   }
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));

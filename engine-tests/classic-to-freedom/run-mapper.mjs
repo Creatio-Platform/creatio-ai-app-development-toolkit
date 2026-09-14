@@ -220,6 +220,30 @@ check("ENG-95806 F3: the overlap module is NOT carried into cardWidgets[]",
   !(cwOverlap.cardWidgets || []).some(w => w.key === "DualModule"),
   () => JSON.stringify(cwOverlap.cardWidgets));
 
+// ENG-95806 (review d-baranovskyi) — recognition is by the two COORDINATES, not `moduleName`. A module with a
+// non-`CardWidgetModule` name carrying BOTH coordinates is still a card widget (only CardWidgetModule carries both
+// in a real classic body, so keying off the name would be redundant AND would silently mis-scope a variant). Locks
+// the name-independence the reference documents.
+const cwNamed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NotACardWidgetName", moduleName: "SomeCompletelyUnrelatedModule", widgetKey: "wk1", recordId: "rec-n" },
+] })]));
+check("ENG-95806: recognition is name-independent — a non-CardWidgetModule name with both coordinates → card-widget decision",
+  cwNamed.needsDecision.some(n => n.kind === "card-widget" && n.item === "NotACardWidgetName" && n.recordId === "rec-n")
+  && (cwNamed.cardWidgets || []).some(w => w.key === "NotACardWidgetName" && w.widgetKey === "wk1"),
+  () => JSON.stringify(cwNamed.needsDecision.filter(n => n.item === "NotACardWidgetName")));
+
+// ENG-95806 (review d-baranovskyi) — a card widget INHERITED from a base/seed layer (`fromTemplate`) is
+// base-template chrome and must NOT emit a per-page card-widget decision: the card-widget branch bypasses the
+// base-chrome evidence gate, so the dispatch loop gates on `!fromTemplate` instead. Only a card widget the page's
+// OWN layer declares becomes a decision.
+const cwSeed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X" })], { seedTemplate: [L("Seed", { entity: "X", modules: [
+  { key: "InheritedKpi", moduleName: "CardWidgetModule", widgetKey: "InheritedKpi", recordId: "rec-seed" },
+] })] }));
+check("ENG-95806: an INHERITED (fromTemplate) card widget emits NO card-widget decision and is not carried into cardWidgets[]",
+  !cwSeed.needsDecision.some(n => n.kind === "card-widget" && n.item === "InheritedKpi")
+  && !(cwSeed.cardWidgets || []).some(w => w.key === "InheritedKpi"),
+  () => JSON.stringify({ decisions: cwSeed.needsDecision.filter(n => n.item === "InheritedKpi"), cardWidgets: cwSeed.cardWidgets }));
+
 /* ---- ENG-95806 (review F1) — the DESIGN-SPEC / CHECKLIST PRINTER output for a card widget (rowsForCardWidgets,
    buildLayoutGroupRows, buildCoverageRows + the --verify onstand gate) is asserted on RENDERED output, not just the
    changeSet. A regression that drops a card widget from the Layout table or the --verify checklist would otherwise

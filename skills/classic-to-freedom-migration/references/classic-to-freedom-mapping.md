@@ -444,6 +444,14 @@ modules: /**SCHEMA_MODULES*/{
 A module missing **either** coordinate cannot be converted, so the engine deliberately leaves it as the old
 generic `component` ⚠ item (no silent drop) — do not treat that as a card widget.
 
+**Recognition is by the two coordinates, not by the module name.** `CardWidgetModule` is the module that carries
+`recordId` + `widgetKey` on `viewModelConfig` in a real classic body, but the engine keys off the **coordinates**,
+not off `moduleName` — a module carrying both (without `masterColumnName`, not in the widget catalog) is a card
+widget whatever it is named. If you are chasing why a differently-named module became a card widget, that is the
+reason; grepping the engine for `CardWidgetModule` will not explain it. An **inherited** card widget (carried in
+from a base/seed layer, `fromTemplate`) is base-template chrome and is **not** emitted — only a card widget the
+page's own layer declares becomes a decision.
+
 **Ordered steps (contract verified against the released migrator, ENG-95805).**
 
 1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)

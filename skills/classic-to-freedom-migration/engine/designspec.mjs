@@ -205,16 +205,11 @@ function rowsForWidgets(widgets) {
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
-// ENG-95806 — the friendly Region label for a card widget, shared by EVERY printer sink (the Layout row, the
-// checklist Layout-by-region group, and the Coverage/--verify row) so the three can never drift and the raw
-// container name never leaks to one of them. `SideAreaProfileContainer` / `Header / top` map to their friendly
-// labels; anything else (a resolved tab or host container) goes through the region resolver, which already `esc`s
-// its output — so callers embed the result WITHOUT a further `esc` (the friendly literals are inert).
-const cardWidgetRegionLabel = (region, regionOf) => {
-  if (region === "SideAreaProfileContainer") return "Side profile";
-  if (region === HEADER_TOP_REGION) return HEADER_TOP_REGION;
-  return regionOf(region);
-};
+// ENG-95806 — the friendly Region label for a card widget is `regionOf(region)`, the SAME resolver every other
+// printer sink uses: `regionOf` already maps `SideAreaProfileContainer` → "Side profile" and returns the
+// `Header / top` sentinel unchanged, so a dedicated helper only duplicated it (review d-baranovskyi). Call
+// `regionOf(w.region)` directly at the Layout row, the checklist Layout-by-region group and the Coverage/--verify
+// row so the three can never drift and the raw container name never leaks to one of them.
 // ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
 // Layout row in the region it resolved to, naming the widgetKey and the migrator-driven conversion (Source =
 // SysWidgetDashboard + the record). The full grouping + process-call + Failed-means-blocked instructions stay in
@@ -222,7 +217,7 @@ const cardWidgetRegionLabel = (region, regionOf) => {
 // `esc` neutralizes hostile tokens at this sink (same convention as every other row builder).
 function rowsForCardWidgets(cardWidgets, regionOf) {
   return (cardWidgets || []).map((w) => {
-    const region = cardWidgetRegionLabel(w.region, regionOf);
+    const region = regionOf(w.region);
     const src = `from SysWidgetDashboard (record \`${esc(w.recordId)}\`)`;
     const note = "→ convert via `ConvertCardWidgetsProcess` (group by recordId, batch widgetKeys); place the returned Freedom element — do NOT hand-build a chart (a Failed conversion stays TODO/BLOCKED)";
     return { region, sort: 2, cells: [esc(w.widgetKey), "Card widget", src, DASH, note] };
@@ -1779,7 +1774,7 @@ function buildLayoutGroupRows(cs, regionOf) {
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
   for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
   for (const w of cs.cardWidgets || []) {
-    add(cardWidgetRegionLabel(w.region, regionOf), `${esc(w.widgetKey)} (card widget)`);
+    add(regionOf(w.region), `${esc(w.widgetKey)} (card widget)`);
   }
   return order.map((k) => {
     const e = byRegion.get(k);
@@ -1860,7 +1855,7 @@ function buildCoverageRows(cs, pm, result, regionOf) {
   // The key is scoped by BOTH recordId and widgetKey: the same widgetKey can legitimately recur under different
   // recordId's (the recordId-batching model), so keying by widgetKey alone would collapse two widgets into one gate.
   for (const w of cs.cardWidgets || [])
-    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${cardWidgetRegionLabel(w.region, regionOf)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
