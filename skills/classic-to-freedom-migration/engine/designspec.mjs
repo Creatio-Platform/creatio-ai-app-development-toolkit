@@ -689,9 +689,10 @@ const COSMETIC_CONFIRM_KINDS = new Set([
 // ENG-96327 — kinds whose decision is ALREADY printed in a TABLE the plan renders, so repeating them in the ⚠ Confirm
 // list makes the approver read the same question twice: `rule-condition` / `entity-filter` are each a row in the
 // **Business rules** table (`⚠ condition unread — parse gap` / `⚠ dynamic — resolve value`).
-// NB `detail-add-mechanism` is deliberately NOT dropped here: its full guidance (add-disabled / custom grid action /
-// service verify — beyond the Layout table's `⚠ INLINE-EDITABLE` note) has no other home in the plan, so it stays a
-// ⚠ Confirm row on this engine.
+// NB `detail-add-mechanism` is dropped ONLY when its sole mode is an inline-editable grid (`editableGridOnly`, set in
+// migrate.mjs) — that row just restates the Layout table's `⚠ INLINE-EDITABLE` note (columns included). A detail with
+// a REAL add mechanism (add-disabled / custom grid action / lookup / service verify — guidance the Layout note does
+// not carry) keeps its ⚠ Confirm row. Filtered per-decision in `kept` below, not by a whole-kind denylist.
 const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter"]);
 // Decisions ALREADY stated by a BANNER above the ⚠ Confirm list, so a confirm row only re-asks "sure?" of a choice
 // the plan just made. Both fire off a signal the banner also reads, so they are strict duplicates:
@@ -772,7 +773,10 @@ function renderConfirmWorklist(cs) {
   // engine has no `--units` machine channel, so `plan.md`'s ⚠ Confirm IS the build agent's worklist (SKILL step 7) —
   // hiding a real decision here would lose it. A DENYLIST: a new kind stays visible by default.
   const kept = nd.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
-    && !SHOWN_IN_BANNER_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind));
+    && !SHOWN_IN_BANNER_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind)
+    // A detail whose ONLY add-mode is an inline-editable grid just restates the Layout table's `⚠ INLINE-EDITABLE`
+    // note (columns included) — drop it; a detail with a real add mechanism keeps its row (guidance has no other home).
+    && !(d.kind === "detail-add-mechanism" && d.editableGridOnly));
   const confirm = foldedConfirmRows(kept);
   // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec shows
   // "required (conditional)" but the raw GUID is unreadable. The build agent resolves it on-stand, and with no

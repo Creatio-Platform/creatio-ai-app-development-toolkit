@@ -1139,7 +1139,12 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const parts = describeAddMode(am);
     const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label,
+    // ENG-96327 — an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
+    // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
+    // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
+    // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
+    const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
+    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label, editableGridOnly,
       reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
   }
 }

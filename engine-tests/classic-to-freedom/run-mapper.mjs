@@ -580,6 +580,20 @@ check("unmapped-component: template-owned items are NOT flagged (payload = clien
     () => /INLINE-EDITABLE grid/.test(dam({ editableGrid: true }).reason)
       && !/supports inline edit/.test(dam({ editableGrid: true }).reason)
       && !/get-component-info/.test(dam({ editableGrid: true }).reason));
+  // ENG-96327 — an editable-grid-ONLY detail just restates the Layout `⚠ INLINE-EDITABLE` note → flagged
+  // editableGridOnly and dropped from ⚠ Confirm; a detail with a REAL add mechanism (lookup/service/add-disabled) is
+  // NOT flagged and keeps its row (its guidance has no other home).
+  check("ENG-96327: editableGridOnly flag — set for grid-only, cleared once any real add mechanism is present",
+    () => dam({ editableGrid: true }).editableGridOnly === true
+      && dam({ editableGrid: true, lookup: true }).editableGridOnly === false
+      && dam({ addDisabled: true }).editableGridOnly === false);
+  const damSpec = renderDesignSpec({ entity: "X", changeSet: { needsDecision: [
+    { kind: "detail-add-mechanism", item: "GridOnlyDetail", editableGridOnly: true, reason: "Detail 'GridOnlyDetail' is NOT a plain related list — it is an INLINE-EDITABLE grid." },
+    { kind: "detail-add-mechanism", item: "LookupDetail", editableGridOnly: false, reason: "Detail 'LookupDetail' is NOT a plain related list — it ADDS via a lookup. Reproduce the add flow with a CUSTOM add request-handler." },
+  ] } }, { embedded: true });
+  check("ENG-96327: ⚠ Confirm drops the editable-grid-ONLY detail (shown in Layout) but keeps a detail with a real add mechanism",
+    () => !/GridOnlyDetail/.test(damSpec) && /LookupDetail/.test(damSpec),
+    () => damSpec.split("\n").filter((l) => /detail-add-mechanism/.test(l)));
   // A custom grid action already carries its own instruction — the guidance must not state a second, conflicting one.
   const custom = dam({ addDisabled: true, customAction: true });
   check("detail-add-mechanism: an add-DISABLED detail with a CUSTOM grid action keeps only that action's instruction",
