@@ -3221,6 +3221,20 @@ check("formless empty: 0-field child with NO behaviour is marked empty (no logic
   && /\| CEPage[^|]*\| ⚠ folded to 0 fields with no behaviour[^|]*\| ⚠ verify \|/.test(formlessEmpty.plan)
   && /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(formlessEmpty.plan),
   () => ({ formless: ceChild.formless, hasLogicSpec: !!ceChild.logicSpec }));
+// review (Kravchuk minor) — hasBehaviour reaches inline-grid through the LOGIC_BEARING_KINDS `needsDecision.some(...)`
+// path, NOT only via handlerStubs: a 0-field child with NO methods but an IMPERATIVE attribute (a logic-bearing
+// `attribute-imperative` decision) is still an inline grid. This is the path finding #3 narrowed (a cosmetic/registry
+// decision must NOT qualify — formlessEmpty above covers the no-logic → empty side).
+const formlessGridViaDecision = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"CIDetail",entitySchemaName:"CI",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "CI", editPage: "CIPage" } },
+  childPageSchemas: { CIPage: { entity: "CI",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"CI",attributes:{Foo:{value:function(){return 1;}}},diff:[]};});` }] } } },
+  { baseDir: FIX });
+const ciChild = formlessGridViaDecision.childPages.find((c) => c.entity === "CI") || {};
+check("formless inline-grid via needsDecision: a 0-field child with NO methods but a logic-bearing decision (imperative attribute) is inline-grid (exercises the LOGIC_BEARING_KINDS path, not handlerStubs)",
+  ciChild.formless === "inline-grid" && typeof ciChild.logicSpec === "string" && ciChild.logicSpec.length > 0,
+  () => ({ formless: ciChild.formless, hasLogicSpec: !!ciChild.logicSpec }));
 // ENG-96327 — the Call-legend PROSE for the two formless calls (the scope-table value assertions above would not
 // catch a typo in the legend definition text).
 check("formless: the `Inline grid` Call-legend definition renders when an inline-grid child is present",
@@ -6665,6 +6679,14 @@ check("review #2: an asymmetric row (one prose field) renders the filled cell + 
   /\| privateHelper \|[^|]*\| Reads the current amount \| ⚠ not described \|[^|]*\| ⚠ not described \|/.test(hoMixed)
     && /could not identify and describe the logic of 1 of 2 method/.test(hoMixed),
   () => hoMixed.split("\n").filter((l) => /privateHelper|could not/.test(l)));
+// review (Kravchuk minor) — the useCase-ONLY case is symmetric to whatItDoes-only: the filled cell renders, the empty
+// What-it-does half AND Described-in both read `⚠ not described`, and the row counts undescribed (the BOTH-cells rule).
+const hoUseCaseOnly = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
+  onStageChanged: { useCase: "When Stage changes, the amount updates" }, // useCase only, no whatItDoes, no card
+} }), {});
+check("review (Kravchuk minor): a useCase-ONLY row renders the filled Use-case cell, `⚠ not described` in the What-it-does half AND in Described-in, and is counted undescribed",
+  /\| onStageChanged \|[^|]*\| ⚠ not described \| When Stage changes, the amount updates \|[^|]*\| ⚠ not described \|/.test(hoUseCaseOnly),
+  () => hoUseCaseOnly.split("\n").filter((l) => /onStageChanged/.test(l)));
 
 // CHAIN ROOTS: a helper resolved only to its caller is the weakest trigger the engine emits, and the header counts
 // it as still open. Once the caller is answered the helper's answer is one hop away in the same table — but the
