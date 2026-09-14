@@ -1266,6 +1266,14 @@ function visibility(v) {
   return v.visible && typeof v.visible === "object" ? "dynamic" : null;
 }
 
+// enablement: the STATIC literal only. A dynamic `enabled: {bindTo: "canX"}` is already a handler binding and is
+// read there; what had no home at all was `enabled: false` — `handlerBindings` skips a literal and
+// `unmodelledValueKeys` excludes the key, so a button Classic disables by default reached the plan looking
+// always-enabled. `null` means this op did not state it.
+function enablement(v) {
+  return typeof v.enabled === "boolean" ? v.enabled : null;
+}
+
 // A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
 // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
 // null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
@@ -1316,6 +1324,7 @@ function normalizeDiffOp(op, i) {
     hint: hintKey(v),
     generator: strOrNull(v.generator),
     visible: visibility(v),
+    enabled: enablement(v),
     // Handler bindings on the item (`click: {bindTo:"onSaveClick"}`, `change: "onXChange"`, `changeMethod`, …).
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
@@ -1491,7 +1500,7 @@ function makeItem(op, seed, pkg) {
     name: op.name, parent: op.parentName, propertyName: op.propertyName,
     bindTo: op.bindTo, itemType: op.itemType, contentType: op.contentType, dataValueType: op.dataValueType,
     isTab: op.isTab, removed: false, provenance: [pkg], order: op.order, layout: op.layout,
-    tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, caption: op.caption,
+    tip: op.tip, hint: op.hint, generator: op.generator, visible: op.visible, enabled: op.enabled, caption: op.caption,
     labelCaption: op.labelCaption, // `labelConfig.caption` — the label's own text, ranked below `caption`
     // COPY, not the parsed op's own object: `replayRemoveProperties` deletes entries from this map, and sharing
     // the reference wrote that deletion back into the parsed schema — a second merge of the SAME parsed input
@@ -1593,7 +1602,7 @@ function mergeIdentityProps(op, cur, pkg, warnings, opName = "merge") {
 
 // own fns so `replayMerge` stays under the Sonar CC 15 ceiling (S3776), same reason as `mergeIdentityProps`.
 function applyMergeOrderVisible(op, cur) {
-  for (const k of ["order", "visible"]) { if (op[k] != null) cur[k] = op[k]; }
+  for (const k of ["order", "visible", "enabled"]) { if (op[k] != null) cur[k] = op[k]; }
 }
 // Key PRESENCE for these too, not truthiness — see the comment on the call site in `replayMerge`.
 function applyMergeContentFields(op, cur) {
@@ -2116,7 +2125,8 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // (`getLabelCaption`, ViewGeneratorV2 L1675-1689). `labelCaption` rides along so a reader can tell WHICH of
       // the two supplied the text — a label a later layer may remove on its own (`remove properties:
       // ["labelConfig"]`) is not the same fact as a caption stated on the control itself.
-      visible: i.visible ?? null, caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
+      visible: i.visible ?? null, enabled: i.enabled ?? null,
+      caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
       provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's

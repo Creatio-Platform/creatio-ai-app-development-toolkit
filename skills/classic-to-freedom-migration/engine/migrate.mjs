@@ -1558,6 +1558,10 @@ function diffActionAsSectionAction(a) {
     condition: primary?.method ?? null, conditionProperty: primary?.property ?? null,
     conditions: a.conditions || [],
     group: null, parent: a.parent ?? null, package: a.package ?? null,
+    // Static literals and the folded menu ride along too. Dropping them here would have put them back exactly
+    // where the review found them: computed by `mapSectionView`, and gone by the time the ChangeSet is built.
+    staticVisible: a.staticVisible ?? null, staticEnabled: a.staticEnabled ?? null,
+    menuItems: a.menuItems || [],
     source: a.source || "sectionDiff",
   };
 }

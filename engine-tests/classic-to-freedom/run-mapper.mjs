@@ -4307,6 +4307,64 @@ check("ENG-94714: `section.seed` reaches the plan VERSION — a changed seed bod
     return !!a && !!other && a !== other; },
   () => ({ a: runMigration(svManifest(), { baseDir: FIX }).planVersion }));
 
+/* --- Review findings on this PR: the menu family reached no surface, a static `visible: false` was
+   indistinguishable from an always-visible button, a leaf resolved its own region off a container naming
+   convention, and the LABEL row in LIST_ROWS was unreachable while its "no reading" text claimed otherwise. --- */
+const svMenuSection = [{ pkg: "OrderInSales", body: `define("XSection",[],function(){return{entitySchemaName:"X",`
+  + `methods:{},diff:[`
+  + `{"operation":"insert","name":"BulkActionsButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":1,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.BulkCaption"},"menu":{"items":[]}}},`
+  + `{"operation":"insert","name":"BulkActionsMenu","parentName":"BulkActionsButton","propertyName":"menu","values":{"itemType":8}},`
+  + `{"operation":"insert","name":"BulkAssignMenuItem","parentName":"BulkActionsMenu","propertyName":"items","index":0,`
+  + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.BulkAssignCaption"},"click":{"bindTo":"onBulkAssign"}}},`
+  + `{"operation":"insert","name":"BulkExportMenuItem","parentName":"BulkActionsMenu","propertyName":"items","index":1,`
+  + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.BulkExportCaption"},"click":{"bindTo":"onBulkExport"}}},`
+  + `{"operation":"insert","name":"HiddenButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":6,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.HidCap"},"visible":false,"enabled":false}},`
+  + `{"operation":"insert","name":"ApplyFilterButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":7,`
+  + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.ApplyCaption"}}},`
+  + `{"operation":"insert","name":"HintLabel","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":8,`
+  + `"values":{"itemType":6,"caption":{"bindTo":"Resources.Strings.HintCaption"}}},`
+  + `{"operation":"insert","name":"OrphanMenuItem","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":9,`
+  + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.OrphanCaption"}}}`
+  + `]};});` }];
+const svMenuRun = runMigration({ ...svManifest(), section: { schemas: svMenuSection, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+const svMenuView = svMenuRun.section?.sectionView;
+const svMenuList = svMenuRun.listChangeSet;
+const svMenuAction = (n) => (svMenuList?.commandBarActions || []).find((a) => a.name === n);
+
+check("review/blocker: a section-declared MENU and its MENU_ITEMs fold into the owning command-bar button's `menuItems` — the LIST_ROWS notes promised that fold and the list path did not have it, so the menu and both items reached NO surface at all",
+  () => { const b = svMenuAction("BulkActionsButton");
+    const captions = (b?.menuItems || []).map((m) => m.caption);
+    return captions.includes("BulkAssignCaption") && captions.includes("BulkExportCaption"); },
+  () => ({ action: svMenuAction("BulkActionsButton"), open: svMenuView?.openItems?.map((i) => i.name) }));
+check("review/blocker: each folded item keeps the CLASSIC handler behind it — `onBulkAssign` / `onBulkExport` vanished with the menu that carried them",
+  () => { const handlers = (svMenuAction("BulkActionsButton")?.menuItems || []).map((m) => m.classicHandler);
+    return handlers.includes("onBulkAssign") && handlers.includes("onBulkExport"); },
+  () => svMenuAction("BulkActionsButton")?.menuItems);
+check("review/blocker (anti-vacuity): a MENU_ITEM that NO button folded is still disclosed as a named open item rather than silently skipped — that is the half of AC1 the blanket `OWNER.FOLDED` skip removed",
+  () => (svMenuView?.openItems || []).some((i) => i.name === "OrphanMenuItem"),
+  () => svMenuView?.openItems);
+check("review/blocker: and the folded names are NOT double-reported as open items — they are accounted for on their button",
+  () => !(svMenuView?.openItems || []).some((i) => ["BulkActionsMenu", "BulkAssignMenuItem", "BulkExportMenuItem"].includes(i.name)),
+  () => svMenuView?.openItems);
+check("review/major: a STATIC `visible: false` / `enabled: false` survives onto the command-bar action — it is not a bound condition, so it reached the ChangeSet indistinguishable from an always-visible button and the built list showed a control Classic hides",
+  () => { const h = svMenuAction("HiddenButton"); return h?.staticVisible === false && h?.staticEnabled === false; },
+  () => svMenuAction("HiddenButton"));
+check("review/major: …and the plan RENDERS it, beside the condition cell, so a reader sees it",
+  () => /`visible: false` \(static\)/.test(renderPlan(svMenuRun, {})),
+  () => (renderPlan(svMenuRun, {}).split("\n").filter((l) => /HiddenButton/.test(l))));
+check("review/minor: a plain BUTTON under a command-bar container reaches `commandBarActions` — matching the container naming convention against the LEAF's own name made `ApplyFilterButton` resolve itself to the filter bar and fall out as an open item",
+  () => !!svMenuAction("ApplyFilterButton")
+    && !(svMenuView?.openItems || []).some((i) => i.name === "ApplyFilterButton"),
+  () => ({ actions: (svMenuList?.commandBarActions || []).map((a) => a.name), open: svMenuView?.openItems }));
+check("review/minor: a standalone LABEL is carried WITH its caption, as its LIST_ROWS row states — it used to fall to `openItems` under the reason \"the list vocabulary has no reading for it\", which was false, and the open-item shape dropped the caption the row promised",
+  () => (svMenuView?.labels || []).some((l) => l.name === "HintLabel" && l.caption === "HintCaption")
+    && !(svMenuView?.openItems || []).some((i) => i.name === "HintLabel"),
+  () => ({ labels: svMenuView?.labels, open: svMenuView?.openItems }));
+
 /* --- ENG-94714: the list gate is SCOPED — a section-side gap stops the list deliverable, never the form one.
    The form-page block this replaces was a real defect once (a section body that would not parse blocked a plan
    that never consumed its `diff`), so the guard has to prove BOTH halves: the list says it is not approvable, and

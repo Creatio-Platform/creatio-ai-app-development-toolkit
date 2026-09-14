@@ -2646,7 +2646,14 @@ const listOpenProps = (item) => (item.unmodelledProps || []).filter((k) => !LIST
 // profile ones. `hops` is bounded exactly as `resolveOwner` bounds it: a malformed chain must not spin.
 function listRegionOf(item, index) {
   if (item.propertyName === LIST_ROW_ACTIONS_PROPERTY) return LIST_REGION.ROW_ACTIONS;
-  const own = listRegionForContainer(item.name);
+  // The own-name heuristic matches on `includes("Filter")` / `includes("ActionButtons")`, which is a CONTAINER
+  // naming convention — applying it to a leaf made `ApplyFilterButton`, a plain button under a command-bar
+  // container, resolve its own region to `filter-bar`, miss the command-bar arm and land in `openItems`. A leaf
+  // answers for itself only when its ancestry cannot: nothing to climb.
+  const answersForItself = item.itemType === VIEW_ITEM_TYPE.CONTAINER
+    || item.itemType === VIEW_ITEM_TYPE.GRID
+    || !item.parent;
+  const own = answersForItself ? listRegionForContainer(item.name) : null;
   if (own) return own;
   let parentName = item.parent, hops = 0;
   while (parentName && hops++ < 32) {
@@ -2670,7 +2677,7 @@ const isSectionDeclared = (i) => !i.templateOwned || i.schemaTouched;
 // list-page button belongs on the Freedom command bar has not been measured, and the command-bar table says so
 // per row. `source` names the classic surface it came from, so a diff-declared button and a `getSectionActions`
 // item stay tellable apart in the plan.
-function sectionDiffAction(item) {
+function sectionDiffAction(item, menuItems = []) {
   return {
     name: item.name,
     // `resourceKey` for the same reason the `getSectionActions` surface applies it: it strips the
@@ -2685,8 +2692,45 @@ function sectionDiffAction(item) {
     order: item.order ?? null,
     package: item.provenance?.[item.provenance.length - 1] || null,
     openProps: listOpenProps(item),
+    // A STATIC literal, not a bound condition. `handlerBindings` only sees methods and `unmodelledValueKeys`
+    // excludes these two, so a `visible: false` button reached the ChangeSet indistinguishable from an
+    // always-visible one — and the built Freedom list then showed a control Classic hides by default.
+    staticVisible: item.visible === false ? false : null,
+    staticEnabled: item.enabled === false ? false : null,
+    // The button's own MENU / MENU_ITEM descendants, folded exactly as the form path folds them. Empty for a
+    // button with no menu; the LIST_ROWS notes promise this fold, so it has to exist on this path too.
+    menuItems,
     source: "sectionDiff",
   };
+}
+
+// MENU / MENU_ITEM descendants of one command-bar button, folded into a single array. Recursive, because classic
+// nests the items under an intermediate MENU as often as directly under the button. Every name it walks is
+// recorded in `claimed`, so the caller can tell a folded menu from one that belongs to no button — the latter is
+// still a named open item rather than a silent drop.
+function listMenuEntriesOf(owner, childrenByParent, claimed) {
+  const out = [];
+  for (const child of (childrenByParent.get(owner.name) || [])) {
+    if (child.itemType === VIEW_ITEM_TYPE.MENU) {
+      claimed.add(child.name);
+      out.push(...listMenuEntriesOf(child, childrenByParent, claimed));
+      continue;
+    }
+    if (child.itemType === VIEW_ITEM_TYPE.MENU_SEPARATOR) { claimed.add(child.name); continue; }
+    if (child.itemType !== VIEW_ITEM_TYPE.MENU_ITEM) continue;
+    claimed.add(child.name);
+    out.push({
+      name: child.name,
+      caption: child.caption ? resourceKey(child.caption) : null,
+      // The classic click stays IMPERATIVE and is named, not ported: dropping it was how `onBulkAssign` and
+      // `onBulkExport` vanished with the menu that carried them.
+      classicHandler: child.handlers?.click || null,
+      conditions: listConditionsOf(child),
+      order: child.order ?? null,
+      package: child.provenance?.[child.provenance.length - 1] || null,
+    });
+  }
+  return out;
 }
 
 // One row action. Same shape the manifest-supplied `section.rowActions` entries carry (`mergeRowActions` unions
@@ -2718,6 +2762,16 @@ export function mapSectionView(sectionEff) {
   if (!sectionEff) return null;
   const items = sectionEff.items || [];
   const index = new Map(items.map((i) => [i.name, i]));
+  const childrenByParent = new Map();
+  for (const i of [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+    if (!i.parent) continue;
+    if (!childrenByParent.has(i.parent)) childrenByParent.set(i.parent, []);
+    childrenByParent.get(i.parent).push(i);
+  }
+  // Names a command-bar button folded into its own `menuItems`. Anything MENU-shaped that is NOT in here belongs
+  // to no button on this surface and becomes a named open item — that is what makes "nothing is silently dropped"
+  // true for the menu family, which the blanket `OWNER.FOLDED` skip used to swallow.
+  const foldedIntoMenus = new Set();
   const out = { commandBarActions: [], rowActions: [], gridConfig: [], openItems: [],
     counts: { items: items.length, sectionDeclared: 0, chrome: 0 } };
   for (const item of items) {
@@ -2734,13 +2788,29 @@ export function mapSectionView(sectionEff) {
     if (region === LIST_REGION.ROW_ACTIONS) { out.rowActions.push(sectionDiffRowAction(item)); continue; }
     const row = listRowForItemType(item.itemType);
     if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
-      out.commandBarActions.push(sectionDiffAction(item));
+      out.commandBarActions.push(sectionDiffAction(item, listMenuEntriesOf(item, childrenByParent, foldedIntoMenus)));
       continue;
     }
+    // A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
+    // carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
+    if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
+      out.labels ??= [];
+      out.labels.push({ name: item.name, region,
+        caption: item.caption ? resourceKey(item.caption) : null,
+        conditions: listConditionsOf(item),
+        package: item.provenance?.[item.provenance.length - 1] || null });
+      continue;
+    }
+    // A menu the fold above already claimed is accounted for on its owning button and stays silent. One that no
+    // button claimed falls through to `openItems` below with its kind named.
+    if (foldedIntoMenus.has(item.name)) continue;
     // Everything else: the grid itself and the containers are already owned by the list surface or are layout, so
     // they are accounted for and silent. Anything the list vocabulary has NO row for, or that resolved to no
     // region, becomes a named open item — this is the arm that makes "nothing is silently dropped" true.
-    if (region === LIST_REGION.GRID || row?.ownedBy === OWNER.CONTAINER || row?.ownedBy === OWNER.FOLDED
+    // `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a section-declared
+    // MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold exists now,
+    // and what it claimed is skipped above — so reaching here means nothing folded this element.
+    if (region === LIST_REGION.GRID || row?.ownedBy === OWNER.CONTAINER
       || row?.ownedBy === OWNER.CHROME) continue;
     out.openItems.push({ name: item.name, region,
       kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),

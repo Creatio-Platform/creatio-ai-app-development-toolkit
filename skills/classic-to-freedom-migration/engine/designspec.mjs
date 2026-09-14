@@ -487,7 +487,21 @@ function listCommandBarTable(actions) {
     } else if (a.condition) {
       cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
     }
-    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
+    // A STATIC `visible: false` / `enabled: false` is not a bound condition and never reached the cell above, so a
+    // button Classic hides by default read here as always-visible — and the built Freedom list showed it.
+    const statics = [
+      a.staticVisible === false ? "`visible: false` (static)" : null,
+      a.staticEnabled === false ? "`enabled: false` (static)" : null,
+    ].filter(Boolean);
+    if (statics.length) {
+      cond = (a.conditions?.length || a.condition ? cond + " · " : "") + statics.join(" · ") + " — Classic hides/disables it by default";
+    }
+    // The folded menu. Naming the items (and the classic handler behind each) is the whole difference between a
+    // menu that reaches the plan and one that vanishes with its handlers.
+    const menu = (a.menuItems || []).length
+      ? " · menu: " + a.menuItems.map((m) => `\`${esc(m.caption || m.name)}\`` + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")).join(", ")
+      : "";
+    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
     L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
   }
