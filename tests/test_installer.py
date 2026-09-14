@@ -48,6 +48,42 @@ def write_release_manifest(repo_root, plugin_runtime=None):
     )
 
 
+def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, body=""):
+    """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
+
+    The manifest is what the installer reads: the script's own `meta.name` is still written so the
+    fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
+    """
+    skill_dir = source_root / "skills" / skill_dir_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    script = skill_dir / f"{script_stem}.workflow.js"
+    script.write_text(
+        f"export const meta = {{\n  name: '{meta_name}',\n}}\n{body}",
+        encoding="utf-8",
+    )
+    add_workflow_manifest_entry(source_root, script, meta_name)
+    return script
+
+
+def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describe",)):
+    """Append `{name, script, phases}` to `skills/_workflow-core/workflows.json`."""
+    installer = load_installer()
+    manifest_path = source_root / installer.WORKFLOW_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.is_file()
+        else {"workflows": []}
+    )
+    manifest["workflows"].append({
+        "name": meta_name,
+        "script": script.relative_to(source_root).as_posix(),
+        "phases": list(phases),
+    })
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
 def write_minimal_plugin_checkout(repo_root):
     """Lay out the files the install_* functions read from the local checkout."""
     (repo_root / ".mcp.json").write_text(
@@ -341,15 +377,44 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
             ],
         )
 
-    def test_install_verb_changes_install_subcommand(self):
+    def test_install_verb_parameterizes_the_install_subcommand(self):
+        # General parameterization of the shared helper: no production caller passes a
+        # non-default verb today (Claude/Copilot use "install", Codex skips the step), so
+        # this pins the contract with a neutral CLI rather than a Codex-reachable state.
         installer = load_installer()
         commands = []
 
         with patch.object(installer, "run_checked", side_effect=lambda command, **_: commands.append(command)):
-            installer.register_remote_marketplace_and_install_plugin(["codex"], install_verb="add")
+            installer.register_remote_marketplace_and_install_plugin(["some-agent"], install_verb="add")
 
         install_calls = [cmd for cmd in commands if cmd[1] == "plugin" and cmd[2] not in {"marketplace"}]
-        self.assertEqual(install_calls, [["codex", "plugin", "add", installer.PLUGIN_SOURCE]])
+        self.assertEqual(install_calls, [["some-agent", "plugin", "add", installer.PLUGIN_SOURCE]])
+
+    def test_install_plugin_false_skips_the_install_step_on_both_paths(self):
+        # Codex CLI has no `plugin add`/`plugin install`; install_codex
+        # registers the marketplace only and materializes the plugin itself.
+        installer = load_installer()
+        commands = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            if command[1:4] == ["plugin", "marketplace", "remove"]:
+                raise RuntimeError("Error: marketplace 'creatio' not found")
+
+        with patch.object(installer, "run_checked", side_effect=fake_run), patch("builtins.print"):
+            installer.register_remote_marketplace_and_install_plugin(
+                ["codex"], marketplace_remove_flags=[], pre_remove_marketplace=True, install_plugin=False
+            )
+            installer.register_remote_marketplace_and_install_plugin(["codex"], install_plugin=False)
+
+        self.assertEqual(
+            commands,
+            [
+                ["codex", "plugin", "marketplace", "remove", "creatio"],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+                ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
+            ],
+        )
 
     def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
         # Regression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
@@ -536,6 +601,304 @@ class InstallClaudeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
                 installer.install_claude(repo_root, Path(temp) / "home")
 
+    def test_provisions_bundled_workflows_as_named_workflows(self):
+        # The marketplace install cannot register a named workflow, so the
+        # skills' `Workflow({ name: ... })` calls only resolve if install_claude
+        # mirrors the bundled scripts into user scope.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            write_bundled_workflow(repo_root, "demo-skill", "demo", "creatio-demo-workflow")
+            home = Path(temp) / "home"
+            (home / ".claude").mkdir(parents=True)
+
+            with patch.object(
+                installer.agent_cli, "preflight_claude", return_value="claude"
+            ), patch.object(installer, "run_checked"):
+                installer.install_claude(repo_root, home)
+
+            mirrored = home / ".claude" / "workflows" / "creatio-demo-workflow.js"
+            self.assertTrue(mirrored.exists())
+            # Byte-identical: the mirror is a copy, never a rewritten variant.
+            self.assertEqual(
+                mirrored.read_text(encoding="utf-8"),
+                (repo_root / "skills" / "demo-skill" / "demo.workflow.js").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+
+class ProvisionNamedWorkflowsTests(unittest.TestCase):
+    def test_names_the_mirror_after_meta_name_not_the_filename(self):
+        # Resolution may key on either identity, so the two must agree — the
+        # bundled filename (`<x>.workflow.js`) never does on its own.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "a-skill", "build", "creatio-build-thing")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            provisioned = installer.provision_named_workflows(source_root, claude_home)
+
+            self.assertEqual(provisioned, ["creatio-build-thing"])
+            self.assertTrue((claude_home / "workflows" / "creatio-build-thing.js").exists())
+            self.assertFalse((claude_home / "workflows" / "build.js").exists())
+
+    def test_refuses_a_meta_name_that_escapes_the_workflows_directory(self):
+        # `pathlib` does not sanitise the right-hand side of `/`, and update.py re-runs this
+        # provisioner over the marketplace cache unattended, so a traversing name would be an
+        # arbitrary-file-write primitive running with the user's privileges.
+        installer = load_installer()
+        for meta_name in ("creatio-../../evil", "creatio-a/b", "..", "", "/tmp/evil", "evil"):
+            with self.subTest(meta_name=meta_name), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "a-skill", "build", meta_name)
+                claude_home = Path(temp) / "home" / ".claude"
+
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, claude_home)
+
+                written = sorted(
+                    path.relative_to(temp).as_posix()
+                    for path in Path(temp).rglob("*.js")
+                    if path.is_file()
+                )
+                self.assertEqual(
+                    written,
+                    ["src/skills/a-skill/build.workflow.js"],
+                    "nothing may be written outside the source tree for a rejected name",
+                )
+
+    def test_refuses_two_scripts_claiming_one_meta_name(self):
+        # Named workflows share one flat user-scope directory, so the second copy would silently
+        # replace the first while both were reported as provisioned.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-same")
+            write_bundled_workflow(source_root, "skill-b", "two", "creatio-same")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            with self.assertRaises(RuntimeError):
+                installer.provision_named_workflows(source_root, claude_home)
+
+    def test_reads_the_name_from_the_manifest_not_from_the_script_text(self):
+        # PR #147 review — the identity comes from the generated manifest, so a line beginning
+        # `name:` anywhere in the inlined prompt text or core modules cannot supply the destination
+        # filename, and no JavaScript is parsed to find out. The script here declares one name in
+        # its own `meta` and a decoy further down; only the manifest decides.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True)
+            script = skill_dir / "build.workflow.js"
+            script.write_text(
+                "export const meta = {\n"
+                "  // the host's own scope, with a `template ${literal}` and a /regex{/ in prose\n"
+                "  name: 'creatio-ignored-by-the-consumer',\n"
+                "}\n"
+                "const agentSpec = {\n"
+                "name: 'creatio-../../evil',\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            add_workflow_manifest_entry(source_root, script, "creatio-real")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(
+                installer.provision_named_workflows(source_root, claude_home), ["creatio-real"]
+            )
+            self.assertTrue((claude_home / "workflows" / "creatio-real.js").exists())
+
+    def test_a_tree_with_no_manifest_refuses_rather_than_falling_back_to_a_parser(self):
+        # Fails CLOSED, with the remedy named. A fallback parser no test exercises would preserve
+        # exactly the coupling the manifest replaced.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "build.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-real',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "carries no workflow manifest"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+            self.assertFalse((Path(temp) / ".claude" / "workflows").exists())
+
+    def test_a_script_missing_from_the_manifest_refuses_and_names_it(self):
+        # The drift gate in `scripts/build-workflows.mjs --check` is what stops this reaching a
+        # release; the installer still refuses rather than guessing a name from the filename.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            unlisted = source_root / "skills" / "skill-b"
+            unlisted.mkdir(parents=True)
+            (unlisted / "two.workflow.js").write_text(
+                "export const meta = {\n  name: 'creatio-two',\n}\n", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "skills/skill-b/two.workflow.js"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_an_unreadable_manifest_refuses_rather_than_provisioning_part_of_the_tree(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                "{ not json", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "could not be read as JSON"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_without_a_workflows_list_refuses(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                '{"generatedBy": "x"}\n', encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "no `workflows` list"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_a_manifest_entry_missing_name_or_script_refuses(self):
+        installer = load_installer()
+        for entry in ({"name": "creatio-one"}, {"script": "skills/a/b.workflow.js"}, "not-an-object"):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temp:
+                source_root = Path(temp) / "src"
+                write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+                (source_root / installer.WORKFLOW_MANIFEST_RELATIVE).write_text(
+                    json.dumps({"workflows": [entry]}) + "\n", encoding="utf-8"
+                )
+
+                with self.assertRaises(RuntimeError):
+                    installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+    def test_provisions_every_bundled_workflow(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
+            write_bundled_workflow(source_root, "skill-b", "two", "creatio-two")
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(
+                installer.provision_named_workflows(source_root, claude_home),
+                ["creatio-one", "creatio-two"],
+            )
+
+    def test_overwrites_a_stale_mirror(self):
+        # The plugin auto-updates, so the mirror must be rewritten rather than
+        # left in place — a stale copy runs an older args contract.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            write_bundled_workflow(source_root, "skill-a", "one", "creatio-one", body="// v2\n")
+            claude_home = Path(temp) / "home" / ".claude"
+            workflows_dir = claude_home / "workflows"
+            workflows_dir.mkdir(parents=True)
+            (workflows_dir / "creatio-one.js").write_text("// v1 stale\n", encoding="utf-8")
+
+            installer.provision_named_workflows(source_root, claude_home)
+
+            self.assertIn(
+                "// v2", (workflows_dir / "creatio-one.js").read_text(encoding="utf-8")
+            )
+
+    def test_source_without_workflows_provisions_nothing(self):
+        # Not every checkout or release the installer runs against bundles one;
+        # that is not an error and must not create an empty workflows dir owner.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            (source_root / "skills" / "plain-skill").mkdir(parents=True)
+            claude_home = Path(temp) / "home" / ".claude"
+
+            self.assertEqual(installer.provision_named_workflows(source_root, claude_home), [])
+            self.assertFalse((claude_home / "workflows").exists())
+
+    def test_missing_skills_dir_provisions_nothing(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(
+                installer.provision_named_workflows(Path(temp) / "src", Path(temp) / ".claude"),
+                [],
+            )
+
+    def test_a_script_the_generator_never_declared_is_a_hard_error(self):
+        # Was "a script with no `meta.name`". The identity no longer lives in the script, so the
+        # equivalent failure is a script the generator's `TARGETS` table never declared.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp) / "src"
+            skill_dir = source_root / "skills" / "skill-a"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "broken.workflow.js").write_text(
+                "export const meta = { description: 'no name' }\n", encoding="utf-8"
+            )
+            add_workflow_manifest_entry(
+                source_root, skill_dir / "other.workflow.js", "creatio-other"
+            )
+            with self.assertRaisesRegex(RuntimeError, "has no entry in"):
+                installer.provision_named_workflows(source_root, Path(temp) / ".claude")
+
+
+class ShippedWorkflowScriptTests(unittest.TestCase):
+    """The repository's own workflow scripts must be provisionable."""
+
+    def test_every_shipped_workflow_declares_a_namespaced_meta_name(self):
+        installer = load_installer()
+        scripts = installer.discover_workflow_scripts(ROOT)
+        self.assertTrue(scripts, "the repository ships no *.workflow.js")
+        declared = installer.workflow_manifest_names(ROOT)
+        for script in scripts:
+            with self.subTest(script=script.name):
+                name = declared[script.relative_to(ROOT).as_posix()]
+                # ~/.claude/workflows/ is shared across every project and
+                # plugin, and project scope wins a name collision.
+                self.assertTrue(
+                    name.startswith("creatio-"),
+                    f"{script.name} declares meta.name {name!r}, which is not namespaced",
+                )
+
+    def test_skills_call_their_workflow_by_script_path_first(self):
+        """`scriptPath` is the PRIMARY documented call form; `name:` is the exception.
+
+        A name resolves only from `~/.claude/workflows/`, and on Claude Code
+        nothing provisions that mirror: the plugin declares no hook, so neither
+        `install.py` nor `update.py` runs on a marketplace install/update. A real
+        run therefore spent a guaranteed-failing `name:` call before falling back.
+        The bundled script is always present and version-matched, so it goes
+        first — and a stale mirror (the normal state after a plugin-branch switch)
+        resolves the right name to the wrong script, which is worse than a
+        resolution error. `name:` stays documented for the installer-based
+        targets, but it must not lead.
+        """
+        installer = load_installer()
+        declared = installer.workflow_manifest_names(ROOT)
+        for script in installer.discover_workflow_scripts(ROOT):
+            with self.subTest(script=script.name):
+                name = declared[script.relative_to(ROOT).as_posix()]
+                skill_doc = (script.parent / "SKILL.md").read_text(encoding="utf-8")
+                self.assertIn("scriptPath", skill_doc)
+                self.assertIn(f'name: "{name}"', skill_doc)
+                self.assertLess(
+                    skill_doc.index("scriptPath"),
+                    skill_doc.index(f'name: "{name}"'),
+                    f"{script.parent.name}/SKILL.md documents name: before scriptPath — "
+                    "the named form does not resolve on a marketplace-installed Claude Code",
+                )
+
 
 class RemoveTomlTableBlockTests(unittest.TestCase):
     def test_removes_block_when_header_has_trailing_comment(self):
@@ -717,9 +1080,15 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 
 
 class InstallCodexTests(unittest.TestCase):
-    """ENG-90514: Codex installs via the remote marketplace, parity with Claude."""
+    """ENG-90514: Codex registers the remote marketplace via its CLI.
 
-    def test_shells_out_via_codex_cli_in_remove_add_install_order(self):
+    Codex CLI has no non-interactive plugin-install subcommand, so the
+    installer performs the two steps the interactive `/plugins` browser does —
+    copy the plugin into `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`
+    and enable it in config.toml. Skills load only when both exist.
+    """
+
+    def test_registers_marketplace_without_plugin_add_and_materializes_cache(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
@@ -740,15 +1109,153 @@ class InstallCodexTests(unittest.TestCase):
             ), patch.object(installer, "copy_plugin_runtime_surface") as copy_runtime:
                 installer.install_codex(repo_root, home)
 
+            # No `codex plugin add`: the subcommand does not exist in Codex CLI.
             self.assertEqual(
                 commands,
                 [
                     ["codex", "plugin", "marketplace", "remove", "creatio"],
                     ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
-                    ["codex", "plugin", "add", installer.PLUGIN_SOURCE],
                 ],
             )
-            copy_runtime.assert_not_called()
+            copy_runtime.assert_called_once_with(
+                repo_root,
+                home / ".codex" / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0",
+            )
+            config_body = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+
+    def test_materializes_plugin_cache_and_enables_plugin_idempotently(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            # A stale version left by an earlier install must not survive.
+            stale = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            stale.mkdir(parents=True)
+            (stale / "marker").write_text("old\n", encoding="utf-8")
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), patch("builtins.print"):
+                installer.install_codex(repo_root, home)
+                installer.install_codex(repo_root, home)  # re-run: idempotent
+
+            version_dir = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0"
+            self.assertTrue((version_dir / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+            self.assertTrue((version_dir / ".github" / "plugin" / "plugin.json").exists())
+            self.assertFalse(stale.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
+            self.assertEqual(config_body.count("[mcp_servers.clio]"), 1)
+
+    def test_materialize_removes_stale_versions_on_its_own(self):
+        # install_codex wipes the whole marketplace cache before it calls
+        # materialize_codex_plugin, so the idempotency test above cannot tell whether
+        # the per-plugin cleanup inside materialize_codex_plugin works. Call it directly.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_release_manifest(repo_root)
+            codex_home = Path(temp) / "home" / ".codex"
+            plugin_cache = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME
+            stale = plugin_cache / "0.0.9"
+            stale.mkdir(parents=True)
+            (stale / "marker").write_text("old\n", encoding="utf-8")
+            sibling = codex_home / "plugins" / "cache" / "creatio" / "other-plugin" / "1.0.0"
+            sibling.mkdir(parents=True)
+
+            with patch("builtins.print"):
+                target = installer.materialize_codex_plugin(repo_root, codex_home)
+
+            self.assertEqual(target, plugin_cache / "0.1.0")
+            self.assertTrue((target / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
+            self.assertFalse(stale.exists())
+            # Only this plugin's cache root is replaced; a sibling plugin's cache is untouched.
+            self.assertTrue(sibling.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+
+    def test_failed_marketplace_registration_propagates_and_writes_nothing(self):
+        # Loud failure: when Codex's marketplace registration fails, install_codex raises
+        # (so `--target codex` exits non-zero and an auto-detected run records the failure)
+        # and neither the cache directory nor the enabled block is written.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('model = "gpt-5.4"\n', encoding="utf-8")
+
+            def fake_run(command, **_kwargs):
+                if command[1:4] == ["plugin", "marketplace", "remove"]:
+                    raise RuntimeError("Error: marketplace 'creatio' not found")
+                if command[1:4] == ["plugin", "marketplace", "add"]:
+                    raise RuntimeError("fatal: unable to access the repository: network unreachable")
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"), self.assertRaisesRegex(RuntimeError, "network unreachable"):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse((codex_home / "plugins" / "cache" / "creatio").exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[plugins.", config_body)
+            self.assertIn('model = "gpt-5.4"', config_body)
+
+            # The same failure under an explicit --target exits the run non-zero.
+            targets = [{"id": "codex", "name": "Codex", "home": codex_home}]
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked", side_effect=fake_run
+            ), patch("builtins.print"), self.assertRaisesRegex(RuntimeError, "network unreachable"):
+                installer.install_for_targets(repo_root, targets, "codex")
+
+    def test_failure_after_the_cache_wipe_leaves_no_dangling_enabled_block(self):
+        # A previous install is on disk (cache + enabled block). If materialization fails
+        # after install_codex has wiped the cache, the enabled block must be gone too —
+        # otherwise config.toml would point Codex at a version directory that no longer
+        # exists. The block comes back only when a later run materializes successfully.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            codex_home = home / ".codex"
+            previous = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            previous.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.4"\n\n'
+                '[plugins."creatio-ai-app-development-toolkit@creatio"]\n'
+                "enabled = true\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
+                installer, "run_checked"
+            ), patch.object(
+                installer, "copy_plugin_runtime_surface", side_effect=OSError("disk full mid-copy")
+            ), patch("builtins.print"), self.assertRaisesRegex(OSError, "disk full"):
+                installer.install_codex(repo_root, home)
+
+            self.assertFalse(previous.exists())
+            config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[plugins.", config_body)
+            self.assertIn('model = "gpt-5.4"', config_body)
 
     def test_tolerates_marketplace_remove_not_found(self):
         installer = load_installer()
@@ -776,7 +1283,6 @@ class InstallCodexTests(unittest.TestCase):
             self.assertEqual([cmd[1:4] for cmd in commands], [
                 ["plugin", "marketplace", "remove"],
                 ["plugin", "marketplace", "add"],
-                ["plugin", "add", installer.PLUGIN_SOURCE],
             ])
 
     def test_cleans_up_legacy_file_copy_artifacts(self):
@@ -808,7 +1314,12 @@ class InstallCodexTests(unittest.TestCase):
                 installer.install_codex(repo_root, home)
 
             self.assertFalse(legacy_marketplace_dir.exists())
-            self.assertFalse(legacy_cache_dir.exists())
+            # The marketplace cache is rebuilt, not just deleted: the legacy marker
+            # is gone and the current version directory is in place.
+            self.assertFalse((legacy_cache_dir / "marker").exists())
+            self.assertTrue(
+                (legacy_cache_dir / installer.PLUGIN_NAME / "0.1.0" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+            )
             self.assertFalse(legacy_personal_plugin_dir.exists())
             self.assertFalse(legacy_skill_dir.exists())
 
@@ -853,7 +1364,9 @@ class InstallCodexTests(unittest.TestCase):
             self.assertIn('model = "gpt-5.4"', config_body)
             self.assertNotIn("[marketplaces.creatio]", config_body)
             self.assertIn("[marketplaces.other]", config_body)
-            self.assertNotIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            # The legacy plugin block is replaced by exactly one installer-owned block.
+            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
+            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
             self.assertIn('[plugins."other@other"]', config_body)
             self.assertNotIn("[[skills.config]]", config_body)
             self.assertIn("[mcp_servers.clio]", config_body)
@@ -1208,6 +1721,155 @@ class InstallCursorTests(unittest.TestCase):
 
 
 class McpConfigMergeTests(unittest.TestCase):
+    def test_merge_cursor_telemetry_hook_keeps_unrelated_entries(self):
+        # The developer's own hooks live in this file. A reinstall that replaced it with our single
+        # entry would silently delete their work.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            (cursor_home / "hooks.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "hooks": {
+                        "afterMCPExecution": [{"command": "node ./their-own-audit.js"}],
+                        "beforeShellExecution": [{"command": "node ./their-guard.js"}],
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            after = config["hooks"]["afterMCPExecution"]
+            self.assertEqual(len(after), 2)
+            self.assertIn("their-own-audit.js", after[0]["command"])
+            self.assertIn("telemetry-routing.mjs", after[1]["command"])
+            self.assertEqual(after[1]["env"]["CAADT_TELEMETRY_HOOK_HOST"], "cursor")
+            # An unrelated hook family must be untouched.
+            self.assertEqual(
+                config["hooks"]["beforeShellExecution"], [{"command": "node ./their-guard.js"}]
+            )
+
+    def test_merge_cursor_telemetry_hook_is_idempotent(self):
+        # Installing twice is ordinary. A second entry would make the hook run — and the floor
+        # event fire — twice per tool call.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            plugin_dir = Path(temp) / "plugin"
+
+            installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+            installer.merge_cursor_telemetry_hook(cursor_home, plugin_dir)
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            entries = [
+                item for item in config["hooks"]["afterMCPExecution"]
+                if "telemetry-routing.mjs" in item["command"]
+            ]
+            self.assertEqual(len(entries), 1)
+
+    def test_merge_cursor_telemetry_hook_leaves_a_broken_file_untouched(self):
+        # A hand-broken hooks.json is the developer's file. Rewriting it with our single entry
+        # would destroy whatever they were in the middle of editing.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            broken = '{"hooks": {"afterMCPExecution": [  <-- half-edited'
+            (cursor_home / "hooks.json").write_text(broken, encoding="utf-8")
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            self.assertEqual((cursor_home / "hooks.json").read_text(encoding="utf-8"), broken)
+
+    def test_merge_cursor_telemetry_hook_leaves_a_wrong_shaped_file_untouched(self):
+        # Valid JSON of an unexpected SHAPE — a bare list, null, or a string — parses without error,
+        # so it reaches the shape guard rather than the JSONDecodeError branch above. Without that
+        # guard, `config.setdefault("hooks", {})` on a non-dict raises AttributeError mid-install,
+        # after two rule files have already been written. Also covers `afterMCPExecution` ITSELF
+        # being the wrong shape (null, a number, a string, a dict) rather than one of its entries:
+        # iterating a non-list there raises TypeError (null/number) or silently iterates
+        # characters/keys and replaces the value with a corrupted list (string/dict) — the same
+        # half-finished-or-corrupted install the container-level shape check exists to prevent.
+        installer = load_installer()
+        broken_shapes = (
+            '[]', 'null', '"just a string"', '{"hooks": "not-a-dict"}',
+            '{"hooks": {"afterMCPExecution": null}}',
+            '{"hooks": {"afterMCPExecution": 7}}',
+            '{"hooks": {"afterMCPExecution": "not-a-list"}}',
+            '{"hooks": {"afterMCPExecution": {"command": "not-a-list-either"}}}',
+        )
+        for broken_shape in broken_shapes:
+            with tempfile.TemporaryDirectory() as temp:
+                cursor_home = Path(temp) / ".cursor"
+                cursor_home.mkdir()
+                (cursor_home / "hooks.json").write_text(broken_shape, encoding="utf-8")
+
+                installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+                self.assertEqual(
+                    (cursor_home / "hooks.json").read_text(encoding="utf-8"), broken_shape,
+                    f"shape {broken_shape!r} must be left untouched, not raise or be rewritten",
+                )
+
+    def test_merge_cursor_telemetry_hook_preserves_a_non_dict_entry_in_after_mcp_execution(self):
+        # A stray non-dict entry (left by a developer or another tool) must not make `item.get(...)`
+        # raise — the entries filter is written to tolerate it rather than assume every element is a
+        # hook definition.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+            (cursor_home / "hooks.json").write_text(
+                json.dumps({"hooks": {"afterMCPExecution": ["not-a-hook-object"]}}),
+                encoding="utf-8",
+            )
+
+            installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            after = config["hooks"]["afterMCPExecution"]
+            self.assertIn("not-a-hook-object", after)
+            self.assertTrue(any("telemetry-routing.mjs" in str(item.get("command", ""))
+                                 for item in after if isinstance(item, dict)))
+
+    def test_merge_cursor_telemetry_hook_returns_quietly_when_the_write_fails(self):
+        # A read-only or locked hooks.json must not abort a Cursor install that has already written
+        # two rule files — the write is wrapped in the same "leave it alone" contract as a read
+        # failure.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            cursor_home = Path(temp) / ".cursor"
+            cursor_home.mkdir()
+
+            real_write_text = Path.write_text
+
+            def raising_write_text(self, *args, **kwargs):
+                if self.name == "hooks.json":
+                    raise OSError("simulated read-only filesystem")
+                return real_write_text(self, *args, **kwargs)
+
+            with patch.object(Path, "write_text", raising_write_text):
+                installer.merge_cursor_telemetry_hook(cursor_home, Path(temp) / "plugin")
+            # No exception propagated — that is the entire contract being tested.
+
+    def test_render_cursor_telemetry_rule_delegates_the_vocabulary(self):
+        # Cursor has no hook that can reach the agent, so this always-applied rule is its only
+        # routing channel — and it must point at the guidance article rather than copy the stages,
+        # which would outlive the release that changed them.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            rule = installer.render_cursor_telemetry_rule(Path(temp))
+
+        self.assertIn("get-guidance name=product-telemetry", rule)
+        self.assertIn("alwaysApply: true", rule)
+        residue = rule.replace("migration_plan_approved", "")
+        for stage in ("workflow_started", "plan_approved", "work_item_completed"):
+            self.assertNotIn(stage, residue)
+
     def test_merge_mcp_config_preserves_existing_server_entries(self):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

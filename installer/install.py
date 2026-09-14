@@ -32,6 +32,17 @@ from agent_cli import (  # noqa: E402
 
 MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit.git"
 SKILL_NAME = "creatio-app-orchestrator"
+NAMED_WORKFLOW_DIR_NAME = "workflows"
+WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
+WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+# A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
+# than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
+# the base and an absolute value discards the base entirely, which would turn the installer into an
+# arbitrary-file-write primitive running with the user's privileges. The namespace prefix is part of
+# the pattern because every shipped script already carries it and it keeps the mirror out of the way
+# of unrelated user-scope workflows.
+WORKFLOW_META_NAME_ALLOWED = re.compile(r"creatio-[A-Za-z0-9._-]+")
+TELEMETRY_RULE_NAME = "creatio-telemetry"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_MANIFEST_FILENAME = ".release-manifest.json"
 SETUP_WIZARD_MANIFEST_DIR = ".caadt"
@@ -215,6 +226,7 @@ def register_remote_marketplace_and_install_plugin(
     marketplace_remove_flags: list[str] | None = None,
     install_verb: str = "install",
     pre_remove_marketplace: bool = False,
+    install_plugin: bool = True,
 ) -> None:
     """Register the remote marketplace and install the plugin via the host CLI.
 
@@ -234,11 +246,13 @@ def register_remote_marketplace_and_install_plugin(
       Codex CLI also produces the conflict error on Windows path round-trips
       that the upstream cleanup did not normalize.
 
-    `install_verb` is `"install"` for Claude/Copilot and `"add"` for Codex,
-    matching each CLI's plugin-install subcommand name. `pre_remove_marketplace`
-    converts the conflict-driven retry into an unconditional remove-then-add
-    sequence — Claude and Codex both pass True so cleanup of legacy state is
-    exhaustive.
+    `install_verb` is `"install"` for Claude/Copilot. `install_plugin=False` skips
+    the plugin-install step: Codex CLI has no non-interactive plugin-install
+    subcommand (`codex plugin` offers only `marketplace`), so install_codex only
+    registers the marketplace here and materializes the plugin itself — see
+    materialize_codex_plugin. `pre_remove_marketplace` converts the
+    conflict-driven retry into an unconditional remove-then-add sequence — Claude
+    and Codex both pass True so cleanup of legacy state is exhaustive.
     """
     marketplace_subcmd = [*cli_command, "plugin", "marketplace"]
     add_command = [*marketplace_subcmd, "add", MARKETPLACE_GIT_URL]
@@ -258,7 +272,8 @@ def register_remote_marketplace_and_install_plugin(
             if not _marketplace_not_found(remove_error):
                 raise
         run_checked(add_command)
-        run_checked(install_command)
+        if install_plugin:
+            run_checked(install_command)
         return
 
     # Conflict-driven retry path. Through install_codex, pre_remove_marketplace
@@ -275,7 +290,8 @@ def register_remote_marketplace_and_install_plugin(
         except RuntimeError as remove_error:
             print(f"Could not remove existing '{MARKETPLACE_NAME}' marketplace: {remove_error}")
         run_checked(add_command)
-    run_checked(install_command)
+    if install_plugin:
+        run_checked(install_command)
 
 
 def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
@@ -377,6 +393,143 @@ def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
         )
 
 
+def workflow_manifest_names(source_root: Path) -> dict[str, str]:
+    """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
+
+    Read from the GENERATED manifest at ``skills/_workflow-core/workflows.json``, which
+    ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
+    from, under the same ``--check`` drift gate.
+
+    This used to be recovered by lexing the generated JavaScript: a hand-written JS sub-lexer in
+    Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
+    generator already held in structured form. It needed comment, string, unterminated-literal and
+    decoy-name hardening across four review rounds, and the constructs it still could not handle are
+    ordinary in generated JS - a template literal with ``${...}``, a regex literal carrying a brace
+    or a quote, the regex-versus-division ambiguity. Its failures were quiet: a wrong name written
+    to ``~/.claude/workflows/`` so ``Workflow({ name })`` resolves to nothing while the install
+    reports success, or a hard abort on a language path the generator's own goldens never exercise.
+    It is also what AGENTS.md forbids twice over - a generated artifact is a verification tool, not
+    a source to reverse-engineer a format from, and parsing text is not a substitute for a source
+    that returns the same data as fields.
+
+    Fails CLOSED: a tree with no manifest, or an unreadable one, raises rather than falling back to
+    a parser. There is deliberately no fallback - one that no test exercises would preserve exactly
+    the coupling this replaced and re-introduce the silent mis-parse.
+    """
+    manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
+            f"bundled workflow script cannot be provisioned as a named workflow: {source_root}. "
+            f"Re-run the installer from a current release, or run "
+            f"`node scripts/build-workflows.mjs` in a checkout."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} could not be read as JSON: {error}"
+        ) from error
+    entries = manifest.get("workflows")
+    if not isinstance(entries, list):
+        raise RuntimeError(
+            f"Workflow manifest {manifest_path} carries no `workflows` list, so it declares no "
+            f"workflow identities."
+        )
+    names: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Workflow manifest {manifest_path} carries a non-object entry: {entry!r}")
+        name, script = entry.get("name"), entry.get("script")
+        if not isinstance(name, str) or not isinstance(script, str) or not name or not script:
+            raise RuntimeError(
+                f"Workflow manifest {manifest_path} carries an entry without both `name` and "
+                f"`script`: {entry!r}"
+            )
+        # Validated HERE, before the value becomes a path component. The manifest arrives with the
+        # rest of the tree - from a marketplace update rather than a reviewed checkout - and
+        # `installer/update.py` re-runs this provisioner over `~/.claude/plugins/cache/`
+        # unattended, on every plugin update.
+        if not WORKFLOW_META_NAME_ALLOWED.fullmatch(name) or Path(name).name != name:
+            raise RuntimeError(
+                f"Workflow name is not usable as a filename: {name!r} in {manifest_path}. "
+                f"A provisioned name must match creatio-[A-Za-z0-9._-]+ and contain no path "
+                f"separator, because it is written to ~/.claude/workflows/<name>.js."
+            )
+        names[script] = name
+    return names
+
+
+def discover_workflow_scripts(source_root: Path) -> list[Path]:
+    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    skills_dir = source_root / "skills"
+    if not skills_dir.is_dir():
+        return []
+    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+
+
+def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
+    """Mirror bundled workflow scripts into user scope as NAMED workflows.
+
+    The marketplace ships skills, agents and MCP servers — it cannot register a
+    named workflow, so a skill can otherwise only reach its own orchestration
+    through `Workflow({ scriptPath })` with a hand-resolved absolute path into
+    the versioned plugin cache. Copying each script to
+    ``~/.claude/workflows/<meta.name>.js`` makes `Workflow({ name })` work
+    instead, which is the same convention the `creatio-development` plugin uses.
+
+    This is a MIRROR, not a second source: it is rewritten on every install and
+    on every Claude update, because the plugin itself auto-updates and a stale
+    user-scope copy would run an older `args` contract against a newer skill.
+    That is also why both skills keep `scriptPath` documented as the fallback —
+    the in-tree script is version-matched by construction, and user-scope
+    discovery only happens at session start, so a freshly provisioned workflow
+    is not resolvable by name until the next session.
+
+    Returns the provisioned workflow names. A source tree without workflow
+    scripts provisions nothing rather than failing — not every checkout or
+    release the installer runs against bundles one.
+    """
+    scripts = discover_workflow_scripts(source_root)
+    if not scripts:
+        return []
+
+    declared = workflow_manifest_names(source_root)
+    workflows_dir = claude_home / NAMED_WORKFLOW_DIR_NAME
+    workflows_dir.mkdir(parents=True, exist_ok=True)
+    provisioned: list[str] = []
+    sources: dict[str, Path] = {}
+    for script in scripts:
+        relative = script.relative_to(source_root).as_posix()
+        name = declared.get(relative)
+        if name is None:
+            raise RuntimeError(
+                f"Bundled workflow script {relative} has no entry in "
+                f"{WORKFLOW_MANIFEST_RELATIVE}, so its named identity is unknown. Run "
+                f"`node scripts/build-workflows.mjs` in a checkout, or re-run the installer from a "
+                f"current release."
+            )
+        # Two scripts claiming one name used to overwrite each other silently while BOTH were
+        # reported as provisioned, so one skill would run the other's orchestration.
+        if name in sources:
+            raise RuntimeError(
+                f"Two bundled workflow scripts declare the same `meta.name` {name!r}: "
+                f"{sources[name]} and {script}. Named workflows share one flat user-scope "
+                f"directory, so the second copy would silently replace the first."
+            )
+        sources[name] = script
+        target = workflows_dir / f"{name}.js"
+        # Containment is asserted on the resolved destination as well as on the name. The name check
+        # above is the real guard; this one holds even if it is ever loosened.
+        if target.resolve().parent != workflows_dir.resolve():
+            raise RuntimeError(
+                f"Workflow {name!r} would be written outside {workflows_dir}: {target}"
+            )
+        shutil.copyfile(script, target)
+        provisioned.append(name)
+    return provisioned
+
+
 def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
     """Copy only the files needed by installed agent plugins."""
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -466,7 +619,7 @@ def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_na
     The old file-copy install_codex wrote a personal-marketplace catalog at this
     path so Codex could resolve the local-path plugin source. Codex CLI prefers
     that file over the freshly-cloned git marketplace of the same name, which
-    breaks `codex plugin add`. We strip the plugin entry; if no plugin entries
+    shadows the git marketplace of the same name at install time. We strip the plugin entry; if no plugin entries
     remain and the catalog still self-identifies as the installer-managed
     `creatio` catalog (`name == marketplace_name`), the whole file is deleted —
     any top-level keys the user customized on the installer-managed catalog
@@ -707,8 +860,111 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
     )
 
 
+def render_cursor_telemetry_rule(repo_root: Path) -> str:
+    """Build the always-applied Cursor rule that routes product telemetry.
+
+    Cursor does have an MCP hook, and the installer registers it — but
+    ``afterMCPExecution`` is documented as informational: it reaches neither the user
+    nor the agent, so it can record the telemetry floor and nothing else. Without an
+    always-applied rule, a Cursor session that never loads a CAADT skill would have
+    nothing but clio's server instructions telling it telemetry exists - which is the
+    original defect (an agent deprioritising a line of instruction it judges
+    unimportant). This rule stays deliberately small so it can be always-on without
+    the cost of loading the whole orchestrator rule.
+    """
+    contract = repo_file(repo_root, "context/product-telemetry.md")
+    return f"""---
+description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
+alwaysApply: true
+---
+
+# Creatio product telemetry
+
+When a Creatio workflow runs through clio MCP, emit product telemetry with `send-telemetry`.
+This applies to EVERY workflow, not just app creation.
+
+Event names are flow-agnostic stages, and WHICH flow it was goes in the `workflow` field:
+`app-creation`, `classic-to-freedom-migration`, `mobile-page-conversion`, `branding`, or
+`app-maintenance`.
+
+Read `get-guidance name=product-telemetry` for the stage names, the payload and the consent flow.
+Do not spell a stage from memory, and do not invent a per-flow name such as
+`migration_plan_approved`: clio validates `event_name` against a closed allow-list and rejects
+anything else.
+
+The migration, mobile-conversion and branding flows are exempt from Gate P/R. That does NOT
+exempt them from telemetry: their emission points are their own gates instead, listed in
+`{contract}`.
+
+Check `get-telemetry-consent` first; if it reports `telemetry_consent=unknown`, ask the developer
+once as a single-purpose question, and if there is nobody to ask, leave it unknown and emit
+nothing. Telemetry must never gate or delay the task.
+"""
+
+
+def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: str) -> None:
+    """Write the `[plugins."<plugin>@<marketplace>"] enabled = true` block Codex reads at startup.
+
+    Idempotent: an existing block for the same key is dropped first so a re-run never
+    leaves two tables behind. The block alone does not load a plugin — Codex also needs
+    the install cache written by materialize_codex_plugin.
+    """
+    remove_codex_plugin_section(config_path, plugin_name, marketplace_name)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    needs_newline = bool(existing) and not existing.endswith("\n")
+    plugin_key = f"{plugin_name}@{marketplace_name}"
+    block = (
+        "\n"
+        "# Added by CAADT installer.\n"
+        f"[plugins.{toml_quote(plugin_key)}]\n"
+        "enabled = true\n"
+    )
+    # Append only the installer-owned block instead of rewriting the whole file:
+    # the user's existing config never flows into the write.
+    with config_path.open("a", encoding="utf-8") as handle:
+        if needs_newline:
+            handle.write("\n")
+        handle.write(block)
+
+
+def materialize_codex_plugin(
+    repo_root: Path,
+    codex_home: Path,
+    plugin_name: str = PLUGIN_NAME,
+    marketplace_name: str = MARKETPLACE_NAME,
+) -> Path:
+    """Install the plugin the way Codex's interactive `/plugins` browser does.
+
+    Codex CLI has no non-interactive install command, and it loads plugin skills
+    only from `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/` —
+    enabling the plugin in config.toml is not enough on its own. The
+    installer therefore copies the plugin runtime surface (the same
+    `.release-manifest.json` `plugin_runtime` list the Cursor install copies) into
+    that directory and enables the plugin. Older cached versions of this plugin
+    are removed so exactly one version remains. Returns the version directory.
+
+    One plugin per call so a multi-plugin installer can run it once
+    per catalog entry.
+    """
+    version = plugin_version(repo_root)
+    plugin_cache_root = codex_home / "plugins" / "cache" / marketplace_name / plugin_name
+    remove_tree_if_exists(plugin_cache_root, "Codex")
+    target = plugin_cache_root / version
+    copy_plugin_runtime_surface(repo_root, target)
+    enable_codex_plugin(codex_home / "config.toml", plugin_name, marketplace_name)
+    return target
+
+
 def install_codex(repo_root: Path, home: Path) -> None:
-    """Install Codex via the remote marketplace (parity with install_claude).
+    """Install Codex: register the remote marketplace, then materialize the plugin.
+
+    Codex CLI has no non-interactive `plugin install` / `plugin add` subcommand —
+    the only documented install path is the interactive `/plugins` browser, which
+    (a) copies the plugin into `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/`
+    and (b) writes `[plugins."<plugin>@<marketplace>"] enabled = true` into
+    config.toml. Skills load only when both exist, so after registering the
+    marketplace the installer performs both steps itself.
 
     Migration cleanup runs first so users coming from the legacy file-copy install
     end up in the same state as a fresh install. The clio MCP block stays in
@@ -716,9 +972,14 @@ def install_codex(repo_root: Path, home: Path) -> None:
     declarations to user-level `[mcp_servers.*]` entries.
     """
     ensure_required_references(repo_root)
+    # `<home>/.codex` is also what detect_targets keys on; a `$CODEX_HOME` override
+    # is deliberately not read here (an environment-derived path would be an
+    # untrusted input to every write below).
     codex_home = home / ".codex"
 
-    # On-disk artifacts left by the old file-copy install_codex.
+    # On-disk artifacts left by the old file-copy install_codex. The marketplace
+    # cache is wiped as a whole because the legacy layout put files directly under
+    # it; materialize_codex_plugin re-creates the per-plugin version dir below.
     remove_tree_if_exists(codex_home / "plugins" / "marketplaces" / MARKETPLACE_NAME, "Codex")
     remove_tree_if_exists(codex_home / "plugins" / "cache" / MARKETPLACE_NAME, "Codex")
     remove_tree_if_exists(home / ".agents" / "plugins" / PLUGIN_NAME, "Codex")
@@ -731,7 +992,12 @@ def install_codex(repo_root: Path, home: Path) -> None:
     )
 
     # config.toml leftovers from the file-copy install. Leave [mcp_servers.clio]
-    # alone — merge_codex_mcp_config re-merges it below.
+    # alone — merge_codex_mcp_config re-merges it below. The plugin block is
+    # removed HERE, next to the cache wipe above, and re-added only by
+    # enable_codex_plugin once the cache exists again: if anything between the two
+    # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
+    # the run exits non-zero without leaving `enabled = true` pointing at a version
+    # directory that no longer exists.
     config_path = codex_home / "config.toml"
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
     remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
@@ -740,10 +1006,11 @@ def install_codex(repo_root: Path, home: Path) -> None:
     register_remote_marketplace_and_install_plugin(
         resolve_codex_command(),
         marketplace_remove_flags=[],
-        install_verb="add",
         pre_remove_marketplace=True,
+        install_plugin=False,
     )
 
+    materialize_codex_plugin(repo_root, codex_home)
     merge_codex_mcp_config(repo_root, config_path)
 
 
@@ -770,6 +1037,10 @@ def install_claude(repo_root: Path, home: Path) -> None:
         pre_remove_marketplace=True,
     )
     enable_claude_marketplace_auto_update(claude_home / "settings.json")
+    # Named workflows are user scope, not plugin scope — the marketplace install
+    # above cannot register them, so mirror them here (see
+    # provision_named_workflows). Claude-only: no other agent reads this dir.
+    provision_named_workflows(repo_root, claude_home)
 
 
 def install_cursor(repo_root: Path, home: Path) -> None:
@@ -783,6 +1054,82 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
     rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
+    # this rule is what reaches a session that never loads a CAADT skill.
+    telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
+    telemetry_rule_path.write_text(render_cursor_telemetry_rule(local_plugin_dir), encoding="utf-8")
+    merge_cursor_telemetry_hook(cursor_home, local_plugin_dir)
+
+
+def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> None:
+    """Register the telemetry floor hook in Cursor's ``hooks.json``.
+
+    Cursor's ``afterMCPExecution`` is documented as informational: it cannot reach the user
+    or the agent, so it carries no routing text. What it can still do is the part that
+    matters most — deterministically record that a session touched Creatio, which is the
+    denominator that makes the agent-reported funnel's own reliability measurable. The
+    routing itself arrives through the always-applied rule written above.
+
+    Merged rather than overwritten: a developer's other hooks must survive a reinstall.
+    """
+    hooks_path = cursor_home / "hooks.json"
+    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
+
+    config: dict = {}
+    if hooks_path.exists():
+        try:
+            config = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            # A hand-broken hooks.json is the developer's file, not ours to silently
+            # rewrite — leave it alone rather than replacing it with our single entry.
+            # Still worth a line on stderr: silently skipping the telemetry hook looks
+            # identical to it having registered, until someone notices the floor never fires.
+            print(f"Skipped Cursor telemetry hook registration — could not read {hooks_path}: "
+                  f"{error}", file=sys.stderr)
+            return
+        # Valid JSON of an unexpected SHAPE deserves the same answer. `[]`, `null` or a string all
+        # parse, and then `config.setdefault` raises AttributeError — an unhandled exception in the
+        # middle of an install that has already written two rule files, rather than the "leave it
+        # alone" this function promises.
+        if not isinstance(config, dict) or not isinstance(config.get("hooks", {}), dict):
+            print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+                  f"unexpected shape", file=sys.stderr)
+            return
+    config.setdefault("version", 1)
+    hooks = config.setdefault("hooks", {})
+    # isinstance on the container itself, not only on each entry: `afterMCPExecution` set to
+    # `null`, a number, a string, or a dict would make the comprehension below raise (or, for
+    # a string/dict, silently iterate characters/keys and replace the value with a corrupted
+    # list) — the same half-finished/corrupted install the shape check above prevents.
+    existing_hooks = hooks.get("afterMCPExecution", [])
+    if not isinstance(existing_hooks, list):
+        print(f"Skipped Cursor telemetry hook registration — {hooks_path} has an "
+              f"unexpected shape", file=sys.stderr)
+        return
+    # isinstance on each ENTRY, not only on the container: an array holding strings would make
+    # `item.get` raise, which is the same half-finished install the shape check above prevents.
+    # An entry this function cannot read is carried through untouched rather than dropped.
+    #
+    # Matched on the exact rendered command, not a "telemetry-routing.mjs" substring: a developer's
+    # own hook at a different path that happens to contain that filename (a wrapper, a copy kept for
+    # comparison) would otherwise be silently dropped and replaced on every reinstall — exactly the
+    # data loss the shape guard above exists to prevent.
+    existing = [
+        item
+        for item in existing_hooks
+        if not isinstance(item, dict) or item.get("command") != command
+    ]
+    hooks["afterMCPExecution"] = [*existing, entry]
+    try:
+        hooks_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        # Read failures already return quietly; a write failure has to as well, or a read-only
+        # or locked hooks.json aborts a Cursor install that has already written two rule files.
+        # A stderr line still goes out, matching the read-failure branch above.
+        print(f"Skipped Cursor telemetry hook registration — could not write {hooks_path}: "
+              f"{error}", file=sys.stderr)
+        return
 
 
 def install_copilot(repo_root: Path, home: Path) -> None:
