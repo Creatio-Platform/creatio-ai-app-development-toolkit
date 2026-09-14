@@ -2824,7 +2824,7 @@ function resolveOnstandVk(vk, ctx) {
 // The plan names every dashboard and its destination, so the gate compares against THAT list: one boolean for
 // the whole run lets eleven of twelve close the row and never mentions the twelfth.
 // `Skipped` is settled - an already-migrated dashboard returns it, and a deliberate re-run is safe (step 7
-// rule 6). `Partially migrated` means the dashboard EXISTS, so it settles the migrated row too.
+// rule 5). `Partially migrated` means the dashboard EXISTS, so it settles the migrated row too.
 const DASH_EXISTS = new Set(["Success", "Skipped", "Partially migrated"]);
 const DASH_NEED = "supply `built.dashboards` - one entry per dashboard the plan lists, `{ id, status,"
   + " schemaName, package? }`, transcribed from `DashboardMigrationLog`";

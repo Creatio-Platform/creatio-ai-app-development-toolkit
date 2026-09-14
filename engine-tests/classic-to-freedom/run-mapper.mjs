@@ -4968,8 +4968,8 @@ check("B1 docs: the dashboard selection is documented as a serialized ESQ filter
   && mappingFlat.includes("a serialized ESQ filter selecting the dashboards"),
   () => "the skill still documents a bare id array, or lost the verified filter template");
 check("OBS1 docs: the delivery-mode scan covers EVERY SysDashboard binding, with no section-package shortcut",
-  skillFlat.includes("Scan EVERY `SysDashboard` binding")
-  && skillFlat.includes("Do NOT narrow the scan to the packages that own the section's schema layers")
+  skillFlat.includes("across **every** binding that query returns")
+  && skillFlat.includes("Do NOT narrow the scan by package")
   && !skillFlat.includes("Probe the packages that own the section-schema layers first")
   && mappingFlat.includes("package-agnostically"),
   () => "the section-package probe shortcut is still offered");
