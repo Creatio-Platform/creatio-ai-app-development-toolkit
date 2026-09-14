@@ -1,7 +1,7 @@
 // Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
-import { VIEW_ITEM_TYPE, CONTENT_TYPE, resourceKey } from "./engine.mjs";
+import { VIEW_ITEM_TYPE, CONTENT_TYPE, resourceKey, HEADER_TOP_REGION } from "./engine.mjs";
 
 // Lesson #6 — structural preservation: the target container derives from the SOURCE container role.
 // Classic left-profile / module area → Freedom SideAreaProfileContainer. `LeftModulesContainer` is the
@@ -1476,16 +1476,17 @@ function mapWidgets(eff, opts = {}) {
     let region;
     if (own?.kind === "tab") region = own.tab;
     else if (own?.kind === "profile") region = "SideAreaProfileContainer";
-    else region = "Header / top";
+    else region = HEADER_TOP_REGION;
     accountedFor.push(c.key);
     if (host?.name) accountedFor.push(host.name);
     cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region, fromTemplate: !!c.fromTemplate });
-    // The decision names the CONCRETE conversion action (call ConvertCardWidgetsProcess with the coordinates and
-    // place the returned Freedom element) — NOT the old "propose the closest component". Contract details of the
-    // migrator are assumed; the SKILL.md / mapping-reference recipe flags them "verify against released migrator".
+    // The decision names the CONCRETE conversion action (convert via ConvertCardWidgetsProcess and place the
+    // returned Freedom element) — NOT the old "propose the closest component". The migrator's result-envelope
+    // contract has ONE canonical home (the "Card widgets" recipe in references/classic-to-freedom-mapping.md);
+    // this reason points there instead of restating it.
     needsDecision.push({
       kind: "card-widget", item: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region,
-      reason: `card widget '${c.widgetKey}' (record-scoped indicator from SysWidgetDashboard, record '${c.recordId}') → convert it: group by recordId and call ConvertCardWidgetsProcess (pass the recordId + widgetKey), then place the returned Freedom element config in ${region}. Do NOT hand-build a chart; a Failed conversion stays TODO/BLOCKED with the migrator's reason. [verify the process contract against the released migrator]`,
+      reason: `card widget '${c.widgetKey}' (record-scoped SysWidgetDashboard indicator, record '${c.recordId}') → convert via ConvertCardWidgetsProcess (group by recordId, one call per record) and place the returned Freedom element in ${region}; do NOT hand-build — a Failed/Skipped conversion stays TODO/BLOCKED. Full recipe: references/classic-to-freedom-mapping.md → "Card widgets".`,
     });
   };
   for (const c of (eff.components || [])) {

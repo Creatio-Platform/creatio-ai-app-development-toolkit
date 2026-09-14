@@ -233,15 +233,55 @@ check("ENG-95806 F1+F2: checklist Coverage row names the card widget and its fri
   /Card widget `KpiChart` \(record `rec-7`\) — converted via `ConvertCardWidgetsProcess` and placed in Side profile/.test(cwChecklist)
   && !/placed in SideAreaProfileContainer/.test(cwChecklist),
   () => cwChecklist.split("\n").filter((l) => /Card widget `KpiChart`/.test(l)));
-// --verify onstand gate: the card-widget Coverage row carries a `cardWidget:<widgetKey>` evidence key that HARD-gates.
-const cwVerifyMiss = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:KpiChart": false });
-check("ENG-95806 F1: --verify HARD-fails a card widget whose conversion is not done (built['cardWidget:KpiChart']=false → MISSING)",
-  cwVerifyMiss.missing >= 1 && /cardWidget:KpiChart/.test(cwVerifyMiss.markdown) && /❌ MISSING/.test(cwVerifyMiss.markdown),
+// --verify onstand gate: the card-widget Coverage row carries a `cardWidget:<recordId>:<widgetKey>` evidence key that HARD-gates.
+const cwVerifyMiss = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": false });
+check("ENG-95806 F1: --verify HARD-fails a card widget whose conversion is not done (built['cardWidget:rec-7:KpiChart']=false → MISSING)",
+  cwVerifyMiss.missing >= 1 && /cardWidget:rec-7:KpiChart/.test(cwVerifyMiss.markdown) && /❌ MISSING/.test(cwVerifyMiss.markdown),
   () => `missing=${cwVerifyMiss.missing}`);
-const cwVerifyOk = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:KpiChart": true });
-check("ENG-95806 F1: --verify passes the card-widget row once conversion is confirmed on-stand (built['cardWidget:KpiChart']=true → Done)",
-  /cardWidget:KpiChart confirmed on-stand/.test(cwVerifyOk.markdown),
-  () => cwVerifyOk.markdown.split("\n").filter((l) => /cardWidget:KpiChart/.test(l)));
+const cwVerifyOk = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": true });
+check("ENG-95806 F1: --verify passes the card-widget row once conversion is confirmed on-stand (built['cardWidget:rec-7:KpiChart']=true → Done)",
+  /cardWidget:rec-7:KpiChart confirmed on-stand/.test(cwVerifyOk.markdown),
+  () => cwVerifyOk.markdown.split("\n").filter((l) => /cardWidget:rec-7:KpiChart/.test(l)));
+
+/* ---- ENG-95806 (review Major) — the --verify evidence key is scoped by BOTH recordId AND widgetKey, so the SAME
+   widgetKey recurring under two different recordId's (allowed by the recordId-batching model) gates INDEPENDENTLY:
+   one widget's conversion can neither satisfy nor fail the other's gate. Keying by widgetKey alone collapsed both
+   into a single boolean. Covers the mapper output AND the rendered --verify gate. ---- */
+const cwSameKey = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "WidgetA", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-1" },
+  { key: "WidgetB", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-2" },
+] })]));
+check("ENG-95806 (Major): same widgetKey under different recordId's → two card widgets with distinct recordId's (evidence keys differ)",
+  (cwSameKey.cardWidgets || []).length === 2
+  && new Set((cwSameKey.cardWidgets || []).map(w => `${w.recordId}:${w.widgetKey}`)).size === 2,
+  () => JSON.stringify(cwSameKey.cardWidgets));
+const cwDupCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [
+    { key: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top" },
+    { key: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top" },
+  ],
+  needsDecision: [
+    { kind: "card-widget", item: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+    { kind: "card-widget", item: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+  ],
+};
+const cwDupChecklist = renderChecklist({ entity: "X", changeSet: cwDupCs });
+check("ENG-95806 (Major): shared widgetKey under two recordId's renders as TWO separate coverage rows (one per record)",
+  /Card widget `KPI` \(record `rec-1`\)/.test(cwDupChecklist) && /Card widget `KPI` \(record `rec-2`\)/.test(cwDupChecklist),
+  () => cwDupChecklist.split("\n").filter((l) => /KPI/.test(l)));
+// The --verify gate carries a distinct evidence key per (recordId, widgetKey), and rec-1 converted (true) /
+// rec-2 not (false) resolve INDEPENDENTLY — rec-1 Done AND rec-2 MISSING at once, impossible if both read one
+// shared `cardWidget:KPI` boolean.
+const cwDupVerify = renderVerify({ entity: "X", changeSet: cwDupCs }, {}, { ops: [], "cardWidget:rec-1:KPI": true, "cardWidget:rec-2:KPI": false });
+check("ENG-95806 (Major): --verify emits TWO distinct evidence keys, one per record (no collision)",
+  /cardWidget:rec-1:KPI/.test(cwDupVerify.markdown) && /cardWidget:rec-2:KPI/.test(cwDupVerify.markdown),
+  () => cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)));
+check("ENG-95806 (Major): each (recordId,widgetKey) gates independently — rec-1 confirmed while rec-2 is MISSING",
+  cwDupVerify.missing >= 1
+  && /cardWidget:rec-1:KPI confirmed on-stand/.test(cwDupVerify.markdown)
+  && /❌ MISSING/.test(cwDupVerify.markdown),
+  () => `missing=${cwDupVerify.missing}\n${cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)).join("\n")}`);
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
 // L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.

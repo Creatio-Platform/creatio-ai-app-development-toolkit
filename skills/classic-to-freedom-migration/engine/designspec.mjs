@@ -16,7 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
-import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
   .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C\uFEFF]/g, "") // bidi/zero-width controls (Trojan-Source CVE-2021-42574) -> REMOVE (they reorder/hide rendered text)
@@ -195,7 +195,7 @@ function widgetSource(w) {
 }
 function rowsForWidgets(widgets) {
   return (widgets || []).map((w) => {
-    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION;
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
@@ -206,7 +206,7 @@ function rowsForWidgets(widgets) {
 // its output — so callers embed the result WITHOUT a further `esc` (the friendly literals are inert).
 const cardWidgetRegionLabel = (region, regionOf) => {
   if (region === "SideAreaProfileContainer") return "Side profile";
-  if (region === "Header / top") return "Header / top";
+  if (region === HEADER_TOP_REGION) return HEADER_TOP_REGION;
   return regionOf(region);
 };
 // ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
@@ -424,7 +424,7 @@ function orderRegions(rows) {
   const regionRank = (r) => {
     if (r.startsWith("Side profile") || r === "Header") return 0;
     if (r.startsWith("Tab ")) return 1;
-    if (r === "Header / top") return 2;
+    if (r === HEADER_TOP_REGION) return 2;
     if (r === "Card actions") return 3;
     return 4;
   };
@@ -903,7 +903,7 @@ export function renderPlan(result, opts = {}) {
 // Form — Layout checklist rows, grouped at top-level tab/region (fields counted, details/widgets listed).
 // Own fn so checklistGroups stays under Sonar CC 15.
 function buildLayoutGroupRows(cs, regionOf) {
-  const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
+  const top = (r) => { const s = String(r).split(" › ")[0]; return s === HEADER_TOP_REGION ? "Header" : s; };
   const order = [], byRegion = new Map();
   const add = (region, label) => {
     const k = top(region);
@@ -913,7 +913,7 @@ function buildLayoutGroupRows(cs, regionOf) {
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
   for (const w of cs.cardWidgets || []) {
     add(cardWidgetRegionLabel(w.region, regionOf), `${esc(w.widgetKey)} (card widget)`);
   }
@@ -954,11 +954,13 @@ function buildCoverageRows(cs, pm, result, regionOf) {
   if (expImages) cover.push({ label: `Image field${expImages === 1 ? "" : "s"} — ${expImages} expected (\`crt.ImageInput\`)`, vk: { type: "image", n: expImages } });
   // ENG-95806 — one on-stand row per CARD WIDGET: the converted+placed Freedom element is a config record not
   // derivable from get-page's component list (it depends on the migrator's ConvertCardWidgetsProcess), so it gates
-  // via an explicit on-stand evidence boolean the agent supplies in `--built` (`built["cardWidget:<widgetKey>"]`):
+  // via an explicit on-stand evidence boolean the agent supplies in `--built` (`built["cardWidget:<recordId>:<widgetKey>"]`):
   // true → Done; false → MISSING (a Failed conversion stays flagged/BLOCKED, never a hand-built substitute); absent →
   // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
+  // The key is scoped by BOTH recordId and widgetKey: the same widgetKey can legitimately recur under different
+  // recordId's (the recordId-batching model), so keying by widgetKey alone would collapse two widgets into one gate.
   for (const w of cs.cardWidgets || [])
-    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${cardWidgetRegionLabel(w.region, regionOf)}`, vk: { type: "onstand", evidence: `cardWidget:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${cardWidgetRegionLabel(w.region, regionOf)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   const FEATURE_TYPE = { Approvals: "crt.ApprovalList", "Communication options": "crt.ContactCommunication", Attachments: "crt.FileList", Feed: "crt.Feed" };

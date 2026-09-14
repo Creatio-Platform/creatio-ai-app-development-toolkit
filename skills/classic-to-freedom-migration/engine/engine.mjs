@@ -184,6 +184,11 @@ const AST_VIEW_ITEM_TYPE = { GRID_LAYOUT: 0, DETAIL: 2, CONTROL_GROUP: 15 };
 // two files never drift on a raw itemType/contentType literal (an off-by-value waiting to happen).
 export const VIEW_ITEM_TYPE = AST_VIEW_ITEM_TYPE; // ViewItemType: GridLayout 0 · Detail 2 · ControlGroup 15
 export const CONTENT_TYPE = { LOOKUP: 5 };        // ContentType.Lookup (a column rendered via a picker)
+// ENG-95806 — the friendly label of the page top area, and the fallback region for a card widget whose host
+// chain does not resolve. ONE source shared by the mapper (which EMITS it as the fallback) and the design spec
+// (which maps it to its friendly label / orders regions by it) so the sentinel can never drift across the module
+// boundary — a rename here reaches both sides at once.
+export const HEADER_TOP_REGION = "Header / top";
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`

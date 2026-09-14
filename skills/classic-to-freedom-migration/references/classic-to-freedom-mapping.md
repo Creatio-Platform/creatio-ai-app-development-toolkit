@@ -380,9 +380,11 @@ generic `component` ⚠ item (no silent drop) — do not treat that as a card wi
        **Never substitute a hand-built chart/list.**
      - A **requested `widgetKey` that is absent from `widgets[]`** is likewise **`TODO`/`BLOCKED`** — it was not
        converted.
-5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<widgetKey>` to `true` (placed on a
+5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<recordId>:<widgetKey>` to `true` (placed on a
    `Success`) or `false` (blocked — `Failed`/`Skipped`/whole-call failure/absent) so
-   `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one.
+   `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one. The key is scoped by **both**
+   `recordId` and `widgetKey` — the same `widgetKey` can legitimately recur under different `recordId`s, so keying
+   by `widgetKey` alone would let one widget's evidence satisfy another's gate.
 
 ## Data And Binding Mapping
 
