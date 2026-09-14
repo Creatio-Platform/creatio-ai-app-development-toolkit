@@ -6322,9 +6322,15 @@ check("#8 Process, signals resolved present:true → names the process + 'Run pr
 const paUnres = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton"] }, signals: {} }, {});
 check("#8 Print, signals NOT resolved → keeps the how-to (fallback so nothing is assumed)",
   /SysModuleReport/.test(paUnres));
-const paChild = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["ProcessButton"] }, signals: {} }, { isChildPage: true });
-check("#8 Process on a CHILD edit page → short 'no section-level' note, not the full ProcessInModules how-to",
-  /no section-level Run-process/.test(paChild) && !/ProcessInModules/.test(paChild));
+// ENG-96327 — the four STANDARD action-menu buttons (Print/ViewOptions/Process/RunProcess/ReloadData/Tag) are
+// inherited base chrome; on a CHILD edit page they carry no section context, so they are DROPPED (not rendered as
+// Layout rows) rather than repeated on every child. A child's OWN custom action still renders.
+const paChild = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "ViewOptionsButton", "ReloadDataButton"] }, signals: {} }, { isChildPage: true });
+check("#8 the STANDARD card actions are DROPPED from a CHILD edit page (inherited base chrome) — no Card-actions rows, no per-child boilerplate note",
+  !/\| Card actions \|/.test(paChild) && !/no section-level/.test(paChild) && !/ProcessInModules/.test(paChild));
+const paChildCustom = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "calculateSaaSMetricsButton"] }, signals: {} }, { isChildPage: true });
+check("#8 a child's OWN custom card action still renders on a CHILD page (only the standard base ones are dropped)",
+  /\| calculateSaaSMetrics \|/.test(paChildCustom) && !/\| Print \|/.test(paChildCustom));
 
 
 /* ---- inverse call graph: a body-called method is not an orphan ---- */

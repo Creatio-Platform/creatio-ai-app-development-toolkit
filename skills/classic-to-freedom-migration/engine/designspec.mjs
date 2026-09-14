@@ -248,12 +248,19 @@ function cardActionNote(name, result, opts) {
   if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
   return { type: "Action", note: DASH };
 }
+// The base-page standard action-menu buttons — inherited chrome on EVERY page, not a page's own customization.
+// On a CHILD edit page they carry no section context (their disposition is "no section-level menu / native /
+// not applicable"), so listing all four on every child page is pure boilerplate. Dropped from a child's Layout;
+// a child's OWN custom action (any name not in this set) still renders.
+const STANDARD_CARD_ACTIONS = new Set(["Print", "ViewOptions", "Process", "RunProcess", "ReloadData", "Tag"]);
 function rowsForCardActions(cardActions, result, opts) {
-  return (cardActions || []).map((a) => {
-    const name = a.replace(/Button$/, "");
-    const { type, note } = cardActionNote(name, result, opts);
-    return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
-  });
+  return (cardActions || [])
+    .filter((a) => !(opts.isChildPage && STANDARD_CARD_ACTIONS.has(a.replace(/Button$/, ""))))
+    .map((a) => {
+      const name = a.replace(/Button$/, "");
+      const { type, note } = cardActionNote(name, result, opts);
+      return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
+    });
 }
 // ENG-95543 — one Layout row per element the shared mapping table emitted (`crt.Label` / `crt.Button` /
 // `crt.Link`). These carry no `values.control`, so `isField` cannot see them and without this builder they would be
