@@ -844,21 +844,26 @@ export function renderDesignSpec(result, opts = {}) {
   // A mini page's form section is titled "Mini page (quick-add)" — NOT "<entity> form page" — so it can't be
   // mistaken for the record page's form section (the two rendered under the SAME "<entity> form page" heading,
   // which read as a duplicated block for the same page).
-  L.push(
-    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
-    "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
-  );
-  for (const region of order) {
-    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
-  }
-  L.push("");
-  // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
-  // paragraph in every linked field's Additional cell.
-  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
-    L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  // `logicOnly` (ENG-96327) — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
+  // / ⚠ Confirm), NOT the form-page Layout. Used for a formless INLINE-GRID child: it has no form page, so a Layout
+  // table (empty, or listing grid-only bits) would misdescribe it — its logic IS the deliverable to port.
+  if (!opts.logicOnly) {
+    L.push(
+      opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
+      "#### Layout",
+      "| Region | Element | Type | Source | Rule | Additional |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const region of order) {
+      const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
+      for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
+    }
+    L.push("");
+    // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
+    // paragraph in every linked field's Additional cell.
+    if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+      L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+    }
   }
 
   L.push(...renderLogicSection(cs));
@@ -867,7 +872,7 @@ export function renderDesignSpec(result, opts = {}) {
   // reconfigured (hid / moved). The parallel-analog build does NOT re-create base fields, so these are CONCRETE
   // changes to APPLY onto the template's existing field — a build instruction, not a ⚠ decision to confirm.
   const bfo = cs.baseFieldOverrides || [];
-  if (bfo.length) {
+  if (bfo.length && !opts.logicOnly) {
     L.push(
       "#### Base-field overrides (apply onto the template's fields)",
       `> These base fields ship with the Freedom template; the client schema reconfigured them. APPLY each change onto the existing base field — do NOT re-create the field, and do NOT ship the bare template default.`,
@@ -892,7 +897,9 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
+    // Template recommendations are FORM-PAGE framing (which template to build the form on) — dropped in `logicOnly`,
+    // where there is no form. The ⚠ Confirm worklist stays: an inline grid still has decisions to port.
+    ...(opts.logicOnly ? [] : [...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts)]), ...renderConfirmWorklist(cs),
     // ENG-96327 (e00abfa) — the Member ledger is dense per-kind coverage accounting, kept on the standalone `--spec`
     // surface (QA / the build agent) but OUT of the embedded plan (`embedded`) a human approves. The coverage GATE is
     // unaffected (computed in migrate.mjs) and any `unaccounted` gap still fires the ⛔ COVERAGE INCOMPLETE banner.
@@ -1544,6 +1551,15 @@ function renderChildMappings(childs) {
       P.push(...boundaryChildLines(c));
     } else if (c.cyclic) {
       P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
+    } else if (c.formless === "inline-grid") {
+      // ENG-96327 — show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT a full form-page mapping: the intro
+      // just said there is no form page. `c.logicSpec` is produced by `foldOneChildPage`; fall back to the full spec
+      // if (defensively) absent. Recurse into grandchildren. (One push: intro + the demoted logic sections.)
+      P.push(`> ⚠ **No separate form page — inline-editable grid (confirm on-stand).** \`${esc(c.resolvedFrom || c.editPage)}\` folded to **0 form fields** while carrying behaviour (an attribute lookup-filter + column-render methods), which reads as a ConfigurationGrid detail edited INLINE in the related-list rows. This rests on the fold seeing no fields — if the fields layer was simply not captured (a bad/partial child bundle) the reading is wrong, so CONFIRM the Classic detail really is inline-editable (no separate edit page) before skipping the form. If it is: do NOT build a Freedom form page — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
+        "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2));
+      for (const g of (c.childPages || [])) renderChild(g, lvl + 1);
+    } else if (c.formless === "empty") {
+      P.push(`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, "");
     } else if (c.spec) {
       P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
       for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
@@ -1700,6 +1716,13 @@ function childScopeMeta(c) {
   // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
   if (c.cyclic)
     return { target: "↩ already mapped above (cycle) — same page, mapped higher in this plan", call: "Mapped above", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  // ENG-96327 — a folded child with 0 form fields is an inline-editable grid (its body is only an attribute
+  // lookup-filter + column-render methods), NOT a form page. "Rebuild (child) → form page" with an empty Layout
+  // misled the reader — there is no form to build; the related list itself is the editable grid.
+  if (c.formless === "inline-grid")
+    return { target: "inline-editable related list — NO separate form page; build it as an editable `crt.DataGrid` and port its logic (lookup filter / column config) as handlers", call: "Inline grid", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  if (c.formless === "empty")
+    return { target: "⚠ folded to 0 fields with no behaviour — verify the child bundle/seed before building", call: "⚠ verify", label: esc(c.resolvedFrom || c.editPage || c.entity) };
   // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
   // recommendation banner. Unknown count (unmapped real page) → generic.
   if (c.spec || (typeof c.editPage === "string" && c.editPage))
@@ -1727,9 +1750,11 @@ const CHILD_CALL_LEGEND = {
   "Reuse (Freedom)": "**`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped).",
   "Reuse (Classic)": "**`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable.",
   "Mapped above": "**`Mapped above`** = the same child page is already mapped higher in this plan (a cycle) — nothing is rebuilt here.",
+  "Inline grid": "**`Inline grid`** = the child edit page folded to 0 form fields — an inline-editable grid (ConfigurationGrid detail), not a form page. Build the related list as an editable `crt.DataGrid` and port its logic; do NOT build a form.",
+  "⚠ verify": "**`⚠ verify`** = the child folded to 0 fields with no behaviour (likely a bad bundle/seed) — verify the child schema before building.",
   "⚠ resolve": "**`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).",
 };
-const CHILD_CALL_ORDER = ["Rebuild (child)", "Without edit page", "Reuse (Freedom)", "Reuse (Classic)", "Mapped above", "⚠ resolve"];
+const CHILD_CALL_ORDER = ["Rebuild (child)", "Inline grid", "Without edit page", "Reuse (Freedom)", "Reuse (Classic)", "Mapped above", "⚠ verify", "⚠ resolve"];
 function renderChildScopeLegend(childs) {
   if (!childs.length) return [];
   const present = new Set(childs.map((c) => childScopeMeta(c).call));

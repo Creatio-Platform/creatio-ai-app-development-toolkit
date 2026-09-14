@@ -975,6 +975,18 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // mini template while its OWN design spec recommended the grid one.
   c.hasTabs = (res.changeSet?.viewConfigDiff || []).some(isTabOp);
   c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
+  // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the related-list
+  // rows; the body is only an attribute lookup-filter + column-render methods). Distinguished from a skeletal / bad
+  // bundle by whether it carries behaviour. Marked so the plan does not mislabel it `Rebuild (child) → form page`
+  // with an EMPTY Layout; the unit still publishes below — its checklist rows ARE the logic to port.
+  if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
+    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0 || (res.changeSet?.needsDecision?.length || 0) > 0;
+    c.formless = hasBehaviour ? "inline-grid" : "empty";
+    // Inline grid → no form page, so the plan shows only its LOGIC (Business rules / ⚠ Custom methods / ⚠ Other
+    // declared logic), not a form-page mapping. Render that logic-only spec here (renderChild prefers c.logicSpec).
+    if (c.formless === "inline-grid") c.logicSpec = renderDesignSpec(res, { embedded: true, logicOnly: true });
+  }
   c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
   c.grandChildren = c.childPages.length;
   c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates

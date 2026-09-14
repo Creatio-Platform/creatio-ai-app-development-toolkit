@@ -3157,6 +3157,38 @@ check("Call legend: an all-`⚠ resolve` plan defines resolve ALONE (no Rebuild/
   && !/\*\*`Without edit page`\*\* =/.test(cli.plan)
   && !/\*\*`Reuse \(Freedom\)`\*\* =/.test(cli.plan));
 
+// ENG-96327 (formless) — a folded child with 0 form fields is NOT a form page. WITH behaviour it is an inline-editable
+// grid (ConfigurationGrid detail): Main scope `Inline grid`, and the mapping shows its LOGIC only, no empty Layout.
+const formlessGrid = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"CGDetail",entitySchemaName:"CG",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "CG", editPage: "CGPage" } },
+  childPageSchemas: { CGPage: { entity: "CG",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"CG",methods:{getFilter:function(){return 1;}},diff:[]};});` }] } } },
+  { baseDir: FIX });
+const cgChild = formlessGrid.childPages.find((c) => c.entity === "CG") || {};
+check("formless inline-grid: 0-field child WITH behaviour is marked inline-grid + gets a logicSpec + Main scope calls it `Inline grid` (not Rebuild)",
+  cgChild.formless === "inline-grid" && typeof cgChild.logicSpec === "string" && cgChild.logicSpec.length > 0
+  && /\| CGPage[^|]*\| inline-editable related list — NO separate form page[^|]*\| Inline grid \|/.test(formlessGrid.plan),
+  () => ({ formless: cgChild.formless, hasLogicSpec: !!cgChild.logicSpec }));
+check("formless inline-grid: the logic-only spec carries behaviour (Business rules / ⚠ Custom methods) but NO form Layout table",
+  (/#### Business rules|#### ⚠ Custom methods/.test(cgChild.logicSpec || "")) && !/#### Layout/.test(cgChild.logicSpec || ""),
+  () => cgChild.logicSpec);
+check("formless inline-grid: the child mapping shows the no-form-page note",
+  /No separate form page — inline-editable grid/.test(formlessGrid.plan));
+// A 0-field child with NO behaviour is a bad/empty bundle → `⚠ verify`, not a silent empty form page.
+const formlessEmpty = runMigration({ entity: "Par",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"CEDetail",entitySchemaName:"CE",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
+  detailSchemas: { D1: { entity: "CE", editPage: "CEPage" } },
+  childPageSchemas: { CEPage: { entity: "CE",
+    schemas: [{ pkg: "C", body: `define("C",[],function(){return{entitySchemaName:"CE",diff:[]};});` }] } } },
+  { baseDir: FIX });
+const ceChild = formlessEmpty.childPages.find((c) => c.entity === "CE") || {};
+check("formless empty: 0-field child with NO behaviour is marked empty (no logicSpec), Main scope `⚠ verify`, mapping warns to verify the bundle",
+  ceChild.formless === "empty" && !ceChild.logicSpec
+  && /\| CEPage[^|]*\| ⚠ folded to 0 fields with no behaviour[^|]*\| ⚠ verify \|/.test(formlessEmpty.plan)
+  && /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(formlessEmpty.plan),
+  () => ({ formless: ceChild.formless, hasLogicSpec: !!ceChild.logicSpec }));
+
 // #7c — a child whose detail names a REAL Classic edit page (getEditPageName) gets a MANDATORY-map slot
 // that closes the "view-only / native / out of scope" escape hatches a real run used to dodge the mapping.
 const realChildBody = `define("StageInRecruitmentDetailV2",[],function(){return{entitySchemaName:"RecruitmentInStage",methods:{getEditPageName:function(){return "RecruitmentInStagePageV2";}},diff:[]};});`;
