@@ -2177,10 +2177,6 @@ function readSchemaBody(e, baseDir) {
   return fs.readFileSync(resolved, "utf8");
 }
 
-// The parse-diagnostic POOL — every schema body's AST diagnostics, tagged by owner (main/seed, detail:<n>,
-// profile:<n>, section) so each routes back to the body it came from. Module-level so its per-source `|| []` guards
-// don't count against runMigration's cognitive complexity (Sonar S3776). Detail/profile structural diagnostics
-// block the gate like a main one; section diagnostics carry `role:"section"` and are advisory (never merged).
 // The "matched nothing on the whole surface" index reports — only the ROOT run can judge them (a folded scope sees
 // one page's rows, so a sibling's answer would look unmatched). Assigns all three so its three root/else branches
 // don't count against runMigration's cognitive complexity (Sonar S3776).
@@ -2209,6 +2205,10 @@ function tallyByKind(decisions) {
   for (const d of decisions) out[d.kind] = (out[d.kind] || 0) + 1;
   return out;
 }
+// The parse-diagnostic POOL — every schema body's AST diagnostics, tagged by owner (main/seed, detail:<n>,
+// profile:<n>, section) so each routes back to the body it came from. Module-level so its per-source `|| []` guards
+// don't count against runMigration's cognitive complexity (Sonar S3776). Detail/profile structural diagnostics
+// block the gate like a main one; section diagnostics carry `role:"section"` and are advisory (never merged).
 function collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors) {
   return [
     ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
