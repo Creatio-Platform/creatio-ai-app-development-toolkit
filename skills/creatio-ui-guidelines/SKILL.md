@@ -96,7 +96,7 @@ When asked to create or redesign a page, follow this sequence:
 
 1. **Scenario map**: state the primary users, primary task, secondary tasks, entry points, and completion signal.
 2. **Page pattern**: choose one of: record page with header and tabs, profile/island layout, mini page for add/edit, dashboard/analytics page, wizard/step-by-step page, dialog/modal, or custom component.
-3. **Information architecture**: define header, primary display field, required fields, tabs, groups, profile blocks, related records, metrics, and help areas.
+3. **Information architecture**: define header, primary display field, required fields, tabs, groups, profile blocks, related records, metrics, and help areas. Before authoring the page body, apply *Field-driven companions* in `./references/page-layout-and-controls.md`: plan analytics for money/quantity fields the user reasons about, timers for deadline/SLA fields, and related-record profiles for business-relationship Contact/Account lookups, following that section's scope and fallback rules.
 4. **Actions**: list top-right buttons, menu actions, inline actions, action states, confirmations, loading/progress behavior, async notifications, and cancellation/undo strategy.
 5. **Fields and validation**: define field order, labels, placeholders, filters, default values, required markers, lookup/dropdown choices, read-only explanations, and copy rules.
 6. **Accessibility**: verify contrast, keyboard access, accessible names, alt text, semantic roles, and error/status announcements.
