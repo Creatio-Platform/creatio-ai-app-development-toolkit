@@ -196,6 +196,11 @@ function widgetSource(w) {
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
+  // `w.base` is a fact about the CLASSIC page — the widget came from its base template. Reading that as "the
+  // FREEDOM template provides it" is the leap that cost a live run its Feed tab: the mapping row for Feed says
+  // `templateProvided: false`, the layout row said "provided by the Freedom template", and the builder believed
+  // the row it was reading. Where the row has an answer, it wins.
+  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it";
   if (w.base) return "template context — provided by the Freedom template";
   return "native — confirm on-stand";
 }
@@ -1871,9 +1876,20 @@ function standardFeatureRows(cs) {
   return rows;
 }
 
+// A Freedom template is a platform SCHEMA NAME (package `CrtUIv2`) and they all end in `Template`. Twice on live
+// runs `planMeta` carried a description instead — `"list"` once, `"BaseListPage"` the next time — and the built
+// page was on `ListPageV3Template` both times, so the template row came back UNCONFIRMABLE: nothing built can
+// ever match a name no stand has. The row is still emitted (the deliverable is real); it says what is wrong with
+// the name it was given, in the plan, where the approver reads it.
+function templateNameNote(name) {
+  if (String(name || "").endsWith("Template")) return "";
+  return " — ⚠ that is not a Freedom template schema name (they end in `Template`, e.g. `ListPageV3Template`); fix"
+    + " `planMeta` and re-plan, or this row can never be confirmed against a built page";
+}
+
 function buildCoverageRows(cs, pm, result, regionOf) {
   const cover = [];
-  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
+  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
@@ -2080,7 +2096,7 @@ function buildListItems(pm, section, result, isMain) {
   // unclosable `list` unit), and adding a template-only vk here would flip that decision by itself. This row lives
   // in `listRows`, gated on `LIST_PAGE_KEY`, so `ctx.page` resolves to `built.pages["list"]`, never `main`'s.
   if (pm.listTemplate && items.some((r) => r.vk)) {
-    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\``, vk: { type: "template", exp: pm.listTemplate } });
+    items.unshift({ label: `List template → \`${esc(pm.listTemplate)}\`${templateNameNote(pm.listTemplate)}`, vk: { type: "template", exp: pm.listTemplate } });
   }
   return items;
 }
@@ -2097,6 +2113,10 @@ export function scopeGroups(groups, pageKey) {
 function pageGroup(pageKey, title, rows) {
   return {
     title: pageKey === "main" ? title : `${esc(pageKey)} · ${title}`,
+    // The group's own name, with no page prefix and no escaping. `title` is for RENDERING and a sub-page's is
+    // prefixed with an escaped key, so a consumer that needs to recognise the group (`tasks.mjs` orders its build
+    // phases by it) would otherwise have to unpick that prefix — many-to-one, and wrong for any key `esc` alters.
+    baseTitle: title,
     pageKey,
     rows: rows.map((r) => ({ ...r, pageKey })),
   };
@@ -2557,9 +2577,28 @@ function resolveFormPageVk(ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the form page");
   return ["❌ MISSING", "get-page returned no components for the form page", "missing"];
 }
+// A page `create-page` makes from a template carries the template's `#PrimaryDataSourceName()#` unexpanded —
+// that macro is resolved by the Interface DESIGNER when a data source is added there, not by `create-page` and
+// not at runtime; `--entity-schema-name` only records a dependency. So a page built through the re-template
+// sequence has no data source until someone declares one, `update-page` accepts the body anyway, and the card
+// HANGS THE BROWSER with `$Id` undefined. Measured on a live run: 18.6 minutes of browser probing to find it.
+// Checked only when the payload carries `modelConfig` — it is not in the `--built` contract's required shape, so
+// a caller that omits it is not punished; one that supplies it gets the check for free.
+function primaryDataSourceGap(ctx) {
+  const mc = entryObject(ctx.page)?.modelConfig;
+  if (!mc || typeof mc !== "object") return null;
+  if (mc.primaryDataSourceName) return null;
+  const bound = ctx.ops.some((o) => VERIFY_FIELD_RE.test(o.type || ""));
+  return bound ? "the page declares NO `primaryDataSourceName` while its fields bind to page attributes — the"
+    + " template's `#PrimaryDataSourceName()#` was never expanded, so `$Id` is undefined and the card hangs the"
+    + " browser. Declare an entity data source (scope `page`) over the entity in `modelConfig`, name it in"
+    + " `primaryDataSourceName`, and point every attribute path at it" : null;
+}
 function resolveTemplateVk(vk, ctx) {
   const tpl = entryObject(ctx.page)?.parentSchemaName;
   if (!tpl) return ["⚠ verify", "get-page `parentSchemaName` not provided for this page — confirm the built page's template", "unverified"];
+  const gap = primaryDataSourceGap(ctx);
+  if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
   return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
 }
@@ -2702,8 +2741,32 @@ export function componentAnalogsOf(ftype) {
 // builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
 // row. Own fn so `resolveComponentVk` keeps one level of nesting (Sonar CC 15). The not-checkable (⚠ unverified)
 // case is `ctx.entryAbsent`, handled by the caller before this runs — a page the payload cannot see is never ❌.
+// A COLLECTION component renders rows, and the rows come from two properties the element itself must carry:
+// `columns` (the definitions the platform iterates) and `items` (the collection attribute it binds). Presence of
+// the TYPE says nothing about either. A `crt.FileList` built with neither answered `hasType`, closed its row ✅,
+// and threw `TypeError: … is not iterable` out of the platform's own column preprocessor the moment the page was
+// opened — the preprocessor does `for (const column of viewConfig.columns)` before anything else runs. This is
+// the one component check that looks INSIDE the element, because for these two the element alone is not the
+// deliverable.
+const COLLECTION_PROPS = new Map([["crt.FileList", ["columns", "items"]], ["crt.DataGrid", ["columns", "items"]]]);
+const missingCollectionProps = (ctx, type) => {
+  const want = COLLECTION_PROPS.get(type);
+  if (!want) return null;
+  const built = ctx.ops.filter((o) => (o.type || "") === type);
+  if (!built.length) return null;
+  // ANY complete one satisfies the row: a page may carry several of a type and the plan counts the feature once.
+  const gaps = built.map((o) => want.filter((k) => {
+    const v = o[k];
+    return v == null || (Array.isArray(v) && v.length === 0) || v === "";
+  }));
+  return gaps.some((g) => !g.length) ? null : [...new Set(gaps.flat())];
+};
 function resolveFeatureVk(vk, ctx) {
-  if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  if (ctx.hasType(vk.ftype)) {
+    const gaps = missingCollectionProps(ctx, vk.ftype);
+    if (gaps) return ["❌ MISSING", `${vk.ftype} is on the page but carries no ${gaps.map((g) => esc(g)).join(" and no ")} — it renders no rows and the platform throws while reading its column definitions. Add the \`columns\` array (each column an \`id\` GUID, \`code\`, \`caption\`, \`dataValueType\`), bind \`items\` to an \`isCollection\` attribute, and feed that attribute from the element's own entity data source`, "missing"];
+    return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  }
   const alts = componentAnalogsOf(vk.ftype);
   const analog = alts.find((t) => ctx.hasType(t));
   if (analog) return ["✅ Done", `found ${analog} — the Freedom analog of ${vk.ftype}`, "ok"];
@@ -3152,7 +3215,14 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) out.push({ name: node.name, type: node.type });
+  if (node.name != null || node.type != null) {
+    // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
+    // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
+    // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
+    const cols = columnsOf(node);
+    const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
+    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}) });
+  }
   return walkViewConfig(node.items, out);
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as

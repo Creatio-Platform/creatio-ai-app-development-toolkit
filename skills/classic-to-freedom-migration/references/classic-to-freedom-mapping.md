@@ -52,6 +52,16 @@ package. Everything below follows from that one fact.
 Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
 present a plan until they are resolved.
 
+**`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
+`optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`
+(the entity must already exist), and the app's own section lands on your object. Omit them and Creatio
+mints a new canonical entity named after the app and a starter section on it — three pages that migrate
+nothing — and a following `create-app-section` then adds a second section beside that one. The two
+tools are not the same mechanism: `create-app` calls `AppInstallerService.svc/CreateApp`, the platform's
+app generator; `create-app-section` writes the section through `DataService/json/SyncReply/InsertQuery`,
+which is why it takes ~90 s, contends with itself, and has no template argument. Use it for a SECOND
+section in an app that already exists — the `existing-app` row above.
+
 **Never repair an app's package composition unasked.** Linking a package to an application or
 flipping its primary flag changes which package owns the app's identity and where the Section Wizard
 writes every future schema. Surface it as a decision; the user picks the host mode.

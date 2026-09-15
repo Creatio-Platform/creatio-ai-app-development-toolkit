@@ -280,8 +280,14 @@ const FEATURE_ROWS = [
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
     componentType: "crt.ApprovalList", uiShape: "component",
     notes: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." }),
+  // The Attachments composite is FOUR parts and a build that lands three of them still answers "the component is
+  // on the page". Measured: a run shipped the ExpansionPanel, the toolbar and the file list's data source, left the
+  // file list itself with neither `columns` nor an `items` binding, passed `--verify`, and threw
+  // `TypeError: ... is not iterable` out of the platform's column preprocessor the first time the page opened —
+  // it reads the element's `columns` before anything else runs. Naming the parts is the difference.
   feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
-    uiShape: "component", templateProvided: true }),
+    uiShape: "component", templateProvided: true,
+    notes: "Attachments is a COMPOSITE, not one element: crt.ExpansionPanel -> crt.GridContainer -> crt.FileList in the body, plus a toolbar (upload / refresh / search) in `tools`. The file list itself needs FOUR things and three of them are not the element: (1) `columns` — an array, each column an `id` GUID, a `code`, a `caption` and a `dataValueType`; the platform iterates this before rendering and THROWS when it is absent, so a file list without it breaks the whole page, not just itself; (2) `items` bound to a collection attribute (`items: '$<name>'`); (3) that attribute declared with `isCollection: true` and one nested attribute per column; (4) the element's own entity data source over the attachment entity, scope `viewElement`, keyed `<name>DS`. `masterRecordColumnValue` / `recordColumnName` alone wire nothing." }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
   // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
   // (an aggregate chronological feed; a separate classic component mapped by the MODULE_KEY row for Timeline) and
@@ -504,9 +510,13 @@ export function rowForItemType(itemType) {
 // ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
 // The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
 // the data has one home and the builders did not have to be rewritten around a new shape.
+// Each widget def carries its ROW's `templateProvided` down with it. The design spec used to infer template
+// provision from the CLASSIC side — "this came from the Classic base template" — and print "provided by the
+// Freedom template" for Feed, whose row says `templateProvided: false`. A live run believed the spec, shipped a
+// form page with no Feed, and the gap surfaced at verify: a 21-minute user question and a second sub-agent.
 export function widgetsByMatch(by) {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === by && r.meta?.widgets)
-    .map((r) => [r.match[by], r.meta.widgets]));
+    .map((r) => [r.match[by], r.meta.widgets.map((w) => ({ templateProvided: r.meta.templateProvided ?? null, ...w }))]));
 }
 export function profileCardsByEntity() {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === MATCH.PROFILE_ENTITY)

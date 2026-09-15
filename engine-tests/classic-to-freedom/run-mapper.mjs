@@ -4261,9 +4261,20 @@ const dvBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[`
   + `{operation:"insert",name:"F2",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Amt"}},`
   + `{operation:"insert",name:"F3",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Vis",visible:{bindTo:"IsShown"}}}]};});`;
 const dv = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: dvBody }] }, { baseDir: FIX });
-check("T3: two classic items on one column → emitted with UNIQUE names (Amt, Amt_2), NO duplicate-binding ⚠ (a normal configurator pattern resolved at design time)",
-  dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt") && dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt_2")
-  && !dv.changeSet.needsDecision.some((n) => n.kind === "duplicate-binding"));
+// Both controls are still emitted — dropping one silently is worse — but the ⚠ is back, FOLDED to one entry
+// naming every such column instead of the per-field line that made a dense page unreadable. Unique element names
+// were never the whole answer: `Amt` and `Amt_2` share the attribute, so the built page is editable in two places
+// and the plan's Layout table lists the column twice in two regions with nothing connecting them. A live run
+// shipped exactly that (`UsrNotes` in the top area, `UsrNotes_2` on a tab, both on `$UsrNotes`) and it was found
+// by reading the built page, not the plan.
+check("T3: two classic items on one column → emitted with UNIQUE names (Amt, Amt_2) AND one folded duplicate-binding ⚠ naming the column — they share the attribute, so this is a decision, not a silent design-time resolution",
+  () => {
+    const dup = dv.changeSet.needsDecision.filter((n) => n.kind === "duplicate-binding");
+    return dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt")
+      && dv.changeSet.viewConfigDiff.some((o) => o.name === "Amt_2")
+      && dup.length === 1 && /\bAmt\b/.test(dup[0].reason);
+  },
+  () => dv.changeSet.needsDecision.map((n) => `${n.kind}:${n.item}`));
 check("T3: a field with a bound (dynamic) 'visible' → visibility-rule decision",
   dv.changeSet.needsDecision.some((n) => n.kind === "visibility-rule" && n.item === "Vis"));
 // s48 — FOLD the per-field noise on a DENSE page. A classic page packing many fields into a 24-col grid collapses
@@ -7607,6 +7618,87 @@ check("ENG-94975 D6: template-provided components nested 4 levels deep in the me
   && tplProvidedShallow.missing === 4,
   () => ({ deep: { m: tplProvidedDeep.missing, u: tplProvidedDeep.unverified }, shallow: { m: tplProvidedShallow.missing },
     rows: tplProvidedDeep.markdown.split("\n").filter((l) => /crt\./.test(l)).map((l) => l.slice(0, 110)) }));
+
+/* ---- A COLLECTION component's element is not the deliverable: the rows are. A `crt.FileList` built with no
+   `columns` and no `items` answered `hasType`, closed its row ✅, and threw `TypeError: … is not iterable` out of
+   the platform's column preprocessor the moment the page opened — it reads `viewConfig.columns` before anything
+   else runs. Measured on a live stand. ---- */
+const flRes = { changeSet: { viewConfigDiff: [], standardFeatures: [{ feature: "Attachments" }], details: [], cardActions: [] }, signals: {} };
+const flPage = (values) => renderVerify(flRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
+  viewConfig: { items: [{ name: "Wrap", type: "crt.GridContainer", items: [{ name: "FL", type: "crt.FileList", ...values }] }] } } }, ...QG_EVIDENCE });
+const flBare = flPage({});
+const flWired = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }], items: "$FLItems" });
+const flHalf = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }] });
+check("collection gate: a crt.FileList with NO `columns` and NO `items` is ❌ MISSING, not ✅ — the type is present and the component still renders nothing and throws on open",
+  () => flBare.missing === 1 && /carries no columns and no items/.test(flBare.markdown),
+  () => ({ missing: flBare.missing, row: flBare.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 200)) }));
+check("collection gate (anti-vacuity): the SAME element wired with `columns` + `items` closes the row ✅ — the check measures the wiring, not the component's name",
+  () => flWired.missing === 0 && flWired.unverified === 0 && flWired.complete === true,
+  () => ({ missing: flWired.missing, unverified: flWired.unverified }));
+check("collection gate: HALF-wired is still ❌, and the reason names only what is absent — `columns` present, `items` not",
+  () => flHalf.missing === 1 && /carries no items/.test(flHalf.markdown) && !/no columns/.test(flHalf.markdown),
+  () => flHalf.markdown.split("\n").filter((l) => /FileList/.test(l)).map((l) => l.slice(0, 220)));
+
+/* ---- The page with no primary data source. `create-page` leaves the template's `#PrimaryDataSourceName()#`
+   unexpanded — the Interface DESIGNER resolves that macro when a data source is added there, and
+   `--entity-schema-name` only records a dependency — so a re-templated page has none until someone declares one.
+   `update-page` accepts the body, and the card hangs the browser. A live run spent 18.6 minutes of browser
+   probing finding it. ---- */
+{
+  const pdsRes = { changeSet: { viewConfigDiff: [{ name: "Name", values: { control: "$Name" } }], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
+  const pdsPage = (modelConfig) => ({ pages: { main: { parentSchemaName: "PageWithTabsFreedomTemplate",
+    ...(modelConfig ? { modelConfig } : {}),
+    viewConfig: { items: [{ name: "Name", type: "crt.Input" }] } } }, ...QG_EVIDENCE });
+  const pdsOpts = { planMeta: { formTemplate: "PageWithTabsFreedomTemplate" } };
+  const noPds = renderVerify(pdsRes, pdsOpts, pdsPage({ dataSources: {} }));
+  const withPds = renderVerify(pdsRes, pdsOpts, pdsPage({ primaryDataSourceName: "PDS", dataSources: { PDS: {} } }));
+  const silent = renderVerify(pdsRes, pdsOpts, pdsPage(null));
+  check("primary data source: a built page whose `modelConfig` names no `primaryDataSourceName` while its fields bind attributes is ❌ MISSING — that page hangs the browser, and `update-page` and `validate-page` both accept it",
+    () => noPds.missing >= 1 && /primaryDataSourceName/.test(noPds.markdown) && /hangs the browser/.test(noPds.markdown),
+    () => noPds.markdown.split("\n").filter((l) => /template/i.test(l)).map((l) => l.slice(0, 200)));
+  check("primary data source (anti-vacuity): the same page WITH one closes the template row normally — the check is about the data source, not about the template row",
+    () => withPds.missing === 0 && !/hangs the browser/.test(withPds.markdown),
+    () => ({ missing: withPds.missing }));
+  check("primary data source: a payload that carries no `modelConfig` at all is NOT punished — the key is outside the `--built` required shape, so the check is a bonus for the caller that supplies it, never a new demand",
+    () => silent.missing === 0 && !/hangs the browser/.test(silent.markdown),
+    () => ({ missing: silent.missing }));
+}
+
+/* ---- Feed. `base` says the CLASSIC page got the widget from its base template; the layout row read that as
+   "the FREEDOM template provides it" and a live run believed it, shipped no Feed, and paid a 21-minute user
+   question plus a second sub-agent when verify caught it. The mapping row said `templateProvided: false` all
+   along, and nothing carried it to the renderer. Checked at the table, which is where the answer lives; the
+   rendered row was verified against a recorded plan (Applicants), where it changed from "template context —
+   provided by the Freedom template" to "⚠ ADD — the Freedom template does NOT provide this; build it". ---- */
+{
+  const byContainer = widgetsByMatch(MATCH.CONTAINER_NAME);
+  const feedDefs = byContainer.ESNFeedContainer || [];
+  check("widgets: every widget def carries its mapping row's `templateProvided` — Feed's row says false, and before this the renderer could only guess from the CLASSIC side, which says nothing about what the Freedom template ships",
+    () => feedDefs.length > 0 && feedDefs.every((w) => w.templateProvided === false),
+    () => feedDefs);
+  check("widgets (anti-vacuity): the field is carried, not hardcoded to false — a row that declares nothing leaves it null rather than asserting the template does not provide it",
+    () => Object.values(byContainer).flat().some((w) => w.templateProvided === null)
+      || Object.values(widgetsByMatch(MATCH.MODULE_KEY)).flat().some((w) => w.templateProvided === null),
+    () => ({ container: Object.values(byContainer).flat().map((w) => [w.widget, w.templateProvided]),
+      module: Object.values(widgetsByMatch(MATCH.MODULE_KEY)).flat().map((w) => [w.widget, w.templateProvided]) }));
+}
+
+/* ---- A planMeta template that is not a template SCHEMA NAME. Twice on live runs it was a description — `"list"`
+   once, `"BaseListPage"` the next — while the page was built on `ListPageV3Template`, so the template row came
+   back unconfirmable and stayed that way through two reports. ---- */
+const TN_BODY = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F1",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Name"}}]};});`;
+const tnSpec = (t) => {
+  const manifest = { entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: TN_BODY }], planMeta: { formTemplate: t } };
+  return checklistGroups(runMigration(manifest, { baseDir: FIX }), { planMeta: manifest.planMeta })
+    .flatMap((g) => g.rows.map((r) => r.label)).join("\n");
+};
+check("planMeta: a form template that is not a schema name carries the reason IN THE PLAN — nothing a stand can build will ever match it, so the row is unconfirmable and the approver is the only one who can fix it",
+  () => /not a Freedom template schema name/.test(tnSpec("BaseListPage")),
+  () => tnSpec("BaseListPage").split("\n").filter((l) => /Form template/.test(l)));
+check("planMeta (anti-vacuity): a real template name carries no such note — the check is about the NAME, not about every template row",
+  () => !/not a Freedom template schema name/.test(tnSpec("PageWithTabsFreedomTemplate"))
+    && /PageWithTabsFreedomTemplate/.test(tnSpec("PageWithTabsFreedomTemplate")),
+  () => tnSpec("PageWithTabsFreedomTemplate").split("\n").filter((l) => /Form template/.test(l)));
 
 /* ---- D7: evidence + an INDEPENDENT judge. Two writers must agree; silence is not consent. ---- */
 const evRec = { evidence: { "main#quality-gates": { referencePage: "an existing Freedom page", components: ["crt.Input"] } } };
