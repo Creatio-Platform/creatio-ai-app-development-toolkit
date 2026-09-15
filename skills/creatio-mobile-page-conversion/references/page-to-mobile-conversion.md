@@ -239,9 +239,10 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   `sectionRegistration.probeOk` is false, say the environment could not be queried and registration
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
-  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* This
-  is a PROPOSAL — the developer can adjust the column counts / placement or decline it. (Both the container
-  columns and the child placement are already in the pasted `values`; nothing separate to apply.)
+  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* State it
+  as what the conversion DID, not as something to accept or decline: both the container columns and each
+  child's placement are already in the pasted `values`, there is nothing separate to apply, and there is no
+  mechanism to honour a refusal. A different layout is an edit to those `values` before pasting.
 - **Other guide-surfaced facts to state** — if the guide reports a converted-tab body structure
   (`guide.tabAreaLayers`) or normalized properties (`guide.normalizations`), state each as ONE aggregated
   plain-language line. Per the guidance article these are FACTS to report at the gate, not decisions — never
@@ -304,7 +305,8 @@ live in the `freedom-page-web-to-mobile-conversion` guidance article — do not 
 - **Requests, adaptive layout, tab bodies, and normalized properties are handled by the converter** and
   already in `guide.viewConfigDiff[].values`; the advisory summaries live on the guide
   (`guide.requestConversions`, `guide.adaptiveLayout`, `guide.tabAreaLayers`, `guide.normalizations`).
-  Present the proposals/facts at the gate (see "Conversion plan"); the article owns how they apply.
+  Present them at the gate as FACTS (see "Conversion plan") — every one is already in the `values`, so none
+  of them is a proposal to accept or decline; the article owns how they apply.
 - One data source per page. If the web page used several (see `guide.dataSources`), keep only the primary one.
 - Apply the data sections by pasting `guide.modelConfigDiff` / `guide.viewModelConfigDiff` verbatim — never
   reconstruct attributes by hand and never source them from a pre-existing body (the article explains why).
