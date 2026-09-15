@@ -1621,21 +1621,25 @@ function renderMiniPageMapping(result) {
 // outside its own target, into a package nothing checked is even editable (a product package is locked).
 // A bare item records no decision AND no `sourcePackage`, so nothing can be derived from it: it goes to
 // `unrecorded` rather than reading as "stays stand-only", an answer the agent never gave.
-function dashboardDecisions(items) {
-  const packaged = [], standOnly = [], skipped = [], unrecorded = [];
-  for (const d of items) {
-    const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
-    if (!name) continue;
-    if (!d || typeof d !== "object") { unrecorded.push({ name, id: "" }); continue; }
-    const id = String(d.id || "");
-    if (d.skip) {
-      skipped.push({ name: typeof d.skip === "string" ? `${name} — ${esc(d.skip)}` : name, id });
-      continue;
-    }
-    const save = typeof d.saveInPackage === "boolean" ? d.saveInPackage : !!d.sourcePackage;
-    (save ? packaged : standOnly).push({ name, id });
+// `skip` outranks delivery: a dashboard left behind has no delivery to decide.
+function dashboardDecision(d) {
+  const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
+  if (!name) return null;
+  if (!d || typeof d !== "object") return { bucket: "unrecorded", entry: { name, id: "" } };
+  const id = String(d.id || "");
+  if (d.skip) {
+    return { bucket: "skipped", entry: { name: typeof d.skip === "string" ? `${name} — ${esc(d.skip)}` : name, id } };
   }
-  return { packaged, standOnly, skipped, unrecorded };
+  const save = typeof d.saveInPackage === "boolean" ? d.saveInPackage : !!d.sourcePackage;
+  return { bucket: save ? "packaged" : "standOnly", entry: { name, id } };
+}
+function dashboardDecisions(items) {
+  const buckets = { packaged: [], standOnly: [], skipped: [], unrecorded: [] };
+  for (const d of items) {
+    const decision = dashboardDecision(d);
+    if (decision) buckets[decision.bucket].push(decision.entry);
+  }
+  return buckets;
 }
 // Captions AND decisions, because the captions are what the human approves and the decisions are what they
 // change. How many process runs that takes is the agent's mechanics and lives in the step-7 rule, not here.
@@ -2330,12 +2334,24 @@ function buildDashboardRows(result, opts) {
     ...d.standOnly.map((e) => ({ id: e.id, caption: e.name, pkg: "" })),
   ];
   const skipped = d.skipped.length ? `, ${d.skipped.length} left behind by recorded decision` : "";
+  const bareStrings = d.unrecorded.length ? ` ⚠ ${d.unrecorded.length} item(s) are written as bare strings — rewrite each as \`{ id, caption, sourcePackage? }\`; as they stand they carry no id, so nothing can migrate or check them.` : "";
   return [
     { label: "Dashboards element on the Freedom list page (`crt.Dashboards`) — the migration TARGET; without it `MigrateDashboardsProcess` has nowhere to write. `ListPageV3Template` ships it as `Dashboards` under `DashboardsContainer` (INHERITED — it shows up in the list page's own ops as a type-less `merge` on that name, not as a `crt.Dashboards` insert); on any other list template ADD the Dashboards tab + container + element to that same page.", vk: { type: "feature", ftype: "crt.Dashboards", byName: "Dashboards", viaTpl: "ListPageV3Template" } },
     { label: `Dashboards migrated — ${moving} of ${items.length} classic dashboard(s) moved by \`MigrateDashboardsProcess\`${skipped}.`, vk: { type: "dashboards", check: "migrated", expect } },
     { label: "No unresolved partial migration — the migrator reports `Partially migrated` for a dashboard it created but could not finish (a widget it could not convert, rights it could not bind). Taking one as it stands is the USER's decision: this row asserts only that each was shown to them and answered, never that nothing was missing.", vk: { type: "dashboards", check: "partials", expect } },
-    { label: `Delivery as planned — ${d.packaged.length} dashboard(s) must land in ${pkg} and ${d.standOnly.length} as user-level schema(s), exactly as the approved plan splits them. Read each back in the store its decision names: absence from \`SysSchema\` is not absence when the decision was stand-only.${d.unrecorded.length ? ` ⚠ ${d.unrecorded.length} item(s) are written as bare strings — rewrite each as \`{ id, caption, sourcePackage? }\`; as they stand they carry no id, so nothing can migrate or check them.` : ""}`, vk: { type: "dashboards", check: "delivery", expect, unrecorded: d.unrecorded.length } },
+    { label: `Delivery as planned — ${d.packaged.length} dashboard(s) must land in ${pkg} and ${d.standOnly.length} as user-level schema(s), exactly as the approved plan splits them. Read each back in the store its decision names: absence from \`SysSchema\` is not absence when the decision was stand-only.${bareStrings}`, vk: { type: "dashboards", check: "delivery", expect, unrecorded: d.unrecorded.length } },
   ];
+}
+// Process/Print each get their own row (machine: a crt.Button must exist); native view controls fold into one.
+function buildCardActionRows(cs) {
+  const acts = cs.cardActions || [];
+  const rows = acts.filter((a) => /process|print/i.test(a))
+    .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
+  const natives = acts.filter((a) => !/process|print/i.test(a));
+  if (natives.length) {
+    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
+  }
+  return rows;
 }
 export function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
@@ -2424,12 +2440,7 @@ export function checklistGroups(result, opts = {}) {
   const dashKey = isMain && opts.sectionHostMode !== "pages-only-no-menu" ? "list" : pageKey;
   const dashRows = buildDashboardRows(result, opts).filter(Boolean);
   if (dashRows.length) groups.push(pageGroup(dashKey, "Dashboards", dashRows));
-  // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
-  const acts = cs.cardActions || [];
-  const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
-  const natives = acts.filter((a) => !/process|print/i.test(a));
-  if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
-  G("Card actions", actItems);
+  G("Card actions", buildCardActionRows(cs));
   // ⚠ Imperative members worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
   // like the `Handler — …` rows above and unlike the evidence rows below: work to record, not open questions closed
   // by a filed record. Without this group these members have no row anywhere in the control table.
@@ -2853,7 +2864,7 @@ function resolveDashboardsVk(vk, ctx) {
 function resolveDashboardsMigrated(expect, byId) {
   const bad = expect.filter((e) => !DASH_EXISTS.has(dashStatus(byId.get(e.id))));
   if (bad.length) {
-    return ["❌ MISSING", `${bad.map((e) => `${esc(e.caption || e.id)}: ${esc(dashStatus(byId.get(e.id)) || "no status")}`).join("; ")}`, "missing"];
+    return ["❌ MISSING", bad.map((e) => `${esc(e.caption || e.id)}: ${esc(dashStatus(byId.get(e.id)) || "no status")}`).join("; "), "missing"];
   }
   return ["✅ Done", `all ${expect.length} reported by the migrator as Success / Skipped / Partially migrated`, "ok"];
 }
@@ -2872,7 +2883,7 @@ function resolveDashboardsPartials(expect, byId) {
 function resolveDashboardsDelivery(expect, byId) {
   const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== e.pkg);
   if (wrong.length) {
-    return ["❌ MISSING", `${wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(e.pkg || "no package (user-level)")}`).join("; ")}`, "missing"];
+    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(e.pkg || "no package (user-level)")}`).join("; "), "missing"];
   }
   const packaged = expect.filter((e) => e.pkg).length;
   return ["✅ Done", `${packaged} packaged and ${expect.length - packaged} user-level, each where the plan said`, "ok"];
