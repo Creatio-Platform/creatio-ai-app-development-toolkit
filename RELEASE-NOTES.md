@@ -8,6 +8,28 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.11.0 (2026-09-15)
+
+**Installing the toolkit into Codex CLI now actually gives you the skills.** The Codex install step called a `codex plugin add` subcommand that does not exist, so every Codex install failed silently and no CAADT skill was ever available in a Codex session — this release fixes that end to end, install and update. It also teaches Classic → Freedom migration to convert classic card widgets through the migrator instead of asking you to hand-build a chart substitute.
+
+### 🔒 Codex CLI install fixed
+
+- **`--target codex` installs a working plugin** ([#168](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/168)). The installer no longer calls the non-existent `codex plugin add`. Instead it does what Codex itself needs: copies the plugin runtime into Codex's install cache (`<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/`) and appends `enabled = true` for the plugin in `config.toml` — the same two things the interactive `/plugins` browser writes. Verified on Codex 0.153.4: all seven toolkit skills show up in a session.
+- **Updating Codex no longer leaves a stale cache.** Codex is updated by reinstalling from the release source, so an old cached version is removed rather than sitting beside the new one. Running the update twice changes nothing the second time, and a stale cache with a missing plugin block ends up with exactly one version and one block.
+- **The docs stopped advertising a command that never worked.** README and `docs/install.md` now describe the installer path and the `/plugins` browser instead of `codex plugin add`.
+- Claude Code, Copilot CLI and Cursor install and update exactly as before.
+
+### 🗺️ Classic → Freedom migration
+
+- **Classic card widgets are migrated, not re-invented** ([#149](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/149)). A classic `CardWidgetModule` used to come out of analysis as a vague generic `component`, which left you hand-building a chart or list substitute. Each card widget that carries both of its coordinates is now recognized as its own `card-widget` decision with its widget key, record id and resolved region, so the plan converts it through the migrator's `ConvertCardWidgetsProcess` and places what the process returns. Widgets missing a coordinate still degrade to a generic component rather than guessing, and a conversion that fails stays blocked instead of being replaced by a fabricated stand-in.
+- The plan carries each widget through to the layout, the confirmation step and the verification checklist, so nothing is converted without showing up for review.
+
+### 🛠️ Developer tooling
+
+- **The clio dev-toolchain build can target a single .NET framework.** A new `TFM` config key for `build-dev-toolchain` (e.g. `net10.0`) uses a two-pass restore so the override does not leak into `netstandard2.0` project references ([#150](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/150)). This is repository build tooling — it is not part of the installable release asset.
+
+---
+
 ## 1.10.0 (2026-09-04)
 
 ![Classic pages read from their source, mapped, and planned into Freedom UI](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.10.0-banner.png)
