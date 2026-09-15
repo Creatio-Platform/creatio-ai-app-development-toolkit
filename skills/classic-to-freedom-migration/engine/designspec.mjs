@@ -1634,13 +1634,9 @@ function renderMiniPageMapping(result) {
   return lines;
 }
 
-// Derived ONCE so the plan, the checklist and the verify gate never disagree about the same dashboard.
-// `saveInPackage: true` resolves to the run's OWN `manifest.targetPackage` - the one package `placement`
-// proved writable. Routing a dashboard to its SOURCE package instead would be this migration's only write
-// outside its own target, into a package nothing checked is even editable (a product package is locked).
-// A bare item records no decision AND no `sourcePackage`, so nothing can be derived from it: it goes to
-// `unrecorded` rather than reading as "stays stand-only", an answer the agent never gave.
-// `skip` outranks delivery: a dashboard left behind has no delivery to decide.
+// A bare item gave no decision and no `sourcePackage`, so it goes to `unrecorded` rather than reading as
+// "stays stand-only" - an answer the agent never gave. `saveInPackage` means the run's OWN target package:
+// routing a dashboard to its SOURCE package would be this migration's only write outside that target.
 function dashboardDecision(d) {
   const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
   if (!name) return null;
@@ -1652,6 +1648,7 @@ function dashboardDecision(d) {
   const save = typeof d.saveInPackage === "boolean" ? d.saveInPackage : !!d.sourcePackage;
   return { bucket: save ? "packaged" : "standOnly", entry: { name, id } };
 }
+// Derived once, so the plan, the checklist and the verify gate never disagree about the same dashboard.
 function dashboardDecisions(items) {
   const buckets = { packaged: [], standOnly: [], skipped: [], unrecorded: [] };
   for (const d of items) {
