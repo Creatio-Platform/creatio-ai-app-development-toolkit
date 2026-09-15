@@ -11,12 +11,14 @@ How it works:
     then update/reinstall the plugin — because a bare update compares against the
     *cached* catalog and no-ops if it looks current:
         claude  — `claude plugin marketplace update`  + `claude plugin update`
-        codex   — `codex plugin marketplace upgrade`   + `codex plugin add`
         copilot — `copilot plugin marketplace update`  + `copilot plugin update`
-  - Cursor has no native update command, so it is the only agent that falls back
-    to install.py: it is reinstalled (file-copy) from the latest release, which
-    this command downloads on demand. Agents are updated from their own
-    marketplace git, so the release zip is fetched *only* when Cursor is present.
+  - Cursor and Codex have no native, non-interactive update command, so they fall
+    back to install.py: each is reinstalled from the latest release, which this
+    command downloads on demand (Cursor as a file copy; Codex by re-registering
+    the marketplace and re-materializing its plugin cache — Codex CLI has no
+    `plugin install`/`plugin add` subcommand). Native agents update
+    from their own marketplace git, so the release zip is fetched *only* when
+    Cursor or Codex is present.
 
 update.py shares only `agent_cli` (plugin/marketplace identifiers + CLI
 resolution) with install.py; its update logic is otherwise independent.
@@ -28,7 +30,7 @@ Windows while the session is live.
 Usage:
   python installer/update.py
   python installer/update.py --target {codex,claude,cursor,copilot}
-  python installer/update.py --source <dir>   # reinstall Cursor from a local checkout/extract
+  python installer/update.py --source <dir>   # reinstall Cursor/Codex from a local checkout/extract
   python installer/update.py --silent         # machine-readable; non-zero on failure
 """
 from __future__ import annotations
@@ -61,20 +63,23 @@ import version_check  # noqa: E402
 # -------------------------------------------------------------------------
 
 # Agents with a native plugin-update command — updated in place, no download.
-NATIVE_TARGETS: tuple[str, ...] = ("codex", "claude", "copilot")
-# Agents with no native update command — reinstalled from the release source.
-COPY_TARGETS: tuple[str, ...] = ("cursor",)
-# Detection/reporting order across every agent we can update. Derived from the
-# two groups above so a new agent added to NATIVE_TARGETS/COPY_TARGETS can never
-# be silently dropped from detection.
-ALL_TARGETS: tuple[str, ...] = NATIVE_TARGETS + COPY_TARGETS
+NATIVE_TARGETS: tuple[str, ...] = ("claude", "copilot")
+# Agents with no native, non-interactive update command — reinstalled from the
+# release source via install.py. Cursor has no plugin CLI at all; Codex CLI has
+# `plugin marketplace` but no `plugin install`/`plugin add`.
+COPY_TARGETS: tuple[str, ...] = ("cursor", "codex")
+# Detection/reporting order across every agent we can update. Spelled out so the
+# order stays stable; the assertion keeps it in sync with the two groups above so
+# a new agent added to either group can never be silently dropped from detection.
+ALL_TARGETS: tuple[str, ...] = ("codex", "claude", "copilot", "cursor")
+assert set(ALL_TARGETS) == set(NATIVE_TARGETS) | set(COPY_TARGETS)
 
 # Upper bound for a single CLI step. Each native step does its own network I/O
 # (refreshing a remote marketplace, pulling a plugin), so without a cap a stalled
 # socket or an interactive prompt would hang the updater with no exit code.
 _STEP_TIMEOUT_SECONDS = 600
 
-# The installer script delegated to for Cursor and used to locate the release root.
+# The installer script delegated to for Cursor/Codex and used to locate the release root.
 _INSTALL_SCRIPT_NAME = "install.py"
 
 
@@ -102,22 +107,17 @@ def native_update_commands(target_id: str) -> list[list[str]]:
     """Return the ordered argv command-lists for a native agent's update.
 
     Step 1 refreshes the local marketplace catalog from its git source; step 2
-    updates (Claude/Copilot) or reinstalls from the refreshed snapshot (Codex,
-    which has no `plugin update`). The refresh is required: a bare update/add
+    updates the plugin (Claude/Copilot). The refresh is required: a bare update
     resolves the version from the *cached* catalog and skips if it already
     matches, so without it a moved `release` branch would never be picked up.
+    Codex is not a native target: its CLI has no plugin-update or plugin-install
+    subcommand, so it is reinstalled through install.py (see COPY_TARGETS).
     """
     if target_id == "claude":
         cli = agent_cli.resolve_claude_command()
         return [
             [*cli, "plugin", "marketplace", "update", agent_cli.MARKETPLACE_NAME],
             [*cli, "plugin", "update", agent_cli.PLUGIN_SOURCE],
-        ]
-    if target_id == "codex":
-        cli = agent_cli.resolve_codex_command()
-        return [
-            [*cli, "plugin", "marketplace", "upgrade", agent_cli.MARKETPLACE_NAME],
-            [*cli, "plugin", "add", agent_cli.PLUGIN_SOURCE],
         ]
     if target_id == "copilot":
         cli = agent_cli.resolve_copilot_command()
@@ -146,32 +146,112 @@ def _run_step(command: list[str]) -> None:
         raise RuntimeError(f"{' '.join(command)} failed: {detail}")
 
 
-def _update_native(target_id: str) -> None:
+def _version_sort_key(name: str) -> tuple[int, ...]:
+    """Dotted-int sort key; a non-numeric segment sorts as 0."""
+    return tuple(int(part) if part.isdigit() else 0 for part in name.split("."))
+
+
+def latest_plugin_cache_root(home: Path | None = None) -> Path | None:
+    """Newest installed plugin version dir, or None when nothing is cached.
+
+    Claude keeps each installed plugin version at
+    ``~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`` and several
+    versions coexist, so the highest one is what the CLI just updated to.
+    """
+    home = home or Path.home()
+    base = (
+        home
+        / ".claude"
+        / "plugins"
+        / "cache"
+        / agent_cli.MARKETPLACE_NAME
+        / agent_cli.PLUGIN_NAME
+    )
+    if not base.is_dir():
+        return None
+    versions = [entry for entry in base.iterdir() if entry.is_dir()]
+    if not versions:
+        return None
+    return max(versions, key=lambda entry: _version_sort_key(entry.name))
+
+
+def refresh_claude_named_workflows(home: Path | None = None) -> list[str]:
+    """Re-mirror the updated plugin's workflow scripts into user scope.
+
+    `~/.claude/workflows/` is user scope, so `claude plugin update` never
+    touches it: without this the mirror keeps running the version that was
+    current at install time against a newer skill. Sourced from the plugin cache
+    rather than a downloaded release because a Claude-only update deliberately
+    performs no download (``need_source`` covers Cursor and Codex only).
+
+    Never fails the update: a missing cache or an unreadable script leaves the
+    previous mirror in place, and both skills still document the `scriptPath`
+    fallback that resolves inside the plugin tree.
+
+    `install` is imported HERE, not at module scope: this script also runs from
+    contexts that carry no sibling install.py (the plugin runtime surface ships
+    `skills/`, `runtime/`, `context/`… while `installer/` is a release extra), and
+    a missing provisioner must cost the mirror only — not every agent's update.
+    """
+    home = home or Path.home()
+    cache_root = latest_plugin_cache_root(home)
+    if cache_root is None:
+        return []
+    # The silent arm covers the IMPORT only. Spanning the call as well misclassified an ImportError
+    # raised INSIDE the provisioner - install.py does lazy imports of its own, and a partially
+    # installed runtime is exactly when this path runs - as "this runtime ships no provisioner", and
+    # returned [] with nothing on any channel: the invisible failure this diagnostic exists to close.
+    try:
+        import install as install_module  # noqa: PLC0415  (deliberately lazy)
+    except ImportError:
+        # No sibling install.py on this surface - the documented, expected case. Staying quiet
+        # here is deliberate: it is not a failure, it is a runtime that ships no provisioner.
+        return []
+    try:
+        return install_module.provision_named_workflows(cache_root, home / ".claude")
+    except (OSError, RuntimeError, ImportError) as error:
+        # Every refusal from the provisioner itself is real and must be visible. RuntimeError in
+        # particular is what the provisioner raises for the security rejections - an unusable name,
+        # two scripts claiming one name, and a destination resolving outside ~/.claude/workflows/ -
+        # and, since the identity moved into the generated manifest, for a cache tree that carries
+        # no manifest or a script the manifest does not declare. Swallowing those printed nothing on
+        # any channel, so an unattended update looked like it had provisioned the workflows it had
+        # just refused.
+        print(f"WARNING: named workflows were not provisioned: {error}", file=sys.stderr)
+        return []
+
+
+def _update_native(target_id: str, home: Path | None = None) -> None:
     for command in native_update_commands(target_id):
         _run_step(command)
+    if target_id == "claude":
+        refresh_claude_named_workflows(home)
 
 
-def _update_cursor(fresh_root: Path | None) -> None:
-    """Reinstall Cursor (file-copy) from the downloaded release via install.py.
+def _reinstall_from_source(target_id: str, fresh_root: Path | None) -> None:
+    """Reinstall a COPY_TARGETS agent from the downloaded release via install.py.
 
-    Cursor's "update" is a fresh install from the latest source, so it reuses
-    install.py — the only agent that does.
+    Cursor's and Codex's "update" is a fresh install from the latest source, so
+    they reuse install.py — the only agents that do. For Codex that re-registers
+    the marketplace and re-materializes the plugin cache at the new version.
     """
     if fresh_root is None:
         raise RuntimeError(
-            "could not obtain the release source needed to update Cursor"
+            f"could not obtain the release source needed to update {target_id}"
         )
     install_script = fresh_root / "installer" / _INSTALL_SCRIPT_NAME
-    _run_step([sys.executable, str(install_script), "--target", "cursor"])
+    _run_step([sys.executable, str(install_script), "--target", target_id])
 
 
-def _update_one_agent(target_id: str, fresh_root: Path | None) -> str | None:
+def _update_one_agent(
+    target_id: str, fresh_root: Path | None, home: Path | None = None
+) -> str | None:
     """Update a single agent. Return None on success, or an error message string."""
     try:
         if target_id in COPY_TARGETS:
-            _update_cursor(fresh_root)
+            _reinstall_from_source(target_id, fresh_root)
         else:
-            _update_native(target_id)
+            _update_native(target_id, home)
     except subprocess.TimeoutExpired:
         return f"timed out after {_STEP_TIMEOUT_SECONDS}s"
     except (RuntimeError, ValueError) as error:
@@ -188,18 +268,23 @@ def update_agents(
     *,
     fresh_root: Path | None = None,
     silent: bool = False,
+    home: Path | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Update each agent: native command in place, or Cursor file-copy reinstall.
+    """Update each agent: native command in place, or a reinstall from the release source (Cursor, Codex).
 
     Updates every id in *target_ids*; the caller is responsible for scoping that
     list (e.g. for --target). A failure on one agent is recorded and the rest
     continue. Returns (updated, failed) lists of target IDs.
+
+    *home* overrides the home directory the Claude named-workflow refresh writes
+    into; it exists so a test can exercise the update without touching the real
+    ``~/.claude/workflows``.
     """
     updated: list[str] = []
     failed: list[str] = []
 
     for target_id in target_ids:
-        error = _update_one_agent(target_id, fresh_root)
+        error = _update_one_agent(target_id, fresh_root, home)
         if error is None:
             updated.append(target_id)
             if not silent:
@@ -218,7 +303,7 @@ def update_agents(
 
 
 # -------------------------------------------------------------------------
-# Source acquisition (Cursor only: download + extract, or local --source)
+# Source acquisition (Cursor/Codex only: download + extract, or local --source)
 # -------------------------------------------------------------------------
 
 
@@ -257,7 +342,7 @@ def acquire_source(
     *,
     source: Path | None = None,
 ) -> tuple[Path, str]:
-    """Return (fresh_root, version) for the source to reinstall Cursor from.
+    """Return (fresh_root, version) for the source to reinstall Cursor/Codex from.
 
     With --source, use the given local directory and read its plugin version.
     Otherwise download and extract the latest release into *work_dir*.
@@ -313,7 +398,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--source",
         type=Path,
-        help="Reinstall Cursor from this local checkout/extract instead of downloading the latest release.",
+        help="Reinstall Cursor and Codex from this local checkout/extract instead of downloading the latest release.",
     )
     parser.add_argument(
         "--silent",
@@ -347,14 +432,14 @@ def main(argv: list[str] | None = None) -> int:
     effective = [tid for tid in target_ids if not args.target or tid == args.target]
     need_source = any(tid in COPY_TARGETS for tid in effective)
 
-    # --source only scopes Cursor's reinstall; native agents always track their
-    # marketplace. Warn rather than silently ignore it, so a user who passed
+    # --source only scopes the Cursor/Codex reinstall; native agents always track
+    # their marketplace. Warn rather than silently ignore it, so a user who passed
     # --source expecting it to pin every agent isn't misled.
     if args.source is not None and not args.silent:
         native_in_scope = [tid for tid in effective if tid in NATIVE_TARGETS]
         if native_in_scope:
             print(
-                f"WARNING: --source only applies to Cursor; "
+                f"WARNING: --source only applies to Cursor and Codex; "
                 f"{', '.join(native_in_scope)} update from their marketplace to latest.",
                 file=sys.stderr,
             )
@@ -363,15 +448,15 @@ def main(argv: list[str] | None = None) -> int:
     fresh_root: Path | None = None
     version: str | None = None
     try:
-        # Only Cursor needs the release source; native agents update from their
-        # own marketplace git. Skip the download entirely when no Cursor.
+        # Only Cursor and Codex need the release source; native agents update from
+        # their own marketplace git. Skip the download entirely when neither is present.
         if need_source:
             work_dir = Path(tempfile.mkdtemp(prefix="caadt-update-"))
             try:
                 fresh_root, version = acquire_source(work_dir, source=args.source)
             except RuntimeError as error:
                 # Don't abort the whole run — native agents can still update;
-                # Cursor will be reported as failed by update_agents.
+                # Cursor/Codex will be reported as failed by update_agents.
                 if not args.silent:
                     print(f"ERROR: {error}", file=sys.stderr)
 
