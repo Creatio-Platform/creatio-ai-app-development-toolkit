@@ -2523,13 +2523,28 @@ function commandBarGapClause(names, why) {
 }
 // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
 // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
+// The folded MENU ITEMS that carry a condition of their OWN, named with the button they hang under. A menu item's
+// `visible`/`enabled` binding is a behaviour rule exactly like a button's, and the worklist listed only the
+// buttons — so an item Classic enables on a selection reached the operator as an unconditional entry.
+function menuItemConditionClause(actions) {
+  const named = [];
+  for (const a of actions) {
+    for (const m of a.menuItems || []) {
+      if (!(m.conditions || []).length) continue;
+      named.push(`\`${m.caption || m.name}\` (under \`${a.name}\`): `
+        + m.conditions.map((c) => `\`${c.method}\` on \`${c.property}\``).join(" · "));
+    }
+  }
+  if (!named.length) return "";
+  return `; menu item(s) carrying their own condition — ${named.join(" ; ")} — must become Freedom state too, not an always-enabled entry`;
+}
 function listCommandBarDecision(section, actions) {
   if (!section) return null;
   const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
   const helperGap = commandBarGapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
     + commandBarGapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
   return { kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-    reason: `read from BOTH classic surfaces — the \`getSectionActions()\` menu and the buttons the section inserts through its own view \`diff\` (each row's Source cell says which)${helperGap} — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar` };
+    reason: `read from BOTH classic surfaces — the \`getSectionActions()\` menu and the buttons the section inserts through its own view \`diff\` (each row's Source cell says which)${helperGap}${menuItemConditionClause(actions)} — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar` };
 }
 function listRowActionDecisions(rowActions) {
   return rowActions.map((ra) => {
@@ -2823,23 +2838,34 @@ export function mapSectionView(sectionEff) {
   out.openItems = out.openItems.filter((e) => !foldedIntoMenus.has(e.name));
   return out;
 }
+// Unmodelled configuration is reported per ELEMENT, not per key: the real Opportunity grid declares eighteen such
+// keys and one row naming all of them is answerable, while eighteen rows are a wall. It is reported for any list
+// element that carries some, not only the grid — `controlColumnName` is the case the ticket names, not the only
+// case there is. Called from each routing arm rather than before them, so an arm can drop a key it just MODELLED.
+function pushGridConfig(out, item, region, props) {
+  if (!props.length) return;
+  out.gridConfig.push({ name: item.name, region, props, package: lastProvenancePackage(item) });
+}
 // One section-declared element, routed to the surface that can read it. Extracted from `mapSectionView`'s loop so
 // each arm stands on its own: the loop was over the cognitive-complexity bound with the label arm added, and the
 // routing rules are the part a reader actually needs to follow.
 function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }) {
   const region = listRegionOf(item, index);
   const openProps = listOpenProps(item);
-  // Unmodelled configuration is reported per ELEMENT, not per key: the real Opportunity grid declares eighteen
-  // such keys and one row naming all of them is answerable, while eighteen rows are a wall. It is reported for
-  // any list element that carries some, not only the grid — `controlColumnName` is the case the ticket names,
-  // not the only case there is.
-  if (openProps.length) out.gridConfig.push({ name: item.name, region, props: openProps,
-    package: lastProvenancePackage(item) });
-  if (region === LIST_REGION.ROW_ACTIONS) { out.rowActions.push(sectionDiffRowAction(item)); return; }
+  if (region === LIST_REGION.ROW_ACTIONS) { pushGridConfig(out, item, region, openProps); out.rowActions.push(sectionDiffRowAction(item)); return; }
   if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
-    out.commandBarActions.push(sectionDiffAction(item, listMenuEntriesOf(item, childrenByParent, foldedIntoMenus)));
+    const menuItems = listMenuEntriesOf(item, childrenByParent, foldedIntoMenus);
+    // `menu` is raised as an open item only when the fold read NOTHING out of it. A classic command-bar button
+    // declares its dropdown as `"menu":{"items":[…]}`, and `menu` is in none of the REMOVABLE_ITEM_PROPS families,
+    // so every menu-bearing button was reported as declaring a configuration key "this engine models on no field"
+    // — while the very same run folded that menu into `menuItems` and printed it in the Menu position cell. One
+    // element both mapped and re-disclosed as an unmapped-config question about the same key is the ⚠ noise the
+    // per-element grouping exists to avoid.
+    pushGridConfig(out, item, region, menuItems.length ? openProps.filter((k) => k !== "menu") : openProps);
+    out.commandBarActions.push(sectionDiffAction(item, menuItems));
     return;
   }
+  pushGridConfig(out, item, region, openProps);
   if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
     out.labels ??= [];
     out.labels.push(sectionViewLabel(item, region));

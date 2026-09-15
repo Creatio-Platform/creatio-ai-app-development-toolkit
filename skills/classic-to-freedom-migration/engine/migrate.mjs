@@ -1505,6 +1505,28 @@ function listColumnNotesFor({ resolvedListColumns, resolvedColumns, chainColumns
 // `sectionActions` folded across the chain, deduped by name. Layers arrive base->top; the TOP declaration wins,
 // matching `addRecordMiniPage` below. First-seen position is kept. `group` is renumbered across the merged list,
 // because every layer numbers its own groups from 0. Exported as the seam those three rules are asserted through.
+// The condition PAIRS one entry contributes, in the `{property, method}` shape the renderers read. An entry that
+// carries only the scalar pair contributes that pair: `getSectionActions` reads its condition off the menu node's
+// `Enabled` property, so an imperative entry with no `conditionProperty` binds `enabled` — naming that default is
+// what makes the two surfaces' conditions comparable at all.
+function conditionPairsOf(a) {
+  if (a?.conditions?.length) return a.conditions.filter((c) => c?.method);
+  if (a?.condition) return [{ property: a.conditionProperty || "enabled", method: a.condition }];
+  return [];
+}
+// Two entries under one name are usually two LAYERS of the same surface (the top one wins), but they can also be
+// the SAME button seen on BOTH surfaces: `getSectionActions` knows its `Enabled` binding, the view `diff` knows its
+// `visible` one. A plain field-by-field merge overwrote one list with the other, so the losing surface's condition
+// existed nowhere — a button Classic enables only on a selection shipped always-enabled. Merge per PROPERTY
+// instead: the later entry wins on a property it binds, and a property only the earlier entry binds survives.
+function mergeConditionPairs(prev, next) {
+  const byProp = new Map();
+  for (const c of [...conditionPairsOf(prev), ...conditionPairsOf(next)]) {
+    const property = c.property || "enabled";
+    byProp.set(property, { ...c, property });
+  }
+  return [...byProp.values()];
+}
 export function mergeSectionActions(fromLayers = []) {
   const byName = new Map();
   for (const a of fromLayers) {
@@ -1514,8 +1536,12 @@ export function mergeSectionActions(fromLayers = []) {
     const prev = byName.get(name);
     // Merge FIELD BY FIELD. A top layer need not repeat every field, and an item carries every key with `null`
     // when absent, so replacing the object (or a plain spread) blanks a value only the base layer declared.
+    // `conditions` is merged per property rather than overwritten (see `mergeConditionPairs`); the scalar
+    // `condition`/`conditionProperty` pair keeps the existing later-wins precedence, so every renderer and golden
+    // that reads it is unchanged — the condition the other surface owns is now also in `conditions`, which is what
+    // the command-bar condition cell and the `list-command-bar` decision actually render.
     byName.set(name, prev
-      ? { ...prev, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)), name, order: prev.order }
+      ? { ...prev, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)), name, order: prev.order, conditions: mergeConditionPairs(prev, a) }
       : { ...a, name, order: byName.size });
   }
   const merged = [...byName.values()].sort((x, y) => x.order - y.order);
@@ -2724,7 +2750,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || verifyIncomplete;
+  // ⛔ LIST GATE (ENG-94714) — the LIST deliverable's own verdict. It gates exactly like the three above: the plan
+  // already prints "⛔ The list page is NOT approvable", and without this leg the CLI still exited 0 next to that
+  // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
+  // could build the Freedom list from a section whose `diff` was never readable.
+  const listGateBad = result.listGate?.blocked;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -2741,6 +2772,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
+  if (listGateBad) process.stderr.write("migrate.mjs: ⛔ LIST GATE BLOCKED — the list page is NOT approvable (the form page may still be). " + result.listGate.reasons.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
   // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
   // EVERY mode and describe the PLAN: a builder cannot build its way out of them, so "loop until --verify is

@@ -491,9 +491,18 @@ function commandBarConditionCell(a) {
 // The `Menu position` cell: the separator-delimited group, the submenu container, and the folded menu. Naming the
 // items (and the classic handler behind each) is the whole difference between a menu that reaches the plan and one
 // that vanishes with its handlers.
+function menuItemCell(m) {
+  // The item's OWN conditions, not only its caption and handler. `listMenuEntriesOf` records them on every folded
+  // MENU_ITEM, and until this line nothing rendered them: a section-declared item with `enabled:{bindTo}` reached
+  // the plan looking unconditional, which is the same always-enabled port the button-level cell exists to prevent.
+  const conds = (m.conditions || []).map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ");
+  return `\`${esc(m.caption || m.name)}\``
+    + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")
+    + (conds ? ` (${conds})` : "");
+}
 function commandBarPlacementCell(a) {
   const menu = (a.menuItems || []).length
-    ? " · menu: " + a.menuItems.map((m) => `\`${esc(m.caption || m.name)}\`` + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")).join(", ")
+    ? " · menu: " + a.menuItems.map(menuItemCell).join(", ")
     : "";
   return [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
 }
@@ -3144,6 +3153,11 @@ export function planGaps(result) {
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
   if (result?.structure?.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
   if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  // ENG-94714 — the LIST deliverable's own gate. Without this leg `listGate.blocked` was prose in the plan's
+  // `### List page` block and nothing else: `planGaps` stayed `[]`, so the CLI exited 0 and every consumer that
+  // gates on `planGaps.length` (the engine README's own contract, the freedom-build-executor) treated a list
+  // page built from an unreadable section `diff` as buildable. Same shape as the legs above so no caller changes.
+  if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   return g;
 }
 function verifyVerdict(missing, unverified) {

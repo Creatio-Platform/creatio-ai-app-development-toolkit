@@ -4316,7 +4316,7 @@ const svMenuSection = [{ pkg: "OrderInSales", body: `define("XSection",[],functi
   + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.BulkCaption"},"menu":{"items":[]}}},`
   + `{"operation":"insert","name":"BulkActionsMenu","parentName":"BulkActionsButton","propertyName":"menu","values":{"itemType":8}},`
   + `{"operation":"insert","name":"BulkAssignMenuItem","parentName":"BulkActionsMenu","propertyName":"items","index":0,`
-  + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.BulkAssignCaption"},"click":{"bindTo":"onBulkAssign"}}},`
+  + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.BulkAssignCaption"},"click":{"bindTo":"onBulkAssign"},"enabled":{"bindTo":"isAnySelected"}}},`
   + `{"operation":"insert","name":"BulkExportMenuItem","parentName":"BulkActionsMenu","propertyName":"items","index":1,`
   + `"values":{"itemType":9,"caption":{"bindTo":"Resources.Strings.BulkExportCaption"},"click":{"bindTo":"onBulkExport"}}},`
   + `{"operation":"insert","name":"HiddenButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":6,`
@@ -4344,6 +4344,43 @@ check("review/blocker: each folded item keeps the CLASSIC handler behind it — 
   () => { const handlers = new Set((svMenuAction("BulkActionsButton")?.menuItems || []).map((m) => m.classicHandler));
     return handlers.has("onBulkAssign") && handlers.has("onBulkExport"); },
   () => svMenuAction("BulkActionsButton")?.menuItems);
+// ENG-94714 (review 3): a folded item's OWN condition. `listMenuEntriesOf` recorded `conditions` on every item
+// from the start, and nothing rendered them — the computed-then-unread pattern already found on `labels` and
+// `foldedIntoMenus`, arriving a third time. Neither fixture item bound a condition, so the goldens could not see
+// it; `BulkAssignMenuItem` now carries `enabled:{bindTo:"isAnySelected"}` so both halves are pinned.
+check("ENG-94714 review 3: a folded MENU_ITEM carries its OWN condition into the ChangeSet, with the property it binds",
+  () => { const m = (svMenuAction("BulkActionsButton")?.menuItems || []).find((x) => x.name === "BulkAssignMenuItem");
+    return m?.conditions?.length === 1 && m.conditions[0].property === "enabled" && m.conditions[0].method === "isAnySelected"; },
+  () => svMenuAction("BulkActionsButton")?.menuItems);
+check("ENG-94714 review 3: …and the plan RENDERS it in the button's Menu position cell — an item that reaches the ChangeSet conditioned and the plan unconditioned reads as an always-enabled port",
+  () => { const row = renderPlan(svMenuRun, {}).split(String.fromCodePoint(10)).find((l) => /\| `BulkActionsButton`/.test(l));
+    return !!row && /`isAnySelected` on `enabled`/.test(row); },
+  () => renderPlan(svMenuRun, {}).split(String.fromCodePoint(10)).filter((l) => /BulkActionsButton/.test(l)).slice(0, 3));
+check("ENG-94714 review 3: …and the `list-command-bar` worklist item names it too — the worklist listed only the BUTTONS' conditions, so a conditioned item reached the operator as an unconditional entry",
+  () => { const d = (svMenuList?.needsDecision || []).find((x) => x.kind === "list-command-bar");
+    return !!d && /BulkAssignCaption/.test(d.reason) && /`isAnySelected` on `enabled`/.test(d.reason); },
+  () => (svMenuList?.needsDecision || []).find((x) => x.kind === "list-command-bar"));
+// ENG-94714 (review 3): `menu` is MODELLED on the list path — the fold reads the dropdown structurally out of the
+// child items. Raising it as a `list-grid-config` open item made every menu-bearing button carry a ⚠ Confirm row
+// asking about a key the same run had just mapped and printed, which is exactly the skim-past noise the
+// per-element grouping exists to prevent.
+check("ENG-94714 review 3: a button whose `menu` WAS folded raises no `list-grid-config` question about that key — one element cannot be both mapped and re-disclosed as unmapped config about the same key",
+  () => !(svMenuList?.needsDecision || []).some((d) => d.kind === "list-grid-config"
+    && /BulkActionsButton/.test(d.item) && /`menu`/.test(d.reason)),
+  () => (svMenuList?.needsDecision || []).filter((d) => d.kind === "list-grid-config").map((d) => d.item));
+// Anti-vacuity for the line above: the key is dropped only because the fold READ it. A `menu` the fold read
+// nothing out of is still an open question, so the filter cannot be a blanket "never ask about `menu`".
+const svEmptyMenuRun = runMigration({ ...svManifest(), section: { schemas: [{ pkg: "OrderInSales",
+  body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:[`
+    + `{"operation":"insert","name":"EmptyMenuButton","parentName":"CombinedModeActionButtonsCardLeftContainer","propertyName":"items","index":1,`
+    + `"values":{"itemType":5,"caption":{"bindTo":"Resources.Strings.EmptyCaption"},"menu":{"items":[]}}}`
+    + `]};});` }], seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("ENG-94714 review 3 (anti-vacuity): a button whose `menu` folded NOTHING still raises the key as an open item — the drop is 'we modelled it', not 'we never ask about `menu`'",
+  () => (svEmptyMenuRun.listChangeSet?.needsDecision || []).some((d) => d.kind === "list-grid-config"
+    && /EmptyMenuButton/.test(d.item) && /`menu`/.test(d.reason)),
+  () => (svEmptyMenuRun.listChangeSet?.needsDecision || []).filter((d) => d.kind === "list-grid-config"));
 check("review/blocker (anti-vacuity): a MENU_ITEM that NO button folded is still disclosed as a named open item rather than silently skipped — that is the half of AC1 the blanket `OWNER.FOLDED` skip removed",
   () => (svMenuView?.openItems || []).some((i) => i.name === "OrphanMenuItem"),
   () => svMenuView?.openItems);
@@ -4410,6 +4447,52 @@ check("ENG-94714: the blocked list page still RENDERS its partial reading, with 
 check("ENG-94714: a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
 
+/* --- ENG-94714 (review 3): the list gate has to be CONSUMED, and all four of its arms have to be pinned ------
+   The gate was prose: `renderListPageBlock` printed the ⛔ paragraph and nothing else read `listGate`, so the CLI
+   exited 0 next to a banner saying the list page is not approvable — and the build executor, which reads the exit
+   code / `planGaps` rather than the Markdown, would build the Freedom list from an unreadable section. And of the
+   four blocking reasons only the parse-error arm was asserted, although two fixtures already reach two more. --- */
+check("ENG-94714 review 3: a blocked list gate reaches `planGaps` — the plan-level contract every consumer gates on, so the exit code matches the ⛔ the plan prints instead of contradicting it",
+  () => { const gaps = planGaps(svBadRun);
+    return gaps.some((g) => /^list gate BLOCKED \(\d+ section-evidence gap\(s\)\)$/.test(g)); },
+  () => planGaps(svBadRun));
+check("ENG-94714 review 3: …and a healthy section adds NO such leg — the new gap is the gate firing, never a leg every run carries",
+  () => !planGaps(svRun).some((g) => /list gate/.test(g)),
+  () => planGaps(svRun));
+check("ENG-94714 review 3: the RECORD page's own gate reasons are untouched by that leg — `planGaps` gained a list leg, it did not re-attribute the form page's",
+  () => JSON.stringify(svBadRun.gate?.reasons) === JSON.stringify(svRun.gate?.reasons),
+  () => ({ bad: svBadRun.gate?.reasons, healthy: svRun.gate?.reasons }));
+// ARM 2 — unresolved parents, reached by the seedless run. Its remedy names `section.seed`, and that string is the
+// operator's ONLY pointer to the key: the QA guidance for AC-4 is literally "omit `section.seed` and re-run".
+check("ENG-94714 review 3: the seedless run BLOCKS the list gate on unresolved parents and its remedy names `section.seed` — the arm the AC-4 verification walks, previously unasserted",
+  () => { const reasons = (svNoSeedRun.listGate?.reasons || []).join(" ");
+    return svNoSeedRun.listGate?.blocked === true && /could not resolve parent/.test(reasons) && /section\.seed/.test(reasons); },
+  () => svNoSeedRun.listGate);
+check("ENG-94714 review 3: …and that run's plan prints the ⛔ verdict in its List page block — SKILL.md 4.0 promises exactly this for exactly this case",
+  () => /⛔ \*\*The list page is NOT approvable/.test(renderPlan(svNoSeedRun, {})),
+  () => renderPlan(svNoSeedRun, {}).split(String.fromCodePoint(10)).filter((l) => /approvable/.test(l)).slice(0, 4));
+// ARM 3 — a fold correctness warning. The seedless run's `merge DataGrid` lands on nothing, which is a
+// CORRECTNESS severity by the fold's own definition, and that arm had no assertion either.
+check("ENG-94714 review 3: a section fold CORRECTNESS warning blocks the list gate too — a `merge` onto an element no layer defines means the reading is wrong, not merely unrepresented",
+  () => /correctness warning/.test((svNoSeedRun.listGate?.reasons || []).join(" ")),
+  () => svNoSeedRun.listGate?.reasons);
+// ARM 4 — the structural parse diagnostic. No fixture reached it at all: a section whose `diff` is a non-static
+// expression parses fine and yields NO items, so without this arm the plan would read as a section that declares
+// nothing rather than one this engine could not read.
+const svDynSection = [{ pkg: "OrderInSales",
+  body: `define("XSection",[],function(){var d=makeDiff();return{entitySchemaName:"X",methods:{},diff:d};});` }];
+const svDynRun = runMigration({ ...svManifest(), section: { schemas: svDynSection, seed: svSeed,
+  listColumns: { success: true, source: "schema-default", sectionSchema: "XSection", entity: "X", columns: ["Name"] } } },
+  { baseDir: FIX });
+check("ENG-94714 review 3: a section whose `diff` is not statically resolvable blocks the list gate on the STRUCTURAL-diagnostic arm, naming the field and the diagnostic kind",
+  () => { const reasons = (svDynRun.listGate?.reasons || []).join(" ");
+    return svDynRun.listGate?.blocked === true && /could not statically resolve structural field/.test(reasons)
+      && /diff \(unresolved-identifier\)/.test(reasons); },
+  () => svDynRun.listGate);
+check("ENG-94714 review 3: …and that unreadable section leaves the RECORD page's gate reasons identical to the healthy run — the list gate is scoped to the list deliverable, in every arm",
+  () => JSON.stringify(svDynRun.gate?.reasons) === JSON.stringify(svRun.gate?.reasons),
+  () => ({ dynamic: svDynRun.gate?.reasons, healthy: svRun.gate?.reasons }));
+
 /* --- ENG-94714 (review 1): the row action's condition PROPERTY, and the `openItems` safety net --------------
    Two arms the fixture above could not reach. A separate section chain rather than more items on `svSection`,
    because the counts and the one-command-bar-action assertions above are pins on THAT chain's shape. --- */
@@ -4433,6 +4516,13 @@ const svOpenRun = runMigration({ ...svManifest(), section: { schemas: svOpenSect
   { baseDir: FIX });
 const svOpenList = svOpenRun.listChangeSet;
 const svOpenSpec = renderPlan(svOpenRun, {});
+
+// ARM 2 again, on its own — the seedless run also trips the fold's correctness arm, so a fixture that reaches
+// unresolved parents ALONE is what proves the arm fires on its own rather than riding the other one.
+check("ENG-94714 review 3: a section whose only gap is an unresolved parent still blocks, and the reason NAMES the container — with a seed present, this arm has nothing else to ride on",
+  () => { const reasons = (svOpenRun.listGate?.reasons || []).join(" ");
+    return svOpenRun.listGate?.blocked === true && /SectionCustomZoneContainer/.test(reasons); },
+  () => svOpenRun.listGate);
 
 check("ENG-94714 review 1: a row action bound to `enabled` reaches the ChangeSet WITH that property — `listRowActionSpec` dropped `conditionProperty` on the way out of the fold, so every row action arrived property-less",
   () => { const ra = (svOpenList?.rowActions || []).find((x) => x.name === "DataGridActiveRowQualifyAction");
@@ -4800,6 +4890,19 @@ check("ENG-94714: on that collision the section `diff` wins the contested fields
 check("ENG-94714: the merge is FIELD BY FIELD on that collision too — a caption only `getSectionActions` declares survives the diff entry that carries none",
   (() => { const a = secActCollided(); return !!a && a.caption === "ImperativeOnlyCaption"; })(),
   () => secActCollided());
+// …and the LOSING surface's condition is not lost with the contest. `getSectionActions` reads its condition off
+// the menu node's `Enabled` property and the `diff` binds `visible`: the two surfaces answer DIFFERENT questions
+// about the same button, so overwriting one with the other shipped a button Classic enables only on a selection
+// as always-enabled — with `isAnySelected` present nowhere in the ChangeSet, the plan or the worklist.
+check("ENG-94714 review 3: on that collision BOTH properties survive — the diff's `visible` binding and the imperative surface's `enabled` one, each under the property it actually binds",
+  (() => { const a = secActCollided();
+    const byProp = Object.fromEntries((a?.conditions || []).map((c) => [c.property, c.method]));
+    return byProp.visible === "getIsStageActive" && byProp.enabled === "isAnySelected"; })(),
+  () => secActCollided()?.conditions);
+check("ENG-94714 review 3: …and the plan PRINTS the recovered enablement condition on that button's row — a condition that reaches the ChangeSet and no surface is the same silent drop, one step later",
+  (() => { const row = renderPlan(secActCollide, {}).split(String.fromCodePoint(10)).find((l) => /\| `foldedButton`/.test(l));
+    return !!row && /`isAnySelected` on `enabled`/.test(row) && /`getIsStageActive` on `visible`/.test(row); })(),
+  () => renderPlan(secActCollide, {}).split(String.fromCodePoint(10)).filter((l) => /foldedButton/.test(l)).slice(0, 3));
 check("ENG-95254: `mergeSectionActions` merges FIELD BY FIELD — a partial top-layer override keeps the base layer's condition and icon",
   (() => { const base = { name: "setOwner", caption: "BaseCaption", condition: "isSingleSelected", icon: "IconA", package: "Base", order: 0, group: 0 };
     const top = { name: "setOwner", caption: "TopCaption", condition: null, icon: null, package: "Top", order: 0, group: 0 };
