@@ -2177,11 +2177,12 @@ function readSchemaBody(e, baseDir) {
     throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
   const base = path.resolve(baseDir);
   const resolved = path.resolve(base, e.file);
-  // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
-  // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
-  // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
-  // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
-  if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
+  // Containment applies to EVERY `file`, relative OR absolute (review — arbitrary-file-read Blocker): the manifest is
+  // stand-derived / untrusted, so a `file` that resolves outside the manifest base dir — a `../…` escape OR an
+  // absolute path like `/etc/passwd` — is refused, never read into the plan. A caller that legitimately needs files
+  // from a directory sets `baseDir` to contain them (the golden fixtures pass `baseDir: FIX` with relative `file`s);
+  // no real manifest uses `file` at all (bodies are inlined), so nothing depends on reading outside `baseDir`.
+  if (resolved !== base && !resolved.startsWith(base + path.sep))
     throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
   return fs.readFileSync(resolved, "utf8");
 }

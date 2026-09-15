@@ -4551,11 +4551,15 @@ check("E5: an entry with neither 'body' nor 'file' throws a clear, named error",
   /neither an inline 'body' nor a string 'file'/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P" }] }, { baseDir: FIX })) || ""));
 check("E5: a schema 'file' escaping the manifest base dir is rejected (path traversal)",
   /escapes the manifest base directory/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P", file: "../../../etc/passwd" }] }, { baseDir: FIX })) || ""));
-// containment applies to RELATIVE escapes only — an ABSOLUTE path outside baseDir is a legit caller choice (the
-// fixtures pass path.join(FIX, …)); rejecting it broke `npm test` from the engine dir (CWD ≠ fixtures root).
-check("E5: an ABSOLUTE file path outside baseDir is honored (not mis-rejected as traversal), regardless of CWD",
-  (() => { const r = runMigration({ entity: "SupportUnit", schemas: [{ pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") }] }, { baseDir: os.tmpdir() });
+// review (Kravchuk Blocker) — containment applies to EVERY file, absolute included: an ABSOLUTE file UNDER baseDir is
+// honored (so `npm test` from any CWD works — the fixtures pass an absolute `baseDir: FIX` and their files resolve
+// under it), but an ABSOLUTE file OUTSIDE baseDir (`/etc/passwd`, or here a tmpdir path) is REJECTED as traversal —
+// the manifest is untrusted, so it must not read arbitrary local files into the plan.
+check("E5: an ABSOLUTE file path UNDER baseDir is honored (read succeeds), regardless of CWD",
+  (() => { const r = runMigration({ entity: "SupportUnit", schemas: [{ pkg: "SupportCalendar", file: path.join(FIX, "supportunitemployee/SupportCalendar_base.js") }] }, { baseDir: FIX });
     return r.entity === "SupportUnit" && !r.parseErrors.some((e) => /escapes/.test(e.error || "")); })());
+check("E5: an ABSOLUTE file path OUTSIDE baseDir is REJECTED as traversal (no arbitrary-file read)",
+  /escapes the manifest base directory/.test(threw(() => runMigration({ entity: "X", schemas: [{ pkg: "P", file: path.join(os.tmpdir(), "evil-schema.js") }] }, { baseDir: FIX })) || ""));
 
 // Major 4 — field ORDER drives row assignment (not Map order); rowSpan occupancy prevents vertical overlap.
 const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
