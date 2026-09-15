@@ -226,6 +226,11 @@ export const DATA_VALUE_TYPE = {
   FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
   FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
 };
+// ENG-95806 — the friendly label of the page top area, and the fallback region for a card widget whose host
+// chain does not resolve. ONE source shared by the mapper (which EMITS it as the fallback) and the design spec
+// (which maps it to its friendly label / orders regions by it) so the sentinel can never drift across the module
+// boundary — a rename here reaches both sides at once.
+export const HEADER_TOP_REGION = "Header / top";
 // Canonical Classic resource-key normalization — strip the `$`-binding sigil, the `Resources.Strings.` prefix,
 // and any `#<culture>` anchor. ONE source so the mapper (which STORES the key) and the design spec (which
 // LOOKS IT UP) agree: they diverged before — the spec kept the `#anchor`, so `Resources.Strings.Foo#bar`
@@ -1427,6 +1432,13 @@ function normalizeModules(m) {
       // `dashboardConfig`, never on `viewModelConfig` itself. Recording the key lets the mapper exclude that
       // shape instead of mistaking every dashboard for a profile card.
       hasDashboardConfig: vmc.dashboardConfig != null && typeof vmc.dashboardConfig === "object",
+      // ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart stored in SysWidgetDashboard, e.g. the
+      // KPI charts on a Campaign page) carries the two coordinates the migrator needs to convert it: `recordId`
+      // (the SysWidgetDashboard record) and `widgetKey` (which widget in it). normalizeModules dropped both as
+      // non-boolean values, leaving the widget an unconvertible generic `component`. Keep them so mapWidgets can
+      // recognise the widget and emit a concrete card-widget decision; a module missing EITHER stays generic.
+      widgetKey: strOrNull(vmc.widgetKey),
+      recordId: strOrNull(vmc.recordId),
       // display flags the classic card toggled (IsPhoneVisible, …) — booleans on viewModelConfig. They say
       // WHICH extra values the card showed, which the Freedom native card may not cover.
       displayFlags: Object.fromEntries(Object.entries(vmc).filter(([, v]) => typeof v === "boolean")),
