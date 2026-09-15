@@ -16,7 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
-import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
@@ -201,8 +201,26 @@ function widgetSource(w) {
 }
 function rowsForWidgets(widgets) {
   return (widgets || []).map((w) => {
-    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION;
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+  });
+}
+// ENG-95806 — the friendly Region label for a card widget is `regionOf(region)`, the SAME resolver every other
+// printer sink uses: `regionOf` already maps `SideAreaProfileContainer` → "Side profile" and returns the
+// `Header / top` sentinel unchanged, so a dedicated helper only duplicated it (review d-baranovskyi). Call
+// `regionOf(w.region)` directly at the Layout row, the checklist Layout-by-region group and the Coverage/--verify
+// row so the three can never drift and the raw container name never leaks to one of them.
+// ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
+// Layout row in the region it resolved to, naming the widgetKey and the migrator-driven conversion (Source =
+// SysWidgetDashboard + the record). The full grouping + process-call + Failed-means-blocked instructions stay in
+// the ⚠ Confirm item (the card-widget needsDecision reason). `region`/`recordId`/`widgetKey` are stand-derived, so
+// `esc` neutralizes hostile tokens at this sink (same convention as every other row builder).
+function rowsForCardWidgets(cardWidgets, regionOf) {
+  return (cardWidgets || []).map((w) => {
+    const region = regionOf(w.region);
+    const src = `from SysWidgetDashboard (record \`${esc(w.recordId)}\`)`;
+    const note = "→ convert via `ConvertCardWidgetsProcess` (group by recordId, batch widgetKeys); place the returned Freedom element — do NOT hand-build a chart (a Failed conversion stays TODO/BLOCKED)";
+    return { region, sort: 2, cells: [esc(w.widgetKey), "Card widget", src, DASH, note] };
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
@@ -568,7 +586,7 @@ function orderRegions(rows) {
   const regionRank = (r) => {
     if (r.startsWith("Side profile") || r === "Header") return 0;
     if (r.startsWith("Tab ")) return 1;
-    if (r === "Header / top") return 2;
+    if (r === HEADER_TOP_REGION) return 2;
     if (r === "Card actions") return 3;
     return 4;
   };
@@ -710,6 +728,7 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion),
     ...rowsForWidgets(cs.widgets),
+    ...rowsForCardWidgets(cs.cardWidgets, regionOf),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
     ...rowsForTableElements(cs.tableElements, regionOf),
@@ -1743,7 +1762,7 @@ export function renderPlan(result, opts = {}) {
 // Form — Layout checklist rows, grouped at top-level tab/region (fields counted, details/widgets listed).
 // Own fn so checklistGroups stays under Sonar CC 15.
 function buildLayoutGroupRows(cs, regionOf) {
-  const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
+  const top = (r) => { const s = String(r).split(" › ")[0]; return s === HEADER_TOP_REGION ? "Header" : s; };
   const order = [], byRegion = new Map();
   const add = (region, label) => {
     const k = top(region);
@@ -1753,7 +1772,10 @@ function buildLayoutGroupRows(cs, regionOf) {
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
+  for (const w of cs.cardWidgets || []) {
+    add(regionOf(w.region), `${esc(w.widgetKey)} (card widget)`);
+  }
   return order.map((k) => {
     const e = byRegion.get(k);
     const parts = [];
@@ -1796,7 +1818,7 @@ function standardFeatureRows(cs) {
   return rows;
 }
 
-function buildCoverageRows(cs, pm, result) {
+function buildCoverageRows(cs, pm, result, regionOf) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -1825,6 +1847,15 @@ function buildCoverageRows(cs, pm, result) {
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and a builder would never fetch their documentation.
   cover.push(...tableElementRows(cs));
+  // ENG-95806 — one on-stand row per CARD WIDGET: the converted+placed Freedom element is a config record not
+  // derivable from get-page's component list (it depends on the migrator's ConvertCardWidgetsProcess), so it gates
+  // via an explicit on-stand evidence boolean the agent supplies in `--built` (`built["cardWidget:<recordId>:<widgetKey>"]`):
+  // true → Done; false → MISSING (a Failed conversion stays flagged/BLOCKED, never a hand-built substitute); absent →
+  // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
+  // The key is scoped by BOTH recordId and widgetKey: the same widgetKey can legitimately recur under different
+  // recordId's (the recordId-batching model), so keying by widgetKey alone would collapse two widgets into one gate.
+  for (const w of cs.cardWidgets || [])
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -2312,7 +2343,7 @@ export function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf));
   // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
   const logicItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
