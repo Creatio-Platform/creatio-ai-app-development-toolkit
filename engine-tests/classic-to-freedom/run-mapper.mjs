@@ -76,7 +76,21 @@ check("3 details as Expanded list with dependency",
   cs.details.length === 3 && cs.details.some(d => d.detailSchema === "SupportScheduleEmployeeDetail"
     && d.dependency?.attributePath === "SupportUnit" && d.dependency?.relationPath === "PDS.Id"));
 check("setName -> handler stub", cs.handlerStubs.some(h => h.sourceMethod === "setName"));
-check("chart widgets flagged as needsDecision (component)", cs.needsDecision.some(n => n.kind === "component"));
+// ENG-95806 — the CardWidgetModule now carries BOTH coordinates (widgetKey + recordId), so it is a concrete
+// `card-widget` decision (was the vague `component`), carrying widgetKey/recordId and a resolved region.
+const suCardWidget = cs.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart");
+check("card widget → one card-widget decision (not a generic component)",
+  !!suCardWidget && !cs.needsDecision.some(n => n.kind === "component" && n.item === "KpiChart"),
+  () => `card-widget decisions: ${JSON.stringify(cs.needsDecision.filter(n => n.kind === "card-widget"))}`);
+check("card-widget decision carries widgetKey + recordId + region",
+  suCardWidget?.widgetKey === "KpiChart" && suCardWidget?.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!suCardWidget?.region,
+  () => JSON.stringify(suCardWidget));
+check("card widget carried into changeSet.cardWidgets[] with coordinates",
+  (cs.cardWidgets || []).some(w => w.key === "KpiChart" && w.widgetKey === "KpiChart" && w.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!w.region),
+  () => JSON.stringify(cs.cardWidgets));
+check("card widget is NOT double-reported as an unmapped component (accountedFor covers the module key)",
+  !cs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "KpiChart"),
+  () => JSON.stringify(cs.needsDecision.filter(n => /component/.test(n.kind))));
 
 // Contract sanity — TRUE dependency order (F1), with base-template seed (F2).
 const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
@@ -138,6 +152,172 @@ check("F3: layout is NOT flattened (≥2 distinct field containers)",
   new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
 check("F3: no field left in the old catch-all GeneralInfoTabContainer",
   !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
+
+/* ---- ENG-95806: record-scoped CARD WIDGETS (SysWidgetDashboard) → concrete card-widget decisions ---- */
+// Synthetic modules carry the already-normalized shape (widgetKey/recordId directly), mirroring what
+// engine.mjs normalizeModules projects from the real config.parameters.viewModelConfig for the file fixture.
+// Grouping: two widgets sharing ONE recordId → two card-widget decisions that group into a single recordId
+// (so the agent makes ONE ConvertCardWidgetsProcess call for the pair).
+const cwGroup = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "KpiA", moduleName: "CardWidgetModule", widgetKey: "KpiA", recordId: "rec-1" },
+  { key: "KpiB", moduleName: "CardWidgetModule", widgetKey: "KpiB", recordId: "rec-1" },
+] })]));
+const cwGroupDec = cwGroup.needsDecision.filter(n => n.kind === "card-widget");
+check("ENG-95806: two card widgets → two card-widget decisions, both carrying recordId",
+  cwGroupDec.length === 2 && cwGroupDec.every(d => d.recordId === "rec-1"),
+  () => JSON.stringify(cwGroupDec));
+check("ENG-95806: two widgets sharing one recordId group into a SINGLE recordId (one process call), both in cardWidgets[]",
+  (cwGroup.cardWidgets || []).length === 2 && new Set((cwGroup.cardWidgets || []).map(w => w.recordId)).size === 1,
+  () => JSON.stringify(cwGroup.cardWidgets));
+check("ENG-95806: grouped card widgets emit NO generic component decision",
+  !cwGroup.needsDecision.some(n => n.kind === "component"));
+
+// Fallback: a module missing EITHER coordinate degrades to the old generic `component` decision (never dropped).
+const cwMissing = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NoRecord", moduleName: "CardWidgetModule", widgetKey: "NoRecord" },   // widgetKey but NO recordId
+  { key: "NoKey", moduleName: "CardWidgetModule", recordId: "rec-9" },          // recordId but NO widgetKey
+] })]));
+check("ENG-95806: a widget missing recordId degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoRecord")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoRecord"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: a widget missing widgetKey degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoKey")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoKey"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: coordinate-incomplete widgets are NOT carried into cardWidgets[]",
+  !(cwMissing.cardWidgets || []).length, () => JSON.stringify(cwMissing.cardWidgets));
+
+// No-duplicate + region: a card widget WITH a host diff item under a tab — accountedFor covers the module key AND
+// the host diff-item name (so mapUnmappedDrop does not re-report it), and the region resolves from that host.
+const cwHost = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
+  modules: [{ key: "KpiChart", moduleName: "CardWidgetModule", widgetKey: "KpiChart", recordId: "rec-5" }],
+  diff: [
+    di({ name: "AnalyticsTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+    di({ name: "KpiChart", parentName: "AnalyticsTab", propertyName: "items", itemType: 0 }),
+  ] })]));
+check("ENG-95806: no duplicate unmapped-component / component for a card widget with a host diff item",
+  !cwHost.needsDecision.some(n => (n.kind === "unmapped-component" || n.kind === "component") && n.item === "KpiChart"),
+  () => JSON.stringify(cwHost.needsDecision.filter(n => /component/.test(n.kind))));
+check("ENG-95806: card-widget region resolves from the host diff item's parent tab (AnalyticsTab)",
+  cwHost.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart")?.region === "AnalyticsTab"
+  && (cwHost.cardWidgets || [])[0]?.region === "AnalyticsTab",
+  () => JSON.stringify(cwHost.cardWidgets));
+
+// ENG-95806 (review F3) — a module that satisfies BOTH shapes (masterColumnName AND recordId+widgetKey) is handled
+// by exactly ONE phase. mapProfileCards runs first and accounts for the key, so the module is a profile-card and
+// mapWidgets must NOT also emit a card-widget decision for it (predicates are now mutually exclusive → no double
+// decision, which R1 forbids). Genuine card widgets never carry masterColumnName, so no real widget regresses.
+const cwOverlap = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "DualModule", moduleName: "DualModule", masterColumnName: "Requester", widgetKey: "Dual", recordId: "rec-2" },
+] })]));
+check("ENG-95806 F3: a masterColumnName + recordId + widgetKey module is a profile-card, NOT also a card-widget (exactly one decision)",
+  cwOverlap.needsDecision.filter(n => (n.kind === "profile-card" || n.kind === "card-widget") && n.item === "DualModule").length === 1
+  && cwOverlap.needsDecision.some(n => n.kind === "profile-card" && n.item === "DualModule")
+  && !cwOverlap.needsDecision.some(n => n.kind === "card-widget" && n.item === "DualModule"),
+  () => JSON.stringify(cwOverlap.needsDecision.filter(n => n.item === "DualModule")));
+check("ENG-95806 F3: the overlap module is NOT carried into cardWidgets[]",
+  !(cwOverlap.cardWidgets || []).some(w => w.key === "DualModule"),
+  () => JSON.stringify(cwOverlap.cardWidgets));
+
+// ENG-95806 (review d-baranovskyi) — recognition is by the two COORDINATES, not `moduleName`. A module with a
+// non-`CardWidgetModule` name carrying BOTH coordinates is still a card widget (only CardWidgetModule carries both
+// in a real classic body, so keying off the name would be redundant AND would silently mis-scope a variant). Locks
+// the name-independence the reference documents.
+const cwNamed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NotACardWidgetName", moduleName: "SomeCompletelyUnrelatedModule", widgetKey: "wk1", recordId: "rec-n" },
+] })]));
+check("ENG-95806: recognition is name-independent — a non-CardWidgetModule name with both coordinates → card-widget decision",
+  cwNamed.needsDecision.some(n => n.kind === "card-widget" && n.item === "NotACardWidgetName" && n.recordId === "rec-n")
+  && (cwNamed.cardWidgets || []).some(w => w.key === "NotACardWidgetName" && w.widgetKey === "wk1"),
+  () => JSON.stringify(cwNamed.needsDecision.filter(n => n.item === "NotACardWidgetName")));
+
+// ENG-95806 (review d-baranovskyi) — a card widget INHERITED from a base/seed layer (`fromTemplate`) is
+// base-template chrome and must NOT emit a per-page card-widget decision: the card-widget branch bypasses the
+// base-chrome evidence gate, so the dispatch loop gates on `!fromTemplate` instead. Only a card widget the page's
+// OWN layer declares becomes a decision.
+const cwSeed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X" })], { seedTemplate: [L("Seed", { entity: "X", modules: [
+  { key: "InheritedKpi", moduleName: "CardWidgetModule", widgetKey: "InheritedKpi", recordId: "rec-seed" },
+] })] }));
+check("ENG-95806: an INHERITED (fromTemplate) card widget emits NO card-widget decision and is not carried into cardWidgets[]",
+  !cwSeed.needsDecision.some(n => n.kind === "card-widget" && n.item === "InheritedKpi")
+  && !(cwSeed.cardWidgets || []).some(w => w.key === "InheritedKpi"),
+  () => JSON.stringify({ decisions: cwSeed.needsDecision.filter(n => n.item === "InheritedKpi"), cardWidgets: cwSeed.cardWidgets }));
+
+/* ---- ENG-95806 (review F1) — the DESIGN-SPEC / CHECKLIST PRINTER output for a card widget (rowsForCardWidgets,
+   buildLayoutGroupRows, buildCoverageRows + the --verify onstand gate) is asserted on RENDERED output, not just the
+   changeSet. A regression that drops a card widget from the Layout table or the --verify checklist would otherwise
+   still pass the changeSet-level cases above, defeating the "nothing silently skipped" guarantee (R2). A side-profile
+   card widget also locks the friendly-region-label consistency fix (F2): the Layout row, the checklist Layout-by-region
+   group AND the Coverage row must all read "Side profile", never the raw "SideAreaProfileContainer". ---- */
+const cwRenderCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [{ key: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer" }],
+  needsDecision: [{ kind: "card-widget", item: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer", reason: "convert via ConvertCardWidgetsProcess" }],
+};
+const cwSpec = renderDesignSpec({ entity: "X", changeSet: cwRenderCs });
+const cwSpecCardRows = cwSpec.split("\n").filter((l) => /\| Card widget \|/.test(l));
+check("ENG-95806 F1: design-spec Layout has exactly ONE card-widget row, in the friendly region, naming widgetKey + SysWidgetDashboard record",
+  cwSpecCardRows.length === 1
+  && /\| Side profile \| KpiChart \| Card widget \| from SysWidgetDashboard \(record `rec-7`\) \|/.test(cwSpecCardRows[0]),
+  () => cwSpecCardRows);
+const cwChecklist = renderChecklist({ entity: "X", changeSet: cwRenderCs });
+check("ENG-95806 F1: checklist Layout-by-region group lists the card widget under its friendly region",
+  /Side profile — KpiChart \(card widget\)/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /card widget/i.test(l)));
+check("ENG-95806 F1+F2: checklist Coverage row names the card widget and its friendly region (not the raw SideAreaProfileContainer)",
+  /Card widget `KpiChart` \(record `rec-7`\) — converted via `ConvertCardWidgetsProcess` and placed in Side profile/.test(cwChecklist)
+  && !/placed in SideAreaProfileContainer/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /Card widget `KpiChart`/.test(l)));
+// --verify onstand gate: the card-widget Coverage row carries a `cardWidget:<recordId>:<widgetKey>` evidence key that HARD-gates.
+const cwVerifyMiss = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": false });
+check("ENG-95806 F1: --verify HARD-fails a card widget whose conversion is not done (built['cardWidget:rec-7:KpiChart']=false → MISSING)",
+  cwVerifyMiss.missing >= 1 && /cardWidget:rec-7:KpiChart/.test(cwVerifyMiss.markdown) && /❌ MISSING/.test(cwVerifyMiss.markdown),
+  () => `missing=${cwVerifyMiss.missing}`);
+const cwVerifyOk = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": true });
+check("ENG-95806 F1: --verify passes the card-widget row once conversion is confirmed on-stand (built['cardWidget:rec-7:KpiChart']=true → Done)",
+  /cardWidget:rec-7:KpiChart confirmed on-stand/.test(cwVerifyOk.markdown),
+  () => cwVerifyOk.markdown.split("\n").filter((l) => /cardWidget:rec-7:KpiChart/.test(l)));
+
+/* ---- ENG-95806 (review Major) — the --verify evidence key is scoped by BOTH recordId AND widgetKey, so the SAME
+   widgetKey recurring under two different recordId's (allowed by the recordId-batching model) gates INDEPENDENTLY:
+   one widget's conversion can neither satisfy nor fail the other's gate. Keying by widgetKey alone collapsed both
+   into a single boolean. Covers the mapper output AND the rendered --verify gate. ---- */
+const cwSameKey = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "WidgetA", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-1" },
+  { key: "WidgetB", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-2" },
+] })]));
+check("ENG-95806 (Major): same widgetKey under different recordId's → two card widgets with distinct recordId's (evidence keys differ)",
+  (cwSameKey.cardWidgets || []).length === 2
+  && new Set((cwSameKey.cardWidgets || []).map(w => `${w.recordId}:${w.widgetKey}`)).size === 2,
+  () => JSON.stringify(cwSameKey.cardWidgets));
+const cwDupCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [
+    { key: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top" },
+    { key: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top" },
+  ],
+  needsDecision: [
+    { kind: "card-widget", item: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+    { kind: "card-widget", item: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+  ],
+};
+const cwDupChecklist = renderChecklist({ entity: "X", changeSet: cwDupCs });
+check("ENG-95806 (Major): shared widgetKey under two recordId's renders as TWO separate coverage rows (one per record)",
+  /Card widget `KPI` \(record `rec-1`\)/.test(cwDupChecklist) && /Card widget `KPI` \(record `rec-2`\)/.test(cwDupChecklist),
+  () => cwDupChecklist.split("\n").filter((l) => /KPI/.test(l)));
+// The --verify gate carries a distinct evidence key per (recordId, widgetKey), and rec-1 converted (true) /
+// rec-2 not (false) resolve INDEPENDENTLY — rec-1 Done AND rec-2 MISSING at once, impossible if both read one
+// shared `cardWidget:KPI` boolean.
+const cwDupVerify = renderVerify({ entity: "X", changeSet: cwDupCs }, {}, { ops: [], "cardWidget:rec-1:KPI": true, "cardWidget:rec-2:KPI": false });
+check("ENG-95806 (Major): --verify emits TWO distinct evidence keys, one per record (no collision)",
+  /cardWidget:rec-1:KPI/.test(cwDupVerify.markdown) && /cardWidget:rec-2:KPI/.test(cwDupVerify.markdown),
+  () => cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)));
+check("ENG-95806 (Major): each (recordId,widgetKey) gates independently — rec-1 confirmed while rec-2 is MISSING",
+  cwDupVerify.missing >= 1
+  && /cardWidget:rec-1:KPI confirmed on-stand/.test(cwDupVerify.markdown)
+  && /❌ MISSING/.test(cwDupVerify.markdown),
+  () => `missing=${cwDupVerify.missing}\n${cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)).join("\n")}`);
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
 // L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.
