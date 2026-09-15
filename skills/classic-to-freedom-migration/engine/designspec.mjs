@@ -465,7 +465,19 @@ function listRowActionsTable(rowActions) {
   if (!rowActions?.length) return [];
   const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
   for (const ra of rowActions) {
-    const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    // The PROPERTY the condition binds travels with the method name (ENG-94714). `visible` and `enabled` are not
+    // interchangeable: porting an enablement condition as a visibility rule hides the control instead of greying
+    // it, and porting either as nothing ships an always-available action. The cell says which one it is.
+    // An item may bind BOTH properties (one method to `visible`, another to `enabled`), so every condition this
+    // run resolved is rendered rather than only the first — the same rule the command-bar table applies. The
+    // singular pair is the fallback for a row action resolved before `conditions` was plumbed through.
+    let cond = "⚠ none declared — confirm on-stand";
+    if (ra.conditions?.length) {
+      cond = ra.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property || "visible")}\``).join(" · ")
+        + " — carry as Freedom state";
+    } else if (ra.condition) {
+      cond = `\`${esc(ra.condition)}\` on \`${esc(ra.conditionProperty || "visible")}\` — carry as Freedom state`;
+    }
     const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
     L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
   }
@@ -474,6 +486,45 @@ function listRowActionsTable(rowActions) {
 }
 // The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
 // folded — the ⚠ Confirm item carries the question.
+// The condition cell of the command-bar table. Own fn so `listCommandBarTable` stays under Sonar CC 15: a bound
+// condition, several bound conditions, and a STATIC `visible: false` / `enabled: false` are three separate readings
+// of the same cell, and a button may carry both kinds at once.
+function commandBarConditionCell(a) {
+  let cond = "⚠ none declared — confirm on-stand";
+  if (a.conditions?.length) {
+    cond = a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state";
+  } else if (a.condition) {
+    cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
+  }
+  // A STATIC `visible: false` / `enabled: false` is not a bound condition and never reached the cell above, so a
+  // button Classic hides by default read here as always-visible — and the built Freedom list showed it.
+  const statics = [
+    a.staticVisible === false ? "`visible: false` (static)" : null,
+    a.staticEnabled === false ? "`enabled: false` (static)" : null,
+  ].filter(Boolean);
+  if (!statics.length) return cond;
+  return (a.conditions?.length || a.condition ? cond + " · " : "") + statics.join(" · ") + " — Classic hides/disables it by default";
+}
+
+// The `Menu position` cell: the separator-delimited group, the submenu container, and the folded menu. Naming the
+// items (and the classic handler behind each) is the whole difference between a menu that reaches the plan and one
+// that vanishes with its handlers.
+function menuItemCell(m) {
+  // The item's OWN conditions, not only its caption and handler. `listMenuEntriesOf` records them on every folded
+  // MENU_ITEM, and until this line nothing rendered them: a section-declared item with `enabled:{bindTo}` reached
+  // the plan looking unconditional, which is the same always-enabled port the button-level cell exists to prevent.
+  const conds = (m.conditions || []).map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ");
+  return `\`${esc(m.caption || m.name)}\``
+    + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")
+    + (conds ? ` (${conds})` : "");
+}
+function commandBarPlacementCell(a) {
+  const menu = (a.menuItems || []).length
+    ? " · menu: " + a.menuItems.map(menuItemCell).join(", ")
+    : "";
+  return [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
+}
+
 function listCommandBarTable(actions) {
   if (!actions.length) return [];
   const L = ["", "#### Command-bar actions",
@@ -481,12 +532,9 @@ function listCommandBarTable(actions) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const a of actions) {
     // Same columns the Row actions table publishes: a name alone cannot build a button, and an action ported
-    // without its `Enabled` condition ships always-enabled. `Menu position` carries the separator-delimited
-    // group and the submenu container, which are the only record of the classic menu's shape.
+    // without its `Enabled` condition ships always-enabled.
     const cap = a.caption ? `\`${esc(a.caption)}\`` : "⚠ none read — confirm on-stand";
-    const cond = a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
-    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
-    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
+    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${commandBarConditionCell(a)} | ${commandBarPlacementCell(a)}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
   }
   return L;
@@ -518,6 +566,15 @@ function renderListBuildNotes(lcs) {
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
 function renderListPageBlock(result, section, opts = {}) {
   const L = ["### List page"];
+  // The LIST page's own verdict, first thing in the block (ENG-94714). It is stated HERE rather than in the plan's
+  // top banners because it is scoped: the record page above it may be perfectly approvable on the same run, and a
+  // banner at the top would read as a verdict on the whole plan. Everything below it still renders — a partial
+  // reading is evidence, and hiding it would leave the operator with a blocked page and no idea what was found.
+  if (result.listGate?.blocked) {
+    L.push("", "> ⛔ **The list page is NOT approvable from this run.** The section's own evidence is incomplete, so what follows is a PARTIAL reading of the Classic list — an element it shows may be missing below with nothing naming it. The record page above is unaffected and is judged on its own gate.");
+    for (const r of result.listGate.reasons) L.push(`> - ${esc(r)}`);
+    L.push("");
+  }
   // The plan is the document an operator APPROVES, so it must not present a full build spec for a page the run
   // deliberately does not build. Same treatment as the `Navigable section registered` row: state the decision, then
   // keep the contents as a record of what a later run — the one that adds the menu entry — would build.
@@ -3127,6 +3184,11 @@ export function planGaps(result) {
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
   if (result?.structure?.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
   if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  // ENG-94714 — the LIST deliverable's own gate. Without this leg `listGate.blocked` was prose in the plan's
+  // `### List page` block and nothing else: `planGaps` stayed `[]`, so the CLI exited 0 and every consumer that
+  // gates on `planGaps.length` (the engine README's own contract, the freedom-build-executor) treated a list
+  // page built from an unreadable section `diff` as buildable. Same shape as the legs above so no caller changes.
+  if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   return g;
 }
 function verifyVerdict(missing, unverified) {
