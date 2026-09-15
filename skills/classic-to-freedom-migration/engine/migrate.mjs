@@ -749,7 +749,11 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // `present` = this entity HAS an active rule marked use-on-save; `serviceConfigured` = the target stand can
 // actually run the Freedom flow. Both are needed because they fail differently: no rule means nothing to lose,
 // while a rule + no service means the check silently stops at migration (measured — see mapDedupOnSave).
-const SIGNAL_KEYS = ["dcm", "processes", "printables", "deduplication"];
+// `dashboards` items carry `{ id, caption, sourcePackage?, saveInPackage?, migrate? }`. `sourcePackage` is the
+// on-stand READ: the package that ships the 7x dashboard today, absent = it is stand data only. The other two
+// are DECISIONS with derived defaults - `migrate` true, `saveInPackage` = `!!sourcePackage` - and `true` there
+// means the run's own `manifest.targetPackage`, the one package `placement` proved writable.
+const SIGNAL_KEYS = ["dcm", "processes", "printables", "dashboards", "deduplication"];
 // Is signal `k` still UNRESOLVED? The generic rule is "absent, not an object, or resolved !== true". `deduplication`
 // adds ONE field-aware clause, because the key carries two facts and the gate must not pass on half of them: a rule
 // IS present but `serviceConfigured` was never recorded is precisely the likely real-world half-answer (an operator
@@ -763,6 +767,11 @@ function signalUnresolved(k, signals) {
   // service requirement into the mapper's "serviceConfigured unrecorded" branch — that is the same half-answered
   // plan this clause exists to block. The mapper reads `present` the same way.
   if (k === "deduplication" && s.present && typeof s.serviceConfigured !== "boolean") return true;
+  // `dashboards` present with an EMPTY list is a half answer, not a resolved one: "this section has 7x
+  // dashboards" and "here are none of them" cannot both be true. Left through, the plan reads "0 to migrate"
+  // under a signal that says there are some, and the checklist emits no dashboards rows at all - so the run
+  // silently drops exactly what the signal was added to catch. "Checked, none found" is `present: false`.
+  if (k === "dashboards" && s.present && !(Array.isArray(s.items) && s.items.length)) return true;
   return false;
 }
 // PLACEMENT completeness — can the target app actually HOST the section? A run once cleared every gate above,
