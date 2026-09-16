@@ -101,9 +101,12 @@ prove it with the member ledger. What the digest changes is your output. Read it
   every member. State the difference as a set difference; do not trim your enumeration to match.
 - **Emit a second deliverable: `behaviour-index.json`** next to the report — one entry per row,
   keyed exactly as the digest keys it (`"<method>"`, `"<schema>::<method>"`, `"<kind>:<name>"`),
-  each `{ "card": "C13", "ac": ["AC-21","AC-22"], "trigger": "internal", "from": "save" }`
-  (`trigger`/`from` only where you resolved one the caller could not). This is what lets the
-  caller's generated worklist carry your card reference; a prose report alone cannot be keyed.
+  each `{ "card": "C13", "ac": ["AC-21","AC-22"], "trigger": "internal", "from": "save", "whatItDoes": "Recalculates the order total", "useCase": "When an order is saved, its total reflects the current line items" }`
+  (`trigger`/`from` only where you resolved one the caller could not). Author both `whatItDoes`
+  and `useCase` in plain language from the analysed behaviour: what the item does, and the
+  concrete scenario in which it is used. If either cannot be established, leave that field
+  empty and state the gap; do not invent behaviour. This lets the caller's generated worklist
+  carry your card reference and its What-it-does / Use-case columns; a prose report alone cannot be keyed.
 
 With no digest supplied, work exactly as the six phases say and skip this section.
 
