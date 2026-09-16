@@ -76,7 +76,21 @@ check("3 details as Expanded list with dependency",
   cs.details.length === 3 && cs.details.some(d => d.detailSchema === "SupportScheduleEmployeeDetail"
     && d.dependency?.attributePath === "SupportUnit" && d.dependency?.relationPath === "PDS.Id"));
 check("setName -> handler stub", cs.handlerStubs.some(h => h.sourceMethod === "setName"));
-check("chart widgets flagged as needsDecision (component)", cs.needsDecision.some(n => n.kind === "component"));
+// ENG-95806 — the CardWidgetModule now carries BOTH coordinates (widgetKey + recordId), so it is a concrete
+// `card-widget` decision (was the vague `component`), carrying widgetKey/recordId and a resolved region.
+const suCardWidget = cs.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart");
+check("card widget → one card-widget decision (not a generic component)",
+  !!suCardWidget && !cs.needsDecision.some(n => n.kind === "component" && n.item === "KpiChart"),
+  () => `card-widget decisions: ${JSON.stringify(cs.needsDecision.filter(n => n.kind === "card-widget"))}`);
+check("card-widget decision carries widgetKey + recordId + region",
+  suCardWidget?.widgetKey === "KpiChart" && suCardWidget?.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!suCardWidget?.region,
+  () => JSON.stringify(suCardWidget));
+check("card widget carried into changeSet.cardWidgets[] with coordinates",
+  (cs.cardWidgets || []).some(w => w.key === "KpiChart" && w.widgetKey === "KpiChart" && w.recordId === "b1e2c3d4-0000-4000-8000-000000000001" && !!w.region),
+  () => JSON.stringify(cs.cardWidgets));
+check("card widget is NOT double-reported as an unmapped component (accountedFor covers the module key)",
+  !cs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "KpiChart"),
+  () => JSON.stringify(cs.needsDecision.filter(n => /component/.test(n.kind))));
 
 // Contract sanity — TRUE dependency order (F1), with base-template seed (F2).
 const seed = load("_base", ["BaseModulePageV2_skeleton.js"]);
@@ -138,6 +152,172 @@ check("F3: layout is NOT flattened (≥2 distinct field containers)",
   new Set(co.viewConfigDiff.filter(o => o.values?.control).map(o => o.parentName)).size >= 2);
 check("F3: no field left in the old catch-all GeneralInfoTabContainer",
   !co.viewConfigDiff.some(o => o.parentName === "GeneralInfoTabContainer"));
+
+/* ---- ENG-95806: record-scoped CARD WIDGETS (SysWidgetDashboard) → concrete card-widget decisions ---- */
+// Synthetic modules carry the already-normalized shape (widgetKey/recordId directly), mirroring what
+// engine.mjs normalizeModules projects from the real config.parameters.viewModelConfig for the file fixture.
+// Grouping: two widgets sharing ONE recordId → two card-widget decisions that group into a single recordId
+// (so the agent makes ONE ConvertCardWidgetsProcess call for the pair).
+const cwGroup = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "KpiA", moduleName: "CardWidgetModule", widgetKey: "KpiA", recordId: "rec-1" },
+  { key: "KpiB", moduleName: "CardWidgetModule", widgetKey: "KpiB", recordId: "rec-1" },
+] })]));
+const cwGroupDec = cwGroup.needsDecision.filter(n => n.kind === "card-widget");
+check("ENG-95806: two card widgets → two card-widget decisions, both carrying recordId",
+  cwGroupDec.length === 2 && cwGroupDec.every(d => d.recordId === "rec-1"),
+  () => JSON.stringify(cwGroupDec));
+check("ENG-95806: two widgets sharing one recordId group into a SINGLE recordId (one process call), both in cardWidgets[]",
+  (cwGroup.cardWidgets || []).length === 2 && new Set((cwGroup.cardWidgets || []).map(w => w.recordId)).size === 1,
+  () => JSON.stringify(cwGroup.cardWidgets));
+check("ENG-95806: grouped card widgets emit NO generic component decision",
+  !cwGroup.needsDecision.some(n => n.kind === "component"));
+
+// Fallback: a module missing EITHER coordinate degrades to the old generic `component` decision (never dropped).
+const cwMissing = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NoRecord", moduleName: "CardWidgetModule", widgetKey: "NoRecord" },   // widgetKey but NO recordId
+  { key: "NoKey", moduleName: "CardWidgetModule", recordId: "rec-9" },          // recordId but NO widgetKey
+] })]));
+check("ENG-95806: a widget missing recordId degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoRecord")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoRecord"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: a widget missing widgetKey degrades to a generic component (not card-widget, not dropped)",
+  cwMissing.needsDecision.some(n => n.kind === "component" && n.item === "NoKey")
+  && !cwMissing.needsDecision.some(n => n.kind === "card-widget" && n.item === "NoKey"),
+  () => JSON.stringify(cwMissing.needsDecision));
+check("ENG-95806: coordinate-incomplete widgets are NOT carried into cardWidgets[]",
+  !(cwMissing.cardWidgets || []).length, () => JSON.stringify(cwMissing.cardWidgets));
+
+// No-duplicate + region: a card widget WITH a host diff item under a tab — accountedFor covers the module key AND
+// the host diff-item name (so mapUnmappedDrop does not re-report it), and the region resolves from that host.
+const cwHost = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
+  modules: [{ key: "KpiChart", moduleName: "CardWidgetModule", widgetKey: "KpiChart", recordId: "rec-5" }],
+  diff: [
+    di({ name: "AnalyticsTab", parentName: "Tabs", propertyName: "tabs", itemType: 15, isTab: true }),
+    di({ name: "KpiChart", parentName: "AnalyticsTab", propertyName: "items", itemType: 0 }),
+  ] })]));
+check("ENG-95806: no duplicate unmapped-component / component for a card widget with a host diff item",
+  !cwHost.needsDecision.some(n => (n.kind === "unmapped-component" || n.kind === "component") && n.item === "KpiChart"),
+  () => JSON.stringify(cwHost.needsDecision.filter(n => /component/.test(n.kind))));
+check("ENG-95806: card-widget region resolves from the host diff item's parent tab (AnalyticsTab)",
+  cwHost.needsDecision.find(n => n.kind === "card-widget" && n.item === "KpiChart")?.region === "AnalyticsTab"
+  && (cwHost.cardWidgets || [])[0]?.region === "AnalyticsTab",
+  () => JSON.stringify(cwHost.cardWidgets));
+
+// ENG-95806 (review F3) — a module that satisfies BOTH shapes (masterColumnName AND recordId+widgetKey) is handled
+// by exactly ONE phase. mapProfileCards runs first and accounts for the key, so the module is a profile-card and
+// mapWidgets must NOT also emit a card-widget decision for it (predicates are now mutually exclusive → no double
+// decision, which R1 forbids). Genuine card widgets never carry masterColumnName, so no real widget regresses.
+const cwOverlap = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "DualModule", moduleName: "DualModule", masterColumnName: "Requester", widgetKey: "Dual", recordId: "rec-2" },
+] })]));
+check("ENG-95806 F3: a masterColumnName + recordId + widgetKey module is a profile-card, NOT also a card-widget (exactly one decision)",
+  cwOverlap.needsDecision.filter(n => (n.kind === "profile-card" || n.kind === "card-widget") && n.item === "DualModule").length === 1
+  && cwOverlap.needsDecision.some(n => n.kind === "profile-card" && n.item === "DualModule")
+  && !cwOverlap.needsDecision.some(n => n.kind === "card-widget" && n.item === "DualModule"),
+  () => JSON.stringify(cwOverlap.needsDecision.filter(n => n.item === "DualModule")));
+check("ENG-95806 F3: the overlap module is NOT carried into cardWidgets[]",
+  !(cwOverlap.cardWidgets || []).some(w => w.key === "DualModule"),
+  () => JSON.stringify(cwOverlap.cardWidgets));
+
+// ENG-95806 (review d-baranovskyi) — recognition is by the two COORDINATES, not `moduleName`. A module with a
+// non-`CardWidgetModule` name carrying BOTH coordinates is still a card widget (only CardWidgetModule carries both
+// in a real classic body, so keying off the name would be redundant AND would silently mis-scope a variant). Locks
+// the name-independence the reference documents.
+const cwNamed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "NotACardWidgetName", moduleName: "SomeCompletelyUnrelatedModule", widgetKey: "wk1", recordId: "rec-n" },
+] })]));
+check("ENG-95806: recognition is name-independent — a non-CardWidgetModule name with both coordinates → card-widget decision",
+  cwNamed.needsDecision.some(n => n.kind === "card-widget" && n.item === "NotACardWidgetName" && n.recordId === "rec-n")
+  && (cwNamed.cardWidgets || []).some(w => w.key === "NotACardWidgetName" && w.widgetKey === "wk1"),
+  () => JSON.stringify(cwNamed.needsDecision.filter(n => n.item === "NotACardWidgetName")));
+
+// ENG-95806 (review d-baranovskyi) — a card widget INHERITED from a base/seed layer (`fromTemplate`) is
+// base-template chrome and must NOT emit a per-page card-widget decision: the card-widget branch bypasses the
+// base-chrome evidence gate, so the dispatch loop gates on `!fromTemplate` instead. Only a card widget the page's
+// OWN layer declares becomes a decision.
+const cwSeed = mapToFreedom(mergeHierarchy([L("Client", { entity: "X" })], { seedTemplate: [L("Seed", { entity: "X", modules: [
+  { key: "InheritedKpi", moduleName: "CardWidgetModule", widgetKey: "InheritedKpi", recordId: "rec-seed" },
+] })] }));
+check("ENG-95806: an INHERITED (fromTemplate) card widget emits NO card-widget decision and is not carried into cardWidgets[]",
+  !cwSeed.needsDecision.some(n => n.kind === "card-widget" && n.item === "InheritedKpi")
+  && !(cwSeed.cardWidgets || []).some(w => w.key === "InheritedKpi"),
+  () => JSON.stringify({ decisions: cwSeed.needsDecision.filter(n => n.item === "InheritedKpi"), cardWidgets: cwSeed.cardWidgets }));
+
+/* ---- ENG-95806 (review F1) — the DESIGN-SPEC / CHECKLIST PRINTER output for a card widget (rowsForCardWidgets,
+   buildLayoutGroupRows, buildCoverageRows + the --verify onstand gate) is asserted on RENDERED output, not just the
+   changeSet. A regression that drops a card widget from the Layout table or the --verify checklist would otherwise
+   still pass the changeSet-level cases above, defeating the "nothing silently skipped" guarantee (R2). A side-profile
+   card widget also locks the friendly-region-label consistency fix (F2): the Layout row, the checklist Layout-by-region
+   group AND the Coverage row must all read "Side profile", never the raw "SideAreaProfileContainer". ---- */
+const cwRenderCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [{ key: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer" }],
+  needsDecision: [{ kind: "card-widget", item: "KpiChart", widgetKey: "KpiChart", recordId: "rec-7", region: "SideAreaProfileContainer", reason: "convert via ConvertCardWidgetsProcess" }],
+};
+const cwSpec = renderDesignSpec({ entity: "X", changeSet: cwRenderCs });
+const cwSpecCardRows = cwSpec.split("\n").filter((l) => /\| Card widget \|/.test(l));
+check("ENG-95806 F1: design-spec Layout has exactly ONE card-widget row, in the friendly region, naming widgetKey + SysWidgetDashboard record",
+  cwSpecCardRows.length === 1
+  && /\| Side profile \| KpiChart \| Card widget \| from SysWidgetDashboard \(record `rec-7`\) \|/.test(cwSpecCardRows[0]),
+  () => cwSpecCardRows);
+const cwChecklist = renderChecklist({ entity: "X", changeSet: cwRenderCs });
+check("ENG-95806 F1: checklist Layout-by-region group lists the card widget under its friendly region",
+  /Side profile — KpiChart \(card widget\)/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /card widget/i.test(l)));
+check("ENG-95806 F1+F2: checklist Coverage row names the card widget and its friendly region (not the raw SideAreaProfileContainer)",
+  /Card widget `KpiChart` \(record `rec-7`\) — converted via `ConvertCardWidgetsProcess` and placed in Side profile/.test(cwChecklist)
+  && !/placed in SideAreaProfileContainer/.test(cwChecklist),
+  () => cwChecklist.split("\n").filter((l) => /Card widget `KpiChart`/.test(l)));
+// --verify onstand gate: the card-widget Coverage row carries a `cardWidget:<recordId>:<widgetKey>` evidence key that HARD-gates.
+const cwVerifyMiss = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": false });
+check("ENG-95806 F1: --verify HARD-fails a card widget whose conversion is not done (built['cardWidget:rec-7:KpiChart']=false → MISSING)",
+  cwVerifyMiss.missing >= 1 && /cardWidget:rec-7:KpiChart/.test(cwVerifyMiss.markdown) && /❌ MISSING/.test(cwVerifyMiss.markdown),
+  () => `missing=${cwVerifyMiss.missing}`);
+const cwVerifyOk = renderVerify({ entity: "X", changeSet: cwRenderCs }, {}, { ops: [], "cardWidget:rec-7:KpiChart": true });
+check("ENG-95806 F1: --verify passes the card-widget row once conversion is confirmed on-stand (built['cardWidget:rec-7:KpiChart']=true → Done)",
+  /cardWidget:rec-7:KpiChart confirmed on-stand/.test(cwVerifyOk.markdown),
+  () => cwVerifyOk.markdown.split("\n").filter((l) => /cardWidget:rec-7:KpiChart/.test(l)));
+
+/* ---- ENG-95806 (review Major) — the --verify evidence key is scoped by BOTH recordId AND widgetKey, so the SAME
+   widgetKey recurring under two different recordId's (allowed by the recordId-batching model) gates INDEPENDENTLY:
+   one widget's conversion can neither satisfy nor fail the other's gate. Keying by widgetKey alone collapsed both
+   into a single boolean. Covers the mapper output AND the rendered --verify gate. ---- */
+const cwSameKey = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", modules: [
+  { key: "WidgetA", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-1" },
+  { key: "WidgetB", moduleName: "CardWidgetModule", widgetKey: "KPI", recordId: "rec-2" },
+] })]));
+check("ENG-95806 (Major): same widgetKey under different recordId's → two card widgets with distinct recordId's (evidence keys differ)",
+  (cwSameKey.cardWidgets || []).length === 2
+  && new Set((cwSameKey.cardWidgets || []).map(w => `${w.recordId}:${w.widgetKey}`)).size === 2,
+  () => JSON.stringify(cwSameKey.cardWidgets));
+const cwDupCs = {
+  viewConfigDiff: [], standardFeatures: [], details: [], cardActions: [],
+  cardWidgets: [
+    { key: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top" },
+    { key: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top" },
+  ],
+  needsDecision: [
+    { kind: "card-widget", item: "WidgetA", widgetKey: "KPI", recordId: "rec-1", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+    { kind: "card-widget", item: "WidgetB", widgetKey: "KPI", recordId: "rec-2", region: "Header / top", reason: "convert via ConvertCardWidgetsProcess" },
+  ],
+};
+const cwDupChecklist = renderChecklist({ entity: "X", changeSet: cwDupCs });
+check("ENG-95806 (Major): shared widgetKey under two recordId's renders as TWO separate coverage rows (one per record)",
+  /Card widget `KPI` \(record `rec-1`\)/.test(cwDupChecklist) && /Card widget `KPI` \(record `rec-2`\)/.test(cwDupChecklist),
+  () => cwDupChecklist.split("\n").filter((l) => /KPI/.test(l)));
+// The --verify gate carries a distinct evidence key per (recordId, widgetKey), and rec-1 converted (true) /
+// rec-2 not (false) resolve INDEPENDENTLY — rec-1 Done AND rec-2 MISSING at once, impossible if both read one
+// shared `cardWidget:KPI` boolean.
+const cwDupVerify = renderVerify({ entity: "X", changeSet: cwDupCs }, {}, { ops: [], "cardWidget:rec-1:KPI": true, "cardWidget:rec-2:KPI": false });
+check("ENG-95806 (Major): --verify emits TWO distinct evidence keys, one per record (no collision)",
+  /cardWidget:rec-1:KPI/.test(cwDupVerify.markdown) && /cardWidget:rec-2:KPI/.test(cwDupVerify.markdown),
+  () => cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)));
+check("ENG-95806 (Major): each (recordId,widgetKey) gates independently — rec-1 confirmed while rec-2 is MISSING",
+  cwDupVerify.missing >= 1
+  && /cardWidget:rec-1:KPI confirmed on-stand/.test(cwDupVerify.markdown)
+  && /❌ MISSING/.test(cwDupVerify.markdown),
+  () => `missing=${cwDupVerify.missing}\n${cwDupVerify.markdown.split("\n").filter((l) => /KPI/.test(l)).join("\n")}`);
 
 /* ---- F9: template (seed) elements are layout context, excluded from the migration payload ---- */
 // L/di are the shared schema/op builders (see _testkit.mjs), aliased to keep the assertions terse.
@@ -2174,9 +2354,9 @@ check("child pages (recursion): custom details → result.childPages + `Rebuild 
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /Rebuild \(child\)/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
 const FULL_PLANMETA = { scope: "single-section", environment: "test", package: "SupportCalendar → UsrSU", approach: "Parallel rebuild", whatItDoes: "Support-unit register.", sectionSchema: "SupportUnitSection", listTemplate: "ListPageV3", formTemplate: "PageWithTabsFreedomTemplate" };
-// resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable checks
-// (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
-const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
+// resolved on-stand signals — a gate-clean, approvable plan must resolve the DCM/process/printable/dashboard/
+// deduplication checks (present:false = verified none). Fixtures that assert a clean --plan supply this alongside FULL_PLANMETA.
+const FULL_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
 // settled PLACEMENT — the app-hosting facts a `--plan` run must carry: the target package is writable, and the
 // app that will host the section is decided. This shape is the `existing-app` happy path: the app's primary
 // package IS the target package and is editable, so `create-app-section` (which takes no package parameter)
@@ -4658,8 +4838,8 @@ const sigBase = {
   planMeta: { scope: "single-section", environment: "env", package: "P", approach: "rebuild", whatItDoes: "docs", sectionSchema: "XSection", listTemplate: "L", formTemplate: "F" },
 };
 const sigUnresolved = runMigration({ ...sigBase });
-check("signals gate: absent manifest.signals → all four unresolved",
-  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dcm,deduplication,printables,processes",
+check("signals gate: absent manifest.signals → all five unresolved",
+  (sigUnresolved.signalsMissing || []).slice().sort().join(",") === "dashboards,dcm,deduplication,printables,processes",
   () => sigUnresolved.signalsMissing);
 check("signals gate: --plan carries the ⛔ signals-incomplete banner when unresolved",
   /PLAN INCOMPLETE — on-stand signals not resolved/.test(sigUnresolved.plan));
@@ -4667,20 +4847,383 @@ const sigResolved = runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: true, cases: ["CaseA"] },
   processes: { resolved: true, present: false },
   printables: { resolved: true, present: true, items: ["Template"] },
+  dashboards: { resolved: true, present: false },
   deduplication: { resolved: true, present: false },
 } });
 check("signals gate: all resolved → signalsMissing empty + resolved summary (present/none) rendered",
   (sigResolved.signalsMissing || []).length === 0
   && /\*\*DCM case:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("CaseA")
   && /\*\*Connected processes:\*\* none/.test(sigResolved.plan)
-  && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template"),
-  () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables/i.test(l)));
+  && /\*\*Printables:\*\* present/.test(sigResolved.plan) && sigResolved.plan.includes("Template")
+  && /\*\*Section dashboards:\*\* none/.test(sigResolved.plan),
+  () => sigResolved.plan.split("\n").filter((l) => /On-stand|DCM case|processes|Printables|Section dashboards/i.test(l)));
 check("signals gate: a key with resolved!=true still blocks (verified-none vs never-checked distinction)",
-  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
+  (runMigration({ ...sigBase, signals: { dcm: { present: true }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false }, deduplication: { resolved: true, present: false } } }).signalsMissing || []).join(",") === "dcm");
 const sigCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--plan"], { input: JSON.stringify(sigBase), encoding: "utf8" });
 check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagnostic",
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
+
+/* ---- section DASHBOARDS — the FOURTH on-stand signal (ENG-95793). A classic section's 7x dashboards are stand
+   DATA (SysDashboard rows filtered by the section's SysModule), not schema code, so they can only reach the pure
+   engine through manifest.signals. Each item also carries its DELIVERY MODE — the package that ships it, or
+   stand-only — because the migrated dashboard must ship the same way (the migrator writes it as a client unit
+   schema, so its package is the delivery). ---- */
+const OTHER_SIGNALS = { dcm: { resolved: true, present: false }, processes: { resolved: true, present: false }, printables: { resolved: true, present: false }, deduplication: { resolved: true, present: false } };
+// `undefined` = the dashboards answer was never recorded (blocks); an object = the recorded answer.
+const dashMani = (dashboards) => ({
+  entity: "X", seed: CLEAN_SEED, planMeta: docPlanMeta, targetPackage: "P",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
+  signals: dashboards === undefined ? OTHER_SIGNALS : { ...OTHER_SIGNALS, dashboards },
+  placement: { ...FULL_PLACEMENT, primaryPackage: { resolved: true, name: "P", editable: true } },
+});
+const dashCliRun = (mani, args = ["--plan"]) => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", ...args], { input: JSON.stringify(mani), encoding: "utf8" });
+const dashRow = (md, needle) => md.split("\n").find((l) => l.includes(needle)) || "";
+// The dashboards rows gate under the LIST page's key - the element lives on that page - so the payload
+// names which page it describes. A flat payload is the FORM page only, and the list row then correctly
+// reads "nobody showed me that page".
+const dashBuilt = (listOps, extra = {}) => ({
+  pages: { main: { ops: [], parentSchemaName: "XPage" }, list: { ops: listOps } }, ...extra,
+});
+
+// T1 (BR1) — "never checked" is not an answer: the plan is unpresentable while the dashboards check is missing.
+const dashUnresolved = runMigration(dashMani());
+check("T1 dashboards gate: an unrecorded dashboards answer → signalsMissing names it + the ⛔ PLAN INCOMPLETE banner",
+  (dashUnresolved.signalsMissing || []).join(",") === "dashboards"
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dashUnresolved.plan)
+  && /`dashboards`/.test(dashUnresolved.plan),
+  () => dashUnresolved.signalsMissing);
+const dashCli = dashCliRun(dashMani());
+check("T1 dashboards gate CLI: an unresolved dashboards answer keeps --plan NON-ZERO (exit 2)",
+  dashCli.status === 2 && /dashboards/.test(dashCli.stderr || ""),
+  () => ({ status: dashCli.status, stderr: (dashCli.stderr || "").slice(0, 160) }));
+
+// T2 (BR1) — "checked on-stand, none found" IS a valid answer: it unblocks the plan and adds no dashboard rows.
+const dashNone = runMigration(dashMani({ resolved: true, present: false }));
+check("T2 dashboards gate: 'checked, none found' unblocks the plan and adds NO dashboard rows",
+  (dashNone.signalsMissing || []).length === 0
+  && /\*\*Section dashboards:\*\* none \(checked on-stand/.test(dashNone.plan)
+  && !/MigrateDashboardsProcess/.test(dashNone.plan)
+  && !/\*\*Dashboards\*\*/.test(dashNone.checklist),
+  () => dashNone.plan.split("\n").filter((l) => /dashboard/i.test(l)));
+const dashNoneCli = dashCliRun(dashMani({ resolved: true, present: false }));
+check("T2 dashboards gate CLI: a resolved 'none' answer exits 0 (no lingering incompleteness)",
+  dashNoneCli.status === 0 && !/PLAN INCOMPLETE/.test(dashNoneCli.stdout || ""),
+  () => ({ status: dashNoneCli.status, stderr: (dashNoneCli.stderr || "").slice(0, 160) }));
+
+// T2b — the boundary between T1 and T2: `present: true` PROMISES dashboards and the list delivers none.
+// Left through, the plan reads "0 found on-stand" under a signal that says there are some and the checklist
+// emits no dashboards rows at all - the run then silently drops the very thing this signal was added to
+// catch. "Checked, none found" has its own spelling, and it is `present: false`.
+const dashEmptyItems = runMigration(dashMani({ resolved: true, present: true, items: [] }));
+check("T2b dashboards gate: `present: true` with an EMPTY list is a half answer, and the plan refuses it",
+  (dashEmptyItems.signalsMissing || []).join(",") === "dashboards"
+  && /PLAN INCOMPLETE — on-stand signals not resolved/.test(dashEmptyItems.plan),
+  () => dashEmptyItems.signalsMissing);
+const dashNoItemsKey = runMigration(dashMani({ resolved: true, present: true }));
+check("T2b dashboards gate: ...and so is `present: true` with no `items` key at all",
+  (dashNoItemsKey.signalsMissing || []).join(",") === "dashboards",
+  () => dashNoItemsKey.signalsMissing);
+// The two answers either side of it stay exactly as they were: a real list resolves, and so does a real none.
+check("T2b dashboards gate: neither a listed answer nor `present: false` is touched by that rule",
+  (runMigration(dashMani({ resolved: true, present: false })).signalsMissing || []).length === 0
+  && (runMigration(dashMani({ resolved: true, present: true, items: [{ id: "1", caption: "D" }] })).signalsMissing || []).length === 0,
+  () => "the gate now blocks a well-formed dashboards answer");
+
+// T3 (BR2 + BR9) — the human approving the plan sees each dashboard BY CAPTION with how it is delivered.
+const DASH_TWO = { resolved: true, present: true, items: [
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "test dashboard 1" },
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", caption: "ML model analytics", sourcePackage: "ML" },
+] };
+const dashTwo = runMigration(dashMani(DASH_TWO));
+check("T3 dashboards plan: the split is rendered as the DECISION it is - into the run's OWN target package, or stand-only",
+  /\*\*Section dashboards:\*\* 2 found on-stand · 2 to migrate/.test(dashTwo.plan)
+  && /The split below is a decision, not a reading/.test(dashTwo.plan)
+  && /^ {2}- saved into `P` \(1\):\n {4}- ML model analytics\n {2}- left stand-only, as a user-level schema \(1\):\n {4}- test dashboard 1$/m.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /dashboard/i.test(l)));
+// The default is DERIVED, never stored: `sourcePackage` decides it and the user overrides it. Both
+// directions matter - the one that was packaged can be left local, and the local one can be shipped.
+const dashOverride = runMigration(dashMani({ resolved: true, present: true, items: [
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "local one", saveInPackage: true },
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", caption: "was packaged", sourcePackage: "ML", saveInPackage: false },
+] }));
+check("T3 dashboards plan: an explicit saveInPackage overrides the sourcePackage default in BOTH directions",
+  /^ {2}- saved into `P` \(1\):\n {4}- local one$/m.test(dashOverride.plan)
+  && /^ {2}- left stand-only, as a user-level schema \(1\):\n {4}- was packaged$/m.test(dashOverride.plan),
+  () => dashOverride.plan.split("\n").filter((l) => /dashboard|packaged|local one/i.test(l)));
+// A dashboard nobody is moving is a RECORDED decision, the shape `memberDispositions` uses for a schema
+// member: without it the skip is invisible and the migrated count reads as if it covered everything.
+const dashSkip = runMigration(dashMani({ resolved: true, present: true, items: [
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "keep this one" },
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", caption: "scratch", skip: "superseded by the Freedom widget" },
+] }));
+check("T3 dashboards plan: `skip` is reported as a decision, with its reason and leaves the migrated count at 1 of 2",
+  /\*\*Section dashboards:\*\* 2 found on-stand · 1 to migrate/.test(dashSkip.plan)
+  && /NOT migrated, by recorded decision \(1\):\n {4}- scratch \u2014 superseded by the Freedom widget/.test(dashSkip.plan)
+  && /Dashboards migrated — 1 of 2 classic dashboard\(s\)/.test(dashSkip.checklist)
+  && /1 left behind by recorded decision/.test(dashSkip.checklist),
+  () => dashSkip.plan.split("\n").filter((l) => /dashboard|scratch/i.test(l)));
+check("T3 dashboards plan: the List page block carries the migrate-last hand-off note (BR4 ordering)",
+  /- \*\*Dashboards:\*\*/.test(dashTwo.plan) && /MigrateDashboardsProcess/.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /\*\*Dashboards:\*\*/.test(l)));
+check("T3 dashboards checklist: the list-page element row and the migrated row are both emitted",
+  /\*\*list · Dashboards\*\*/.test(dashTwo.checklist)
+  && /crt\.Dashboards/.test(dashTwo.checklist)
+  && /Dashboards migrated/.test(dashTwo.checklist),
+  () => dashTwo.checklist.split("\n").filter((l) => /Dashboard/.test(l)));
+
+// BR3 — dashboards are migrated by the platform migrator, never rebuilt as page components by the agent, so a
+// resolved signal must NOT leak a dashboard into the widgets/Layout the design spec tells the agent to build.
+check("BR3 dashboards: a resolved signal never becomes a page component to hand-build (the migrator owns it)",
+  !(dashTwo.changeSet.widgets || []).some((w) => /dashboard/i.test(w.widget || ""))
+  && !(dashTwo.changeSet.viewConfigDiff || []).some((o) => /Dashboard/i.test(o.name || "")),
+  () => ({ widgets: (dashTwo.changeSet.widgets || []).map((w) => w.widget), ops: (dashTwo.changeSet.viewConfigDiff || []).map((o) => o.name) }));
+
+// T4 (BR6) — "done" is machine-side: a list page built WITHOUT the crt.Dashboards element has nowhere for the
+// migrator to write, so the row is ❌ MISSING and the verify gate stays non-zero. The template must be one that
+// does NOT ship the element, or "absent" is indistinguishable from "the list page was never passed" (see F2).
+const nonV3PlanMeta = { ...docPlanMeta, listTemplate: "ListFreedomTemplate" };
+const dashVerifyEmpty = renderVerify(dashTwo, { planMeta: nonV3PlanMeta }, dashBuilt([], { miniPageBuilt: null }));
+check("T4 dashboards verify: a non-V3 list template with NO crt.Dashboards → ❌ MISSING + non-zero verify gate",
+  /❌ MISSING/.test(dashRow(dashVerifyEmpty.markdown, "Dashboards element on the Freedom list page"))
+  && dashVerifyEmpty.missing > 0 && dashVerifyEmpty.complete === false,
+  () => dashRow(dashVerifyEmpty.markdown, "Dashboards element on the Freedom list page"));
+check("T4 dashboards verify: an unconfirmed migration keeps the gate non-zero (⚠ until built.dashboardsMigrated)",
+  /⚠ verify/.test(dashRow(dashVerifyEmpty.markdown, "Dashboards migrated")) && dashVerifyEmpty.unverified > 0,
+  () => dashRow(dashVerifyEmpty.markdown, "Dashboards migrated"));
+
+// T5 (BR9) — the delivery-preserved row exists only when a SOURCE dashboard is packaged (nothing to preserve
+// otherwise), and it stays unverified until the agent supplies the on-stand evidence.
+const dashStandOnly = runMigration(dashMani({ resolved: true, present: true, items: [{ id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", caption: "test dashboard 1" }] }));
+// The delivery row is emitted for EVERY run, both directions. Conditioning it on "something is packaged"
+// made it vanish whenever an item's shape was wrong, and `--verify` then exited 0 having checked nothing.
+check("T5 dashboards checklist: an all-stand-only section STILL gets the delivery row, naming 0 packaged",
+  /Delivery as planned — 0 dashboard\(s\) must land in `P` and 1 as user-level schema\(s\)/.test(dashStandOnly.checklist)
+  && /Dashboards migrated/.test(dashStandOnly.checklist),
+  () => dashStandOnly.checklist.split("\n").filter((l) => /Dashboard|Delivery/.test(l)));
+// A malformed item can no longer take the row away with it - it forces the row to say so instead.
+const dashMalformed = runMigration(dashMani({ resolved: true, present: true, items: ["just a caption string"] }));
+check("T5 dashboards checklist: a bare-string item keeps the row and names what is wrong with it",
+  /Delivery as planned/.test(dashMalformed.checklist)
+  && /1 item\(s\) are written as bare strings/.test(dashMalformed.checklist),
+  () => dashMalformed.checklist.split("\n").filter((l) => /Delivery/.test(l)));
+const dashBuiltOps = [{ name: "Dashboards", type: "crt.Dashboards", parentName: "DashboardsContainer" }];
+// The gate reads the migrator's own log, one entry per dashboard the plan lists, instead of one boolean for
+// the whole run: a boolean lets eleven of twelve close the row and never names the twelfth.
+const dashVerifyOpts = { planMeta: docPlanMeta, targetPackage: "P" };
+const dashLog = [
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", status: "Success", schemaName: "UsrMlModelAnalytics_8x", package: "P" },
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", status: "Success", schemaName: "TestDashboard1_8x" },
+];
+const dashVerifyPartial = renderVerify(dashTwo, dashVerifyOpts, { ops: dashBuiltOps, parentSchemaName: "XPage" });
+check("T5 dashboards verify: with no built.dashboards every dashboards row stays ⚠, naming what was not reported",
+  /⚠ verify/.test(dashRow(dashVerifyPartial.markdown, "Delivery as planned"))
+  && /2 of 2 dashboard\(s\) not reported/.test(dashRow(dashVerifyPartial.markdown, "Dashboards migrated"))
+  && dashVerifyPartial.unverified > 0,
+  () => dashRow(dashVerifyPartial.markdown, "Dashboards migrated"));
+const dashVerifyDone = renderVerify(dashTwo, dashVerifyOpts, dashBuilt(dashBuiltOps, { dashboards: dashLog }));
+check("T5 dashboards verify: element built + every dashboard reported where the plan put it → all rows ✅ Done",
+  /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Dashboards element on the Freedom list page"))
+  && /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Dashboards migrated"))
+  && /✅ Done/.test(dashRow(dashVerifyDone.markdown, "Delivery as planned")),
+  () => dashVerifyDone.markdown.split("\n").filter((l) => /Dashboard|Delivery/.test(l)));
+// The regression a boolean could never catch: ONE dashboard of two failed, or landed somewhere else.
+const dashOneFailed = renderVerify(dashTwo, dashVerifyOpts, { ops: dashBuiltOps, dashboards: [
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", status: "Failed" },
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", status: "Success", schemaName: "TestDashboard1_8x" },
+] });
+check("T5 dashboards verify: a single failed dashboard is ❌ MISSING and is NAMED, not averaged away",
+  /❌ MISSING/.test(dashRow(dashOneFailed.markdown, "Dashboards migrated"))
+  && /ML model analytics: Failed/.test(dashRow(dashOneFailed.markdown, "Dashboards migrated")),
+  () => dashRow(dashOneFailed.markdown, "Dashboards migrated"));
+const dashWrongPkg = renderVerify(dashTwo, dashVerifyOpts, { ops: dashBuiltOps, dashboards: [
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", status: "Success", package: "SomeOtherPkg" },
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", status: "Success", package: "P" },
+] });
+check("T5 dashboards verify: a dashboard delivered anywhere but where the plan said is ❌ MISSING, both directions",
+  /❌ MISSING/.test(dashRow(dashWrongPkg.markdown, "Delivery as planned"))
+  && /ML model analytics: in SomeOtherPkg, planned P/.test(dashRow(dashWrongPkg.markdown, "Delivery as planned"))
+  && /test dashboard 1: in P, planned no package \(user-level\)/.test(dashRow(dashWrongPkg.markdown, "Delivery as planned")),
+  () => dashRow(dashWrongPkg.markdown, "Delivery as planned"));
+
+/* ---- F2 (BR6) — the crt.Dashboards row must be SATISFIABLE by a correctly built V3 list page. On
+   `ListPageV3Template` the element is INHERITED, so the page never re-declares it: clio `get-page` reports it in
+   `ownBodySummary.viewConfigDiffOps` as a type-LESS `merge` keyed by its NAME (verified on Cases_ListPage,
+   AIPlatformEntityEvents_ListPage and DashboardsMigrationLog_ListPage — all three), while `crt.Dashboards`
+   itself shows up only in the MERGED bundle. A type-only check therefore reported ❌ MISSING for a page built
+   exactly as the docs prescribe and pinned `--verify` at exit 2 with no way out. ---- */
+// A page that deliberately DROPS the inherited element reports it the same way it reports keeping one - as an
+// op carrying that name. Matched on the name alone, `{operation:"remove", name:"Dashboards"}` read as
+// present and closed the row with a tick, which is precisely the silent drop this row exists to catch. The
+// shape is not hypothetical: `remove` appears in V3_LIST_OPS below as an ordinary op of a real list page.
+const V3_OPS_DASHBOARDS_REMOVED = [
+  { operation: "merge", name: "FolderTree" },
+  { operation: "merge", name: "DataTable" },
+  { operation: "remove", name: "Dashboards" },
+];
+const dashRemoved = renderVerify(dashTwo, dashVerifyOpts, dashBuilt(V3_OPS_DASHBOARDS_REMOVED, { dashboards: dashLog }));
+check("F2 a REMOVED inherited element is ❌ MISSING, never a name match - and says so in those words",
+  /❌ MISSING/.test(dashRow(dashRemoved.markdown, "Dashboards element on the Freedom list page"))
+  && /explicitly REMOVED/.test(dashRow(dashRemoved.markdown, "Dashboards element on the Freedom list page"))
+  && dashRemoved.missing > 0 && dashRemoved.complete === false,
+  () => dashRow(dashRemoved.markdown, "Dashboards element on the Freedom list page"));
+
+const V3_LIST_OPS = [
+  { operation: "remove", name: "MenuItem_ImportFromExcel" },
+  { operation: "merge", name: "FolderTree" },
+  { operation: "merge", name: "DataTable" },
+  { operation: "merge", name: "Dashboards" },
+];
+const dashV3 = renderVerify(dashTwo, dashVerifyOpts, dashBuilt(V3_LIST_OPS, { dashboards: dashLog }));
+check("F2 dashboards verify: the REAL ListPageV3Template shape (type-less `merge` named Dashboards) → ✅ Done",
+  /✅ Done/.test(dashRow(dashV3.markdown, "Dashboards element on the Freedom list page")),
+  () => dashRow(dashV3.markdown, "Dashboards element on the Freedom list page"));
+// isolate the row's own contribution to the gate: same planMeta both sides, the Dashboards op the only delta.
+const dashV3Without = renderVerify(dashTwo, dashVerifyOpts, dashBuilt(V3_LIST_OPS.filter((o) => o.name !== "Dashboards"), { dashboards: dashLog }));
+const dashV3With = renderVerify(dashTwo, dashVerifyOpts, dashBuilt(V3_LIST_OPS, { dashboards: dashLog }));
+check("F2 dashboards verify: the inherited element clears exactly ONE ❌ MISSING from the gate",
+  dashV3Without.missing === dashV3With.missing + 1,
+  () => ({ withoutDashboards: dashV3Without.missing, withDashboards: dashV3With.missing }));
+// the hand-added case (non-V3 template): the designer names it `Dashboards_<slug>` and it DOES carry its type.
+const dashHandAdded = renderVerify(dashTwo, dashVerifyOpts, dashBuilt([{ operation: "insert", name: "Dashboards_mlmodels", type: "crt.Dashboards", parentName: "DashboardsContainer" }], { dashboards: dashLog }));
+check("F2 dashboards verify: a hand-added `Dashboards_<slug>` element on a non-V3 template → ✅ Done",
+  /✅ Done/.test(dashRow(dashHandAdded.markdown, "Dashboards element on the Freedom list page")),
+  () => dashRow(dashHandAdded.markdown, "Dashboards element on the Freedom list page"));
+// A page NOBODY SHOWED must never be called absent - that is a missing INPUT, not a missing build. The engine
+// no longer infers this from the template name: the list page's own `--built` entry is either there or it is
+// not, so the same answer now holds for every template instead of only for the one that ships the element.
+const dashOpsOmitted = renderVerify(dashTwo, dashVerifyOpts, { pages: { main: { ops: [], parentSchemaName: "XPage" } }, dashboards: dashLog });
+check("F2 dashboards verify: the list page never supplied → ⚠ verify naming the entry to fill, gate still non-zero",
+  /⚠ verify/.test(dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"))
+  && /--built.pages\["list"\]/.test(dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"))
+  && dashOpsOmitted.complete === false,
+  () => dashRow(dashOpsOmitted.markdown, "Dashboards element on the Freedom list page"));
+// ...and the same omission on a NON-V3 template gets the same answer, which is the whole point: the template
+// stopped being the thing that decides whether a hard ❌ is honest.
+const dashOpsOmittedNonV3 = renderVerify(dashTwo, { planMeta: nonV3PlanMeta, targetPackage: "P" },
+  { pages: { main: { ops: [], parentSchemaName: "XPage" } }, dashboards: dashLog });
+check("F2 dashboards verify: a non-V3 template gets the SAME ⚠ for the same missing input, not a hard ❌",
+  /⚠ verify/.test(dashRow(dashOpsOmittedNonV3.markdown, "Dashboards element on the Freedom list page")),
+  () => dashRow(dashOpsOmittedNonV3.markdown, "Dashboards element on the Freedom list page"));
+
+/* ---- F1 / OBS1 — two DOCUMENTED facts the engine cannot enforce but which decide whether the migration hits
+   anything at all. Locked as source assertions, the same way the vendored-parser provenance is locked above.
+   · `SysSchemasSelectedId` takes a SysSchema PRIMARY KEY. The process filters SysSchema by primary column, and
+     `get-page` only ever returns UIds (schemaUId / rootSchemaUId / packageUId / designPackageUId) — verified on
+     the stand, where the Accounts_ListPage layer is Id 1425e99e… / UId 1c26396f… and NO SysSchema row has that
+     UId as its Id. Documenting "the schema UId from get-page" resolves to Guid.Empty and migrates nothing.
+   · the delivery-mode scan is PACKAGE-AGNOSTIC. Probing the section's own schema-layer packages first returns a
+     WRONG answer rather than no answer (stand: the section's layers live in `ML`, whose SysDashboard binding
+     holds an unrelated empty-`Section` dashboard, while the section's genuinely packaged dashboard is bound in
+     the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
+const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
+const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
+const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
+const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
+// One fact, one owner. The trap and its recipe are PROCEDURE, so they live in the skill that executes them;
+// the reference names the parameter and points there. Requiring BOTH documents to carry it, as this pair of
+// goldens used to, locked the duplication in place - a reader then has two copies to keep in step, and the
+// reference is the copy nobody updates.
+check("F1 docs: the SysSchemasSelectedId trap and its recipe are documented ONCE, in the skill",
+  skillFlat.includes("**`SysSchema.Id`** — its PRIMARY KEY")
+  && skillFlat.includes("`execute-esq` on `SysSchema` filtered `Name")
+  && skillFlat.includes("whose `UId` equals the `schemaUId`")
+  && !skillFlat.includes("the built list page's schema UId"),
+  () => "the skill lost the primary-key trap, its resolution recipe, or the layer-selection rule");
+check("F1 docs: the reference does NOT restate it - it names the parameter and points at the skill",
+  !mappingFlat.includes("its **primary key**")
+  && !mappingFlat.includes("pick the layer whose `UId`")
+  && mappingFlat.includes("Resolving each of them, and the order the runs go in, is the skill's"),
+  () => "the reference is repeating the skill's parameter recipe again");
+// The regression this locks (ENG-95807 / B1): the migrator briefly accepted a bare JSON array of ids on
+// SysDashboardsSelectionStateFilter, and the skill documented that notation. The second notation was reverted as
+// undiscoverable, so a skill that still teaches it hands the process a value that does not deserialize into a
+// filter - selecting nothing and reporting no error, the same silent no-op as the Guid.Empty trap above.
+check("B1 docs: the dashboard selection is documented as a serialized ESQ filter, with the stand-verified template",
+  skillFlat.includes("takes a SERIALIZED ESQ FILTER, not a list of ids")
+  && skillFlat.includes('"className":"Terrasoft.InFilter"')
+  && skillFlat.includes('"rootSchemaName":"SysDashboard"')
+  && !skillFlat.includes("the dashboard **ids** to migrate")
+  && !skillFlat.includes("passing the ids as an array")
+  && mappingFlat.includes("a serialized ESQ filter selecting the dashboards"),
+  () => "the skill still documents a bare id array, or lost the verified filter template");
+check("OBS1 docs: the delivery-mode scan covers EVERY SysDashboard binding, with no section-package shortcut",
+  skillFlat.includes("across **every** binding that query returns")
+  && skillFlat.includes("Do NOT narrow the scan by package")
+  && !skillFlat.includes("Probe the packages that own the section-schema layers first")
+  && mappingFlat.includes("package-agnostically"),
+  () => "the section-package probe shortcut is still offered");
+
+// The incident these lock: a clean agent ran BOTH destinations successfully, found the packaged schemas in
+// SysSchema, did NOT find the stand-only ones (those live in SysUserLevelSchema), declared that run a no-op on a
+// made-up "a schema must belong to some package" rule, and asked the engineer to name a package for 12
+// stand-only dashboards: the BR9 delivery regression, arriving as a request for a DECISION rather than as a
+// reported failure, which is why no engine gate could catch it.
+check("BR9 docs: the migrated dashboard's two destination stores are documented, and 'not in SysSchema' is not 'not migrated'",
+  mappingFlat.includes("Where a migrated dashboard lands")
+  && mappingFlat.includes("`SysUserLevelSchema`, in **no** package")
+  && mappingFlat.includes("`SchemaNamePrefix` system setting")
+  && mappingFlat.includes("**Absence from `SysSchema` is NOT absence.**")
+  && skillFlat.includes("**Omitting `TargetPackageName` is the supported stand-only route, not a missing input**")
+  && skillFlat.includes("you are querying the wrong store")
+  && skillFlat.includes("not looking at a failed migration"),
+  () => "the migrated-dashboard destination stores, or the supported no-package route, are not documented");
+// The rework this locks: delivery USED to mean "the package the source ships from", which made the dashboards
+// the migration's only write outside its own target package - into a package nothing proved writable, usually a
+// locked product one. The destination is now the run's own target package, and WHICH dashboards take it is a
+// recorded decision rather than something derived behind the user's back.
+check("rework docs: the packaged route names the RUN's target package, and the split is a decision, not a reading",
+  skillFlat.includes("**`saveInPackage: true` means `manifest.targetPackage`**")
+  && skillFlat.includes("Run once per destination — at most twice")
+  && skillFlat.includes("they are the USER's, not yours")
+  && !skillFlat.includes("RUNNING PER DELIVERY GROUP")
+  && mappingFlat.includes("**Which package, and who chooses.**")
+  && mappingFlat.includes("Never the package the 7x"),
+  () => "the docs still route a migrated dashboard to its SOURCE package, or present the split as derived");
+check("BR9 docs: the delivery-mode scan warns that a binding's Data carries a BOM that breaks JSON.parse",
+  skillFlat.includes("Strip a leading BOM before parsing"),
+  () => "the SysDashboard binding Data BOM is undocumented");
+check("BR docs: `Partially migrated` is documented as NOT done, and the decision is the user's",
+  skillFlat.includes("treat `Partially migrated` as NOT done")
+  && skillFlat.includes("never make that call yourself")
+  && skillFlat.includes("`built.dashboards` — a LIST, not a flag.**")
+  && skillFlat.includes("**Statuses go in VERBATIM**"),
+  () => "SKILL.md does not say a partially migrated dashboard is unfinished, or omits the evidence key");
+
+// T5b: the partial-outcome row. Emitted for ANY section with dashboards (unlike the delivery row, which needs a
+// packaged source): a widget the converter cannot map leaves a stand-only dashboard just as incomplete. It
+// asserts the CONVERSATION, not the outcome: whether to accept an incomplete dashboard is the user's call, and
+// the failure it guards is the agent making that call for them and reporting the migration complete.
+check("T5b partial-outcome checklist: the row is emitted even when no source dashboard is packaged",
+  /No unresolved partial migration/.test(dashStandOnly.checklist),
+  () => dashStandOnly.checklist.split("\n").filter((l) => /partial/i.test(l)));
+// The partials row asserts the CONVERSATION: a dashboard the user knowingly took as it stands is closed, one
+// they were never shown is not - so an unanswered partial reads unverified and NAMES the dashboard.
+const dashPartialOpen = renderVerify(dashTwo, dashVerifyOpts, { ops: dashBuiltOps, dashboards: [
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", status: "Partially migrated", message: "access right for Andrew was refused", package: "P" },
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", status: "Success", schemaName: "TestDashboard1_8x" },
+] });
+const dashPartialAnswered = renderVerify(dashTwo, dashVerifyOpts, { ops: dashBuiltOps, dashboards: [
+  { id: "dc755ef4-81e9-4ccb-b72a-831d1d6fcb84", status: "Partially migrated", message: "access right for Andrew was refused", package: "P", acceptedByUser: true },
+  { id: "41e34f4c-bcb4-4f69-b2a8-97d2b750aebb", status: "Success", schemaName: "TestDashboard1_8x" },
+] });
+check("T5b partial-outcome verify: an unanswered partial is ⚠ and names it; the user's answer closes the row",
+  /⚠ verify/.test(dashRow(dashPartialOpen.markdown, "No unresolved partial migration"))
+  && /ML model analytics came back Partially migrated/.test(dashRow(dashPartialOpen.markdown, "No unresolved partial migration"))
+  && dashPartialOpen.unverified > 0
+  && /✅ Done/.test(dashRow(dashPartialAnswered.markdown, "No unresolved partial migration")),
+  () => dashRow(dashPartialOpen.markdown, "No unresolved partial migration"));
+// A partial still EXISTS, so it settles the migrated row - the two rows answer different questions.
+check("T5b partial-outcome verify: Partially migrated settles the migrated row (the dashboard does exist)",
+  /✅ Done/.test(dashRow(dashPartialAnswered.markdown, "Dashboards migrated")),
+  () => dashRow(dashPartialAnswered.markdown, "Dashboards migrated"));
+
+// T6 (BR7) — the three pre-existing signal lines must read EXACTLY as before; the dashboards line is additive.
+check("T6 dashboards regression (BR7): the dcm / processes / printables lines are byte-for-byte untouched",
+  /- \*\*DCM case:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan)
+  && /- \*\*Connected processes:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan)
+  && /- \*\*Printables:\*\* none \(checked on-stand → not migrated\)/.test(dashTwo.plan),
+  () => dashTwo.plan.split("\n").filter((l) => /On-stand|DCM case|Connected processes|Printables|Section dashboards/.test(l)));
 
 /* ---- ENG-94274: the on-save DUPLICATE CHECK signal. The behaviour is an `asyncValidate` override on the seed
    chain (CrtDeduplication.BaseEntityPage), so it is `fromTemplate`, never a mappable member, and a migration used
@@ -4689,7 +5232,8 @@ check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagno
    Three states must behave differently, and the third one is the whole point of the signal. */
 const dedupSig = (dedup) => runMigration({ ...sigBase, signals: {
   dcm: { resolved: true, present: false }, processes: { resolved: true, present: false },
-  printables: { resolved: true, present: false }, ...(dedup ? { deduplication: dedup } : {}),
+  printables: { resolved: true, present: false }, dashboards: { resolved: true, present: false },
+  ...(dedup ? { deduplication: dedup } : {}),
 } });
 const dedupRows = (r) => (r.changeSet?.needsDecision || []).filter((d) => d.kind === "dedup-on-save");
 const dedupUnresolved = dedupSig(null);

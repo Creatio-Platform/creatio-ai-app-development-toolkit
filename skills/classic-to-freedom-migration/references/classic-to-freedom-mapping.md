@@ -124,6 +124,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 | Duplicates (side widget) | `widgets` (`Duplicates`) | the Freedom duplicates widget — surface it only when the classic page actually carried the `DuplicatesWidgetContainer` **with** its own layer evidence (an inherited-but-empty base container is chrome). No registry component is published under a duplicates name, so resolve the exact target on-stand (`get-component-info`, search "duplicate") before building. | assume the target is NOT `crt.Duplicates` — nothing in the component registry is named that; and do not migrate the widget from an inherited base container with no evidence the classic page used it. |
 | Recommendations (side widget) | `chromeWidgets` (hidden by default) | inherited base-template container (`BasePageV2`), **empty by default**, filled at runtime by `RecommendationModuleUtilities` (the **Next-Best-Offer / product recommendations**, `RecommendedProduct`). The engine classifies it as base **chrome and HIDES it from the plan** (kept in `chromeWidgets`). Surface it manually ONLY if the live page actually renders recommendations (NBO rules configured for the entity) → then wire the Freedom product-selection / recommendations component. | treat it as page content just because it is in the schema — it's always present but usually empty. |
 | **Embedded profile card** — a compact card of a LINKED record dropped into the page by `modules` config (a "requester" block on a request page; `AccountProfile` on `ContactPageV2`) | `profileCards[]` + a `profile-card` ⚠ item | the native Freedom **compact profile** in the **side profile**, keyed by the PROFILED entity: Contact → `crt.ContactCompactProfile`, Account → `crt.AccountCompactProfile`, user → `crt.UserCompactProfile` (the first two need the `CrtCustomer360App` package). Wire it with `referenceColumn: "$<masterColumnName>"` + `readonly: true`. No native component for that entity ⇒ rebuild the card as its own read-only-fields island. Full recipe below. | treat it as an "unknown embedded module" and drop the card (that is exactly the gap this rule closes); mistake the **actions/DCM dashboard** module for a profile card (it carries `masterColumnName` too, but nested under `dashboardConfig`); assume the native card shows everything the classic one did — it does **not** render Phone/Email/JobTitle-style columns, which must be added beside it. |
+| **Card widget** — a record-scoped indicator/chart embedded by `modules` config, its data stored per record in **`SysWidgetDashboard`** (e.g. the KPI charts on a Campaign page). The module carries `widgetKey` (which widget) + `recordId` (its `SysWidgetDashboard` record). | `cardWidgets[]` + a `card-widget` ⚠ item (carries `widgetKey`, `recordId`, `region`) | **converted by the migrator, never hand-built.** Group the widgets by `recordId`; per group make ONE `ConvertCardWidgetsProcess` call (batch the group's `widgetKeys`) and place the returned `freedomElementConfig` in the widget's `region`. Full recipe below. | hand-build a chart/list as a substitute; make one process call per widget instead of one per `recordId`; confuse it with a **section dashboard** (`SysDashboard`, the analytics section) — that is a different store and out of scope here. |
 | Ordinary related lists | `details[]` | a Freedom related list bound to the child data source | confuse them with the standard features above. |
 | Run process (record page) | `needsDecision` `process-launch` / `cardActions` | a Freedom "Run process" card action — **only if a process is connected to the section**. Check `ProcessInModules` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) — that is what fills the menu (Section Wizard → Business Processes); resolve each row's `SysSchemaUId` via `VwSysProcess` by `Id` for the name. None connected ⇒ **drop the button**; if some are, name each in the plan. | fabricate a process name, or migrate the button when nothing is connected. The base `ProcessButton` names none; only a literal `executeProcess`/`RunProcessRequest` name in a method is captured directly. `SysProcessEntity`/`VwSysProcessEntity` ("Object in process") are runtime process↔record instances — NOT the section config. |
 | Print (record page) | `cardActions` (Print) | a Freedom print action — **only if printables/reports exist** for the section. Check `SysModuleReport` filtered by the section's `SysModule` (`SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) / `ShowInCard eq true` (record card); read each `Caption`/`Type`/`SysReportSchemaUId`\|`FileName`. None ⇒ **drop the button**. | migrate the Print button when the section has no printables (it would be a dead button). |
@@ -164,7 +165,7 @@ is what shows the current approval state/actions. Read `get-component-info` for 
 required config before building, and add both.
 
 **Resolve the conditional checks BEFORE building — do not defer.** DCM case, connected processes,
-printables, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
+printables, section dashboards, and the on-save duplicate check are marked "⚠ ADD only if present" precisely because the schema
 alone doesn't say. Run each query at plan time and act on the result; never build "faithful to the classic
 body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
 the section has no case/process.
@@ -253,6 +254,78 @@ button; always a **menu item in the template's existing `Actions` button**, one 
 - **Form / record page** → the form page's OWN `Actions` button in the header action area (the header action-buttons container the template provides, e.g. `ActionButtonsContainer` in `PageWithTabsFreedomTemplate` — mirror the list-page Actions pattern, do NOT invent a new button and do NOT drop a bare button in the content). **Place it at the END of that container, next to the `CloseButton`** (last position — the standard spot for record actions), not first/mid-container. Run for the CURRENT record: pass `$Id` (`processRunType` = the current record, not `ForTheSelectedRecords`). If the template exposes no Actions menu on the form, that gap is a manual decision to raise, not a reason to place a loose button.
 
 None connected on a surface ⇒ nothing on that surface. None connected anywhere ⇒ drop the button entirely.
+
+### Section dashboards (7x analytics → the Freedom list page)
+
+**Storage model — why the schemas look empty.** A classic `*Section` schema contains **no dashboard code**. The
+analytics view is inherited from `BaseSectionV2` in `CrtUIPlatform7x`, and the dashboards themselves are *rows*:
+
+| What | Where it lives | Key columns |
+| --- | --- | --- |
+| The dashboard | `SysDashboard` (a data row, not a schema) | `Caption` (its title — there is **no `Name`**), `Section` → `SysModule`, `Items`, `ViewConfig`, `Position` |
+| Which section owns it | `SysDashboard.Section` → `SysModule` | a section's `SysModule` is found by `SectionSchemaUId` |
+| Section schema ↔ module | `SysModule.SectionSchemaUId` → `SysSchema.UId` | a plain **Guid** column, not a lookup |
+| Whether it ships in a package | `SysPackageSchemaData` (a data binding) | `Name`, `SysPackage`, `SysSchema`, `Data` (the bound rows, as JSON) |
+
+Two consequences drive everything below: the dashboards can only be discovered **on the stand** (nothing in the
+schema chain reveals them), and their *delivery* — packaged vs stand-only — is a property of the **bindings**,
+not of the section's own package. A single section routinely owns one of each.
+
+**Where a migrated dashboard lands — the two delivery routes.** The migrator writes the 8x dashboard as a
+client unit schema, and *which store* it uses is decided by the `TargetPackageName` process parameter:
+
+| `TargetPackageName` | The migrated schema lands in | Named |
+| --- | --- | --- |
+| passed | `SysSchema`, inside that package | prefixed with the `SchemaNamePrefix` system setting — e.g. `UsrTest01_0957AC8FB1_8x` |
+| omitted | `SysUserLevelSchema`, in **no** package | unprefixed — e.g. `Test10_D4FA19580A_8x` |
+
+**Which package, and who chooses.** The package passed is always **`manifest.targetPackage`** — the one this
+migration builds everything else into, and the only one `placement` proved writable. Never the package the 7x
+dashboard happens to ship from today: that is usually a product package, locked against design-time writes, and
+nothing in the plan ever checked it. Which dashboards take the packaged route is a DECISION recorded per item
+(`saveInPackage`, defaulting to "it shipped in a package before"), approved with the plan, and changed only
+when the user asks — the discovered `sourcePackage` picks the default and decides nothing else.
+
+**Absence from `SysSchema` is NOT absence.** A stand-only migrated dashboard is in a different table, so
+checking `SysSchema` alone reports a *successful* migration as a no-op. Read the per-dashboard
+`DashboardMigrationLog` first: a `Success` row with a schema you cannot find means you are looking in the
+wrong store.
+
+**Resolution order.** Two chains run at PLAN time and their answers are recorded in `manifest.signals.dashboards`,
+which the engine gates the plan on: the section's dashboards, and the package that ships each one.
+
+The executable form of both chains — which layer's `UId` the module actually points at, the shape of a
+binding's `Data` JSON, and the per-check caveats (strict `Section` filter, record-level administration, no
+`HasAnalytics`/`CreatedOn` heuristics, an errored query is not a "none") — lives with the recipe in the
+skill's `signals` step.
+
+**Why the binding scan must be package-agnostic.** A section's dashboards and its schema layers can sit in
+entirely unrelated packages, so step 4 scans *every* `SysDashboard` binding **package-agnostically** rather than
+probing the section's own packages. On one reference stand the ML models section's layers live in `ML`, whose
+only `SysDashboard` binding carries an unrelated page-level dashboard, while that section's genuinely packaged
+dashboard is bound from a different package altogether. Narrowing the scan does not fail loudly — it returns a
+*wrong* answer, reporting a packaged dashboard as stand-only and stripping its delivery on migration.
+
+**The target surface.** The migration writes into the section's Freedom **list** page. `ListPageV3Template`
+already ships the whole structure — `MainTabPanel` → `DashboardsTabContainer` → `DashboardsContainer` → an
+element named **`Dashboards`** of type `crt.Dashboards`. On any other list template you add that tab, container
+and element to the same page yourself, and a hand-added element carries the designer's own name —
+`Dashboards_<slug>` — rather than the template's `Dashboards`.
+
+**Run contract.** `MigrateDashboardsProcess` (from `CrtDashboardsMigratorApp`) does the migration. Its five parameters carry the section's `SysModule.Id`, the built list page's
+`SysSchema.Id`, a serialized ESQ filter selecting the dashboards to migrate, the `crt.Dashboards` element's
+name, and the target package. Resolving each of them, and the order the runs go in, is the skill's
+dashboards hand-off step.
+
+**What this migration does NOT cover** — state this explicitly rather than letting it be assumed:
+
+- **`SysWidgetDashboard` record-page card widgets.** Dashboard-like widgets embedded in a *record page* are not
+  section analytics; they stay a `needsDecision` item for a human to place.
+- **`SysDashboard` rows with an empty `Section`.** Page-level dashboards, out of scope even when their widgets
+  reference the section being migrated.
+- **Installing the migrator.** `CrtDashboardsMigratorApp` must already be on the stand; nothing here installs it.
+- **Anything the migrator itself gets wrong.** The widgets are moved by the platform app, so a mis-migrated
+  widget is a `CrtDashboardsMigratorApp` issue, not something to patch by hand-authoring the Freedom dashboard.
 
 ### Embedded profile cards (linked-record blocks) → the Freedom side profile
 
@@ -410,6 +483,85 @@ NOT `Applicant` columns. Build each such companion as a **read-only field bound 
 companions is exactly what collapses the island to a single lookup. If an island/group ends up with **one
 field**, treat it as a red flag (ui-guidelines flags the lone-field anti-pattern) and recover its
 auto-filled/companion fields before shipping.
+
+### Card widgets (record-scoped SysWidgetDashboard indicators) → the migrator, never hand-built
+
+A Classic page can embed **card widgets** — small record-scoped indicators/charts whose data is stored **per
+record in `SysWidgetDashboard`** (e.g. three KPI charts on a Campaign page). This is **not** the analytics
+**section dashboard** (`SysDashboard`, a whole dashboard section) and **not** the DCM action dashboard (rows
+above) — it is a different store, and only these `SysWidgetDashboard` card widgets are in scope here. The engine
+recognises each one and emits `changeSet.cardWidgets[]` plus a `card-widget` ⚠ item; this section is the build
+recipe.
+
+> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app, ENG-95805) and the clio
+> `run-process` MCP tool are separate, sibling subtasks. The contract below is **verified against the released
+> migrator (ENG-95805)** — re-confirm the field names on each migrator release. If either dependency is not yet
+> available on the stand, the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
+
+**Recognise it — the Classic side.** In the page's `modules` block, a `CardWidgetModule` whose
+`config.parameters.viewModelConfig` carries **both** `widgetKey` and `recordId`:
+
+```js
+modules: /**SCHEMA_MODULES*/{
+    "KpiChart": {
+        "moduleName": "CardWidgetModule",
+        "config": { "parameters": { "viewModelConfig": {
+            "widgetKey": "KpiChart",                              // which widget in the dashboard record
+            "recordId": "b1e2c3d4-0000-4000-8000-000000000001"   // its SysWidgetDashboard record
+        } } }
+    }
+}
+```
+
+A module missing **either** coordinate cannot be converted, so the engine deliberately leaves it as the old
+generic `component` ⚠ item (no silent drop) — do not treat that as a card widget.
+
+**Recognition is by the two coordinates, not by the module name.** `CardWidgetModule` is the module that carries
+`recordId` + `widgetKey` on `viewModelConfig` in a real classic body, but the engine keys off the **coordinates**,
+not off `moduleName` — a module carrying both (without `masterColumnName`, not in the widget catalog) is a card
+widget whatever it is named. If you are chasing why a differently-named module became a card widget, that is the
+reason; grepping the engine for `CardWidgetModule` will not explain it. An **inherited** card widget (carried in
+from a base/seed layer, `fromTemplate`) is base-template chrome and is **not** emitted — only a card widget the
+page's own layer declares becomes a decision.
+
+**Ordered steps (contract verified against the released migrator, ENG-95805).**
+
+1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)
+   / the `card-widget` ⚠ items. Do not re-derive the coordinates by hand.
+2. **Group by `recordId`.** All widgets that share one `recordId` are one `SysWidgetDashboard` record, so they
+   convert in **one** process call — batch their `widgetKeys` together. N distinct `recordId`s ⇒ N calls.
+3. **Call the migrator once per group** via the clio `run-process` MCP tool: run `ConvertCardWidgetsProcess`
+   with inputs `SysWidgetDashboardId` = the group's `recordId` and `WidgetKeys` = the group's keys as a
+   **comma-separated string** (empty ⇒ the migrator converts every widget on the record), requesting the
+   `["ConversionResult"]` output parameter. The caller must hold the **`CanMigrateDashboard`** operation right
+   (a denied call comes back as a whole-call failure — see step 4).
+4. **Read `ConversionResult`** — a camelCase JSON envelope (null fields omitted):
+
+   ```
+   { success, error, stack, widgets: [ { widgetKey, status, freedomElementConfig, issues[], stack } ] }
+   freedomElementConfig = { viewConfigDiff, viewModelConfigDiff, modelConfigDiff, localizableStrings[], issues[] }
+   ```
+
+   - **Whole-call failure — `success:false`** (empty/unknown `recordId`, invalid `Items`, no widgets on the
+     record, access denied, or an unhandled error): `widgets` is empty. **Mark every requested widget in this
+     group `TODO`/`BLOCKED`** in `worklog.md` with the top-level `error`. Nothing is placed; do not retry by hand.
+   - Otherwise iterate `widgets[]`. Each widget's `status` is one of **`Success` / `Failed` / `Skipped`** (there
+     is no `Partial` for card widgets):
+     - **`Success`** → **place `freedomElementConfig`**: merge its `viewConfigDiff` / `viewModelConfigDiff` /
+       `modelConfigDiff` into the widget's `region` **and apply its `localizableStrings[]`** (localized captions).
+       Placement follows `creatio-ui-guidelines`; you **build nothing by hand**. (A non-empty per-element
+       `issues[]` on a `Success` is advisory — note it, still place.)
+     - **`Failed`** (widget key absent from the record, missing widget type, converter error, or record-context
+       could not be bound) or **`Skipped`** (widget type unsupported on the platform version, or unknown type) →
+       leave the widget **`TODO`/`BLOCKED`** in `worklog.md` with its `issues[]` (and `stack` for diagnosis).
+       **Never substitute a hand-built chart/list.**
+     - A **requested `widgetKey` that is absent from `widgets[]`** is likewise **`TODO`/`BLOCKED`** — it was not
+       converted.
+5. **Record evidence.** Per widget, set `built.json`'s `cardWidget:<recordId>:<widgetKey>` to `true` (placed on a
+   `Success`) or `false` (blocked — `Failed`/`Skipped`/whole-call failure/absent) so
+   `node engine/migrate.mjs <manifest> --verify --built <built-file>` gates each one. The key is scoped by **both**
+   `recordId` and `widgetKey` — the same `widgetKey` can legitimately recur under different `recordId`s, so keying
+   by `widgetKey` alone would let one widget's evidence satisfy another's gate.
 
 ## Data And Binding Mapping
 
