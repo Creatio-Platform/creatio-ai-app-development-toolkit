@@ -428,6 +428,28 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"per-audience read must redact literals; missing {missing}")
 
+    def test_classic_dashboards_go_through_the_migrator_not_a_rebuild(self):
+        # A section's Classic dashboards used to be invisible to the skill, so a run
+        # either redrew them as a Freedom page or dropped them silently. The install is a
+        # destructive clio tool (configuration build + restart), so the route and the hand-off
+        # to the user are pinned, not only the tool name.
+        content = read_text(MIGRATION_SKILL)
+        step = bullet(content, "9. **Classic dashboards (from step 2).**")
+        missing = missing_markers(
+            step,
+            [
+                "clio-run-destructive",
+                '"command": "install-dashboards-migrator"',
+                "confirm the environment with the user",
+                "Dashboards migration log",
+            ],
+        )
+        self.assertFalse(missing, f"dashboards step must route through the migrator; missing {missing}")
+        discovery = bullet(content, "- **Classic dashboards of the section:**")
+        self.assertIn("SysDashboard", discovery)
+        dod = read_text(ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md")
+        self.assertIn("Classic dashboards: the Dashboards Migrator is installed", dod)
+
 
 if __name__ == "__main__":
     unittest.main()

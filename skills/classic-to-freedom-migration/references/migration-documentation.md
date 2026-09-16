@@ -26,7 +26,7 @@ Match the user's language inside the documents.
 | Single section / page / detail / mini page | `plan.md`, `worklog.md` and `decisions.md`. (Status is tracked in `worklog.md` / the Plan-vs-Done table — never inside `plan.md`, which is frozen after approval. `decisions.md` exists at this scope for ONE reason: it is where the plan approval is recorded, and the build reads it — see below.) |
 | Whole package / application | Full set: `README.md`, `discovery.md`, `plan.md`, `roadmap.md`, `decisions.md`, `worklog.md`. |
 
-`customizations.md` is required **at both scopes** whenever the step-5.1 `classic-ui-expert` run applies (an `⚠ Imperative logic` row with an unresolved trigger or an `externalRef` method, or a `message` / `mixin` member). It is not part of the whole-package-only set: a single-section migration whose page carries such a row gets `plan.md` + `worklog.md` + `decisions.md` + `customizations.md`, and nothing else.
+`customizations.md` is required **at both scopes** whenever the step-5.1 `classic-ui-expert` run applies (an `⚠ Custom methods` row with an unresolved trigger or an `externalRef` method, or a `message` / `mixin` member). It is not part of the whole-package-only set: a single-section migration whose page carries such a row gets `plan.md` + `worklog.md` + `decisions.md` + `customizations.md`, and nothing else.
 
 That run also produces **`behaviour-index.json`** — the machine-readable half of the same deliverable (each handed-over row → its card, AC numbers and, where the analysis resolved one, the trigger the engine could not trace). It is not documentation to read: it is merged into the manifest as `behaviourIndex` so the regenerated `plan.md` carries the card reference in its own generated tables. Keep it in the folder next to the report — a plan re-run needs it again, and without it the link from a worklist row to the behaviour that describes it exists only in prose.
 
@@ -78,6 +78,7 @@ Read-only findings from runtime discovery.
 - classification of every Classic schema: **own section/page** vs **replacing/extension schema**
 - dependency graph: which pages depend on which entities, details, and backend schemas
 - missing-source gaps recorded as risks
+- Classic dashboards per section: count and captions, or an explicit `none`
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
@@ -159,6 +160,7 @@ A task may only move to `VALIDATED` after runtime read-back is recorded in `work
 - localizable resources present
 - page schema validation passed
 - no route/section-code collision introduced (Classic route still resolves where intended; no duplicate Freedom section)
+- Classic dashboards: the Dashboards Migrator is installed and the migration outcome recorded, or `discovery.md` says `none` for the section
 
 If any item cannot be verified, the task stays `DONE` and the gap is logged as a risk.
 
