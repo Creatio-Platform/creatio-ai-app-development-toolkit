@@ -11,12 +11,15 @@ matter is where the outcome goes. Nothing outside that file reports your work.
    not you. Silently simplifying a row is the one failure the machine gate cannot catch, because the row that
    would have caught it is the row you changed.
 2. **ONE task, this one. Do not pick up a second task file in this session** — not to "keep the page coherent",
-   not because the next task looks small, not because you already have the page body open. Your task's front
-   matter names the artifact it writes (`writesTo:`) and the tasks that had to close before it (`dependsOn:`);
-   everything your task needs from those is in their `## Notes`, which you read rather than redo. Before you
-   finish, put a value you mint yourself into `agentNonce:` — any short unique string. The engine reports the same
-   value appearing on two task files, and a `done` task carrying none: that is how a session that closed several
-   tasks at once becomes visible, and it is checked because neither you nor the orchestrator can attest to it.
+   not because the next task looks small, not because you already have the page body open. This holds for the
+   NEXT chunk of the very page you just built: those are separate tasks and separate sub-agents, and taking them
+   one after another in this session is the violation, not a way of finishing the page. Your task's front matter
+   names the artifact it writes (`writesTo:`) and the tasks that had to close before it (`dependsOn:`); everything
+   your task needs from those is in their `## Notes`, which you read rather than redo. Before you finish, copy the
+   **dispatch token** you were handed when this task was started into `agentNonce:`, verbatim. Do not invent one:
+   the token was issued to this task alone, and a task closed carrying a different token — or none — fails the
+   run's dispatch gate. If you were handed no token you were not dispatched through the engine: say so and stop,
+   rather than minting a value.
 3. **Write your outcome into your own task file before you return** — `status` in the front matter (`todo` /
    `in-progress` / `done` / `blocked` / `n/a`) plus what you did under `## Notes`: the artifacts you saved, the
    evidence you filed — spelled out, because a SEPARATE context judges it and cannot ask you (the shipped reference

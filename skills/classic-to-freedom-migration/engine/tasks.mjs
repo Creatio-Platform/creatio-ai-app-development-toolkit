@@ -35,7 +35,7 @@
 // the digits are exactly what moves: `Side profile — 12 fields` and `Side profile — 13 fields` are one anchor, so
 // adding a field does not renumber the chunks after it. `order` carries the build sequence and is the field that
 // moves; the index calls it `Step`.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY } from "./designspec.mjs";
@@ -608,7 +608,11 @@ function oneAgentBlock(task) {
   const L = [];
   if (task.writesTo) {
     L.push(`- **Writes:** \`${task.writesTo}\` — no other task may be running against this artifact. A task with a`
-      + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not.");
+      + " DIFFERENT `writesTo` (or an empty one) may run beside this one; one with the same must not."
+      // "No other task may be RUNNING against this artifact" is satisfied by one agent taking a page's chunks one
+      // after another, so the sequential case is stated rather than left to be inferred.
+      + " The NEXT task on this artifact goes to a DIFFERENT sub-agent — sequential is not permission to keep"
+      + " this one; finishing yours and picking up the next chunk of the same page is the violation.");
   } else {
     L.push("- **Writes:** nothing — read-only. It may run beside any task it does not depend on.");
   }
@@ -617,9 +621,11 @@ function oneAgentBlock(task) {
     L.push(`- **Depends on:** ${deps} — each must read \`done\` before`
       + " this starts. Read their `## Notes` first: what they answered on the stand is not repeated here.");
   }
-  L.push("- **One sub-agent, one task:** do not pick up another task file in this session. Before finishing, put a"
-    + " value you mint yourself in `agentNonce:` above (any short unique string). The engine reports the same nonce"
-    + " appearing twice, which is how a task closed by a sub-agent that was already working another one is found.");
+  L.push("- **One sub-agent, one task:** do not pick up another task file in this session. Before finishing, copy"
+    + " the **dispatch token** your orchestrator handed you when it started THIS task into `agentNonce:` above,"
+    + " verbatim. Do not invent one: the engine issued that token to this task alone, and a task closed carrying"
+    + " a different token — or none — is reported as closed by a context it was never handed to. If you were not"
+    + " given a token, you were not dispatched through the engine: stop and say so rather than minting a value.");
   return L;
 }
 
@@ -718,8 +724,13 @@ const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 // puts it. Naming the column `#` invited reading the two as one number.
 // `Writes` is in the table because the orchestrator's parallelism rule reads off it: two tasks may be dispatched
 // at once only when this column differs between them. A blank cell is a read-only task.
+// `Dispatched` answers ONE question — was a sub-agent sent out for this task — in the MAIN table rather than in a
+// paragraph below it. It carries no duration: an elapsed time is noise beside that fact, and a cell with no clock
+// value in it is also a cell that cannot make the derived index differ between two regenerations.
+const DISPATCH_MARK = new Map([["yes", "✔ yes"], ["started", "▶ started"], ["never", "⚠ never"], ["pending", "—"]]);
+
 function indexRows(tasks) {
-  const L = ["| Step | Task | Page | Writes | Status | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- |"];
+  const L = ["| Step | Task | Page | Writes | Status | Dispatched | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
     const gatedNote = t.gatedRows ? ` (${t.gatedRows} gated)` : "";
     // An adopted file's rows are counted off the file, because the engine never parsed them into `t.rows`.
@@ -729,7 +740,8 @@ function indexRows(tasks) {
     const mark = t.unread ? "⚠ unread" : statusMark(t.status);
     const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
     const gate = t.stopGate ? " ⏸ stop-gate" : "";
-    L.push(`| ${t.step ?? t.order} | ${t.group}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${rows} | [${t.file}](${t.file}) |`);
+    const disp = DISPATCH_MARK.get(t.dispatched) || "—";
+    L.push(`| ${t.step ?? t.order} | ${t.group}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${disp} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
@@ -786,18 +798,57 @@ function nonceAttention(tasks) {
   return out;
 }
 
-function attentionLines(set) {
-  const out = set.tasks.flatMap(taskAttention);
-  out.push(...nonceAttention(set.tasks));
-  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
-  // nobody asked it to start one — and on the first live run of `--start` that was the review task, closed by the
-  // orchestrator that had just judged its own build. Reported, never coerced: the status stands as recorded.
-  for (const t of set.undispatched || []) {
+// WHAT A FAILED SIGNATURE WAS CARRYING. Three cases, each naming what the engine can actually tell the caller.
+function signatureCarried(s) {
+  if (s.owner) return `the token issued for \`${s.owner}\`, so the context that closed this task was the one dispatched for THAT one`;
+  return s.got ? "a value dispatch never issued" : "NOTHING";
+}
+
+// A review is read-only and names its builders in `dependsOn`, so a signature belonging to one of them is the
+// verdict being filed by the work's own author.
+function signatureIsSelfReview(s) {
+  return !!s.owner && !s.task.writesTo && (s.task.dependsOn || []).includes(s.owner);
+}
+
+// The dispatch findings, in the order their remedies differ: rebuild, read the reason, write one, re-run the
+// mode, re-dispatch. Kept apart from `attentionLines` so neither grows a branch the other has to carry.
+function dispatchAttention(dispatch) {
+  const out = [];
+  for (const t of dispatch?.never || []) {
     out.push(`- \`${t.file}\` — recorded \`${t.status}\` but never STARTED through \`--tasks --start ${t.id}\`, so no`
       + " sub-agent was dispatched for it through the engine and its duration was never measured. For a review task"
       + " this is the thing the task exists to prevent: a verdict filed by the context that did the work is not a"
       + " verdict. Re-open it (`status: todo`), start it, and hand it to its own sub-agent.");
   }
+  for (const t of dispatch?.naUndispatched || []) {
+    out.push(`- \`${t.file}\` — recorded \`n/a\` with no dispatch record. That does NOT fail the gate: a row that`
+      + " does not apply is closed without a sub-agent, and its `## Notes` carry the reason. Read the reason.");
+  }
+  for (const t of dispatch?.naNoReason || []) {
+    out.push(`- \`${t.file}\` — recorded \`n/a\` with no dispatch record AND nothing under \`## Notes\`. The reason`
+      + " is what earns an `n/a` its exemption from the dispatch gate, so without one this is a task closed with"
+      + " neither a builder nor a justification. Write why it does not apply, or re-open and build it.");
+  }
+  for (const t of dispatch?.openClock || []) {
+    out.push(`- \`${t.file}\` — recorded \`${t.status}\` while its clock is STILL OPEN, so the folder's books are`
+      + " behind rather than wrong. Re-run `--tasks` on this folder: that closes the clock and records the sample.");
+  }
+  for (const s of dispatch?.signature || []) {
+    const review = signatureIsSelfReview(s)
+      ? " This is a review task signed by a builder of the very work it judges — a verdict filed by the context"
+        + " that did the work is not a verdict, and that is the whole reason this task is separate."
+      : "";
+    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (\`status: todo\`), \`--start\` it,`
+      + " and hand the token that prints to a sub-agent of its own.");
+  }
+  return out;
+}
+
+function attentionLines(set) {
+  const out = set.tasks.flatMap(taskAttention);
+  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
+  // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
+  out.push(...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch));
   // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
   // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
   // is exactly the judgement the split file records.
@@ -1273,6 +1324,9 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   }
   // The index is derived from the FILES, so re-deriving it now picks the new repair files up with everything else.
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  // The Dispatched column is folder-derived like the rest of the index: without this every row would render as
+  // "not known" and a repair round would quietly erase what the build rounds recorded.
+  attachDispatch(merged, dir);
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { written, parked, pending, set: merged };
 }
@@ -1344,15 +1398,36 @@ const CLOSED = new Set([S_DONE, S_NA]);
 
 // `running` is the open clocks, keyed by task id; `samples` the closed ones. Both in one file so a run's timing
 // state is one thing to read, write and delete.
+// AN OPEN CLOCK IS READ SHAPE-AGNOSTICALLY. `running` is accepted as a bare `{id: "<iso>"}` map, as
+// `{id: {startedAt, token}}`, or as a LIST of either, and always normalized to `{id: {startedAt, token}}` for
+// every consumer below. A shape this does not recognise yields NO open clocks, which is indistinguishable from a
+// folder in which everything was dispatched — so tolerance here is what keeps the audit honest.
+function normalizeRunning(raw) {
+  const out = {};
+  const put = (id, v) => {
+    if (!id) return;
+    if (typeof v === "string") out[id] = { startedAt: v, token: "" };
+    else if (v && typeof v === "object") out[id] = { startedAt: v.startedAt || v.at || "", token: v.token || "" };
+  };
+  if (Array.isArray(raw)) for (const e of raw) put(typeof e === "string" ? e : e?.id, e);
+  else if (raw && typeof raw === "object") for (const [id, v] of Object.entries(raw)) put(id, v);
+  return out;
+}
+
+// A SAMPLE IS TWO FACTS, and only one of them is a duration: THAT the task was dispatched, and how long it took.
+// They are filtered apart. A task that closes faster than the recorded precision rounds to `minutes: 0` and is
+// useless to the forecast, but it is still proof a sub-agent was dispatched — dropping it here would report a
+// dispatched task as one nobody was ever sent out for.
+const usableSamples = (samples) => samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0);
+
 export function readTimingsFile(dir) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
-    const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0) : [];
-    const running = raw?.running && typeof raw.running === "object" ? raw.running : {};
-    return { samples, running };
+    const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => x?.id) : [];
+    return { samples, running: normalizeRunning(raw?.running) };
   } catch { return { samples: [], running: {} }; }   // absent or malformed — a forecast is not worth an exception
 }
-export const readTimings = (dir) => readTimingsFile(dir).samples;
+export const readTimings = (dir) => usableSamples(readTimingsFile(dir).samples);
 const writeTimings = (dir, state) =>
   fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
 
@@ -1362,13 +1437,20 @@ function closeClocks(dir, tasks, now) {
   const state = readTimingsFile(dir);
   let changed = false;
   for (const t of tasks) {
-    const startedAt = state.running[t.id];
-    if (!CLOSED.has(t.status) || !startedAt) continue;
+    const clock = state.running[t.id];
+    if (!CLOSED.has(t.status) || !clock?.startedAt) continue;
     delete state.running[t.id];
     changed = true;
-    const minutes = (new Date(now) - new Date(startedAt)) / 60000;
-    if (Number.isFinite(minutes) && minutes > 0) {
-      state.samples.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(minutes.toFixed(2)) });
+    const minutes = (new Date(now) - new Date(clock.startedAt)) / 60000;
+    // THE TOKEN OUTLIVES THE CLOCK, into the sample. `running` is deleted the moment the task closes, and a
+    // closed task is the only kind whose signature can be checked at all.
+    // A sample is dispatch evidence first, a duration second: every real close records one, clamped to 0. A
+    // same-tick or backward-skew close (`minutes <= 0`) is useless to the forecast but still proof a sub-agent
+    // was dispatched; dropping it would leave the gate reading a correctly closed task as never dispatched.
+    // `usableSamples` keeps zero-duration out of the forecast. Only an unparseable timestamp records nothing.
+    if (Number.isFinite(minutes)) {
+      state.samples.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(Math.max(0, minutes).toFixed(2)),
+        ...(clock.token ? { token: clock.token } : {}) });
     }
   }
   if (changed) writeTimings(dir, state);
@@ -1379,7 +1461,8 @@ function closeClocks(dir, tasks, now) {
 // apart. It is stdout, never `index.md`: the index is a derived file compared byte-for-byte by the goldens, and a
 // clock in it would make every regeneration a different file.
 export function renderProgress(set, dir, now = new Date().toISOString()) {
-  const { samples, running: clocks } = readTimingsFile(dir);
+  const { samples: allSamples, running: clocks } = readTimingsFile(dir);
+  const samples = usableSamples(allSamples);   // the FORECAST reads only measurable samples; the dispatch count below reads all of them
   const tasks = [...set.tasks].sort((a, b) => Number(a.order) - Number(b.order));
   const done = tasks.filter((t) => CLOSED.has(t.status));
   const running = tasks.filter((t) => t.status === S_IN_PROGRESS);
@@ -1387,7 +1470,7 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
   const L = [];
   for (const t of running) {
     const f = forecastMinutes(t.weight, samples);
-    const startedAt = clocks[t.id];
+    const startedAt = clocks[t.id]?.startedAt;
     const elapsed = startedAt ? `, running ${Math.round((new Date(now) - new Date(startedAt)) / 60000)} min` : "";
     const eta = f ? `, expected ${f.low}-${f.high} min` : "";
     L.push(`[${Number(t.order)}/${tasks.length}] RUNNING  ${t.group} · ${t.pageKey}${elapsed}${eta}`);
@@ -1397,6 +1480,12 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
   const basis = samples.length ? `${samples.length} closed task(s) of this run` : "the engine's calibrated rate — no task of this run has closed yet";
   L.push(`done ${done.length} · running ${running.length} · todo ${open.length}`
     + (left ? ` — about ${left.low}-${left.high} min left (${basis})` : ""));
+  // THE COUNT THE USER READS IN REAL TIME. This block is pasted into the chat after every dispatch and is the
+  // only surface a watching user has while the run is happening, so the dispatch shortfall belongs in it rather
+  // than only in a file the run may never re-read.
+  const audit = dispatchAudit(tasks, dir);
+  const shortfall = audit.failing.length ? ` — ⚠ ${audit.failing.length} closed task(s) with NO dispatch record` : "";
+  L.push(`dispatched ${audit.dispatched} of ${audit.total}${shortfall}`);
   return L.join("\n") + "\n";
 }
 
@@ -1415,9 +1504,34 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   if (t.unread) {
     return { ...merged, started: null, unread: t.file };
   }
-  t.status = S_IN_PROGRESS;
+  // ⛔ THE RUN STOPS AT THE NEXT DISPATCH, not at the end. A folder holding a closure nobody was dispatched for
+  // gets no new clock: the books are repaired BEFORE another sub-agent is sent out on top of them, so the cost of
+  // a broken ledger is one task rather than a whole run.
+  if (merged.dispatch?.failing.length) {
+    return { ...merged, started: null, blockedByDispatch: merged.dispatch };
+  }
   const state = readTimingsFile(dir);
-  state.running[t.id] = now;
+  // ⛔ THE QUEUE ORDER IS ENFORCED, not advised. A task whose `dependsOn` has not closed would be built against
+  // answers that do not exist yet: the child form its related list opens, the scaffolding it saves into, the
+  // `## Notes` the next chunk of its page reads instead of redoing the work.
+  const byId = new Map(merged.tasks.map((x) => [x.id, x]));
+  const openDeps = (t.dependsOn || []).map((d) => byId.get(d)).filter((d) => d && !CLOSED.has(d.status));
+  if (openDeps.length) return { ...merged, started: null, blockedByDeps: openDeps };
+  // ⛔ ONE WRITER PER ARTIFACT, enforced where the token is issued. Issuing tokens for several tasks that write
+  // the SAME artifact is what lets one sub-agent hold them all and close each with a valid signature — every
+  // other check would pass. Tasks on DIFFERENT artifacts may legitimately be open at once, so the comparison is
+  // on `writesTo` and not on the number of open clocks; a read-only task claims nothing and never conflicts.
+  const conflicts = t.writesTo
+    ? merged.tasks.filter((x) => x.id !== t.id && x.writesTo === t.writesTo && state.running[x.id])
+    : [];
+  if (conflicts.length) return { ...merged, started: null, blockedByOverlap: conflicts };
+  t.status = S_IN_PROGRESS;
+  // THE SIGNATURE THE AGENT CANNOT MINT. The orchestrator hands this token to the sub-agent it dispatches and the
+  // sub-agent echoes it into `agentNonce`. A value the agent chooses for itself is distinct on every file it
+  // closes, so it can never show one agent closing several. The token is NOT written into the task file: an agent
+  // holding several files would read a valid token off each one.
+  const token = opts.dispatchToken || `${t.id}-${randomBytes(6).toString("hex")}`;
+  state.running[t.id] = { startedAt: now, token };
   writeTimings(dir, state);
   // The SAME guard set `syncTaskDir` applies on its write. An adopted file (`origin: orchestrator`, which every
   // repair task carries) has a body the engine never authored: its Deliverables come from the file, not from
@@ -1429,8 +1543,11 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   } else {
     fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
   }
+  // Re-read the clocks AFTER this task's own was stamped, so the index it writes shows the task it just started
+  // as started rather than as never dispatched.
+  attachDispatch(merged, dir);
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
-  return { ...merged, started: t };
+  return { ...merged, started: t, dispatchToken: token };
 }
 
 // REWRITES ONE LINE OF AN EXISTING FILE. The whole point is that everything else in the file — an authored body,
@@ -1457,10 +1574,103 @@ function setFrontMatterStatus(dir, file, status) {
 // tasks were not closed by the SAME one — but it can see that a task went to `done` without ever being started
 // through `--start`. On the first live run that was the review task, closed by the orchestrator that had just
 // judged its own build, and nothing in the folder objected.
-function undispatched(set, dir) {
+// THE ONE PREDICATE, read-only, computed from the parsed task files plus `timings.json` and nothing else — so the
+// SAME answer comes out of a folder the engine just wrote and a folder `--verify` merely reads. Three findings,
+// deliberately distinct because their remedies are:
+//
+//   `never`   — closed with no clock EVER opened: no sub-agent was dispatched through the engine. The remedy is
+//               to re-open, `--start` and hand it out; re-running the mode cannot supply what was never recorded.
+//   `openClock` — closed while its clock is STILL open, so the books are behind rather than wrong; re-running the
+//               mode closes the clock and records the sample. Only reachable on the READ-ONLY path, because
+//               `syncTaskDir` closes clocks before it audits.
+//   `signature` — started, and closed carrying something other than the token dispatch issued for it.
+//
+// `n/a` IS NOT A GATE FAILURE. A row that does not apply is closed without anyone building it, so requiring a
+// dispatch record for it would make the gate unpassable. It is reported on Attention instead: the one closure a
+// run may make with no sub-agent is also the cheapest way around the gate, so it is named rather than silent.
+// THE FOLDER AS IT STANDS, with no plan and no re-slice. `--verify` audits dispatch without re-cutting the folder,
+// so it reads the recorded front matter straight off disk. A file whose front matter could not be parsed carries
+// no status anyone can act on and is skipped, exactly as the merge skips it.
+export function readTaskDir(dir) {
+  return readExisting(dir)
+    .filter((e) => !e.malformed && e.meta?.id)
+    .map((e) => ({
+      id: e.meta.id, file: e.file, status: e.meta.status || S_TODO,
+      origin: TASK_ORIGINS.includes(e.meta.origin) ? e.meta.origin : TASK_ORIGIN_ENGINE,
+      agentNonce: e.meta.agentNonce || "", writesTo: e.meta.writesTo || "",
+      dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
+      notes: e.notes || "",
+    }));
+}
+
+// CLOSED WITH NO CLOCK AT ALL. An orchestrator-authored file is not the engine's to schedule, so it is not held
+// to the engine's dispatch record — the repair tasks the engine DOES author carry `origin: orchestrator` too.
+// THE REASON IS WHAT BUYS THE EXEMPTION: `n/a` is the one closure that needs no sub-agent, so an `n/a` with
+// nothing under `## Notes` is a task closed with neither a builder nor a justification, and it is the cheapest
+// way to write off every remaining row at once.
+function classifyUndispatched(t, out) {
+  if (t.origin !== TASK_ORIGIN_ENGINE) return;
+  if (t.status !== S_NA) { out.never.push(t); return; }
+  ((t.notes || "").trim() ? out.naUndispatched : out.naNoReason).push(t);
+}
+
+// SIGNED WITH A VALUE THE AGENT DID NOT CHOOSE. Checkable only where the clock record carries a token; without
+// one there is nothing to compare against, and the duplicate/empty-nonce report on the index is the only check.
+function checkSignature(t, sample, tokenOwner, out) {
+  if (!sample.token) return;
+  const got = (t.agentNonce || "").trim();
+  if (got === sample.token) return;
+  const owner = got ? tokenOwner.get(got) : null;
+  out.signature.push({ task: t, got, expected: sample.token, owner: owner && owner !== t.id ? owner : null });
+}
+
+export function dispatchAudit(tasks, dir) {
   const { running, samples } = readTimingsFile(dir);
-  const timed = new Set([...Object.keys(running), ...samples.map((x) => x.id)]);
-  return set.tasks.filter((t) => CLOSED.has(t.status) && t.origin === TASK_ORIGIN_ENGINE && !timed.has(t.id));
+  const sampleById = new Map(samples.map((x) => [x.id, x]));
+  const tokenOwner = new Map();   // token → task id it was issued to
+  for (const [id, c] of Object.entries(running)) if (c.token) tokenOwner.set(c.token, id);
+  for (const s of samples) if (s.token) tokenOwner.set(s.token, s.id);
+
+  const out = { never: [], openClock: [], signature: [], naUndispatched: [], naNoReason: [] };
+  for (const t of tasks) {
+    if (t.unread || !CLOSED.has(t.status)) continue;
+    const clock = running[t.id], sample = sampleById.get(t.id);
+    if (!clock && !sample) classifyUndispatched(t, out);
+    else if (clock) out.openClock.push(t);   // still open: the sample does not exist yet, so nothing to sign
+    else checkSignature(t, sample, tokenOwner, out);
+  }
+  const { never, openClock, signature, naUndispatched, naNoReason } = out;
+  // The exit-2 set. `openClock` is separated because its remedy is a command, not a rebuild.
+  // ONE denominator for every surface that prints a dispatch count: the tasks in the folder.
+  return { never, openClock, signature, naUndispatched, naNoReason,
+    failing: [...never, ...openClock, ...naNoReason, ...signature.map((s) => s.task)],
+    dispatched: tasks.filter((t) => running[t.id] || sampleById.has(t.id)).length,
+    total: tasks.length };
+}
+
+// The audit, plus the per-task cell the index renders. `renderTaskIndex` takes only a set (it is called in tests
+// with a set built by hand and no folder at all), so the folder-derived fact is attached to the set here rather
+// than read inside the renderer — an undefined cell renders as "not known", never as "never dispatched".
+function attachDispatch(set, dir) {
+  const audit = dispatchAudit(set.tasks, dir);
+  const { running, samples } = readTimingsFile(dir);
+  const sampled = new Set(samples.map((x) => x.id));
+  for (const t of set.tasks) {
+    if (running[t.id]) t.dispatched = "started";
+    else if (sampled.has(t.id)) t.dispatched = "yes";
+    // NO CLOCK MEANS TWO DIFFERENT THINGS, and only one of them is a warning. A task still OPEN has simply not
+    // had its turn yet; a CLOSED one was finished with nobody dispatched for it. Marking both the same way puts a
+    // warning on every row of a healthy queue, and the one row that matters then reads like the other sixteen.
+    // THE COLUMN AGREES WITH THE GATE: `⚠ never` only where the gate would fail the row. `classifyUndispatched`
+    // exempts a non-engine-origin (orchestrator/repair) closure, so it reads `—` here too rather than a warning
+    // nothing else echoes.
+    else t.dispatched = CLOSED.has(t.status) && t.origin === TASK_ORIGIN_ENGINE ? "never" : "pending";
+  }
+  set.dispatch = audit;
+  // Kept under its old name: the Attention section and every caller that reads "closed but never dispatched"
+  // already spell it this way, and the gate reads `set.dispatch` for the rest.
+  set.undispatched = [...audit.never, ...audit.naUndispatched];
+  return set;
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {
@@ -1473,7 +1683,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   fs.mkdirSync(dir, { recursive: true });
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
-  merged.undispatched = undispatched(merged, dir);
+  attachDispatch(merged, dir);
   for (const t of merged.tasks) {
     // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.

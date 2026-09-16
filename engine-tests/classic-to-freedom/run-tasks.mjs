@@ -15,6 +15,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
+  dispatchAudit, readTaskDir,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -164,6 +165,49 @@ const readExistingMeta = (dir) => fs.readdirSync(dir)
   .filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE)
   .map((f) => ({ file: f, id: parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")).meta?.id || null }));
 const readIndex = (dir) => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
+
+// ---- dispatching a task the way a real run does ----------------------------------------------
+// `--start` refuses a task whose `dependsOn` is still open, so a test that wants to exercise ONE task has to
+// bring the queue to that task first. Flipping the dependencies to `done` by hand would not do it: they would
+// then be closures with no dispatch record, which is the other thing `--start` refuses. So each dependency is
+// dispatched, signed and closed, depth-first, exactly as the orchestrator would.
+const AT = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+const taskFilePath = (dir, id) => path.join(dir, fs.readdirSync(dir).find((x) => x.endsWith(".md")
+  && x !== TASK_INDEX_FILE && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
+const editFrontMatter = (dir, id, key, value) => {
+  const f = taskFilePath(dir, id);
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`));
+};
+// Dispatch + sign + close ONE task. Returns the token it was issued.
+function runTask(dir, id, run, opts, min) {
+  const token = `tok-${id}`;
+  startTask(dir, id, run, { ...opts, dispatchToken: token }, null, AT(min));
+  editFrontMatter(dir, id, "status", "done");
+  editFrontMatter(dir, id, "agentNonce", token);
+  syncTaskDir(dir, run, { ...opts, now: AT(min + 1) });
+  return token;
+}
+// Close everything `id` waits on, depth-first, so `id` itself can then be started.
+function clearDepsOf(dir, id, run, opts, min = 0) {
+  const byId = () => new Map(syncTaskDir(dir, run, opts).tasks.map((t) => [t.id, t]));
+  const order = [], seen = new Set();
+  const visit = (x) => {
+    if (seen.has(x)) return;
+    seen.add(x);
+    const t = byId().get(x);
+    if (!t) return;
+    for (const d of t.dependsOn) visit(d);
+    order.push(x);
+  };
+  for (const d of byId().get(id)?.dependsOn || []) visit(d);
+  let m = min;
+  for (const depId of order) {
+    if (byId().get(depId)?.status === "done") continue;
+    runTask(dir, depId, run, opts, m);
+    m += 2;
+  }
+  return m;
+}
 
 console.log("\n===== fixture preconditions (anti-vacuity) =====");
 // Asserted BEFORE anything reads the ordering: "a sub-page's tasks come before main's" and "list comes after main"
@@ -1533,11 +1577,12 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
   {
     const d = fresh();
     const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
     const before = readIndex(d);
     const res = startTask(d, id, RUN, OPTS, null, at(0));
     const t = taskOfId(d, id);
     check("clock: `--start` marks the task in-progress and opens its clock BEFORE the agent runs — until this existed a run in flight looked identical to one that had not begun",
-      () => res.started?.id === id && t.status === "in-progress" && readTimingsFile(d).running[id] === at(0)
+      () => res.started?.id === id && t.status === "in-progress" && readTimingsFile(d).running[id]?.startedAt === at(0)
         && /▶ in-progress/.test(readIndex(d)) && !/▶ in-progress/.test(before),
       () => ({ status: t.status, running: readTimingsFile(d).running, row: readIndex(d).split("\n").find((l) => l.includes(id)) }));
     check("clock: the times are NOT in the task file — the sub-agent legitimately edits that front matter, and on the first live run it filled `endedAt` in itself with a rounded value, which cost the run its only measurement",
@@ -1552,13 +1597,15 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
   {
     const d = fresh();
     const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
     startTask(d, id, RUN, OPTS, null, at(0));
     const f = path.join(d, taskOfId(d, id).file);
     fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("status: in-progress", "status: done"));
     syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
-    const one = readTimings(d);
+    const mine = (xs) => xs.filter((x) => x.id === id);
+    const one = mine(readTimings(d));
     syncTaskDir(d, RUN, { ...OPTS, now: at(30) });          // a later re-slice must not move or duplicate it
-    const two = readTimings(d);
+    const two = mine(readTimings(d));
     check("clock: closing a started task records exactly ONE sample and closes its open clock, and a later re-slice neither duplicates nor re-times it — a duration that drifts with every regeneration measures the regenerations",
       () => one.length === 1 && one[0].minutes === 12 && one[0].weight > 0
         && two.length === 1 && two[0].minutes === 12 && !readTimingsFile(d).running[id],
@@ -1600,6 +1647,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         const d3 = tmp("start-adopted");
         syncTaskDir(d3, RUN, OPTS);
         const rep = syncRepairDir(d3, RUN, VERIFY_PAGES, OPTS).written[0];
+        clearDepsOf(d3, rep.id, RUN, OPTS);
         const f3 = path.join(d3, rep.file);
         const before3 = fs.readFileSync(f3, "utf8");
         const res3 = startTask(d3, rep.id, RUN, OPTS, null, at(0));
@@ -1641,11 +1689,421 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       () => {
         const d2 = fresh();
         const id2 = idOf(d2, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+        clearDepsOf(d2, id2, RUN, OPTS);
         startTask(d2, id2, RUN, OPTS, null, at(0));
         const f2 = path.join(d2, taskOfId(d2, id2).file);
         fs.writeFileSync(f2, fs.readFileSync(f2, "utf8").replace("status: in-progress", "status: done"));
         return syncTaskDir(d2, RUN, { ...OPTS, now: at(9) }).undispatched.length === 0;
       }, () => "see above");
+  }
+
+  /* ============================================================================================
+     THE DISPATCH GATE (ENG-98562). Three mechanisms were advisory and a run walked past all three:
+     it dispatched one sub-agent per PAGE, closed the chunk tasks of that page from the one context
+     and closed the four `Quality gates` tasks from the orchestrator itself. Every check below is
+     about making an already-written rule FAIL rather than warn.
+
+     The two recorded folders are the reference shapes and are NOT copied in — they hold customer
+     page content. They are reproduced here as fixtures: a "services" folder (closures with no
+     clock, incl. a review) and an "applicants" folder (every closure dispatched).
+     ============================================================================================ */
+  console.log("\n===== the dispatch gate: a closure with no dispatch record FAILS =====");
+  {
+    const gateDir = () => { const d = path.join(tmp("gate"), "build-tasks"); syncTaskDir(d, RUN, OPTS); return d; };
+    const idOf2 = (d, pred) => syncTaskDir(d, RUN, OPTS).tasks.find(pred).id;
+    // READ-ONLY, and it has to be: `syncTaskDir` closes clocks, so a helper that re-sliced the folder to find a
+    // file would close the very clock the open-clock case exists to leave open.
+    const fileOf = (d, id) => path.join(d, fs.readdirSync(d).find((x) => x.endsWith(".md") && x !== TASK_INDEX_FILE
+      && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(d, x), "utf8"))));
+    const setStatus = (d, id, s) => {
+      const f = fileOf(d, id);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${s}`));
+    };
+    // Fixed tokens so the assertions can name them; a real dispatch mints its own.
+    const CLOSED_FOR_TEST = new Set(["done", "n/a"]);
+    const TOK_A = "tok-alpha", TOK_BUILDER = "tok-builder", TOK_REVIEW = "tok-review", TOK_OPEN = "tok-open";
+    const setNonce = (d, id, n) => {
+      const f = fileOf(d, id);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^agentNonce:.*$/m, `agentNonce: ${n}`));
+    };
+
+    // ---- the failing shape: closed, never started ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      setStatus(d, id, "done");
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      check("gate: a task closed with NO clock ever opened is in `failing` — this is the exit-2 set, not an advisory list, because nothing re-running the mode can supply a dispatch that never happened",
+        () => set.dispatch.failing.some((t) => t.id === id) && set.dispatch.never.some((t) => t.id === id),
+        () => ({ failing: set.dispatch.failing.map((t) => t.id), never: set.dispatch.never.map((t) => t.id) }));
+      check("gate: `--start` REFUSES while that stands and opens NO clock — the run stops at the next dispatch instead of at the final gate, so one broken ledger costs one task and not a whole run",
+        () => {
+          const other = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.status === "todo");
+          const res = startTask(d, other.id, RUN, OPTS, null, at(20));
+          return res.started === null && res.blockedByDispatch?.failing.length > 0
+            && !readTimingsFile(d).running[other.id]
+            && /todo/.test(fs.readFileSync(path.join(d, other.file), "utf8").split("---")[1]);
+        },
+        () => ({ running: readTimingsFile(d).running }));
+    }
+
+    // ---- `n/a` is the ONE closure that legitimately has no sub-agent, and the REASON is what earns that ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      setStatus(d, id, "n/a");
+      const bare = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      check("gate: `n/a` with no dispatch record and NOTHING under `## Notes` FAILS — otherwise flipping every remaining task to `n/a` writes off a whole run in one edit, which is cheaper than any other way past the gate",
+        () => bare.dispatch.failing.some((t) => t.id === id) && bare.dispatch.naNoReason.some((t) => t.id === id),
+        () => ({ failing: bare.dispatch.failing.map((t) => t.id), naNoReason: bare.dispatch.naNoReason.map((t) => t.id) }));
+      fs.appendFileSync(fileOf(d, id), "\nThe section this task scaffolds already exists on the stand.\n");
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(13) });
+      check("gate: `status: n/a` with a WRITTEN REASON and no clock does NOT fail — a row that does not apply is closed without anyone building it, so requiring a dispatch record for it would make the gate unpassable",
+        () => set.dispatch.failing.length === 0 && set.dispatch.naUndispatched.some((t) => t.id === id),
+        () => ({ failing: set.dispatch.failing.map((t) => t.id), na: set.dispatch.naUndispatched.map((t) => t.id) }));
+      check("gate: it is still NAMED on Attention — the one closure that needs no sub-agent is reported rather than silent, so the reason gets read",
+        () => /recorded `n\/a` with no dispatch record/.test(readIndex(d)),
+        () => readIndex(d).split("## Attention")[1]?.slice(0, 300));
+    }
+
+    // ---- the queue order, and one writer per artifact, enforced where the token is ISSUED ----
+    {
+      const d = gateDir();
+      const all = syncTaskDir(d, RUN, OPTS).tasks;
+      const dependent = all.find((t) => t.dependsOn.length && all.some((x) => x.id === t.dependsOn[0]));
+      const dep = dependent && all.find((x) => x.id === dependent.dependsOn[0]);
+      check("order (anti-vacuity): the fixture really has a task that names another one in `dependsOn`, and that other one is OPEN — otherwise the refusal below is asserted about a chain that does not exist",
+        () => !!dependent && !!dep && !CLOSED_FOR_TEST.has(dep.status),
+        () => ({ dependent: dependent?.id, dep: dep?.id, depStatus: dep?.status }));
+      if (dependent && dep) {
+        const res = startTask(d, dependent.id, RUN, OPTS, null, at(0));
+        check("order: `--start` REFUSES a task whose `dependsOn` has not closed, and names each one with its status — a task built before its dependency reads answers that do not exist yet, and the queue order was previously the caller's to honour",
+          () => res.started === null && res.blockedByDeps?.some((x) => x.id === dep.id)
+            && !readTimingsFile(d).running[dependent.id],
+          () => ({ blocked: res.blockedByDeps?.map((x) => x.id), running: Object.keys(readTimingsFile(d).running) }));
+      }
+    }
+    {
+      // ONE WRITER PER ARTIFACT is enforced by the dependency chain: `chainMerged` makes every task that writes an
+      // artifact depend on the previous writer of it, so two tasks on one artifact are serialized and `--start`
+      // refuses the second while the first is open. Two repair tasks of different causes on one page are that
+      // shape — same `writesTo`, the later chained onto the earlier. (`blockedByOverlap` is the secondary net for
+      // a folder that somehow omits the chain; the chain is what actually holds a single sub-agent off both.)
+      const d = gateDir();
+      const reps = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written;
+      const set = syncTaskDir(d, RUN, OPTS);
+      const pool = reps.map((r) => set.tasks.find((t) => t.id === r.id)).filter((t) => t?.writesTo);
+      const b = pool.find((t) => pool.some((x) => x.writesTo === t.writesTo && t.dependsOn.includes(x.id)));
+      const a = b && pool.find((x) => x.writesTo === b.writesTo && b.dependsOn.includes(x.id));
+      check("one writer (anti-vacuity): two repair tasks really write the SAME artifact and are chained — the later depends on the earlier, so the refusal below is asserted about a real pair",
+        () => !!a && !!b && a.writesTo === b.writesTo && b.dependsOn.includes(a.id),
+        () => ({ a: a && { id: a.id, writesTo: a.writesTo }, b: b && { id: b.id, dependsOn: b.dependsOn } }));
+      if (a && b) {
+        clearDepsOf(d, a.id, RUN, OPTS);
+        startTask(d, a.id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+        const res = startTask(d, b.id, RUN, OPTS, null, at(1));
+        check("one writer: `--start` REFUSES the second writer of an artifact while the first is open — the chain serializes same-artifact tasks so one sub-agent can never hold both at once",
+          () => res.started === null && res.blockedByDeps?.some((x) => x.id === a.id)
+            && !readTimingsFile(d).running[b.id],
+          () => ({ deps: res.blockedByDeps?.map((x) => x.id), overlap: res.blockedByOverlap?.map((x) => x.id) }));
+      }
+      // A read-only task claims no artifact, so it never conflicts and never blocks.
+      const d2 = gateDir();
+      const tasks2 = syncTaskDir(d2, RUN, OPTS).tasks;
+      const writer = tasks2.find((t) => t.writesTo);
+      const readOnly = tasks2.find((t) => !t.writesTo && !t.dependsOn.length);
+      check("one writer (anti-vacuity): the fixture really holds both a writer and an independent read-only task — otherwise the read-only-starts-beside-a-writer case runs zero assertions and still reports green",
+        () => !!writer && !!readOnly,
+        () => ({ writer: writer?.id, readOnly: readOnly?.id }));
+      if (writer && readOnly) {
+        startTask(d2, writer.id, RUN, OPTS, null, at(0));
+        const res2 = startTask(d2, readOnly.id, RUN, OPTS, null, at(1));
+        check("one writer: a READ-ONLY task still starts beside a writer — it claims no artifact, so a rule that counted open clocks instead of comparing `writesTo` would serialise a run that has no reason to be serial",
+          () => res2.started?.id === readOnly.id && !!readTimingsFile(d2).running[readOnly.id],
+          () => ({ started: res2.started?.id, overlap: res2.blockedByOverlap?.map((x) => x.id) }));
+      }
+    }
+
+    // ---- closed with the clock still OPEN: the books are behind, not wrong ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      startTask(d, id, RUN, { ...OPTS, dispatchToken: TOK_OPEN }, null, at(0));
+      setStatus(d, id, "done");
+      setNonce(d, id, TOK_OPEN);   // properly dispatched and properly signed: the ONLY thing wrong is the open clock
+      // READ-ONLY, deliberately: `syncTaskDir` closes clocks before it audits, so this state is only ever
+      // visible to a caller that reads the folder without re-slicing it — which is what `--verify` does.
+      const audit = dispatchAudit(readTaskDir(d), d);
+      check("gate: a task closed while its clock is STILL OPEN fails, and is reported apart from a never-dispatched one — its remedy is to re-run the mode, not to rebuild the task",
+        () => audit.failing.some((t) => t.id === id) && audit.openClock.some((t) => t.id === id)
+          && audit.never.length === 0,
+        () => ({ open: audit.openClock.map((t) => t.id), never: audit.never.map((t) => t.id) }));
+      check("gate: re-running `--tasks` CLEARS it — the sample is recorded and the same folder then passes, so the remedy the message gives actually works",
+        () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch.failing.length === 0,
+        () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch);
+    }
+
+    // ---- a dispatch that starts and closes within ONE timestamp tick ----
+    // `closeClocks` deletes the open clock the moment a task closes. If it recorded a sample only for a positive
+    // duration, a same-tick close (minute-granular `now`, or the clock skewing back) would leave neither clock
+    // nor sample, and the gate would read a correctly dispatched-and-closed task as NEVER dispatched — failing a
+    // run that did everything right. A sample is dispatch evidence first and a duration second.
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      startTask(d, id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+      setStatus(d, id, "done");
+      setNonce(d, id, TOK_A);
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(0) });   // SAME tick as the start: zero elapsed
+      check("gate: a task started and closed within ONE tick is still a dispatch record — a zero-duration sample is written, the gate does NOT fail it, and it counts toward `dispatched N of M`",
+        () => set.dispatch.failing.length === 0
+          && !set.dispatch.never.some((t) => t.id === id)
+          && readTimingsFile(d).samples.some((s) => s.id === id)
+          && set.dispatch.dispatched >= 1,
+        () => ({ failing: set.dispatch.failing.map((t) => t.id), samples: readTimingsFile(d).samples.map((s) => ({ id: s.id, minutes: s.minutes })) }));
+      check("gate: the zero-duration sample stays OUT of the forecast — it proves dispatch, not timing, so `readTimings` (the forecast's source) does not carry it",
+        () => !readTimings(d).some((s) => s.id === id),
+        () => readTimings(d).map((s) => ({ id: s.id, minutes: s.minutes })));
+    }
+
+    // ---- an ORCHESTRATOR-origin closure the gate exempts must read `—`, not `⚠ never`, in the column ----
+    // `classifyUndispatched` exempts a non-engine-origin (repair) task from the dispatch gate. The Dispatched
+    // column has to agree, or a row the gate does not fail carries a warning the run's dispatch state does not.
+    {
+      const d = gateDir();
+      const rep = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written[0];
+      setStatus(d, rep.id, "done");   // closed with no dispatch record, exactly the shape the gate exempts
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      const adopted = set.tasks.find((t) => t.id === rep.id);
+      const rowRe = rep.file.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+      check("column (anti-vacuity): the repair task is adopted as `origin: orchestrator` — otherwise the exemption below is asserted about an engine-origin row",
+        () => adopted?.origin === "orchestrator",
+        () => adopted);
+      check("column: an orchestrator-origin task closed with no dispatch record does NOT fail the gate — the engine did not schedule it, so it is not held to a dispatch record",
+        () => set.dispatch.failing.every((t) => t.id !== rep.id) && !set.dispatch.never.some((t) => t.id === rep.id),
+        () => ({ failing: set.dispatch.failing.map((t) => t.id) }));
+      check("column: and its Dispatched cell reads `—`, not `⚠ never` — the column carries the warning only where the gate itself would",
+        () => adopted?.dispatched === "pending" && !new RegExp(`${rowRe}.*⚠ never`).test(readIndex(d)),
+        () => readIndex(d).split("\n").find((l) => l.includes(rep.file)));
+    }
+
+    // ---- the signature: a value the agent does not choose ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      const res = startTask(d, id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+      check("signature: `--start` mints the token and hands it BACK to the caller — it is never written into the task file, because an agent holding several files would read a valid token off each one",
+        () => res.dispatchToken === TOK_A
+          && !/tok-alpha/.test(fs.readFileSync(path.join(d, res.started.file), "utf8")),
+        () => res.dispatchToken);
+      setStatus(d, id, "done");
+      setNonce(d, id, TOK_A);
+      check("signature: the task closed carrying the token it was issued PASSES — the honest run is not made to fail",
+        () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch.failing.length === 0,
+        () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch.signature);
+    }
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      startTask(d, id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+      setStatus(d, id, "done");
+      setNonce(d, id, "a-value-i-made-up");
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      check("signature: a value the agent MINTED ITSELF fails — a self-chosen value is distinct on every file one agent closes, which is exactly why it can never show one agent closing several",
+        () => set.dispatch.signature.some((s) => s.task.id === id && s.got === "a-value-i-made-up" && !s.owner),
+        () => set.dispatch.signature);
+    }
+
+    // ---- the review signed by the builder of the very work it judges ----
+    {
+      const d = gateDir();
+      const all = syncTaskDir(d, RUN, OPTS).tasks;
+      const review = all.find((t) => !t.writesTo && t.dependsOn.length && t.group !== "Reference cache");
+      const builder = review && all.find((t) => t.id === review.dependsOn[review.dependsOn.length - 1]);
+      check("review (anti-vacuity): the fixture really pairs a read-only review with a WRITER it names in `dependsOn` — otherwise the check below is asserted about a task that is its own builder",
+        () => !!review && !!builder && !!builder.writesTo && review.id !== builder.id,
+        () => ({ review: review?.id, builder: builder?.id }));
+      if (review && builder) {
+        clearDepsOf(d, builder.id, RUN, OPTS);
+        startTask(d, builder.id, RUN, { ...OPTS, dispatchToken: TOK_BUILDER }, null, at(0));
+        setStatus(d, builder.id, "done");
+        setNonce(d, builder.id, TOK_BUILDER);
+        syncTaskDir(d, RUN, { ...OPTS, now: at(10) });
+        startTask(d, review.id, RUN, { ...OPTS, dispatchToken: TOK_REVIEW }, null, at(10));
+        setStatus(d, review.id, "done");
+        setNonce(d, review.id, TOK_BUILDER);     // the builder's own context closing its own review
+        const set = syncTaskDir(d, RUN, { ...OPTS, now: at(20) });
+        const found = set.dispatch.signature.find((s) => s.task.id === review.id);
+        check("signature: a `Quality gates` task signed with the token of a task it DEPENDS ON fails and names that task — a verdict filed by the context that did the work is not a verdict, which is the whole reason the review is a separate task",
+          () => !!found && found.owner === builder.id,
+          () => set.dispatch.signature.map((s) => ({ id: s.task.id, owner: s.owner })));
+        check("signature: the index says so in those words, naming the review as judged by its own builder",
+          () => /review task signed by a builder of the very work it judges/.test(readIndex(d)),
+          () => readIndex(d).split("## Attention")[1]?.slice(0, 600));
+      }
+    }
+
+    // ---- the shapes `timings.json` may legitimately be in ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      setStatus(d, id, "done");
+      const write = (running) => fs.writeFileSync(path.join(d, TIMINGS_FILE),
+        JSON.stringify({ version: 1, samples: [], running }, null, 2));
+      check("shape: an open clock is read as a bare `{id: iso}` map, as `{id: {startedAt}}`, AND as a LIST — a shape the reader does not recognise yields no open clocks, which is indistinguishable from a run in which everything was dispatched",
+        () => {
+          write({ [id]: at(0) });
+          const a = dispatchAudit(readTaskDir(d), d).openClock.length;
+          write({ [id]: { startedAt: at(0), token: "t" } });
+          const b = dispatchAudit(readTaskDir(d), d).openClock.length;
+          write([{ id, startedAt: at(0), token: "t" }]);
+          const c = dispatchAudit(readTaskDir(d), d).openClock.length;
+          return a === 1 && b === 1 && c === 1;
+        }, () => "see the three running shapes");
+    }
+
+    // ---- the two visible surfaces ----
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      startTask(d, id, RUN, OPTS, null, at(0));
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(7) });
+      check("progress: the block carries `dispatched N of M` — it is pasted into the chat after every dispatch and is the only surface a watching user has while the run is happening",
+        // Two: the dependency that was dispatched and closed to reach this task, and this task itself, which is
+        // still running. A clock counts from the moment it opens, not from the moment it closes.
+        () => /dispatched 2 of \d+/.test(renderProgress(set, d, at(7))),
+        () => renderProgress(set, d, at(7)));
+      check("index: the dispatch fact is a CELL in the main table, not a paragraph below it — a row nobody was dispatched for is read at a glance beside its status",
+        () => {
+          const idx = readIndex(d);
+          return /\| Step \| Task \| Page \| Writes \| Status \| Dispatched \|/.test(idx)
+            && /▶ started/.test(idx);
+        }, () => readIndex(d).split("\n").slice(7, 11).join("\n"));
+      check("index: a task that is still OPEN reads `—`, never `⚠ never` — it has not had its turn yet, and a warning on every waiting row is what makes the ONE row that matters stop standing out",
+        () => !/⚠ never/.test(readIndex(d)) && /\| — \|/.test(readIndex(d)),
+        () => readIndex(d).split("\n").slice(7, 12).join("\n"));
+      check("index: `⚠ never` appears once the task is CLOSED with no dispatch — the warning marks work that was finished with nobody sent to do it, which is the whole point of the column",
+        () => {
+          const dN = gateDir();
+          const idN = idOf2(dN, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+          setStatus(dN, idN, "done");
+          syncTaskDir(dN, RUN, { ...OPTS, now: at(12) });
+          const idx = readIndex(dN);
+          return /⚠ never/.test(idx) && idx.split("\n").filter((l) => /⚠ never/.test(l)).length === 1;
+        }, () => "see the Dispatched column after one task closes undispatched");
+      check("index: the Dispatched cell carries NO duration — the index is compared byte for byte, so two regenerations at different clock times must still be the same file",
+        () => {
+          const a = readIndex(d);
+          syncTaskDir(d, RUN, { ...OPTS, now: at(99) });
+          return a === readIndex(d) && !/\d min/.test(a);
+        }, () => readIndex(d).slice(0, 400));
+    }
+
+    // ---- the recorded-run shapes, end to end through the CLI ----
+    {
+      // Defined locally: the shared `cliTasks` below is declared after this block.
+      const cli = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
+        { input: JSON.stringify(manifest), encoding: "utf8" });
+      // The folder is cut BY THE CLI, which slices with the real default budget — a folder cut in-process with the
+      // test's own budget carries different ids, and every closure written into it would read as stale instead.
+      // "services": closures with no clock. Exit 2, every file named.
+      const dS = path.join(tmp("gate-cli-s"), "build-tasks");
+      cli(["--tasks", dS], MANIFEST);
+      const closed = readTaskDir(dS).slice(0, 2);
+      for (const t of closed) setStatus(dS, t.id, "done");
+      const runS = cli(["--tasks", dS], MANIFEST);
+      check("recorded shape (services): the CLI exits 2 and NAMES every closed task that no sub-agent was dispatched for, each with the `--start` that re-opens it — never a generic 'process violation'",
+        () => runS.status === 2 && /DISPATCH GATE/.test(runS.stderr || "")
+          && closed.every((t) => (runS.stderr || "").includes(t.file))
+          && closed.every((t) => (runS.stderr || "").includes(`--start ${t.id}`)),
+        () => ({ status: runS.status, stderr: (runS.stderr || "").slice(0, 700) }));
+      check("recorded shape (services): the folder and the index WERE written — what failed is the run, not the slice, and a caller that reads exit 2 as 'nothing was written' would re-cut a folder that is already correct",
+        () => fs.existsSync(path.join(dS, TASK_INDEX_FILE))
+          && /what failed is the run, not the slice/.test(runS.stderr || ""),
+        () => (runS.stderr || "").slice(0, 400));
+
+      // Dispatch every task in DEPENDENCY ORDER, the way the orchestrator must: `--start` refuses a task whose
+      // `dependsOn` is still open, so picking files in directory order no longer works.
+      const dispatchAll = (dir) => {
+        for (let i = 0; i < 20; i++) {
+          const tasks = readTaskDir(dir);
+          const next = tasks.find((t) => t.status === "todo" && t.dependsOn.every((d) => {
+            const dep = tasks.find((x) => x.id === d);
+            return !dep || dep.status === "done" || dep.status === "n/a";
+          }));
+          if (!next) return;
+          const started = cli(["--tasks", dir, "--start", next.id], MANIFEST);
+          const tok = /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1];
+          setStatus(dir, next.id, "done");
+          setNonce(dir, next.id, tok || "");
+          cli(["--tasks", dir], MANIFEST);
+        }
+      };
+      // "applicants": the same plan with every closure dispatched AND signed. Unchanged: exit 0.
+      const dA = path.join(tmp("gate-cli-a"), "build-tasks");
+      cli(["--tasks", dA], MANIFEST);
+      dispatchAll(dA);
+      const runA = cli(["--tasks", dA], MANIFEST);
+      check("recorded shape (applicants): the SAME plan with every closure dispatched exits 0 and raises nothing — the gate has to tell the two runs apart, which is the whole point, and a gate that failed both would just be noise",
+        () => runA.status === 0 && !/DISPATCH GATE/.test(runA.stderr || ""),
+        () => ({ status: runA.status, stderr: (runA.stderr || "").slice(0, 400) }));
+
+      // THE HEADLINE CASE: a run whose PLAN and BUILD are both fine and which still must not pass. The plan is
+      // gate-clean and this mode computes no build verdict at all, so exit 2 here is attributable to the dispatch
+      // gate ALONE — nothing else in the exit-code decision can produce it.
+      check("attribution: the services folder's exit 2 comes from the DISPATCH gate and nothing else — no plan-level banner and no build verdict is present, so a run that is otherwise entirely clean still does not pass",
+        () => runS.status === 2 && /DISPATCH GATE/.test(runS.stderr || "")
+          && !/GATE BLOCKED|STRUCTURE INCOMPLETE|COVERAGE INCOMPLETE|VERIFY INCOMPLETE/.test(runS.stderr || ""),
+        () => (runS.stderr || "").slice(0, 500));
+      check("attribution: the message says this is neither a plan gap nor a short build — the three exit-2 verdicts have different remedies, and re-planning or rebuilding buys nothing here",
+        () => /NOT a plan gap and NOT a short build/.test(runS.stderr || ""),
+        () => (runS.stderr || "").slice(0, 500));
+
+      // The verify leg carries its own assignment of the verdict, so it needs its own assertion: removing it
+      // would leave the `--tasks` checks above green while the FINAL gate went quiet.
+      const builtEmpty = path.join(path.dirname(dS), "built.json");
+      fs.writeFileSync(builtEmpty, JSON.stringify({ pages: { main: false } }));
+      const runV = cli(["--verify", "--built", builtEmpty, "--tasks", dS], MANIFEST);
+      check("verify leg: `--verify --tasks` runs the dispatch gate over the folder too, so the run's FINAL gate cannot pass a folder whose work nobody was dispatched for",
+        () => runV.status === 2 && /DISPATCH GATE/.test(runV.stderr || ""),
+        () => ({ status: runV.status, stderr: (runV.stderr || "").slice(0, 400) }));
+      check("verify leg: NO repair task is written while that gate fails — a repair round would schedule more sub-agents on top of work nobody was dispatched for, and its rows cannot be trusted to describe what was built",
+        () => /NO REPAIR TASKS WRITTEN/.test(runV.stdout || "")
+          && !fs.readdirSync(dS).some((f) => /repair/i.test(f)),
+        () => fs.readdirSync(dS).join(" · "));
+      check("verify leg: the failing files are listed on ONE stream — stdout carries the verify table the caller presents verbatim, so the same list on both streams is that report read twice",
+        () => {
+          const onOut = ((runV.stdout || "").match(/ · task-/g) || []).length;
+          const onErr = ((runV.stderr || "").match(/ · task-/g) || []).length;
+          return onOut === 0 && onErr > 0;
+        },
+        () => ({ stdout: ((runV.stdout || "").match(/ · task-/g) || []).length,
+                 stderr: ((runV.stderr || "").match(/ · task-/g) || []).length }));
+      check("verify leg: a plain `--verify` with no folder SAYS the dispatch gate did not run, on stderr — the caller presents stdout verbatim as the report, so a note about what was not checked must not land inside that table",
+        () => {
+          const runP = cli(["--verify", "--built", builtEmpty], MANIFEST);
+          return /the dispatch\s+gate did not run/.test(runP.stderr || "")
+            && !/dispatch/i.test(runP.stdout || "");
+        }, () => cli(["--verify", "--built", builtEmpty], MANIFEST).stdout?.slice(-300));
+
+      // A repair round re-derives the index, so it has to carry the dispatch fact forward like every other run.
+      check("repair round: the Dispatched column SURVIVES a `--verify --tasks` regeneration — the index it rewrites is the same derived file, and a repair round that blanked the column would erase what the build rounds recorded",
+        () => {
+          const dR = path.join(tmp("gate-repair"), "build-tasks");
+          cli(["--tasks", dR], MANIFEST);
+          dispatchAll(dR);
+          const b = path.join(path.dirname(dR), "b.json");
+          fs.writeFileSync(b, JSON.stringify({ pages: { main: false } }));
+          cli(["--verify", "--built", b, "--tasks", dR], MANIFEST);
+          const idx = fs.readFileSync(path.join(dR, TASK_INDEX_FILE), "utf8");
+          return /\| Dispatched \|/.test(idx) && /✔ yes/.test(idx);
+        }, () => "see index.md after a repair round");
+    }
   }
 
   // 4 — the forecast is a RANGE, and it comes from this run once this run has data.
@@ -1667,14 +2125,16 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
 
   // 5 — the progress block, and the index's freedom from the clock.
   {
+    // The reference cache is the run's FIRST task and waits on nothing, so this exercises a folder in which
+    // no task has closed yet — which is what the cold-start basis below is about.
     const d = fresh();
-    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_REFS);
     startTask(d, id, RUN, OPTS, null, at(0));
     const set = syncTaskDir(d, RUN, { ...OPTS, now: at(7) });
     const text = renderProgress(set, d, at(7));
     check("progress: the block names the running task, how long it has been running and what it is expected to take, plus the counts and the remaining estimate — one paste, rendered by the engine so the chat and the folder cannot drift apart",
       () => /RUNNING/.test(text) && /running 7 min/.test(text) && /expected \d+-\d+ min/.test(text)
-        && /done 0 · running 1 · todo/.test(text) && /min left/.test(text),
+        && /done 0 · running 1 · todo/.test(text) && /min left/.test(text) && /dispatched 1 of/.test(text),
       () => text);
     check("progress: it says WHICH basis the estimate rests on — this run's own closed tasks, or the calibrated rate when none has closed yet",
       () => /no task of this run has closed yet/.test(text), () => text);

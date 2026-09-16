@@ -15,15 +15,18 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
-node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress and stamping its clock (call it BEFORE dispatching)
+node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
-node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …and write this run's OPEN rows into <dir> as repair tasks
+node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
 `--verify --tasks <dir>` is the one legal pairing: `--verify` is still the MODE (the table is printed as always)
-and the folder is where its OPEN rows are written as repair tasks. Repair tasks are merged by (page, cause) — sixteen
+and the folder is where its OPEN rows are written as repair tasks. It also runs the DISPATCH GATE over that
+folder, read-only — and while that gate fails no repair task is written, because a repair round would schedule
+more sub-agents on top of work nobody was dispatched for. Without `--tasks`, `--verify` checks the built pages
+only and says on stdout that the dispatch gate did not run. Repair tasks are merged by (page, cause) — sixteen
 handlers missing from one page is ONE task, because sixteen tasks is sixteen sub-agent startups to make one edit
 each. A ROUND IS AN ATTEMPT, not a verify run: re-verifying an unchanged page opens no second round, since the rows
 are still the work of the round already in the folder, and a new round opens only once the previous one was CLOSED
@@ -113,9 +116,25 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   `create-app`'s `optional-template-data-json` to a bare name and kept "the file list needs its own data source"
   while losing the `columns` the platform throws without. Each build task asks for its own two or three tools and
   its own handful of components instead, and gets the authoritative answer.
-- **`agentNonce` is written by the sub-agent and checked by the engine.** The same value on two files, or a `done`
-  task carrying none, is reported on the index. The orchestrator composes the prompt and reads the reply, so it
-  cannot also be the evidence that it dispatched one sub-agent per task.
+- **`agentNonce` is the dispatch token, echoed back.** `--start` mints a token for that one task and prints it for
+  the orchestrator to put in the sub-agent's prompt; it is never written into the task file, which an agent
+  holding several files could read. The sub-agent copies it into `agentNonce:`. A closed task carrying a
+  different token, or none, fails the gate — and one signed with the token of a task it names in `dependsOn` is
+  named as a review closed by a builder of the work it judges. The orchestrator composes the prompt and reads the
+  reply, so it cannot also be the evidence that it dispatched one sub-agent per task.
+- **A closure with no dispatch record FAILS, in every mode that can see the folder.** `dispatchAudit` is one
+  read-only predicate over the task files plus `timings.json`: `--start` refuses to open a new clock while it
+  fails, plain `--tasks` exits 2 with the folder still written, and `--verify --tasks` exits 2 and writes no
+  repair round. It separates a task that was never dispatched (re-open and rebuild) from one whose clock is still
+  open (re-run the mode) from one signed with the wrong token. `status: n/a` is the one closure that needs no
+  sub-agent, and the reason under `## Notes` is what earns it that: an `n/a` with nothing written there fails,
+  because otherwise flipping every open task to `n/a` writes off a run in one edit. A sample whose duration rounds
+  to zero is still a dispatch record — only the forecast filters it out.
+- **`--start` enforces the queue, not just the ledger.** It refuses a task whose `dependsOn` has not closed, and
+  refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
+  makes rather than rules the caller is asked to honour. The second one matters most: with
+  several tokens open on one artifact, a single sub-agent can hold them all and close each with a valid
+  signature, and every other check passes. The check compares `writesTo`, so a read-only task never conflicts.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
