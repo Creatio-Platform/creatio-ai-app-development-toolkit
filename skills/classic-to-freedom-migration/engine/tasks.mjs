@@ -799,17 +799,28 @@ function tableRows(bodyLines) {
   return out;
 }
 
+// Split a mark at its separator: the FIRST dash carrying whitespace on both sides. `not-built` and `n-a` carry
+// their own hyphens, which is why the whitespace is what makes a dash a separator rather than part of the word.
+// SCANNED, NOT MATCHED. Every regex for this shape puts two unbounded whitespace quantifiers around one
+// character (`\s+[—-]\s+`, or `\s+` beside a `[\s\S]*` tail), and each whitespace RUN can then be re-divided on
+// failure — super-linear on a cell of spaces, which is a customer's Classic caption and not the engine's to
+// trust. One left-to-right pass has nothing to re-divide.
+const IS_WS = /\s/;
+function splitMark(s) {
+  for (let i = 1; i < s.length - 1; i++) {
+    if (s[i] !== "—" && s[i] !== "-") continue;
+    if (!IS_WS.test(s[i - 1]) || !IS_WS.test(s[i + 1])) continue;
+    return { head: s.slice(0, i).trim(), detail: s.slice(i + 1).trim() };
+  }
+  return { head: s, detail: "" };
+}
+
 // `built` · `not-built — cause` · `n-a — reason`. A plain hyphen is accepted as well as the rendered em dash.
 function parseOutcome(raw) {
   if (!raw || raw === "—") return null;
-  // ANCHORED, and the two parts cannot match the same characters: the kind is a single word, the separator needs
-  // whitespace on both sides, and the detail runs to the end. Split on a bare `\s+…\s+` instead and a cell of
-  // whitespace makes the engine try every division of it — super-linear on a string a customer's caption controls.
-  const m = /^([a-z-]+)(?:\s+[—-]\s+([\s\S]*))?$/i.exec(String(raw).trim());
-  if (!m) return null;
-  const kind = m[1].toLowerCase();
+  const { head, detail } = splitMark(String(raw).trim());
+  const kind = head.toLowerCase();
   if (!ROW_OUTCOMES.includes(kind)) return null;
-  const detail = (m[2] || "").trim();
   if (kind === O_BUILT) return { outcome: kind, cause: null, reason: "", text: raw };
   // `n-a` CLOSES A ROW WITHOUT BUILDING IT, so it carries the same burden the task-level `n/a` does: the reason is
   // what earns it. Without one it is a self-certified skip, and it is counted as `not-built` rather than as an

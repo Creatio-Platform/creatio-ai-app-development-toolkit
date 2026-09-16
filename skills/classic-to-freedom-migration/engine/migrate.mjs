@@ -2813,8 +2813,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // round), or parked after its rounds. The gate reads the same folder state in either mode.
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
-  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd());
-  lines.push(...splitDriftLines(set));
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set));
   return lines.join("\n") + "\n";
 }
 
