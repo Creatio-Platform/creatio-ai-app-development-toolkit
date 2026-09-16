@@ -56,7 +56,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES, dispatchAudit, readTaskDir } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltRows } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2664,9 +2664,46 @@ function dispatchFailureText(audit, dir) {
   return L.join("\n");
 }
 
+// The unbuilt-deliverable list, generated from the outcome cells so it is passed on verbatim rather than
+// summarised: every unbuilt deliverable, its task, and what it is waiting on. Only rows with NO repair task
+// reach here — a row already routed to one is somebody's work, not a gate failure.
+// The gate's own list: rows nothing is scheduled to close. `resolvePartials` has already stamped `residual` on
+// every row it could match to a repair task, so this is a filter and not a second opinion.
+const unroutedNotBuilt = (tasks) => notBuiltRows(tasks).filter((it) => !it.residual);
+
+const REMEDY = {
+  "blocked": "the stand or a service was unreachable — a repair round may clear it",
+  "needs-decision": "a scope question — a repair round gives it to a fresh agent holding the evidence",
+};
+function notBuiltFailureText(items) {
+  const L = [];
+  const byTask = new Map();
+  for (const it of items) {
+    if (!byTask.has(it.task.file)) byTask.set(it.task.file, []);
+    byTask.get(it.task.file).push(it);
+  }
+  for (const [file, rows] of byTask) {
+    L.push(`  ${file} (${rows[0].task.pageKey}) — read its \`## Notes\` for the detail:`);
+    for (const it of rows) {
+      const why = it.cause
+        ? `${it.cause}: ${REMEDY[it.cause] || "a person decides"}`
+        : "NOT ACCOUNTED FOR — the task closed without marking this row either way, so nobody stated what happened to it";
+      L.push(`    · row ${it.n} — ${it.row.label}`);
+      L.push(`      ${why}`);
+    }
+  }
+  L.push("  None of the above is routed to a repair task. Run `--verify --tasks <dir>` to open a repair round over"
+    + ` them; a cause that has already had ${REPAIR_ROUND_CAP} rounds is PARKED and will not get another, and is`
+    + " yours to decide: rebuild it, defer it, or accept it — and say so.");
+  return L.join("\n");
+}
+
 // Set by `runTaskMode` / the verify leg when the folder fails the dispatch gate, and read once at the exit-code
 // decision below. The mode has several early returns, so the verdict travels beside the text rather than in it.
 let dispatchGateFailure = null;
+// Separate from the dispatch gate: that one refuses to schedule more work, this one only withholds "finished"
+// from the run. Rebuild, defer or accept is the user's decision.
+let partialGateFailure = null;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -2706,6 +2743,7 @@ function startRefusalText(set, startId, dir) {
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
+  partialGateFailure = null;
   const gaps = planGaps(result);
   if (gaps.length) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
@@ -2755,6 +2793,12 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // THE FOLDER IS WRITTEN AND THE RUN STILL FAILS. The task files and the index are correct — what is wrong is
   // that work was closed with nobody dispatched for it, which no re-slice can repair.
   if (set.dispatch?.failing.length) dispatchGateFailure = { audit: set.dispatch, dir, started: true };
+  // Off the folder this run just wrote. The folder and its files are still written; only the run fails.
+  // A row with a RESIDUAL is already routed to a repair task and is somebody's open work, so it is not a gate
+  // failure. What fails is a row nothing is scheduled to close: not yet routed here (this mode opens no repair
+  // round), or parked after its rounds. The gate reads the same folder state in either mode.
+  const notBuilt = unroutedNotBuilt(set.tasks);
+  if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
   lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd());
   // A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
   // scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
@@ -2779,7 +2823,12 @@ function runRepairMode(result, dir, verifyRes, opts) {
   // so this sees the recorded front matter and the clocks exactly as they stand. No repair task is written while
   // it fails — a repair round adds sub-agents on top of closures nobody was dispatched for, and the rows it would
   // open cannot be trusted to describe what was actually built.
-  const audit = dispatchAudit(readTaskDir(dir), dir);
+  const folder = readTaskDir(dir);
+  // NOT-BUILT IS NOT JUDGED HERE. `readTaskDir` computes a status off the cells alone and never resolves a
+  // residual, so a row whose repair task has closed still reads unrouted on this path — and the refusals below
+  // return before `syncRepairDir` can correct it. The verdict is set once, after that call, off the folder it
+  // wrote; a refusal reports the gate that actually fired and nothing else.
+  const audit = dispatchAudit(folder, dir);
   if (audit.failing.length) {
     dispatchGateFailure = { audit, dir, started: true };
     // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify
@@ -2801,12 +2850,22 @@ function runRepairMode(result, dir, verifyRes, opts) {
     return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
       + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`;
   }
+  // Re-read off the folder this call just wrote: a row that now has a repair round is somebody's open work, not
+  // a gate failure. What survives is the residual nothing can be scheduled for — a parked cause.
+  const stillOpen = unroutedNotBuilt(res.set.tasks);
+  partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
   const lines = [];
   if (res.written.length) {
     const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
     lines.push(`migrate.mjs: wrote ${res.written.length} repair task(s) (round ${byRound.join(", ")}) to ${dir}`
       + ` — the open rows of THIS verify run, merged by (page, cause). Hand ONE to a sub-agent, same contract as a`
       + ` build task, then re-verify. Re-verifying opens a NEW round; it does not rewrite these files.`);
+    const residual = res.written.filter((t) => String(t.cause).startsWith("not-built:")).length;
+    if (residual) {
+      lines.push(`migrate.mjs: ${residual} of them cover rows a BUILD agent recorded as NOT BUILT rather than rows`
+        + ` \`--verify\` found open. The \`partial\` task each row came from stays \`partial\` until its repair task`
+        + ` closes, and closes to \`done\` when it does.`);
+    }
   }
   if (res.pending.length) {
     const what = res.pending.map((p) => `${p.pageKey}: ${p.cause} (round ${p.round}, ${p.status})`).join(" | ");
@@ -2982,7 +3041,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || verifyIncomplete || !!dispatchGateFailure;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || verifyIncomplete
+    || !!dispatchGateFailure || !!partialGateFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -3015,6 +3075,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + (started ? " The task files and the index WERE written and are current — what failed is the run, not the slice." : "")
       + " This is NOT a plan gap and NOT a short build; re-running the plan changes nothing.\n");
     process.stderr.write(dispatchFailureText(audit, dir) + "\n");
+  }
+  // Exit 2 for the build's own record of what it did not do — distinct from a short build (`--verify` measures
+  // the page against the plan) and from a dispatch failure. Nothing is re-dispatched; the causes say what needs
+  // a person.
+  if (partialGateFailure) {
+    const { items, dir: pDir } = partialGateFailure;
+    const nTasks = new Set(items.map((x) => x.task.file)).size;
+    process.stderr.write(`migrate.mjs: ⛔ NOT BUILT — ${items.length} deliverable(s) across ${nTasks} task(s) in ${pDir}`
+      + " were recorded by the agent that built them as NOT built. The task files and the index ARE written and"
+      + " current; what is not true is that this migration is finished.\n");
+    process.stderr.write(notBuiltFailureText(items) + "\n");
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");

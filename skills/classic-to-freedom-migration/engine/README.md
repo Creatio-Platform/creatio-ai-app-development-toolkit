@@ -163,9 +163,14 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   stderr and left byte for byte as it is — its task simply gets no file that run. Rewriting it would destroy the
   `## Notes` that may be the only record of work already done on a stand. An orchestrator file carrying an engine
   task's id (the natural result of copying a task file as a template) is refused for the same reason.
-- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is
-  reported, never read as "not done". A status recorded against an older row set keeps its held `rowsDigest`, so the
-  drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
+- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a` / `partial`); an
+  unrecognised one is reported, never read as "not done". `done` and `partial` are COMPUTED from the `Outcome`
+  column of the task's `## Deliverables` table and written into the front matter; `blocked` and `n/a` are the
+  agent's own and are never computed over. A `partial` task's unbuilt rows are routed into the SAME repair
+  machinery a short `--verify` uses — grouped by (page, cause), one task per cause, one round per attempt — and
+  the task computes `done` once that repair task closes. A row with no repair task open against it (none yet, or
+  the round came back `blocked`) is what fails the run. A status recorded against an older row set keeps its held `rowsDigest`,
+  so the drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
 
 A **plan-level gap writes NOTHING and exits 2** — `gate` / `structure` / `coverage`. Slicing a plan with a gap would
 hand sub-agents write access to a stand against deliverables the plan cannot state, so this mode refuses before it

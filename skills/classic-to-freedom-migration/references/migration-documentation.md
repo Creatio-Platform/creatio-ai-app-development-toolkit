@@ -130,9 +130,10 @@ Append-only, chronological. One entry per working session.
 
 ### build-tasks/ — the approved plan, cut into one-task files (both scopes)
 Engine-written, and not documentation: it is how the orchestrator schedules work and how a killed session resumes.
-- **A task file is the record of that task** — its `status` and `## Notes` are written by the sub-agent that did the work, never transcribed by the orchestrator.
+- **A task file is the record of that task** — the `Outcome` column of its `## Deliverables` table and its `## Notes` are written by the sub-agent that did the work, never transcribed by the orchestrator.
 - `index.md` is derived. Never hand-author a task list, a status table or a progress summary beside it.
-- Do not hand-edit an engine task file's `## Deliverables` table; the engine rewrites it from the plan on every re-slice.
+- `status` is derived too: the engine computes `done` / `partial` from the Outcome cells and overwrites the front matter. Only `blocked` and `n/a` are set by hand. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks`, and it computes `done` when they close.
+- Do not hand-edit an engine task file's `## Deliverables` table apart from that `Outcome` column; the engine rewrites the rest from the plan on every re-slice.
 - What a task must do, and the statuses it may record, are in `references/build-task-execution.md`; the folder's own modes and gates are SKILL.md step 7.
 
 ## Status Vocabulary
@@ -148,7 +149,7 @@ Use exactly these statuses everywhere in the DOCUMENT set:
 | `VALIDATED` | Implemented and validated with recorded evidence (see Definition Of Done). |
 | `DROPPED` | Intentionally not migrated. Must record the reason. |
 
-**A build task file uses its own vocabulary and this table does not apply to it:** `todo` / `in-progress` / `done` / `blocked` / `n/a` in its front matter (`references/build-task-execution.md`). A build task's status is its own file's, rolled up by `build-tasks/index.md`; an artifact's is this table's.
+**A build task file uses its own vocabulary and this table does not apply to it:** `todo` / `in-progress` / `done` / `blocked` / `n/a` / `partial` in its front matter (`references/build-task-execution.md`). A build task's status is its own file's, rolled up by `build-tasks/index.md`; an artifact's is this table's.
 
 ## Task Identifiers
 
