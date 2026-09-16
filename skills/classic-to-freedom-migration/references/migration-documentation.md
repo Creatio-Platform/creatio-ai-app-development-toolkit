@@ -78,6 +78,7 @@ Read-only findings from runtime discovery.
 - classification of every Classic schema: **own section/page** vs **replacing/extension schema**
 - dependency graph: which pages depend on which entities, details, and backend schemas
 - missing-source gaps recorded as risks
+- Classic dashboards per section: count and captions, or an explicit `none`
 Separate confirmed facts from inferences.
 
 ### plan.md — the approval-gated plan
@@ -159,6 +160,7 @@ A task may only move to `VALIDATED` after runtime read-back is recorded in `work
 - localizable resources present
 - page schema validation passed
 - no route/section-code collision introduced (Classic route still resolves where intended; no duplicate Freedom section)
+- Classic dashboards: the Dashboards Migrator is installed and the migration outcome recorded, or `discovery.md` says `none` for the section
 
 If any item cannot be verified, the task stays `DONE` and the gap is logged as a risk.
 
