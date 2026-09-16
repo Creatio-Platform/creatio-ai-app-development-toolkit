@@ -22,7 +22,7 @@
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
-//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, listTemplate, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste)
+//     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
 //     "placement": { targetPackageEditable, application, primaryPackage, targetPackageInApplication, sectionHost }, // REQUIRED for `--plan`: can the target APP host the section? See PLACEMENT_KEYS / placementIssues — a writable package is not the same question as a registrable section
 
 //     "behaviourIndex": { "<method>" | "<schema>::<method>" | "<kind>:<name>": { trigger?, from?, card?, ac?: […], bodyCard?, bodyAc?: […], note? }, … } // optional; the step-5.1 behaviour-analysis answers, folded back into the ⚠ Imperative logic / ⚠ Imperative members rows (see applyBehaviourIndex). `bodyCard`/`bodyAc` = the body's own card when it lives in another scope; both are rendered
@@ -50,7 +50,7 @@ import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
 import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
-import { GATE_KIND } from "./mapping-table.mjs";
+import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
@@ -551,13 +551,20 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
+  // ENG-96534 — the plain-language plan columns (What the item does / Use case). Free prose the step-5.1 analyst
+  // authored on the behaviour card (`whatItDoes` from the card's "What it is"; `useCase` a non-technical step-by-step
+  // it writes). Sanitized to a trimmed non-empty string; the renderer escapes it into the cell. Either alone counts
+  // as a description, so a row carrying only these still sets `describedIn`.
+  const prose = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const whatItDoes = prose(entry.whatItDoes);
+  const useCase = prose(entry.useCase);
   // PR #147 review — a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
   // no `minLength`, so `{ key, card: "", ac: ["AC-1"] }` is schema-valid and is exactly what a merge agent emits
   // for "nowhere to put one". Accepting it on `ac.length` made the two legs disagree about the same entry: the
   // engine counted the row as carrying a behaviour card while the workflow's `hasCard` (helpers.mjs) counted it
   // as uncovered, and the plan then cited `? AC-1` — a citation the operator cannot follow. The comment on
   // `cardRef` above states the invariant every leg reads a card by; this is the leg that broke it.
-  return card || bodyCard ? { card, ac, bodyCard, bodyAc } : null;
+  return card || bodyCard || whatItDoes || useCase ? { card, ac, bodyCard, bodyAc, whatItDoes, useCase } : null;
 }
 
 // A behaviour report covers a whole SURFACE, so its answers span several scopes (the record page, the mini page,
@@ -730,7 +737,11 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "listTemplate", "formTemplate"];
+// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides. `formTemplate` stays
+// required — a genuine multi-way choice (top-area / progress-bar / mini / …).
+const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
+const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatItDoes", "sectionSchema", "formTemplate"];
 // on-stand SIGNALS completeness — the ⚠ conditional checks (DCM case / connected processes / printables)
 // must be RESOLVED before the plan, not deferred to build (the recurring "faithful to the classic body,
 // check later" miss). No new tool is needed — the agent runs the existing ESQ/odata queries and records the
@@ -843,8 +854,12 @@ function existingAppIssues(p, target) {
 // as no row helper read the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
-  const pm = manifest.planMeta || {};
   const blank = (v) => v == null || String(v).trim() === "";
+  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
+  // renderers read this normalized `pm`, so the Main-scope/Overview row and the missing-key gate see the default.
+  const pm0 = manifest.planMeta || {};
+  const pm = blank(pm0.listTemplate) ? { ...pm0, listTemplate: DEFAULT_LIST_TEMPLATE } : pm0;
   // A nested run's manifest is the CHILD bundle, which carries no `signals` of its own — the on-stand answers are
   // supplied ONCE on the root manifest (one stand check covers the whole surface), exactly like `behaviourIndex`
   // and `targetPackage`. So the RUN-level answers are inherited via `opts.inheritedSignals` and a sub-bundle's own
@@ -853,7 +868,7 @@ export function checklistOpts(manifest, opts = {}) {
   return {
     template: manifest.template,
     targetPackage: manifest.targetPackage,
-    planMeta: manifest.planMeta,
+    planMeta: pm,
     planMetaMissing: REQUIRED_PLANMETA.filter((k) => k === "formTemplate" ? (blank(pm.formTemplate) && blank(manifest.template)) : blank(pm[k])),
     signals,
     signalsMissing: SIGNAL_KEYS.filter((k) => signalUnresolved(k, signals)),
@@ -938,6 +953,9 @@ function publishUnfoldedChild(c, pageKey) {
   // that reach the SAME base key stay one entry, exactly as before. The disambiguator is the detail it opens from.
   publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
 }
+// The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
+// advisories) — used to tell a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
+const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency", "rule", "entity-filter", "method"]);
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
   // bundle happens to be supplied — folding it would re-introduce the recursion the disposition exists to close.
@@ -969,6 +987,22 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // mini template while its OWN design spec recommended the grid one.
   c.hasTabs = (res.changeSet?.viewConfigDiff || []).some(isTabOp);
   c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
+  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
+  // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the related-list
+  // rows; the body is only an attribute lookup-filter + column-render methods). Distinguished from a skeletal / bad
+  // bundle by whether it carries behaviour. Marked so the plan does not mislabel it `Rebuild (child) → form page`
+  // with an EMPTY Layout; the unit still publishes below — its checklist rows ARE the logic to port.
+  if (c.fieldCount === 0 && !c.hasTabs && c.nDetails === 0) {
+    // "Behaviour" here means REAL ported logic (methods, imperative members, business rules) — NOT any needsDecision:
+    // `needsDecision` is a catch-all that also carries widget / registry / cosmetic / placement advisories, and a
+    // 0-field child whose only decision is such noise is a bad/empty bundle (`empty` → ⚠ verify), not an inline grid.
+    const hasBehaviour = (res.changeSet?.handlerStubs?.length || 0) > 0
+      || (res.changeSet?.needsDecision || []).some((d) => LOGIC_BEARING_KINDS.has(d.kind));
+    c.formless = hasBehaviour ? "inline-grid" : "empty";
+    // Inline grid → no form page, so the plan shows only its LOGIC (Business rules / ⚠ Custom methods / ⚠ Other
+    // declared logic), not a form-page mapping. Render that logic-only spec here (renderChild prefers c.logicSpec).
+    if (c.formless === "inline-grid") c.logicSpec = renderDesignSpec(res, { embedded: true, logicOnly: true });
+  }
   c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
   c.grandChildren = c.childPages.length;
   c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
@@ -997,7 +1031,9 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    const f = foldSubPage(tkey, typedSchemas, foldCtx);
+    // ENG-96327 (e5350b5) — `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
+    // the List-page block: a typed page is NOT its own section; the ONE list page is rendered once by the base fold.
+    const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
     if (f.status === "error") { t.specError = f.error; t.resolved = false; continue; }
     const res = f.res;
@@ -1093,7 +1129,9 @@ function addModeGuidance(am) {
   else if (openCardIsTheWholeStory(am)) g.push("Reproduce the overridden add-card flow with a CUSTOM add request-handler that performs the same open-card logic; do not fall back to the default related-list add.");
   else if (am.addDisabled && !am.customAction) g.push("There is no add flow to reproduce: build it as a read-only / attach-only related list, with no add button.");
   if (am.service) g.push("VERIFY that service is deployed on-stand (else port its logic to a process/service).");
-  if (am.editableGrid) g.push("Confirm the Freedom list supports inline edit for those columns via `get-component-info`.");
+  // ENG-96327 (81305bd) — no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
+  // property, resolved via get-component-info) is builder mechanics, not plan content. The human fact (this detail
+  // is inline-editable, and WHICH columns) is already stated by `describeAddMode`.
   return g;
 }
 
@@ -1117,7 +1155,12 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const parts = describeAddMode(am);
     const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label,
+    // ENG-96327 — an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
+    // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
+    // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
+    // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
+    const editableGridOnly = !!am.editableGrid && !(am.lookup || am.service || am.customAction || am.addDisabled || am.fixedFilters || openCardIsTheWholeStory(am));
+    changeSet.needsDecision.push({ kind: "detail-add-mechanism", item: label, editableGridOnly,
       reason: `Detail '${label}' is NOT a plain related list — it ${parts.join("; ")}.${guidance.length ? " " + guidance.join(" ") : ""}` });
   }
 }
@@ -2041,12 +2084,20 @@ export function registrySettleGuidance(finding) {
 // those would flood the worklist (the majority of registry types are compositeOnly) and blame the operator for a
 // type the engine chose — the same rule the registry-target check already honours. Extracted from
 // reportRegistryFindings (Sonar S3776) alongside `collectResolvedGates`.
-function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
+export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
   const enginePositioned = new Set();
   for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
   for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
+  // ENG-96327 — a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
+  // ALREADY a row in the Layout table ("template-provided" / "native"), and that these features are composite
+  // (built via their recipe, not dragged from a toolbar) is general Creatio knowledge the skill already carries.
+  // Re-stating it as a per-plan ⚠ Confirm just duplicates the Layout, so skip a composite-only advisory whose type
+  // is a standard feature present on this page. A NON-standard composite-only type the agent must place standalone
+  // has no Layout row and keeps its advisory.
+  const featureTypes = new Set();
+  for (const f of changeSet.standardFeatures || []) { const t = featureVerifyType(f.feature); if (t) featureTypes.add(t); }
   for (const a of regRun.advisories || []) {
-    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType)) continue;
+    if (a.kind !== "composite-only" || enginePositioned.has(a.componentType) || featureTypes.has(a.componentType)) continue;
     changeSet.needsDecision.push({ kind: "registry-composite-only", item: a.componentType,
       reason: `this run emits \`${a.componentType}\` — ${a.why} — but it is a COMPOSITE-ONLY component: the platform assembles it as part of a composite and it has no Designer toolbar entry, so it cannot be inserted directly. Reach it through its composite host/recipe (the page/recipe that owns it) rather than adding it as a standalone element. ${sourceNote}.` });
   }
@@ -2116,24 +2167,71 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
   buildCompositeOnlyDecisions(changeSet, regRun, REG_SOURCE_NOTE[reg.source]);
 }
 
+// Read one schema entry's body — inline `body`, else its `file` read from under `baseDir`. Module-level so its
+// path-safety branches don't count against runMigration's cognitive complexity (Sonar S3776).
+function readSchemaBody(e, baseDir) {
+  if (e?.body != null) return String(e.body);
+  // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither an
+  // inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
+  if (!e || typeof e.file !== "string" || !e.file)
+    throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, e.file);
+  // Containment applies to EVERY `file`, relative OR absolute (review — arbitrary-file-read Blocker): the manifest is
+  // stand-derived / untrusted, so a `file` that resolves outside the manifest base dir — a `../…` escape OR an
+  // absolute path like `/etc/passwd` — is refused, never read into the plan. A caller that legitimately needs files
+  // from a directory sets `baseDir` to contain them (the golden fixtures pass `baseDir: FIX` with relative `file`s);
+  // no real manifest uses `file` at all (bodies are inlined), so nothing depends on reading outside `baseDir`.
+  if (resolved !== base && !resolved.startsWith(base + path.sep))
+    throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
+  return fs.readFileSync(resolved, "utf8");
+}
+
+// The "matched nothing on the whole surface" index reports — only the ROOT run can judge them (a folded scope sees
+// one page's rows, so a sibling's answer would look unmatched). Assigns all three so its three root/else branches
+// don't count against runMigration's cognitive complexity (Sonar S3776).
+function assignRootIndexKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
+  const root = !scopeSchema;
+  behaviourIndex.unmatched = root ? unmatchedIndexKeys(behaviourIndexInput, stubIndex) : [];
+  behaviourIndex.sectionOnly = root ? sectionOnlyIndexKeys(behaviourIndexInput, stubIndex) : [];
+  behaviourIndex.wiringOnly = root ? wiringOnlyKeys(behaviourIndexInput, stubIndex) : [];
+}
+// THE run's entity: the manifest's own value when it named a real one, else the entity the merged schema chain
+// reports. The list page's data-source and the result's `entity` must name the SAME object. Module-level (S3776).
+function resolveRunEntity(manifest, eff) {
+  return manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+}
+// The design-spec options for a SUB-PAGE render (child / mini / typed per-type form): always `embedded` (it is only
+// ever nested into the parent plan), with `formOnly` propagated for the typed fold (checklistOpts carries
+// isChildPage/isMiniPage but NOT formOnly). A record page (none of these) renders with the plain specOpts. Module-
+// level so its branching does not count against runMigration's cognitive complexity (Sonar S3776 — review Rita).
+function subPageSpecOpts(specOpts, opts) {
+  if (!(opts.isChildPage || opts.isMiniPage || opts.formOnly)) return specOpts;
+  return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) };
+}
+// Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
+function tallyByKind(decisions) {
+  const out = {};
+  for (const d of decisions) out[d.kind] = (out[d.kind] || 0) + 1;
+  return out;
+}
+// The parse-diagnostic POOL — every schema body's AST diagnostics, tagged by owner (main/seed, detail:<n>,
+// profile:<n>, section) so each routes back to the body it came from. Module-level so its per-source `|| []` guards
+// don't count against runMigration's cognitive complexity (Sonar S3776). Detail/profile structural diagnostics
+// block the gate like a main one; section diagnostics carry `role:"section"` and are advisory (never merged).
+function collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors) {
+  return [
+    ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
+    ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
+    ...Object.entries(profileSchemas).flatMap(([name, p]) => (p.astDiagnostics || []).map((x) => ({ pkg: `profile:${name}`, ...x }))),
+    ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
+    ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
+  ];
+}
+
 export function runMigration(manifest, opts = {}) {
   const baseDir = opts.baseDir || ".";
-  const bodyOf = (e) => {
-    if (e?.body != null) return String(e.body);
-    // E5: a clear error (not a cryptic `path.resolve(baseDir, undefined)` TypeError) when an entry has neither
-    // an inline body nor a string `file`; and contain the path so a `file: "../…"` can't read outside baseDir.
-    if (!e || typeof e.file !== "string" || !e.file)
-      throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
-    const base = path.resolve(baseDir);
-    const resolved = path.resolve(base, e.file);
-    // Containment guards a RELATIVE `file` against a `../` escape of the manifest base dir. An ABSOLUTE path is an
-    // explicit caller choice (e.g. the golden fixtures pass `path.join(FIX, …)`), so it is honored regardless of
-    // baseDir — the earlier blanket `startsWith(base)` check wrongly rejected legit absolute paths that resolve
-    // outside the CWD (which broke `npm test` run from the engine dir, where CWD ≠ the fixtures' root).
-    if (!path.isAbsolute(e.file) && resolved !== base && !resolved.startsWith(base + path.sep))
-      throw new Error(`schema 'file' escapes the manifest base directory (path traversal): '${e.file}'`);
-    return fs.readFileSync(resolved, "utf8");
-  };
+  const bodyOf = (e) => readSchemaBody(e, baseDir);
   const parse = (list) => (Array.isArray(list) ? list : []).map((e) => parseSchema(bodyOf(e), e.pkg));
   const schemas = parse(manifest.schemas);
   const seedTemplate = parse(manifest.seed);
@@ -2189,19 +2287,7 @@ export function runMigration(manifest, opts = {}) {
   // fail-loud parse diagnostics: constructs the AST parser could not statically resolve (dynamic call /
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
-  const parseDiagnostics = [
-    ...[...schemas, ...seedTemplate].flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, ...d }))),
-    // Major 4 — detail-schema diagnostics join the pool tagged `detail:<name>`; a structural one (an unresolved
-    // detail `diff`) then blocks the gate just like a main-schema one, instead of silently emptying its columns.
-    ...Object.entries(detailSchemas).flatMap(([name, d]) => (d.astDiagnostics || []).map((x) => ({ pkg: `detail:${name}`, ...x }))),
-    // profile-schema diagnostics join the pool tagged `profile:<name>` — a structural one (its `diff` built via
-    // an unresolved construct) blocks the gate, instead of emptying the card's column list unnoticed.
-    ...Object.entries(profileSchemas).flatMap(([name, p]) => (p.astDiagnostics || []).map((x) => ({ pkg: `profile:${name}`, ...x }))),
-    // Section diagnostics are tagged `role:"section"` and are EXCLUDED from the structural gate below (their
-    // `diff` is never merged) — advisory only, so they surface without hard-blocking a valid form-page plan.
-    ...sectionSchemas.flatMap((l) => (l.astDiagnostics || []).map((d) => ({ pkg: l.pkg, role: "section", ...d }))),
-    ...sectionParseErrors.map((e) => ({ pkg: e.pkg, role: "section", path: "", kind: `section parse error: ${e.error}` })),
-  ];
+  const parseDiagnostics = collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors);
   // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
   // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
@@ -2239,7 +2325,7 @@ export function runMigration(manifest, opts = {}) {
   // schema chain reports. Hoisted rather than repeated at each consumer, because the list page's data-source op and
   // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
   // states is a page built on the wrong table.
-  const resolvedEntity = manifest.entity && manifest.entity !== "?" ? manifest.entity : eff.entity;
+  const resolvedEntity = resolveRunEntity(manifest, eff);
   const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
@@ -2317,13 +2403,8 @@ export function runMigration(manifest, opts = {}) {
     // as the record page and nested runs slice(1) for child scopes — a section entry must not shift those.
     ...sectionScopes,
   ]);
-  // Only the ROOT run can judge this. A folded scope sees one page's rows, so every answer belonging to a sibling
-  // page would look unmatched there — reporting it per sub-run would turn a correct handoff into a wall of noise.
-  behaviourIndex.unmatched = opts.scopeSchema ? [] : unmatchedIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.sectionOnly = opts.scopeSchema ? [] : sectionOnlyIndexKeys(behaviourIndexInput, stubIndex);
-  behaviourIndex.wiringOnly = opts.scopeSchema ? [] : wiringOnlyKeys(behaviourIndexInput, stubIndex);
-  const decisionSummary = {};
-  for (const d of changeSet.needsDecision) decisionSummary[d.kind] = (decisionSummary[d.kind] || 0) + 1;
+  assignRootIndexKeys(behaviourIndex, opts.scopeSchema, behaviourIndexInput, stubIndex);
+  const decisionSummary = tallyByKind(changeSet.needsDecision);
   // ⛔ HARD GATE (RV1) — the four correctness signals, computed ONCE here so the CLI, the renderer, and any
   // caller share one verdict instead of each re-deriving it (or, as before, never checking it at all). This
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
@@ -2422,7 +2503,12 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  out.designSpec = renderDesignSpec(out, specOpts);
+  // ENG-96327 (e5350b5) — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
+  // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
+  // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
+  // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
+  // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
+  out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
   out.plan = renderPlan(out, specOpts);
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
