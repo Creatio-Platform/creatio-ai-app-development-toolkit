@@ -2140,9 +2140,9 @@ function standardFeatureRows(cs, pageKey = "main") {
     // and not how it has to be configured, which is the whole of the reported defect. The pointer is appended only
     // for the features the guidance item covers, so a feature with its own recipe elsewhere is not sent to an item
     // that says nothing about it.
-    const guided = featureGuidanceId(f);
-    rows.push({ label: `${esc(f)} (\`${t}\`)${guided ? ` — ${GUIDANCE_POINTER}` : ""}`, vk: { type: "feature", ftype: t } });
-    rows.push(...companionRows(f, pageKey));
+    const route = featureGuidanceId(f) ? ` — ${GUIDANCE_POINTER}` : "";
+    rows.push({ label: `${esc(f)} (\`${t}\`)${route}`, vk: { type: "feature", ftype: t } },
+      ...companionRows(f, pageKey));
     // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
     // gated row PER HALF, same as the DCM case-progress-bar/next-steps split in `buildCoverageRows`. Before this,
     // the second half lived only in `notes` prose, and a build that added just the list read identically to one
