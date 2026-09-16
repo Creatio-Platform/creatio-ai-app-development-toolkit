@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "./mapping-table.mjs";
+import { MAPPING_ROWS, SOURCE, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType, featureVerifyType } from "./mapping-table.mjs";
 
 const INDEX_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "registry", "component-index.json");
 
@@ -307,11 +307,10 @@ export function runTypes(changeSet) {
   return out;
 }
 // A standard feature's gate type, read from the shared table by the feature's own name (the ONE source designspec's
-// gate reads too), never from the ChangeSet entry — a feature row carries prose, not a type.
+// gate and migrate's composite-only skip read too), never from the ChangeSet entry — a feature row carries prose, not
+// a type. Delegates to `featureVerifyType` so the MAPPING_ROWS lookup lives in exactly one place.
 function featureTypeOf(f) {
-  const name = f?.feature || f?.caption || "";
-  const r = MAPPING_ROWS.find((x) => x.meta?.feature === name && x.verify?.componentType);
-  return r?.verify.componentType || null;
+  return featureVerifyType(f?.feature || f?.caption || "");
 }
 
 // Validate what a run emits against the registry it resolved. Returns findings in the same shape `validateRow`
