@@ -2629,32 +2629,37 @@ function valueFlagArg(argv, flag, example, onBad) {
 // differs per finding — a never-dispatched task must be rebuilt, a stale clock only needs the mode re-run.
 // The whole set is stated at once because `--start` refuses while ANY of it stands: fixing one file and
 // dispatching again would meet the same refusal.
+function signedWith(s) {
+  if (s.owner) return `signed with the token issued for ${s.owner}`;
+  return s.got ? "signed with an unissued value" : "carries no signature";
+}
+
+// One section per finding: the headline, then the files it names. Written as data so the function that renders
+// them carries no branch per finding — their remedies differ, their shape does not.
+function dispatchFailureSections(audit, dir) {
+  return [
+    [audit.never, (n) => `⛔ ${n} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
+      + " measured them and nothing says who built them. For each: re-open it (`status: todo`), run"
+      + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:",
+      (t) => `   · ${t.file}  (--start ${t.id})`],
+    [audit.openClock, (n) => `⛔ ${n} task(s) closed while their clock is still open — the folder's books are`
+      + ` behind, not wrong. Re-run \`--tasks ${dir}\` to close them and record their samples:`,
+      (t) => `   · ${t.file}  (${t.id})`],
+    [audit.naNoReason, (n) => `⛔ ${n} task(s) recorded \`n/a\` with no dispatch record and no reason under`
+      + " `## Notes`. The reason is what exempts an `n/a` from the dispatch gate. Write why each does not apply,"
+      + " or re-open and build it:",
+      (t) => `   · ${t.file}  (${t.id})`],
+    [audit.signature, (n) => `⛔ ${n} task(s) closed carrying a signature dispatch did not issue for them —`
+      + " the context that closed each was not the one it was handed to. Re-open, `--start`, re-dispatch:",
+      (s) => `   · ${s.task.file}  (${signedWith(s)})`],
+  ];
+}
+
 function dispatchFailureText(audit, dir) {
   const L = [];
-  if (audit.never.length) {
-    L.push(`⛔ ${audit.never.length} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
-      + " measured them and nothing says who built them. For each: re-open it (`status: todo`), run"
-      + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:");
-    for (const t of audit.never) L.push(`   · ${t.file}  (--start ${t.id})`);
-  }
-  if (audit.openClock.length) {
-    L.push(`⛔ ${audit.openClock.length} task(s) closed while their clock is still open — the folder's books are`
-      + ` behind, not wrong. Re-run \`--tasks ${dir}\` to close them and record their samples:`);
-    for (const t of audit.openClock) L.push(`   · ${t.file}  (${t.id})`);
-  }
-  if (audit.naNoReason?.length) {
-    L.push(`⛔ ${audit.naNoReason.length} task(s) recorded \`n/a\` with no dispatch record and no reason under`
-      + " `## Notes`. The reason is what exempts an `n/a` from the dispatch gate. Write why each does not apply,"
-      + " or re-open and build it:");
-    for (const t of audit.naNoReason) L.push(`   · ${t.file}  (${t.id})`);
-  }
-  if (audit.signature.length) {
-    L.push(`⛔ ${audit.signature.length} task(s) closed carrying a signature dispatch did not issue for them —`
-      + " the context that closed each was not the one it was handed to. Re-open, `--start`, re-dispatch:");
-    for (const s of audit.signature) {
-      const who = s.owner ? `signed with the token issued for ${s.owner}` : (s.got ? "signed with an unissued value" : "carries no signature");
-      L.push(`   · ${s.task.file}  (${who})`);
-    }
+  for (const [rows, head, line] of dispatchFailureSections(audit, dir)) {
+    if (!rows?.length) continue;
+    L.push(head(rows.length), ...rows.map(line));
   }
   return L.join("\n");
 }
@@ -2662,6 +2667,42 @@ function dispatchFailureText(audit, dir) {
 // Set by `runTaskMode` / the verify leg when the folder fails the dispatch gate, and read once at the exit-code
 // decision below. The mode has several early returns, so the verdict travels beside the text rather than in it.
 let dispatchGateFailure = null;
+
+// EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
+// started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
+// dependency, wait for the other writer, or fix a typo in the id.
+function startRefusalText(set, startId, dir) {
+  if (set.unread) {
+    return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
+  }
+  // NO NEW CLOCK OVER A BROKEN LEDGER. `--start` is the one command the orchestrator runs before every dispatch,
+  // so refusing here stops the run at the next dispatch instead of at the final gate.
+  if (set.blockedByDispatch) {
+    dispatchGateFailure = { audit: set.blockedByDispatch, dir, started: false };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
+      + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
+      + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
+  }
+  // THE QUEUE ORDER AND THE ONE-WRITER RULE, refused at the moment a token would be issued. Both are field
+  // comparisons the engine can make, so neither depends on the caller remembering them.
+  if (set.blockedByDeps) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` waits on ${set.blockedByDeps.length} task(s) that have not closed:\n`
+      + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
+      + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
+  }
+  if (set.blockedByOverlap) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
+      + set.blockedByOverlap.map((c) => `   · ${c.file}  (${c.id})`).join("\n")
+      + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
+      + " one artifact is how a single sub-agent ends up holding both.\n";
+  }
+  if (!set.started) {
+    return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
+  }
+  return null;
+}
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
   dispatchGateFailure = null;
@@ -2681,34 +2722,9 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
       + set.problems.map((p) => "  · " + p).join("\n")
       + `\nFix ${SPLIT_FILE} and re-run. Expected shape: ${SPLIT_SHAPE}\n`;
   }
-  if (startId && set.unread) {
-    return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
-  }
-  // NO NEW CLOCK OVER A BROKEN LEDGER. `--start` is the one command the orchestrator runs before every dispatch,
-  // so refusing here stops the run at the next dispatch instead of at the final gate.
-  if (startId && set.blockedByDispatch) {
-    dispatchGateFailure = { audit: set.blockedByDispatch, dir, started: false };
-    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
-      + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
-      + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
-  }
-  // THE QUEUE ORDER AND THE ONE-WRITER RULE, refused at the moment a token would be issued. Both are field
-  // comparisons the engine can make, so neither depends on the caller remembering them.
-  if (startId && set.blockedByDeps) {
-    dispatchGateFailure = { startRefusal: true, dir };
-    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` waits on ${set.blockedByDeps.length} task(s) that have not closed:\n`
-      + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
-      + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
-  }
-  if (startId && set.blockedByOverlap) {
-    dispatchGateFailure = { startRefusal: true, dir };
-    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
-      + set.blockedByOverlap.map((c) => `   · ${c.file}  (${c.id})`).join("\n")
-      + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
-      + " one artifact is how a single sub-agent ends up holding both.\n";
-  }
-  if (startId && !set.started) {
-    return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
+  if (startId) {
+    const refusal = startRefusalText(set, startId, dir);
+    if (refusal) return refusal;
   }
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length

@@ -798,47 +798,58 @@ function nonceAttention(tasks) {
   return out;
 }
 
-function attentionLines(set) {
-  const out = set.tasks.flatMap(taskAttention);
-  out.push(...nonceAttention(set.tasks));
-  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
-  // nobody asked it to start one — and on the first live run of `--start` that was the review task, closed by the
-  // orchestrator that had just judged its own build. Reported, never coerced: the status stands as recorded.
-  for (const t of set.dispatch?.never || []) {
+// WHAT A FAILED SIGNATURE WAS CARRYING. Three cases, each naming what the engine can actually tell the caller.
+function signatureCarried(s) {
+  if (s.owner) return `the token issued for \`${s.owner}\`, so the context that closed this task was the one dispatched for THAT one`;
+  return s.got ? "a value dispatch never issued" : "NOTHING";
+}
+
+// A review is read-only and names its builders in `dependsOn`, so a signature belonging to one of them is the
+// verdict being filed by the work's own author.
+function signatureIsSelfReview(s) {
+  return !!s.owner && !s.task.writesTo && (s.task.dependsOn || []).includes(s.owner);
+}
+
+// The dispatch findings, in the order their remedies differ: rebuild, read the reason, write one, re-run the
+// mode, re-dispatch. Kept apart from `attentionLines` so neither grows a branch the other has to carry.
+function dispatchAttention(dispatch) {
+  const out = [];
+  for (const t of dispatch?.never || []) {
     out.push(`- \`${t.file}\` — recorded \`${t.status}\` but never STARTED through \`--tasks --start ${t.id}\`, so no`
       + " sub-agent was dispatched for it through the engine and its duration was never measured. For a review task"
       + " this is the thing the task exists to prevent: a verdict filed by the context that did the work is not a"
       + " verdict. Re-open it (`status: todo`), start it, and hand it to its own sub-agent.");
   }
-  // `n/a` closes without anyone building it — legitimately, which is why it is the one closure that does not fail
-  // the gate. It is named anyway: a status that skips the dispatch record is also the cheapest way around it, and
-  // the task file already requires the reason that makes it reviewable.
-  for (const t of set.dispatch?.naUndispatched || []) {
+  for (const t of dispatch?.naUndispatched || []) {
     out.push(`- \`${t.file}\` — recorded \`n/a\` with no dispatch record. That does NOT fail the gate: a row that`
       + " does not apply is closed without a sub-agent, and its `## Notes` carry the reason. Read the reason.");
   }
-  for (const t of set.dispatch?.naNoReason || []) {
+  for (const t of dispatch?.naNoReason || []) {
     out.push(`- \`${t.file}\` — recorded \`n/a\` with no dispatch record AND nothing under \`## Notes\`. The reason`
       + " is what earns an `n/a` its exemption from the dispatch gate, so without one this is a task closed with"
       + " neither a builder nor a justification. Write why it does not apply, or re-open and build it.");
   }
-  for (const t of set.dispatch?.openClock || []) {
+  for (const t of dispatch?.openClock || []) {
     out.push(`- \`${t.file}\` — recorded \`${t.status}\` while its clock is STILL OPEN, so the folder's books are`
       + " behind rather than wrong. Re-run `--tasks` on this folder: that closes the clock and records the sample.");
   }
-  // SIGNED BY SOMEONE ELSE. `--start` hands the sub-agent a token; this is the task coming back carrying a
-  // different one — the orchestrator having closed it, or one agent having closed a task it was never handed.
-  for (const s of set.dispatch?.signature || []) {
-    const who = s.owner
-      ? `the token issued for \`${s.owner}\`, so the context that closed this task was the one dispatched for THAT one`
-      : (s.got ? "a value dispatch never issued" : "NOTHING");
-    const review = s.owner && !s.task.writesTo && (s.task.dependsOn || []).includes(s.owner)
+  for (const s of dispatch?.signature || []) {
+    const review = signatureIsSelfReview(s)
       ? " This is a review task signed by a builder of the very work it judges — a verdict filed by the context"
         + " that did the work is not a verdict, and that is the whole reason this task is separate."
       : "";
-    out.push(`- \`${s.task.file}\` — closed carrying ${who}.${review} Re-open it (\`status: todo\`), \`--start\` it,`
+    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (\`status: todo\`), \`--start\` it,`
       + " and hand the token that prints to a sub-agent of its own.");
   }
+  return out;
+}
+
+function attentionLines(set) {
+  const out = set.tasks.flatMap(taskAttention);
+  out.push(...nonceAttention(set.tasks));
+  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
+  // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
+  out.push(...dispatchAttention(set.dispatch));
   // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
   // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
   // is exactly the judgement the split file records.
@@ -1589,6 +1600,27 @@ export function readTaskDir(dir) {
     }));
 }
 
+// CLOSED WITH NO CLOCK AT ALL. An orchestrator-authored file is not the engine's to schedule, so it is not held
+// to the engine's dispatch record — the repair tasks the engine DOES author carry `origin: orchestrator` too.
+// THE REASON IS WHAT BUYS THE EXEMPTION: `n/a` is the one closure that needs no sub-agent, so an `n/a` with
+// nothing under `## Notes` is a task closed with neither a builder nor a justification, and it is the cheapest
+// way to write off every remaining row at once.
+function classifyUndispatched(t, out) {
+  if (t.origin !== TASK_ORIGIN_ENGINE) return;
+  if (t.status !== S_NA) { out.never.push(t); return; }
+  ((t.notes || "").trim() ? out.naUndispatched : out.naNoReason).push(t);
+}
+
+// SIGNED WITH A VALUE THE AGENT DID NOT CHOOSE. Checkable only where the clock record carries a token; without
+// one there is nothing to compare against, and the duplicate/empty-nonce report on the index is the only check.
+function checkSignature(t, sample, tokenOwner, out) {
+  if (!sample.token) return;
+  const got = (t.agentNonce || "").trim();
+  if (got === sample.token) return;
+  const owner = got ? tokenOwner.get(got) : null;
+  out.signature.push({ task: t, got, expected: sample.token, owner: owner && owner !== t.id ? owner : null });
+}
+
 export function dispatchAudit(tasks, dir) {
   const { running, samples } = readTimingsFile(dir);
   const sampleById = new Map(samples.map((x) => [x.id, x]));
@@ -1596,30 +1628,15 @@ export function dispatchAudit(tasks, dir) {
   for (const [id, c] of Object.entries(running)) if (c.token) tokenOwner.set(c.token, id);
   for (const s of samples) if (s.token) tokenOwner.set(s.token, s.id);
 
-  const never = [], openClock = [], signature = [], naUndispatched = [], naNoReason = [];
+  const out = { never: [], openClock: [], signature: [], naUndispatched: [], naNoReason: [] };
   for (const t of tasks) {
     if (t.unread || !CLOSED.has(t.status)) continue;
     const clock = running[t.id], sample = sampleById.get(t.id);
-    if (!clock && !sample) {
-      // An orchestrator-authored file is not the engine's to schedule, so it is not held to the engine's dispatch
-      // record — the repair tasks the engine DOES author carry `origin: orchestrator` too.
-      if (t.origin !== TASK_ORIGIN_ENGINE) continue;
-      // THE REASON IS WHAT BUYS THE EXEMPTION. `n/a` is the one closure that needs no sub-agent, so an `n/a` with
-      // nothing written under `## Notes` is a task closed with neither a builder nor a justification — and it is
-      // the cheapest way to write off every remaining row at once.
-      if (t.status === S_NA) ((t.notes || "").trim() ? naUndispatched : naNoReason).push(t);
-      else never.push(t);
-      continue;
-    }
-    if (clock) { openClock.push(t); continue; }   // still open: the sample does not exist yet, so nothing to sign
-    // SIGNED WITH A VALUE THE AGENT DID NOT CHOOSE. Only checkable where dispatch actually issued a token: a
-    // folder started by an older engine has none, and there the older duplicate/empty-nonce report still stands.
-    if (!sample.token) continue;
-    const got = (t.agentNonce || "").trim();
-    if (got === sample.token) continue;
-    const owner = got ? tokenOwner.get(got) : null;
-    signature.push({ task: t, got, expected: sample.token, owner: owner && owner !== t.id ? owner : null });
+    if (!clock && !sample) classifyUndispatched(t, out);
+    else if (clock) out.openClock.push(t);   // still open: the sample does not exist yet, so nothing to sign
+    else checkSignature(t, sample, tokenOwner, out);
   }
+  const { never, openClock, signature, naUndispatched, naNoReason } = out;
   // The exit-2 set. `openClock` is separated because its remedy is a command, not a rebuild.
   // ONE denominator for every surface that prints a dispatch count: the tasks in the folder.
   return { never, openClock, signature, naUndispatched, naNoReason,

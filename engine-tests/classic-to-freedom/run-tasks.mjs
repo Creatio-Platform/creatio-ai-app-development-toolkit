@@ -173,7 +173,7 @@ const readIndex = (dir) => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf
 // dispatched, signed and closed, depth-first, exactly as the orchestrator would.
 const AT = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const taskFilePath = (dir, id) => path.join(dir, fs.readdirSync(dir).find((x) => x.endsWith(".md")
-  && x !== TASK_INDEX_FILE && new RegExp(`^id: ${id}\\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
+  && x !== TASK_INDEX_FILE && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
 const editFrontMatter = (dir, id, key, value) => {
   const f = taskFilePath(dir, id);
   fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`));
@@ -1714,7 +1714,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     // READ-ONLY, and it has to be: `syncTaskDir` closes clocks, so a helper that re-sliced the folder to find a
     // file would close the very clock the open-clock case exists to leave open.
     const fileOf = (d, id) => path.join(d, fs.readdirSync(d).find((x) => x.endsWith(".md") && x !== TASK_INDEX_FILE
-      && new RegExp(`^id: ${id}\\s*$`, "m").test(fs.readFileSync(path.join(d, x), "utf8"))));
+      && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(d, x), "utf8"))));
     const setStatus = (d, id, s) => {
       const f = fileOf(d, id);
       fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${s}`));
@@ -1945,7 +1945,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => {
           const a = readIndex(d);
           syncTaskDir(d, RUN, { ...OPTS, now: at(99) });
-          return a === readIndex(d) && !/\d+ min/.test(a);
+          return a === readIndex(d) && !/[0-9] min/.test(a);
         }, () => readIndex(d).slice(0, 400));
     }
 
