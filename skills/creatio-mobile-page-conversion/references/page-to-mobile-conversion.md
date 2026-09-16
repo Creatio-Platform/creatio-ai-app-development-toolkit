@@ -97,7 +97,10 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    this — no fixed read ceiling). There is no `existingMobileEquivalentSchemaName` field either — the
    equivalent search below is something YOU perform, not something the guide ever did. Skip this step entirely
    when both lists are empty. Otherwise, for every DISTINCT candidate name (dedupe `target` /
-   `resolvedCandidateSchemaName` first — same grouping the "Missing target pages" plan section requires):
+   `resolvedCandidateSchemaName` first — same grouping the "Missing target pages" plan section requires — AND
+   ACROSS the two sources: a `web-page` row's `target` and an `entity-default-mobile-page` row's
+   `resolvedCandidateSchemaName` that name the SAME schema are ONE candidate, not two, even though they came
+   from different lists):
    - **`entity-default-mobile-page` candidate with NO `resolvedCandidateSchemaName` at all:** clio could not
      find the object's default WEB edit page either (both the mobile and the web `RelatedPage` add-ons came
      back empty) — but the OBJECT name (`target`) is still known. **Do not jump straight to
@@ -332,8 +335,13 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   produce two rows sharing the same `resolvedCandidateSchemaName` (or the same `target` object name when
   none resolved). Group those rows — by `resolvedCandidateSchemaName` when it is set, otherwise by
   `target` — and combine every `elementName` that referenced the group into one candidate row, the same
-  shape `references[]` already gives you for a `web-page` target. List every remaining DISTINCT candidate
-  the guide could not find while analyzing this source page's action bindings. For each: the target name
+  shape `references[]` already gives you for a `web-page` target. **Then merge ACROSS the two sources**:
+  clio never checks whether a `web-page` target's schema name coincides with an `entity-default-mobile-page`
+  candidate's `resolvedCandidateSchemaName` — if it does (a direct `crt.OpenPageRequest` on a page that also
+  happens to be some object's default mobile edit page), they name the SAME missing page and must become
+  ONE row with the combined `references[]`, not two rows offering the same conversion twice. List every
+  remaining DISTINCT candidate the guide could not find while analyzing this source page's action bindings.
+  For each: the target name
   (the resolved web edit page, `resolvedCandidateSchemaName`, for an `entity-default-mobile-page` target —
   or the raw object name when no candidate could be resolved), which buttons/requests reference it
   (`references[]`, or your combined `elementName`s for the entity case), and the recommended next step from
@@ -393,9 +401,9 @@ one followed by a later summary):
   them — `convertedRequests` (carried, remapped where the mobile name differs), `droppedRequests` (a binding
   lost, INCLUDING on a component that stayed on the page), `flaggedRequests` (an unknown request kept for
   you to verify) and `unresolvedTargetRequests` (the action's navigation target could not be confirmed —
-  read `state` AND `bindingRemoved` together, per the article). A `crt.Button` whose request is unsupported
-  was **dropped entirely** (a `guide.droppedElements` entry whose coded reason names the request) — list
-  those removed action components for the developer.
+  the control AND its binding are ALWAYS kept regardless of `state`; nothing here is ever removed). A
+  `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements` entry whose
+  coded reason names the request) — list those removed action components for the developer.
 - **Missing pages:** the same deduplicated list from the plan (`missingTargetPages` + verified-`missing`
   `entity-default-mobile-page` targets), each with its `recommendedAction`. State whether the developer
   accepted the step 8a offer to convert them, and for each accepted target: queued / converted (its own
