@@ -1945,7 +1945,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => {
           const a = readIndex(d);
           syncTaskDir(d, RUN, { ...OPTS, now: at(99) });
-          return a === readIndex(d) && !/[0-9] min/.test(a);
+          return a === readIndex(d) && !/\d min/.test(a);
         }, () => readIndex(d).slice(0, 400));
     }
 
@@ -2021,6 +2021,14 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => /NO REPAIR TASKS WRITTEN/.test(runV.stdout || "")
           && !fs.readdirSync(dS).some((f) => /repair/i.test(f)),
         () => fs.readdirSync(dS).join(" · "));
+      check("verify leg: the failing files are listed on ONE stream — stdout carries the verify table the caller presents verbatim, so the same list on both streams is that report read twice",
+        () => {
+          const onOut = ((runV.stdout || "").match(/ · task-/g) || []).length;
+          const onErr = ((runV.stderr || "").match(/ · task-/g) || []).length;
+          return onOut === 0 && onErr > 0;
+        },
+        () => ({ stdout: ((runV.stdout || "").match(/ · task-/g) || []).length,
+                 stderr: ((runV.stderr || "").match(/ · task-/g) || []).length }));
       check("verify leg: a plain `--verify` with no folder SAYS the dispatch gate did not run, on stderr — the caller presents stdout verbatim as the report, so a note about what was not checked must not land inside that table",
         () => {
           const runP = cli(["--verify", "--built", builtEmpty], MANIFEST);

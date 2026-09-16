@@ -2782,8 +2782,11 @@ function runRepairMode(result, dir, verifyRes, opts) {
   const audit = dispatchAudit(readTaskDir(dir), dir);
   if (audit.failing.length) {
     dispatchGateFailure = { audit, dir, started: true };
-    return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this folder fails the dispatch gate, and a repair round would"
-      + " schedule more sub-agents against work nobody was dispatched for.\n" + dispatchFailureText(audit, dir) + "\n";
+    // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify
+    // table the caller presents verbatim, so the same list on both streams is the caller's report read twice.
+    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this folder fails the dispatch gate (${audit.failing.length} task(s)),`
+      + " and a repair round would schedule more sub-agents against work nobody was dispatched for."
+      + " The failing tasks and their remedies are on stderr.\n";
   }
   if (planGaps(result).length) {
     return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this run has PLAN-level gaps, which no build round can close."

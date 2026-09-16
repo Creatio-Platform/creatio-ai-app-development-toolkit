@@ -846,10 +846,9 @@ function dispatchAttention(dispatch) {
 
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
-  out.push(...nonceAttention(set.tasks));
   // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
   // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
-  out.push(...dispatchAttention(set.dispatch));
+  out.push(...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch));
   // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
   // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
   // is exactly the judgement the split file records.
