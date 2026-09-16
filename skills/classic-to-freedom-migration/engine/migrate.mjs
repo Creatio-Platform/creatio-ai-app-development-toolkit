@@ -2688,8 +2688,7 @@ function notBuiltFailureText(items) {
       const why = it.cause
         ? `${it.cause}: ${REMEDY[it.cause] || "a person decides"}`
         : "NOT ACCOUNTED FOR — the task closed without marking this row either way, so nobody stated what happened to it";
-      L.push(`    · row ${it.n} — ${it.row.label}`);
-      L.push(`      ${why}`);
+      L.push(`    · row ${it.n} — ${it.row.label}`, `      ${why}`);
     }
   }
   L.push("  None of the above is routed to a repair task. Run `--verify --tasks <dir>` to open a repair round over"
@@ -2739,6 +2738,21 @@ function startRefusalText(set, startId, dir) {
     return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
   }
   return null;
+}
+
+// A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
+// scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
+function splitDriftLines(set) {
+  const L = [];
+  if (set.added?.length) {
+    L.push(`⚠ ${set.added.length} plan row group(s) are in NO item — nobody is scheduled to build them.`
+      + ` Place them in ${SPLIT_FILE}; the engine will not pick an owner, because which item a row belongs to is`
+      + ` the judgement the split records. See the "Attention" section of ${TASK_INDEX_FILE}.`);
+  }
+  if (set.emptied?.length) {
+    L.push(`⚠ ${set.emptied.length} split item(s) have no rows left in the current plan: ${set.emptied.map((e) => "`" + e.id + "`").join(", ")}. Their files are kept.`);
+  }
+  return L;
 }
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
@@ -2800,16 +2814,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
   lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd());
-  // A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
-  // scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
-  if (set.added?.length) {
-    lines.push(`⚠ ${set.added.length} plan row group(s) are in NO item — nobody is scheduled to build them.`
-      + ` Place them in ${SPLIT_FILE}; the engine will not pick an owner, because which item a row belongs to is`
-      + ` the judgement the split records. See the "Attention" section of ${TASK_INDEX_FILE}.`);
-  }
-  if (set.emptied?.length) {
-    lines.push(`⚠ ${set.emptied.length} split item(s) have no rows left in the current plan: ${set.emptied.map((e) => "`" + e.id + "`").join(", ")}. Their files are kept.`);
-  }
+  lines.push(...splitDriftLines(set));
   return lines.join("\n") + "\n";
 }
 

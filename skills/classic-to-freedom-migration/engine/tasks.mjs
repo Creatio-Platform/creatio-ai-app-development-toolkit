@@ -620,8 +620,8 @@ function renderRowTable(rows, repair = false) {
 // A DELIVERABLE LABEL IS A CUSTOMER'S CLASSIC CAPTION and may contain a `|`. The Outcome column is read back by
 // cell POSITION, so an unescaped pipe shifts every index after it: the label truncates, the outcome is read out
 // of the wrong cell, and the row's mark can never be matched to it again. Escaped on write, undone on read.
-const cell = (s) => String(s ?? "").replace(/\|/g, "\\|");
-const uncell = (s) => String(s ?? "").replace(/\\\|/g, "|");
+const cell = (s) => String(s ?? "").replaceAll("|", String.raw`\|`);
+const uncell = (s) => String(s ?? "").replaceAll(String.raw`\|`, "|");
 
 // An empty `## Notes` would otherwise end the file in three newlines. Scanned rather than matched with a
 // quantified regex, which Sonar reads as super-linear backtracking on a long run of newlines.
@@ -802,10 +802,14 @@ function tableRows(bodyLines) {
 // `built` · `not-built — cause` · `n-a — reason`. A plain hyphen is accepted as well as the rendered em dash.
 function parseOutcome(raw) {
   if (!raw || raw === "—") return null;
-  const [head, ...rest] = raw.split(/\s+[—-]\s+/);
-  const kind = head.trim().toLowerCase();
+  // ANCHORED, and the two parts cannot match the same characters: the kind is a single word, the separator needs
+  // whitespace on both sides, and the detail runs to the end. Split on a bare `\s+…\s+` instead and a cell of
+  // whitespace makes the engine try every division of it — super-linear on a string a customer's caption controls.
+  const m = /^([a-z-]+)(?:\s+[—-]\s+([\s\S]*))?$/i.exec(String(raw).trim());
+  if (!m) return null;
+  const kind = m[1].toLowerCase();
   if (!ROW_OUTCOMES.includes(kind)) return null;
-  const detail = rest.join(" — ").trim();
+  const detail = (m[2] || "").trim();
   if (kind === O_BUILT) return { outcome: kind, cause: null, reason: "", text: raw };
   // `n-a` CLOSES A ROW WITHOUT BUILDING IT, so it carries the same burden the task-level `n/a` does: the reason is
   // what earns it. Without one it is a self-certified skip, and it is counted as `not-built` rather than as an
@@ -1110,9 +1114,12 @@ const mergePages = (a = {}, b = {}) => {
 // Attached to an assembled set like `attachDispatch`, not folded into `mergeTaskSet`: a task's status must not
 // depend on its siblings inside a function whose contract is "merge these files against this plan".
 // Runs AFTER `attachDispatch`, which is what makes `t.dispatched` readable here — see the closure rule below.
-function resolvePartials(set) {
+// Which rows the repair tasks in this set have OPEN work against, and which they have closed. Keyed per ROW off
+// `covers`: keying on the cause would credit every row that ever lands in that bucket to the first task that
+// closed there — including rows recorded after it ran, which nobody has looked at.
+function repairCoverage(tasks) {
   const open = new Set(), closed = new Set();
-  for (const t of set.tasks || []) {
+  for (const t of tasks || []) {
     if (t.kind !== REPAIR_KIND) continue;
     // A CLOSURE ONLY COUNTS IF SOMEBODY WAS DISPATCHED FOR IT. A repair file is exempt from the dispatch gate
     // (`adoptOrchestrated` rewrites its origin), and `--verify` re-measures the page, so that exemption costs the
@@ -1123,19 +1130,24 @@ function resolvePartials(set) {
     // deliberately does not auto-reopen one — so nothing is scheduled against that row any more, and counting it
     // as open work would let the run pass over a deliverable a second agent has now also failed to build.
     if (t.status === S_BLOCKED) continue;
-    // Keyed per ROW, off `covers`. Keying on the cause would credit every row that ever lands in that bucket to
-    // the first task that closed there — including rows recorded after it ran, which nobody has looked at.
     const into = CLOSED.has(t.status) ? closed : open;
     for (const c of t.covers || []) into.add(`${t.pageKey} ${c}`);
   }
+  // An OPEN round wins over a closed earlier one: the row came back, so it is somebody's work again.
+  return (key) => {
+    if (open.has(key)) return "open";
+    return closed.has(key) ? "closed" : null;
+  };
+}
+
+function resolvePartials(set) {
+  const residualOf = repairCoverage(set.tasks);
   for (const t of set.tasks || []) {
     if (t.status !== S_PARTIAL || t.unread || t.kind === REPAIR_KIND) continue;
     let residuals = 0, settled = 0;
     for (const r of t.rows || []) {
       if (r.outcomeKind !== O_NOT_BUILT && r.outcome) continue;
-      const key = `${t.pageKey} ${coverKey(r.label)}`;
-      // An OPEN round wins over a closed earlier one: the row came back, so it is somebody's work again.
-      r.residual = open.has(key) ? "open" : (closed.has(key) ? "closed" : null);
+      r.residual = residualOf(`${t.pageKey} ${coverKey(r.label)}`);
       residuals++;
       if (r.residual === "closed") settled++;
     }
@@ -1148,15 +1160,19 @@ function resolvePartials(set) {
 // label is clipped here — the task file is named on the same line and carries it in full.
 const brief = (s, n = 90) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
+// No cause at all is the weaker claim of the two: nobody said anything about the row either way.
+function whyNotBuilt(cause) {
+  if (!cause) return "unaccounted — the task closed without recording this row";
+  const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (needs a decision — not re-dispatched)";
+  return `${cause}${tail}`;
+}
+
 function notBuiltLines(tasks) {
   const items = notBuiltRows(tasks);
   if (!items.length) return [];
   const L = [`⚠ NOT BUILT — ${items.length} deliverable(s) across ${new Set(items.map((x) => x.task.id)).size} task(s):`];
   for (const it of items) {
-    const why = it.cause
-      ? `${it.cause}${RETRYABLE_CAUSES.has(it.cause) ? " (a re-run may clear it)" : " (needs a decision — not re-dispatched)"}`
-      : "unaccounted — the task closed without recording this row";
-    L.push(`  · ${it.task.pageKey} · row ${it.n} ${brief(it.row.label)} — ${why} [${it.task.file}]`);
+    L.push(`  · ${it.task.pageKey} · row ${it.n} ${brief(it.row.label)} — ${whyNotBuilt(it.cause)} [${it.task.file}]`);
   }
   return L;
 }

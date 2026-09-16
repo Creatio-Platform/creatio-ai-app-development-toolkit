@@ -2371,7 +2371,11 @@ function setOutcome(text, n, value) {
 // Hoisted: written by most checks below.
 const NOT_BUILT_BLOCKED = "not-built — blocked";
 const rowCount = (text) => text.split("\n").filter((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); }).length;
-const allBuilt = (text) => { let t = text; for (let i = 1; i <= rowCount(text); i++) t = setOutcome(t, i, "built"); return t; };
+const allBuilt = (text) => {
+  let t = text;
+  for (let i = 1; i <= rowCount(text); i++) { t = setOutcome(t, i, "built"); }
+  return t;
+};
 // One task re-read through the merge, exactly as `syncTaskDir` does it: render → edit → parse → carry over.
 const reread = (task, set, edit) => {
   const text = edit(renderTaskFile(task, set));
@@ -2445,13 +2449,15 @@ check("a `blocked` task still HALTS its dependents — `--start` refuses a task 
   () => {
     const d = tmp("blockhalt");
     const s1 = syncTaskDir(d, RUN, OPTS);
-    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    // `Page build`, NOT `Quality gates` — the gates task is a leaf and nothing depends on it, so a halt asserted
+    // over it asserts nothing.
+    const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
     fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked"));
     const s2 = syncTaskDir(d, RUN, OPTS);
     const dep = s2.tasks.find((t) => (t.dependsOn || []).includes(tgt.id));
-    if (!dep) return "no dependent task in this fixture";
-    return s2.tasks.find((t) => t.id === tgt.id).status === "blocked"
+    // No dependent means the FIXTURE stopped exercising the halt, which has to fail rather than pass quietly.
+    return !!dep && s2.tasks.find((t) => t.id === tgt.id).status === "blocked"
       && !!startTask(d, dep.id, RUN, OPTS).blockedByDeps;
   }, "a blocked dependency must still refuse the dispatch");
 
@@ -2529,15 +2535,26 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
     }, () => renderProgress(second, dir));
 
   check("`partial` RELEASES the tasks that depend on it — it holds up calling the run complete, not the queue. A state that halted dependents is exactly the state agents avoided by writing `done`",
+    // Built on its OWN folder around `Page build`: the `Quality gates` task this block otherwise uses is a leaf,
+    // so a release asserted over it asserts nothing. The source is dispatched and signed so the only thing that
+    // could refuse the dependent is the dependency rule under test.
     () => {
-      const dependent = second.tasks.find((t) => (t.dependsOn || []).includes(target.id));
-      if (!dependent) return "no dependent task in this fixture";
-      const res = startTask(dir, dependent.id, RUN, OPTS);
+      const d = tmp("partial-releases");
+      const s1 = syncTaskDir(d, RUN, OPTS);
+      const src = taskAt(s1, "child:G1", "Page build");
+      const dependent = s1.tasks.find((t) => (t.dependsOn || []).includes(src.id));
+      if (!dependent) return false;
+      clearDepsOf(d, src.id, RUN, OPTS);
+      const token = `tok-${src.id}`;
+      startTask(d, src.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(80));
+      const fp = taskFilePath(d, src.id);
+      fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-built — needs-decision"));
+      editFrontMatter(d, src.id, "agentNonce", token);
+      const s2 = syncTaskDir(d, RUN, { ...OPTS, now: AT(81) });
+      if (s2.tasks.find((t) => t.id === src.id).status !== "partial") return false;
+      const res = startTask(d, dependent.id, RUN, { ...OPTS, dispatchToken: "tok-dep" }, null, AT(82));
       return !!res.started && !res.blockedByDeps;
-    }, () => {
-      const dependent = second.tasks.find((t) => (t.dependsOn || []).includes(target.id));
-      return { dependent: dependent?.id, deps: dependent?.dependsOn };
-    });
+    }, "a `partial` dependency must not refuse the dispatch of what waits on it");
 
   check("a `partial` task is still held to the DISPATCH gate — it was worked and finished, so it must carry a dispatch record exactly as a `done` one does; exempting it would make `partial` the new way to close a task nobody was sent out for",
     () => dispatchAudit(readTaskDir(dir), dir).never.some((t) => t.id === target.id),
@@ -2734,10 +2751,11 @@ const repairIds = (d) => repairFiles(d)
   .map((f) => parseTaskFile(fs.readFileSync(path.join(d, f), "utf8")).meta?.id).filter(Boolean);
 // Dispatched, signed and closed — the same three steps a build task takes.
 let repairMin = 50;
-const closeRepairs = (d) => repairIds(d).forEach((id) => runTask(d, id, RUN, OPTS, (repairMin += 2)));
+const nextMin = () => { repairMin += 2; return repairMin; };
+const closeRepairs = (d) => repairIds(d).forEach((id) => runTask(d, id, RUN, OPTS, nextMin()));
 // The round ran and the sub-agent stated why it could not proceed.
 const blockRepairsAs = (d, status) => repairIds(d).forEach((id) => {
-  startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(repairMin += 2));
+  startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
   editFrontMatter(d, id, "status", status);
   editFrontMatter(d, id, "agentNonce", `tok-${id}`);
   syncTaskDir(d, RUN, { ...OPTS, now: AT(repairMin + 1) });
