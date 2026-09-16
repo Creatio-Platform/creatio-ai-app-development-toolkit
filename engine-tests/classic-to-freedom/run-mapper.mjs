@@ -7834,7 +7834,11 @@ const tplProvidedShallow = renderVerify(tplProvidedRes, {}, { pages: { main: { p
   viewConfig: { items: [{ name: "Contact", type: "crt.ComboBox" }] } } }, ...QG_EVIDENCE });
 check("ENG-94975 D6: template-provided components nested 4 levels deep in the merged `bundle.viewConfig` ARE found (Feed / CommunicationOptions / ApprovalList all ✅, verdict complete) — the regression that motivated contract v2",
   tplProvidedDeep.missing === 0 && tplProvidedDeep.unverified === 0 && tplProvidedDeep.complete === true
-  && /Feed \(`crt\.Feed`\) \| ✅ Done/.test(tplProvidedDeep.markdown)
+  // ENG-94756 — the row label now carries the route to the guidance item that owns this component's settings,
+  // so the pattern is EXTENDED rather than loosened: it still pins `✅ Done` on the Feed row, and it now also
+  // pins that the pointer reached the gated row a builder reads. A `.*` here would have let the pointer be
+  // dropped without anything going red.
+  && /Feed \(`crt\.Feed`\) — settings: `get-guidance name=page-modification-standard-components` \| ✅ Done/.test(tplProvidedDeep.markdown)
   // positive control: the SAME expectations, without those nodes, are MISSING — 4 now that Approvals gates on
   // TWO components (crt.Approval + crt.ApprovalList) instead of one (ENG-95859).
   && tplProvidedShallow.missing === 4,
@@ -10507,6 +10511,252 @@ const n2TreeManifest = (titleA, titleB) => ({
   check("dedupeStubScopes: two scopes that share a role and a schema but NOT their rows are kept apart — collapsing them would drop real work from the handoff",
     dedupeStubScopes([scope("child page", "P", ["a"]), scope("child page", "P", ["b"])]).length === 2);
 }
+
+
+/* ================================================================================================================
+   ENG-94756 — FEED / ATTACHMENTS CARRY THE CREATION FLOW'S SETTINGS, AND CAADT SAYS WHERE THOSE SETTINGS LIVE
+
+   THE DEFECT. A page migrated onto a Freedom form template gets Feed and Attachments, and gets none of the property
+   values the section/app CREATION flow produces — so the Feed queries nothing and the attachments list shows
+   nothing. What the plan said about both was that they are template-provided: true about the CONTAINER, and silent
+   about everything that makes the component work. Nothing in this repository answered "configured how".
+
+   WHERE THE VALUES LIVE, AND WHY NOT HERE. The canonical value set was measured read-only from a page the creation
+   flow built, and PUBLISHED — as the clio-knowledge guidance item `page-modification-standard-components`, which a
+   builder reads at build time through `get-guidance`. Approved requirement R7 is explicit that CAADT keeps NO
+   literal copy of those values and carries only a reference to that item. The engine could not honour a copy
+   anyway: `migrate.mjs` renders the plan OFFLINE, under plain `node`, with no clio and no stand, so a value table
+   here would be a second source of truth drifting from the one the builder actually reads — and
+   `get-component-info` stays authoritative for the property vocabulary.
+
+   WHAT THESE CHECKS ASSERT, therefore, is the contract R7 creates:
+     (i)   the plan ROUTES the builder to the guidance item by its stable id, on the line that names the component,
+           so the values are one call away;
+     (ii)  the deliverables are gated by PRESENCE — the component on its own gated row, and the companion
+           `AttachmentListDS` data source, without which a `crt.FileList` lists nothing;
+     (iii) the value table is ABSENT from CAADT — asserted over the rendered output AND over every engine source.
+           That guard is what stops decision (i) decaying back into a paste.
+
+   THE ROUTE IS UNCONDITIONAL, and that is this branch's design rather than an omission. The guidance item covers
+   the MERGE path and the INSERT path alike, so a builder needs it either way. This branch carries no measured
+   template-capability table — no verdicts, no per-template merge-vs-insert decision — so there is nothing here to
+   branch on, and nothing that could honestly be branched on. What that costs is stated in the PR body rather than
+   papered over here.
+   ================================================================================================================ */
+// The fixture: ONE page carrying BOTH components, built by the REAL mapper rather than hand-composed, so the
+// widget/feature records under test are the ones production emits.
+//   Feed        arrives as a base-declared WIDGET: `ESNFeedContainer` is seed-owned (→ `base: true`) and the client
+//               layer MERGES onto its ancestor `ESNTab`, which is the classic evidence `mapWidgets` demands before
+//               it will emit a base container (otherwise inherited chrome would leak onto every page).
+//   Attachments arrives as a standard FEATURE, by the `*File` ENTITY rule — the same path `FileDetailV2` takes.
+//               That asymmetry is why the route has to be resolved on BOTH surfaces (the widget Source cell and the
+//               feature Source cell) and not on one of them.
+const faSeed = L("Tpl", { diff: [
+  di({ name: "Tabs", itemType: 15 }),
+  di({ name: "ESNTab", parentName: "Tabs", propertyName: "tabs", isTab: true }),
+  di({ name: "ESNFeedContainer", parentName: "ESNTab", propertyName: "items", itemType: 15 })] });
+const FA_ENTITY = "UsrSourceCode";
+const faClient = L("Client", { entity: FA_ENTITY,
+  details: { Files: { schemaName: "FileDetailV2", entitySchemaName: "UsrSourceCodeFile", detailColumn: FA_ENTITY, masterColumn: "Id" } },
+  diff: [
+    di({ operation: "merge", name: "ESNTab", parentName: "Tabs", propertyName: "tabs", caption: "Resources.Strings.ESNCap" }),
+    di({ name: "FileTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.FileCap" }),
+    di({ name: "Files", parentName: "FileTab", propertyName: "items", itemType: 2 }),
+    di({ name: "Nm", parentName: "FileTab", propertyName: "items", bindTo: "Nm" })] });
+const faCs = mapToFreedom(mergeHierarchy([faClient], { seedTemplate: [faSeed] }));
+const faResult = { entity: FA_ENTITY, changeSet: faCs, signals: {} };
+const faOpts = { planMeta: { formTemplate: "PageWithTopAreaAndTabsFreedomTemplate" } };
+const faPlan = renderPlan(faResult, faOpts);
+const faRowRecs = checklistGroups(faResult, faOpts).flatMap((g) => g.rows);
+// The spec a builder actually READS is the plan document PLUS the coverage checklist it is gated on. The R7 guard
+// asserts against both joined, deliberately: the claim is that the values are nowhere in what CAADT produces, and
+// a guard over one table only would be satisfied by moving them into the other.
+const faSpec = [faPlan, ...faRowRecs.map((r) => r.label)].join("\n");
+// The stable id of the clio-knowledge guidance item, SPELLED OUT here rather than imported from the engine. It is a
+// CROSS-REPO contract — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json` — and a test
+// that imported the engine's own constant would follow a rename straight past the break: the plan would keep
+// pointing at "whatever the engine calls it" while `get-guidance` served nothing under that name.
+const FA_GUIDANCE_ID = "page-modification-standard-components";
+const FA_CALL = `get-guidance name=${FA_GUIDANCE_ID}`;
+// The Layout-table row for one component — the line a builder reads when it learns the component is on this page,
+// which is where the routing has to be.
+const faLayoutRow = (what) => faPlan.split("\n").find((l) => l.startsWith("|") && l.includes(`| ${what} |`)) || "";
+
+check("ENG-94756 fixture: the page carries a base-declared Feed widget AND an entity-matched Attachments feature — both halves of the defect on ONE page, emitted by the real mapper",
+  faCs.widgets.some((w) => w.widget === "Feed (ESN)" && w.base === true)
+  && faCs.standardFeatures.some((s) => s.feature === "Attachments" && s.uiShape === "component"),
+  () => ({ widgets: faCs.widgets, standardFeatures: faCs.standardFeatures }));
+
+// ---- T1 (R2 / R3 / R5 / R7): Attachments is ROUTED and its companion is GATED ---------------------------------
+// Three things have to be true of Attachments, and each one fails differently in production:
+//   route     — without the guidance item named ON the line that says the component is on this page, the builder
+//               configures from memory, which is the reported defect;
+//   component — the gated row must survive and still name `crt.FileList`, or `--verify` stops gating the component;
+//   companion — an attachments component without `AttachmentListDS` lists nothing, so a gate that counts only the
+//               component calls an empty tab done. The row must be GATED (carry a `vk`): a row without one renders
+//               as a note and closes on nobody. It is an EVIDENCE vk and not a count on purpose — `--built.pages[]`
+//               carries `viewConfig` (page ITEMS, walked by `walkViewConfig`) and a data source is not an item, so
+//               a count could never close on a correctly built page.
+check("ENG-94756 T1 (R2/R3/R5 + R7): the Attachments Layout row ROUTES the builder to the `page-modification-standard-components` guidance item, and the coverage gate names BOTH deliverables — the `crt.FileList` row, and the companion `AttachmentListDS` data source as a GATED evidence row",
+  () => {
+    const row = faLayoutRow("Attachments");
+    const comp = faRowRecs.find((r) => /^Attachments \(`crt\.FileList`\)/.test(r.label));
+    const ds = faRowRecs.find((r) => r.label.includes("AttachmentListDS"));
+    return row.includes(FA_CALL)
+      && !!comp && comp.vk?.type === "feature" && comp.vk.ftype === "crt.FileList" && comp.label.includes(FA_CALL)
+      && !!ds && ds.vk?.type === "evidence" && ds.vk.id === "main#datasource:AttachmentListDS"
+      && Array.isArray(ds.vk.requires) && ds.vk.requires.length > 0 && ds.label.includes(FA_GUIDANCE_ID);
+  },
+  () => ({ layoutRow: faLayoutRow("Attachments"),
+    attachmentRows: faRowRecs.filter((r) => /Attachment/i.test(r.label)).map((r) => ({ label: r.label, vk: r.vk || null })) }));
+
+
+// ---- T1b (R3 second criterion): the companion row really GATES ------------------------------------------------
+// The row above is asserted to CARRY a `vk`; this is the other half — that the `vk` actually holds the page open.
+// R3's second acceptance criterion is "a built page missing the companion data source is reported as incomplete
+// rather than passing", and with R7 in force the engine cannot check the data source's VALUES, so what it gates is
+// its PRESENCE, evidenced. Three states, one per real outcome:
+//   nobody looked      → ⚠ unverified and the page is NOT complete (the silent pass this row exists to prevent);
+//   filed, unjudged    → still open — a record nobody reviewed does not close a row, the same rule every other
+//                        evidence row follows;
+//   filed and judged   → closed.
+// `crt.FileList` is BUILT in every arm, so what moves the verdict is only the data source. Without that control the
+// check could pass for the wrong reason (a missing component, not a missing data source).
+const faVerifyRes = { changeSet: { viewConfigDiff: [], images: [],
+  standardFeatures: [{ feature: "Attachments", uiShape: "component" }], details: [], cardActions: [] }, signals: {} };
+const faVerifyBuilt = { pages: { main: { parentSchemaName: "FormPageTemplate",
+  viewConfig: { items: [{ name: "Files", type: "crt.FileList" }] } } } };
+const FA_DS_ID = "main#datasource:AttachmentListDS";
+const faDsRecord = { referencePage: "the creation-flow reference page", components: ["crt.EntityDataSource"] };
+const faNoDs = renderVerify(faVerifyRes, {}, { ...faVerifyBuilt, ...QG_EVIDENCE });
+const faDsUnjudged = renderVerify(faVerifyRes, {}, { ...faVerifyBuilt,
+  evidence: { ...QG_EVIDENCE.evidence, [FA_DS_ID]: faDsRecord }, judge: { ...QG_EVIDENCE.judge } });
+const faDsJudged = renderVerify(faVerifyRes, {}, { ...faVerifyBuilt,
+  evidence: { ...QG_EVIDENCE.evidence, [FA_DS_ID]: faDsRecord },
+  judge: { ...QG_EVIDENCE.judge, [FA_DS_ID]: { convincing: true, why: "read the page's model configuration on-stand" } } });
+check("ENG-94756 T1b (R3): a page that built the `crt.FileList` and nothing else leaves the `AttachmentListDS` row ⚠ unverified and the page NOT complete — the companion data source is gated by PRESENCE, so an empty attachments tab can no longer pass as done",
+  () => faNoDs.unverified >= 1 && faNoDs.complete === false && /AttachmentListDS/.test(faNoDs.markdown)
+    && faDsUnjudged.complete === false
+    && faDsJudged.complete === true && faDsJudged.unverified === 0 && faDsJudged.missing === 0,
+  () => ({ noDs: { u: faNoDs.unverified, m: faNoDs.missing, c: faNoDs.complete },
+    unjudged: { u: faDsUnjudged.unverified, c: faDsUnjudged.complete },
+    judged: { u: faDsJudged.unverified, m: faDsJudged.missing, c: faDsJudged.complete },
+    rows: faDsJudged.markdown.split("\n").filter((l) => /AttachmentListDS/.test(l)).map((l) => l.slice(0, 140)) }));
+
+// ---- T2 (R1 / R7): Feed is ROUTED on its own surface ----------------------------------------------------------
+// Feed needs no companion artifact, so what it owes is the route: the engine says WHICH component is on the page
+// and WHERE its settings are published, and says nothing at all about what those settings are — including the one
+// value that is not even a constant (the migrated object's schema name). A plan that hardcoded it would be this
+// same defect in a new place.
+//
+// NO EXPECTED COUNT IS ASSERTED FOR FEED, and that is deliberate. Feed reaches the plan as a WIDGET on this branch,
+// and widgets file no coverage count here. Filing one would mean asserting that the chosen template does NOT ship
+// Feed — a claim this branch has no measured capability table to support, and exactly the "extra expected count
+// against a component the template provides" that a plan must not make.
+check("ENG-94756 T2 (R1 + R7): the Feed Layout row routes the builder to the same guidance item for the Feed value set — the engine names the component and the source of its settings, never the settings",
+  () => faLayoutRow("Feed (ESN)").includes(FA_CALL),
+  () => ({ layoutRow: faLayoutRow("Feed (ESN)"),
+    feedLines: faPlan.split("\n").filter((l) => /Feed/.test(l)).slice(0, 5) }));
+
+// ---- T2b: the route is NOT sprayed over every component -------------------------------------------------------
+// The item covers Feed and Attachments. Approvals and Communication options have their own recipes, and sending
+// them to an item that says nothing about them would be a false instruction — the failure mode of "just append the
+// pointer everywhere". This is the negative control that keeps the routing table meaning something.
+const faOtherCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X",
+  details: { V: { schemaName: "VisaDetailV2", entitySchemaName: "XVisa", detailColumn: "X", masterColumn: "Id" },
+    C: { schemaName: "ContactCommunicationDetail", entitySchemaName: "ContactCommunication", detailColumn: "X", masterColumn: "Id" } },
+  diff: [
+    di({ name: "OtherTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.OtherCap" }),
+    di({ name: "V", parentName: "OtherTab", propertyName: "items", itemType: 2 }),
+    di({ name: "C", parentName: "OtherTab", propertyName: "items", itemType: 2 })] })]));
+const faOtherRes = { entity: "X", changeSet: faOtherCs, signals: {} };
+const faOtherSpec = [renderPlan(faOtherRes, faOpts), ...checklistGroups(faOtherRes, faOpts).flatMap((g) => g.rows).map((r) => r.label)].join("\n");
+check("ENG-94756 T2b: a page whose only component features are Approvals and Communication options is NOT routed to the standard-components item — the route names the two components that item covers, and no others",
+  () => faOtherCs.standardFeatures.some((s) => s.feature === "Approvals")
+    && faOtherCs.standardFeatures.some((s) => s.feature === "Communication options")
+    && !faOtherSpec.includes(FA_GUIDANCE_ID),
+  () => ({ features: faOtherCs.standardFeatures.map((s) => s.feature),
+    lines: faOtherSpec.split("\n").filter((l) => l.includes(FA_GUIDANCE_ID)).slice(0, 4) }));
+
+// ---- R7 GUARD: the value table is ABSENT from CAADT -----------------------------------------------------------
+// The tokens are the property NAMES and measured literals of the canonical value set. Asserting their ABSENCE is
+// what makes this guard the executable form of the architecture decision rather than a comment about it: paste the
+// measured table into the engine to "help the builder" and this goes red, naming each value that was pasted.
+const FA_VALUE_TOKENS = ["feedType", "primaryColumnValue", "cardState", "dataSourceName", "masterRecordColumnValue",
+  "recordColumnName", "viewType", "tileSize", "gallery", "$AttachmentList", "$CardState", "SysFile",
+  "crt.EntityDataSource", "AttachmentListDS_"];
+check("ENG-94756 R7 GUARD (output): the CAADT-rendered spec carries NOT ONE canonical property value — it names the components, the guidance item and the companion data source, and stops there",
+  () => FA_VALUE_TOKENS.every((t) => !faSpec.includes(t)),
+  () => ({ leaked: FA_VALUE_TOKENS.filter((t) => faSpec.includes(t)),
+    lines: faSpec.split("\n").filter((l) => FA_VALUE_TOKENS.some((t) => l.includes(t))) }));
+// The output guard only sees what THIS fixture renders; R7 is about the REPOSITORY. So the same list is run over
+// every engine source, which is where a copy would actually be typed — and which is the only place a reviewer of a
+// future PR would have to notice it by eye. `dataSourceName` is dropped from this arm ONLY: `mapper.mjs` has spoken
+// that word since ENG-94714, in the Freedom recipe for a list Actions-button process launch, so a hit on it here
+// could not be told apart from a paste. Its absence from the OUTPUT arm above still pins the Feed value.
+const FA_SOURCE_TOKENS = FA_VALUE_TOKENS.filter((t) => t !== "dataSourceName");
+const faEngineSources = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs"))
+  .map((f) => ({ file: f, text: fs.readFileSync(path.join(ENGINE_DIR, f), "utf8") }));
+check("ENG-94756 R7 GUARD (source): no engine source file carries the canonical value table either — CAADT holds the guidance item's ID and the names of the deliverables it routes to, and not one of the values behind them",
+  () => faEngineSources.length >= 5
+    && faEngineSources.every((s) => FA_SOURCE_TOKENS.every((t) => !s.text.includes(t))),
+  () => ({ scanned: faEngineSources.map((s) => s.file),
+    hits: faEngineSources.flatMap((s) => FA_SOURCE_TOKENS.filter((t) => s.text.includes(t)).map((t) => `${s.file}: ${t}`)) }));
+
+// ---- REGRESSION BOUNDARY: the flat template-provided flags still say what they said ----------------------------
+// This branch decides merge-vs-insert nowhere: `meta.templateProvided` is a flat per-row flag, Feed's Layout cell is
+// driven by `w.base` alone, and no template is ever consulted. This change appends a ROUTE to those cells and
+// changes NOT ONE of those decisions — the honest statement of what it does and does not do. Pinning the existing
+// wording is what stops a later "while we are here" from quietly turning the flat flag into a claim about a
+// specific template, which is a different ticket needing measurements this branch does not have.
+check("ENG-94756 regression: the flat template-provided behaviour is untouched — Attachments still reads `template-provided`, Feed still reads `template context — provided by the Freedom template`, neither claims a NAMED template ships or omits it, and no expected count is filed for either",
+  () => {
+    const att = faLayoutRow("Attachments"); const feed = faLayoutRow("Feed (ESN)");
+    // The cell PREFIX, not the whole cell: this check's job is that the pre-existing disposition survived, so it
+    // must stay green with or without the route appended after it. Demanding the separator too would turn a
+    // regression guard into a second copy of T1/T2 and would go red on the baseline it is meant to describe.
+    return att.includes("| template-provided") && feed.includes("| template context — provided by the Freedom template")
+      && !/ships NO|ships Feed|ships Attachments|⚠ ADD/.test(`${att}\n${feed}`)
+      && !faRowRecs.some((r) => /Feed.*expected|Attachments.*expected/.test(r.label));
+  },
+  () => ({ attachments: faLayoutRow("Attachments"), feed: faLayoutRow("Feed (ESN)"),
+    expectedRows: faRowRecs.filter((r) => /expected/.test(r.label)).map((r) => r.label) }));
+
+// ---- TAGS: the control is free, the DATA is the question, and one wrong premise stays withdrawn ----------------
+// Tags is in this ticket's title and it is a DIFFERENT shape of defect from Feed/Attachments: the Freedom form
+// templates ship the control and this migration neither builds nor configures it, so there is nothing to insert
+// and no value set to route to. What the plan used to say about it was "nothing to migrate" — true of the CONTROL
+// and false as a whole, because a page build moves no tag DATA. The correction rides on the row that ALREADY
+// existed and is already conditioned on the run: it renders only when the classic page carried a tag button, i.e.
+// only for a migration where tagging was actually in use. No unconditional note was added; on a branch with no
+// measured template-capability table, a note asserting that "your template ships the tag control" would be an
+// assertion nothing here measured — see the PR body for that argument.
+const faTagCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("ENG-94756 (Tags): the tag card action no longer reads `nothing to migrate` — it separates the CONTROL (template-provided, nothing to build) from the DATA (a page build moves none, and nothing offline says where this object's tags are stored), and sends that question on-stand",
+  () => /\| Tag \| — \|/.test(faTagCs.designSpec)
+    && /tag CONTROL is provided by the default Freedom template/.test(faTagCs.designSpec)
+    && /tag DATA is a separate question/.test(faTagCs.designSpec)
+    && /Confirm on-stand/.test(faTagCs.designSpec)
+    && !/nothing to migrate/.test(faTagCs.designSpec),
+  () => faTagCs.designSpec.split("\n").filter((l) => /\| Tag \|/.test(l)));
+// THE WITHDRAWN PREMISE, MADE EXECUTABLE. An earlier draft of this work claimed that tagging requires a per-object
+// junction object derived from the migrated entity (`<Entity>InTag`, inheriting `BaseEntityInTag`), and read the
+// absence of one as proof that a page's tag control was dead. That premise is WRONG: the control's DEFAULT source
+// is entity-agnostic — one shared record→tag table keyed by record id and schema name — verified against a stand.
+// The per-object model is a different, older one. A gate built on the wrong premise would fire falsely on every
+// object using the default, so nothing in this engine may assert it.
+//
+// This check is currently green BY ABSENCE, and that is the point: its job is to bite a future author, not to
+// describe today. Reinstating the premise — in code, in a comment, or in rendered plan text — requires making it
+// red first. On the branch where the premise was first written down, the equivalent check went red on its own
+// author's explanatory comments, which is the evidence that this pattern bites rather than decorates.
+const FA_JUNCTION_RE = /\b(?:[A-Z][A-Za-z0-9]*InTag|BaseEntityInTag)\b/;
+check("ENG-94756 RETRACTION (executable): no engine source and no rendered plan names a per-object tag junction object (`<Entity>InTag` / `BaseEntityInTag`) — the tag control's default source is entity-agnostic, so the absence of such an object proves nothing and nothing here may claim otherwise",
+  () => !faEngineSources.some((s) => FA_JUNCTION_RE.test(s.text))
+    && !FA_JUNCTION_RE.test(faSpec) && !FA_JUNCTION_RE.test(faTagCs.designSpec),
+  () => ({ sourceHits: faEngineSources.filter((s) => FA_JUNCTION_RE.test(s.text)).map((s) => `${s.file}: ${FA_JUNCTION_RE.exec(s.text)?.[0]}`),
+    specHit: FA_JUNCTION_RE.exec(faSpec)?.[0] || null, tagHit: FA_JUNCTION_RE.exec(faTagCs.designSpec)?.[0] || null }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

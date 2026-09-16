@@ -17,7 +17,11 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
-import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf,
+  // ENG-94756: the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
+  // attachments component is inert without, and the two resolvers that say which plan row is covered by that item.
+  // Both constants are NAMES this file renders; neither is a property value.
+  STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -181,11 +185,28 @@ function rowsForDetails(details, tabRegion) {
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
   });
 }
+// ENG-94756 — THE ROUTE TO THE CANONICAL SETTINGS, in ONE place, because the plan says it in two (the Layout
+// table's Source cell and the coverage rows the build is gated on) and a run that pointed at the guidance item in
+// one of them and improvised in the other would be the duplication all over again. The call is printed verbatim so
+// it can be pasted: the values are a `get-guidance` away, and they are deliberately nowhere in here.
+const GUIDANCE_CALL = `\`get-guidance name=${STANDARD_COMPONENTS_GUIDANCE_ID}\``;
+// Appended to the Layout table's Source cell, which is the line a builder reads when it learns this component is
+// on the page. It says nothing about WHETHER the component is built or re-bound — that is the rest of the cell's
+// job — because the item covers both: merging onto a template-shipped container and inserting outright need the
+// same property set, and a page that merged still owes its own configuration.
+const GUIDANCE_ROUTE = ` · configure it from ${GUIDANCE_CALL} — that item owns the canonical property set; this plan names none of the values, and none may be invented`;
+// The same route, compressed to what fits at the end of a gated checklist row.
+const GUIDANCE_POINTER = `settings: ${GUIDANCE_CALL}`;
 function rowsForFeatures(standardFeatures, tabRegion) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
     const type = isList ? "Related list" : esc(s.feature);
-    const nativeSrc = s.templateProvided ? "template-provided" : "native — confirm component on-stand";
+    // ENG-94756 — `template-provided` on its own was the whole of what the plan said about a component whose
+    // settings decide whether it works at all. It is true and it is not enough: the template supplies the
+    // container, the page still owes the configuration, and nothing here told anyone where that is defined.
+    const guided = isList ? null : featureGuidanceId(s.feature);
+    const nativeSrc = (s.templateProvided ? "template-provided" : "native — confirm component on-stand")
+      + (guided ? GUIDANCE_ROUTE : "");
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
@@ -203,9 +224,24 @@ function widgetSource(w) {
   // FREEDOM template provides it" is the leap that cost a live run its Feed tab: the mapping row for Feed says
   // `templateProvided: false`, the layout row said "provided by the Freedom template", and the builder believed
   // the row it was reading. Where the row has an answer, it wins.
-  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it";
-  if (w.base) return "template context — provided by the Freedom template";
-  return "native — confirm on-stand";
+  //
+  // ENG-94756 — same correction as the feature cell above, for the widget half of the same defect. Feed arrives
+  // here rather than as a standard feature (one table row, two consumers), and "provided by the Freedom template"
+  // was the entire instruction: true about the container, silent about the five properties without which the Feed
+  // queries nothing. The route is appended for the components the guidance item covers and for no others.
+  //
+  // THE TWO SENTENCES ANSWER DIFFERENT QUESTIONS AND EVERY BRANCH OWES BOTH. The row's `templateProvided` says
+  // WHETHER this component has to be built; the guidance route says WHERE its settings are defined. They are not
+  // alternatives, and the `templateProvided === false` branch is the one that needs the route MOST — a builder
+  // told to build the component from nothing has nothing else to configure it from. It is also the branch Feed
+  // actually takes (its row is `templateProvided: false`), i.e. the guided widget: resolving `guided` after that
+  // return would have silently dropped the route from the only widget that has one. So it is resolved ONCE, above
+  // every branch, and appended to each.
+  const guided = widgetGuidanceId(w.widget);
+  const route = guided ? GUIDANCE_ROUTE : "";
+  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it" + route;
+  if (w.base) return "template context — provided by the Freedom template" + route;
+  return "native — confirm on-stand" + route;
 }
 function rowsForWidgets(widgets, dcmActive) {
   // When the DCM case is resolved present on-stand (`dcmActive`), the DCM widgets (case progress bar + Next steps)
@@ -268,7 +304,20 @@ function cardActionNote(name, result, opts) {
   if (/process/i.test(name)) return processActionNote(result, opts, sigList);
   if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
-  if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
+  // ENG-94756 (Tags) — THE CONTROL IS FREE; THE DATA IS NOT, AND THAT IS WHAT THIS CELL USED TO DENY. This row is
+  // emitted only when the CLASSIC page carried a tag button, i.e. only for a migration where tagging was actually
+  // in use — so it is the one place the question is worth asking, and it costs nothing on every other plan. What
+  // it said was "nothing to migrate": true of the CONTROL (the Freedom form templates ship it, and this migration
+  // neither builds nor configures it) and false as a whole, because a page build moves no tag DATA and the platform
+  // has more than one place that data can live. Which one a given object's records are in is not knowable here:
+  // nothing this engine is given — the captured classic bodies, the object's own columns, the detail/child/section
+  // bundles, the component registry — says whether the object carries tag data at all, let alone where. So the
+  // cell states what is true of the control, names the open question and sends it on-stand, and asserts nothing
+  // more. A WITHDRAWN PREMISE, recorded so it is not rederived: an earlier draft of this work claimed tagging
+  // requires a per-object junction object derived from the entity name, and read its absence as proof a page's tag
+  // control was dead. That is WRONG — the control's default source is entity-agnostic — so no such object is
+  // named here or anywhere in the engine, and a test forbids it.
+  if (name === "Tag") return { type: "—", note: "The tag CONTROL is provided by the default Freedom template — nothing to build or configure for it. The tag DATA is a separate question this migration does not answer: a page build moves no records, and nothing available offline says where this object's existing tags are stored. ⚠ Confirm on-stand whether tagging is in use here and whether anything has to move." };
   return { type: "Action", note: DASH };
 }
 // The base-page standard action-menu buttons — inherited chrome on EVERY page, not a page's own customization.
@@ -2056,13 +2105,44 @@ function tableElementRows(cs) {
   }));
 }
 
+// ENG-94756 — THE COMPANION ARTIFACT A BUILT COMPONENT IS INERT WITHOUT. An attachments component reads its records
+// from `AttachmentListDS`; a page carrying the component and not the data source lists nothing, and a `--verify`
+// that counted only the component would report that page done. So the data source is a DELIVERABLE of the page,
+// with a row of its own — and it is owed whichever path the component took: the measured creation-flow page MERGED
+// onto a template-shipped container and still declares this data source in its OWN model configuration.
+//
+// WHY AN EVIDENCE ROW AND NOT A COUNT. `--built.pages[<key>]` carries the page's `viewConfig` — its ITEMS, walked
+// by `walkViewConfig` into `{name, type}` — and a data source is not an item; it lives in the page's model
+// configuration, which no read this engine is given can show. An `element` or `feature` count would therefore be a
+// gate that can never close on a correctly built page. The evidence mechanism is exactly the one this file already
+// uses for "a deliverable no page body can prove": the verifier reads it on the stand and files a record, an
+// independent judge rules on that record, and until then the row is ⚠ unverified — visible and open, never a
+// silent pass.
+//
+// AND IT GATES PRESENCE, NOT VALUES. The engine does not carry the data source's shape (the entity it binds, its
+// scope, its attribute) and R7 is that it must not. What it can honestly assert is that the artifact EXISTS and
+// that whoever built it was sent to the item that defines it; checking the values is the job of the agent that
+// read that item.
+// `pageKey` defaults the same way `pageKeyOf` does, so the published evidence id can never come out as
+// `undefined#datasource:…` — an id no caller could reproduce to file its record under.
+function companionRows(feature, pageKey = "main") {
+  if (feature !== "Attachments") return [];
+  return [evidenceRow(`${pageKey}#datasource:${ATTACHMENTS_DATA_SOURCE}`,
+    `Companion data source \`${ATTACHMENTS_DATA_SOURCE}\` — the \`${featureVerifyType("Attachments")}\` on this page reads its records from it and lists NOTHING without it; ${GUIDANCE_POINTER}`)];
+}
 // One gated row per standard feature, plus a second one for the two-part features. Own fn for the same reason.
-function standardFeatureRows(cs) {
+function standardFeatureRows(cs, pageKey = "main") {
   const rows = [];
   for (const s of cs.standardFeatures || []) {
     const f = s.feature || s.caption || ""; const t = featureVerifyType(f);
     if (!t || s.uiShape === "list") continue; // list-shaped features are covered by "Related lists"
-    rows.push({ label: `${esc(f)} (\`${t}\`)`, vk: { type: "feature", ftype: t } });
+    // ENG-94756 — the gated row names the component; without the route beside it the builder knows WHAT to produce
+    // and not how it has to be configured, which is the whole of the reported defect. The pointer is appended only
+    // for the features the guidance item covers, so a feature with its own recipe elsewhere is not sent to an item
+    // that says nothing about it.
+    const guided = featureGuidanceId(f);
+    rows.push({ label: `${esc(f)} (\`${t}\`)${guided ? ` — ${GUIDANCE_POINTER}` : ""}`, vk: { type: "feature", ftype: t } });
+    rows.push(...companionRows(f, pageKey));
     // ENG-95859 — a two-part feature (Approvals: the module ABOVE the profile island + the list) publishes ONE
     // gated row PER HALF, same as the DCM case-progress-bar/next-steps split in `buildCoverageRows`. Before this,
     // the second half lived only in `notes` prose, and a build that added just the list read identically to one
@@ -2084,7 +2164,7 @@ function templateNameNote(name) {
     + " `planMeta` and re-plan, or this row can never be confirmed against a built page";
 }
 
-function buildCoverageRows(cs, pm, result, regionOf) {
+function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -2130,7 +2210,7 @@ function buildCoverageRows(cs, pm, result, regionOf) {
   // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
-  cover.push(...standardFeatureRows(cs));
+  cover.push(...standardFeatureRows(cs, pageKey));
   // `cs.dcmActive` (from the mapper) scopes DCM to THIS page's entity — a child edit page does not inherit the
   // parent's case, so it demands no case bar. The mapper sets it on every real changeSet; a hand-built changeSet
   // (no `dcmActive` key) falls back to the raw resolved signal, which is the unscoped main-page reading it always
@@ -2327,12 +2407,15 @@ function pageGroup(pageKey, title, rows) {
 // ⚠ Confirm item — is closed by an evidence RECORD plus an independent judge verdict, not by prose in the Evidence
 // cell. The record is looked up by an id the ENGINE derives and publishes; the agent never invents one. Keep this
 // list complete — an id missing here reads to a builder as an id that does not exist, so it never gets filed.
-// FOUR shapes:
+// FIVE shapes:
 //   `<pageKey>#quality-gates`            — the singleton per-page row (one per published page key)
 //   `<pageKey>#confirm:<kind>:<item>`    — one per ⚠ Confirm worklist item
 //   `<pageKey>#childpage`                — an unfolded child page (see `unresolvedChildGroups` below)
 //   `list#listpage:<kind>:<item>`        — one per list-page deliverable: `columns:set`, `filter:<name>`,
 //                                          `action:<name>` (see `listRow`; `<pageKey>` is always `list`)
+//   `<pageKey>#datasource:<name>`        — ENG-94756: a data source the page's components read from, which the
+//                                          page BODY cannot show (it is not a view item). Emitted by
+//                                          `companionRows`
 // Built from the RAW `pageKey` / `d.kind` / `d.item`, never from the rendered label: labels pass through `esc`, so
 // a caption carrying a backtick or a pipe would yield an id the caller could not reproduce to file its evidence
 // under. `requires` is the UI gate for "this record is complete" and rides on the row so the checklist can carry it.
@@ -2657,7 +2740,7 @@ export function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf));
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf, pageKey));
   // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
   // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
   const ruleItems = [];

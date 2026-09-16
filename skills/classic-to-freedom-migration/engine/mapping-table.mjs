@@ -505,6 +505,62 @@ export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
 }
 
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+   The rows above answer WHICH Freedom component a classic Feed / Attachments becomes and WHETHER a template tends
+   to ship it (`meta.templateProvided`). Neither they nor anything else in this repository answers HOW the component
+   is CONFIGURED — and that is the reported defect: a page migrated onto a non-basic template gets the components
+   and none of the property values the section/app CREATION flow produces, so the Feed queries nothing and the
+   attachments list shows nothing.
+
+   THE SETTINGS ARE PUBLISHED ONCE, AS KNOWLEDGE, NOT HERE. The value set was measured read-only from a page the
+   creation flow built, and lives in clio-knowledge as the guidance item named below, which a builder reads at build
+   time through `get-guidance`; `get-component-info` stays authoritative for the property VOCABULARY. So the plan
+   ROUTES a builder to that item by its stable id and asserts nothing about the values themselves.
+
+   WHY A POINTER AND NOT A COPY (approved requirement R7). A table of values here would be a SECOND source of truth
+   for the same knowledge, free to drift from the one the builder actually reads — the duplication this ticket
+   exists to end. And the engine could not maintain it honestly even if that were wanted: `migrate.mjs` renders the
+   plan OFFLINE, under plain `node`, with no clio and no stand, so it can never check a value it printed. Naming the
+   item costs one string and keeps the run's only claim a true one: here is the component you owe, and here is where
+   its settings are defined. Two engine tests hold the line — one over the rendered plan, one over every engine
+   source file — so the decision cannot decay back into a paste without going red.
+
+   THE ROUTE IS OWED ON BOTH PATHS, which is why nothing here branches on the template. The guidance item covers the
+   MERGE case (the template ships the container and the component is merged onto it) and the INSERT case (the
+   template ships neither and the component is built outright) alike, so the builder needs it either way — whether
+   the plan tells it the template provides the component or tells it to add one.
+
+   The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`.
+   Renaming it there without renaming it here produces a plan that points at nothing, which is why the engine tests
+   spell the literal out rather than importing this constant. Only RUNTIME consumption needs the clio release that
+   carries the item; the plan needs the id alone.                                                                  */
+export const STANDARD_COMPONENTS_GUIDANCE_ID = "page-modification-standard-components";
+// The companion artifact an attachments component is inert without: it is what the component reads its records
+// from, so a page carrying the component and not this lists nothing — and a gate that counted only the component
+// would call that page done. The measured creation-flow page declares it in its OWN model configuration even though
+// it MERGED onto a template-shipped container, so it is the page's deliverable whichever path the component took.
+// This is a deliverable NAME, not one of the property values: the plan has to be able to say WHICH artifact is owed
+// and `--verify` has to be able to gate it. Its SHAPE — the entity it binds, its scope, its attribute — stays in
+// the guidance item, with everything else the builder configures.
+export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
+// The features that item covers, by the same `meta.feature` name the rows above carry. A feature absent from this
+// set gets no route: Approvals and Communication options have their own recipes elsewhere, and pointing them at an
+// item that says nothing about them would be a false instruction.
+const GUIDED_FEATURES = new Set(["Attachments", "Feed"]);
+export function featureGuidanceId(featureName) {
+  return GUIDED_FEATURES.has(featureName) ? STANDARD_COMPONENTS_GUIDANCE_ID : null;
+}
+// Feed reaches the plan as a WIDGET (keyed by its classic container) while Attachments reaches it as a standard
+// FEATURE — one row, two consumers, as the ESNFeedContainer row's own comment says. So the widget's rendered label
+// is resolved back to the feature name THROUGH THAT ROW rather than by a hand-kept second list: a row that carries
+// both `meta.feature` and `meta.widgets` is exactly the pair, and a rename on either side moves both at once.
+const WIDGET_FEATURE = Object.freeze(Object.fromEntries(MAPPING_ROWS
+  .filter((r) => r.meta?.feature && Array.isArray(r.meta.widgets))
+  .flatMap((r) => r.meta.widgets.map((w) => [w.widget, r.meta.feature]))));
+export function widgetGuidanceId(widgetLabel) {
+  return featureGuidanceId(WIDGET_FEATURE[widgetLabel]);
+}
+
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for
 // that member. This is what lets a golden witness the 29-member coverage instead of leaving it to a reader's
 // tally: every convenience accessor above returns something truthy for a member nobody listed.
