@@ -134,9 +134,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
   makes rather than rules the caller is asked to honour. The second one matters most: with
   several tokens open on one artifact, a single sub-agent can hold them all and close each with a valid
-  signature, and every other check passes. The check compares `writesTo` rather than counting clocks, so a
-  read-only task never conflicts — and so the engine does NOT serialise a run on its own. Keeping dispatch to one
-  task at a time is the orchestrator contract's rule 2 (`../SKILL.md` 7.2), not something this refusal enforces.
+  signature, and every other check passes. The check compares `writesTo`, so a read-only task never conflicts.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
