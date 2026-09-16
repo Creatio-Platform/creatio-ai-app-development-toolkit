@@ -10740,6 +10740,77 @@ check("ENG-94756 (Tags): the tag card action no longer reads `nothing to migrate
     && /Confirm on-stand/.test(faTagCs.designSpec)
     && !/nothing to migrate/.test(faTagCs.designSpec),
   () => faTagCs.designSpec.split("\n").filter((l) => /\| Tag \|/.test(l)));
+
+// ---- TAGS T3: the cell names the CONDITION and the OVERRIDE, not only the question -----------------------------
+// WHAT A LIVE MIGRATION ADDED. On a migrated page the template-supplied tag control was the bare element with no
+// source override, so it read the PLATFORM-WIDE record→tag table — zero rows in that table across the whole stand —
+// while the migrated record's tags sat in a junction object belonging to that object alone. The control rendered
+// empty over live data. "⚠ Confirm on-stand whether tagging is in use here" does not get a reader to that: it names
+// neither the read that decides it nor what either outcome implies. So the cell owes four things, and each one
+// fails differently in production:
+//   the read        — unnamed, the reader invents one, and the read that decides this is over the OBJECT's own
+//                     schema family, not over the page or its details;
+//   BOTH outcomes   — a one-sided note ("if a junction exists, override") reads as a defect on every object that
+//                     uses the default path, which is the retracted premise smuggled back in as a tone. The absent
+//                     branch must say, in the cell, that there is nothing to do;
+//   the property    — "point the control at the junction" is not actionable in a page schema without the property;
+//   the route       — the VALUE, and the default it overrides, stay with the component catalog (R7 below).
+// The fixture uses a REALISTIC object name because the prescribed read interpolates it; `faTagCs` above keeps the
+// one-letter entity, so the two together pin that the term FOLLOWS the migrated object rather than being a constant.
+const faTagNamed = runMigration({ entity: "UsrToMigrate",
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"UsrToMigrate",diff:[{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+const faTagCell = (spec) => (spec || "").split("\n").find((l) => /\| Tag \| — \|/.test(l)) || "";
+check("ENG-94756 T3 (Tags): the cell names the ONE on-stand read that decides it, BOTH outcomes, and the property to override when a junction exists — the open question is now answerable without the reader inventing the check",
+  () => {
+    const cell = faTagCell(faTagNamed.designSpec);
+    return /`find-entity-schema search-pattern=UsrToMigrate`/.test(cell)
+      && /\*\*None\*\* ⇒/.test(cell) && /nothing to configure/.test(cell)
+      && /\*\*One\*\* ⇒/.test(cell) && /render EMPTY/.test(cell)
+      && /`tagInRecordSourceSchemaName`/.test(cell)
+      && /`get-component-info crt\.TagSelect`/.test(cell);
+  },
+  () => ({ cell: faTagCell(faTagNamed.designSpec) }));
+
+// ---- TAGS T3b: the prescribed read carries THIS object's name, and degrades instead of prescribing a broken one -
+// Two failure modes, both seen in this engine before. A hardcoded search term sends every reader at one object's
+// schema family; and the engine's OWN unresolved-entity placeholder (`"?"`, what the plan headings print) rendered
+// into the command would produce `search-pattern=?` — an instruction that looks precise and cannot be run. The
+// degraded arm must still prescribe the read, because dropping it is how a conditional note becomes decoration.
+const faTagNoEntity = runMigration({
+  schemas: [{ pkg: "P", body: `define("P",[],function(){return{diff:[{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
+check("ENG-94756 T3b (Tags): the prescribed read is interpolated with the MIGRATED object's own name (two fixtures, two names) — and a run whose entity never resolved still prescribes the read rather than emitting the `?` placeholder as a search term",
+  () => {
+    const named = faTagCell(faTagNamed.designSpec); const short = faTagCell(faTagCs.designSpec);
+    const anon = faTagCell(faTagNoEntity.designSpec);
+    return /search-pattern=UsrToMigrate`/.test(named) && /search-pattern=X`/.test(short)
+      && /find-entity-schema/.test(anon) && !/search-pattern=/.test(anon)
+      && /`tagInRecordSourceSchemaName`/.test(anon);
+  },
+  () => ({ named: faTagCell(faTagNamed.designSpec), short: faTagCell(faTagCs.designSpec),
+    anonEntity: faTagNoEntity.entity, anon: faTagCell(faTagNoEntity.designSpec) }));
+
+// ---- TAGS T3c (R7 for the tag cell): a PROPERTY NAME is carried, a VALUE is not --------------------------------
+// R7 keeps the canonical property VALUES out of this repository. `tagInRecordSourceSchemaName` is a property NAME,
+// and property names are the component catalog's vocabulary — `get-component-info` owns it and this repo already
+// vendors it under `engine/registry/component-index.json`, which is why naming one is a route to the catalog and
+// not a second copy of it. The VALUES are what must stay out: the junction schema to set it to (resolved by the
+// read the cell prescribes, and different for every object) and the DEFAULT it overrides, which is a published
+// default free to change and is served beside the property by the same call the cell points at.
+//
+// The `\b` boundary is what makes this check meaningful rather than accidental, so the assertion states BOTH
+// halves: the property name is present AND the default value is absent. Without the positive half a future author
+// could delete the whole cell and this would still pass.
+const FA_TAG_DEFAULT_RE = /\bTagInRecord\b/;
+check("ENG-94756 T3c (Tags, R7): the tag cell carries the property NAME and not one VALUE — no junction schema name, and not the published default the override replaces; the catalog call beside it is where both come from",
+  () => {
+    const cells = [faTagCell(faTagNamed.designSpec), faTagCell(faTagCs.designSpec), faTagCell(faTagNoEntity.designSpec)];
+    return cells.every((c) => c.includes("`tagInRecordSourceSchemaName`") && !FA_TAG_DEFAULT_RE.test(c));
+  },
+  () => ({ hits: [faTagNamed, faTagCs, faTagNoEntity].map((r) => FA_TAG_DEFAULT_RE.exec(faTagCell(r.designSpec))?.[0] || null) }));
+check("ENG-94756 T3c (Tags, R7 source): no engine source file spells the published default either — the engine holds the property name and routes the value to the catalog that serves it",
+  () => faEngineSources.length >= 5 && !faEngineSources.some((s) => FA_TAG_DEFAULT_RE.test(s.text)),
+  () => ({ hits: faEngineSources.filter((s) => FA_TAG_DEFAULT_RE.test(s.text)).map((s) => s.file) }));
+
 // THE WITHDRAWN PREMISE, MADE EXECUTABLE. An earlier draft of this work claimed that tagging requires a per-object
 // junction object derived from the migrated entity (`<Entity>InTag`, inheriting `BaseEntityInTag`), and read the
 // absence of one as proof that a page's tag control was dead. That premise is WRONG: the control's DEFAULT source
@@ -10751,12 +10822,33 @@ check("ENG-94756 (Tags): the tag card action no longer reads `nothing to migrate
 // describe today. Reinstating the premise — in code, in a comment, or in rendered plan text — requires making it
 // red first. On the branch where the premise was first written down, the equivalent check went red on its own
 // author's explanatory comments, which is the evidence that this pattern bites rather than decorates.
-const FA_JUNCTION_RE = /\b(?:[A-Z][A-Za-z0-9]*InTag|BaseEntityInTag)\b/;
-check("ENG-94756 RETRACTION (executable): no engine source and no rendered plan names a per-object tag junction object (`<Entity>InTag` / `BaseEntityInTag`) — the tag control's default source is entity-agnostic, so the absence of such an object proves nothing and nothing here may claim otherwise",
+// THE SHARPENED CELL IS INSIDE THIS GUARD'S SCOPE, BY DESIGN. T3 above teaches the cell to say "when a junction
+// EXISTS, point the control at it" — the CONVERSE of the retracted premise, not a softening of it — and the cell is
+// rendered plan text, so every word of it is scanned here. The guard is what keeps the converse from drifting back
+// into the premise: the cell may describe such an object FUNCTIONALLY ("a junction object whose rows link this
+// object's records to tags", found by a named on-stand read) and may never name one or assert a naming convention
+// for one, because a convention asserted here would be read back as a derivation and its absence as proof.
+//
+// THE PLACEHOLDER FORM IS NOW CAUGHT TOO, and that is a hole this ticket found rather than a new rule. The prose
+// above always forbade `<Entity>InTag`; the pattern did not match it, because `>` breaks the `[A-Za-z0-9]*` run and
+// a bare `InTag` is shorter than the `X` + `InTag` minimum. So the placeholder spelling — the exact spelling a
+// note "tell the reader to look for an `<Entity>InTag` schema" would use — passed a guard whose own description
+// named it. Closing it costs nothing legitimate: the functional description the cell actually uses is unaffected.
+const FA_JUNCTION_RE = /\b(?:[A-Z][A-Za-z0-9]*InTag|BaseEntityInTag)\b|<[A-Za-z]+>InTag\b/;
+const faTagSpecs = { faSpec, tagX: faTagCs.designSpec, tagNamed: faTagNamed.designSpec, tagNoEntity: faTagNoEntity.designSpec };
+check("ENG-94756 RETRACTION (executable): no engine source and no rendered plan names a per-object tag junction object (`<Entity>InTag` / `BaseEntityInTag`), in that spelling or the placeholder one — the tag control's default source is entity-agnostic, so the absence of such an object proves nothing and nothing here may claim otherwise",
   () => !faEngineSources.some((s) => FA_JUNCTION_RE.test(s.text))
-    && !FA_JUNCTION_RE.test(faSpec) && !FA_JUNCTION_RE.test(faTagCs.designSpec),
+    && Object.values(faTagSpecs).every((t) => !FA_JUNCTION_RE.test(t)),
   () => ({ sourceHits: faEngineSources.filter((s) => FA_JUNCTION_RE.test(s.text)).map((s) => `${s.file}: ${FA_JUNCTION_RE.exec(s.text)?.[0]}`),
-    specHit: FA_JUNCTION_RE.exec(faSpec)?.[0] || null, tagHit: FA_JUNCTION_RE.exec(faTagCs.designSpec)?.[0] || null }));
+    specHits: Object.entries(faTagSpecs).map(([k, t]) => `${k}: ${FA_JUNCTION_RE.exec(t)?.[0] || "—"}`) }));
+// The guard's own negative control: the pattern must actually match both spellings, or "green by absence" would be
+// green by a broken regex. Pinned because the placeholder alternative was added ABOVE on the strength of this.
+check("ENG-94756 RETRACTION (negative control): the pattern matches a derived junction name, the base junction object and the placeholder spelling — and does NOT match the tag cell's own property name or its functional description",
+  () => ["UsrToMigrateInTag", "BaseEntityInTag", "<Entity>InTag"].every((t) => FA_JUNCTION_RE.test(t))
+    && !FA_JUNCTION_RE.test("tagInRecordSourceSchemaName")
+    && !FA_JUNCTION_RE.test("a junction object whose rows link this object's records to tags"),
+  () => ({ probes: ["UsrToMigrateInTag", "BaseEntityInTag", "<Entity>InTag", "tagInRecordSourceSchemaName"]
+    .map((t) => `${t} -> ${FA_JUNCTION_RE.test(t)}`) }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

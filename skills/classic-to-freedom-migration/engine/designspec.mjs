@@ -298,26 +298,72 @@ function printActionNote(result, opts, sigList) {
   const namePart = sigList(spr) ? `: ${sigList(spr)}` : "s present";
   return { type: "Action", note: `Printable${namePart} → wire as the Freedom **print** action.` };
 }
+// ENG-94756 (Tags) — THE CONTROL IS FREE; THE DATA IS NOT, AND THAT IS WHAT THIS CELL USED TO DENY. This row is
+// emitted only when the CLASSIC page carried a tag button, i.e. only for a migration where tagging was actually in
+// use — so it is the one place the question is worth asking, and it costs nothing on every other plan. What it once
+// said was "nothing to migrate": true of the CONTROL (the Freedom form templates ship it, and this migration
+// neither builds nor configures it) and false as a whole, because a page build moves no tag DATA and the platform
+// has more than one place that data can live.
+//
+// WHAT A LIVE MIGRATION ADDED, and why "confirm on-stand" alone was under-specified. On a migrated page the
+// template-supplied tag control was the bare element with no source override, so it read the PLATFORM-WIDE
+// record→tag table — which held zero rows in the entire table — while the migrated record's three tags sat in a
+// junction object belonging to that object alone. The control rendered empty over live data, and the component
+// catalog states the remedy as a property override plus the one condition it applies under: a module using a
+// custom junction schema. So the cell can now name the CONDITION to look for and WHAT IT IMPLIES, on both
+// branches, instead of handing the reader an open question and letting it invent the check.
+//
+// THE RETRACTED PREMISE STAYS RETRACTED; THIS IS ITS CONVERSE, WHICH IS A DIFFERENT AND NARROWER CLAIM. An earlier
+// draft of this work claimed tagging REQUIRES a per-object junction derived from the entity name, and read the
+// absence of one as proof a page's tag control was dead. That is WRONG — the control's default source is
+// entity-agnostic and the default path needs no junction at all — so no such object is named here or anywhere in
+// the engine, no naming convention for one is asserted, and a test forbids both. What is asserted below is only:
+// WHERE such a junction EXISTS and holds the rows, a control left on the default reads the wrong table. The
+// ABSENT branch is stated too, and it says "nothing to configure" — never a defect, which is exactly the reading
+// the retraction exists to prevent.
+//
+// STILL NOT DERIVABLE OFFLINE, which is why this stays a ⚠ and never a gate. `migrate.mjs` is handed this object,
+// its own columns (plus their forward lookup refs), its details' child entities, its embedded profiles and the
+// component registry. No manifest key is an inventory of the schemas that exist BESIDE the migrated object, so the
+// engine cannot tell whether such a junction is there — and a junction never reaches it as a detail either, since
+// classic tagging surfaces as this card ACTION and not as a detail. Absence of the fact from the inputs is
+// therefore not evidence about the stand, and the cell claims nothing from it. Making it derivable would mean a
+// new on-stand `signals` key in `migrate.mjs` — a discovery-contract change (every existing manifest's `--plan`
+// would go INCOMPLETE until answered), deliberately described and NOT started here.
+//
+// R7: A PROPERTY NAME, NO VALUES. The cell names `tagInRecordSourceSchemaName` and not one value — not the schema
+// to set it to (that is this object's own, resolved by the read the cell prescribes) and not the default it
+// overrides. A property NAME is the component catalog's vocabulary, which `get-component-info` owns and which this
+// repository already vendors in `engine/registry/component-index.json`; R7 governs the canonical VALUE SET
+// published as the `page-modification-standard-components` guidance item, and tagging is not in that item. So the
+// cell routes to the catalog for the value exactly as the Feed/Attachments rows route to their item for theirs.
+function tagActionNote(result) {
+  // The entity is stand-derived, so `esc` neutralizes hostile tokens at this sink like every other row builder.
+  // `"?"` is the engine's OWN placeholder for an unresolved entity (the same one the plan headings print), so it is
+  // excluded alongside the empty string: rendering `search-pattern=?` would be a prescribed read that cannot be
+  // run, which is worse than prescribing the read and leaving the reader to supply the name. Either way the
+  // instruction survives — a degraded cell, never a throw and never a silently dropped step.
+  const raw = typeof result?.entity === "string" ? result.entity.trim() : "";
+  const ent = raw === "?" ? "" : raw;
+  const read = ent ? `\`find-entity-schema search-pattern=${esc(ent)}\`` : "`find-entity-schema` over this object's own name";
+  return { type: "—", note:
+    "The tag CONTROL is provided by the default Freedom template — nothing to build for it. The tag DATA is a "
+    + "separate question this migration does not answer: a page build moves no records, and nothing available "
+    + "offline says where this object's existing tags are stored. "
+    + `⚠ Confirm on-stand, and it is ONE read — ${read}: does a junction object exist whose rows link THIS object's `
+    + "records to tags? **None** ⇒ the tags live in the platform-wide record→tag table the control already reads by "
+    + "default, and there is nothing to configure. **One** ⇒ the template-supplied control still reads that "
+    + "platform-wide table and will render EMPTY over the junction's rows: point its `tagInRecordSourceSchemaName` "
+    + "at that schema (`get-component-info crt.TagSelect` for the property and the default it overrides). Either "
+    + "way, confirm whether tagging is in use here at all — an empty junction means nothing has to move." };
+}
 function cardActionNote(name, result, opts) {
   // Same `Array.isArray` guard as `sigLine`: a bare-string answer must degrade to "no list", not throw mid-render.
   const sigList = (s) => { const raw = s?.cases || s?.items || s?.names; return (Array.isArray(raw) ? raw : []).map((x) => esc(typeof x === "string" ? x : (x && (x.name || x.caption)) || "")).filter(Boolean).join(", "); };
   if (/process/i.test(name)) return processActionNote(result, opts, sigList);
   if (/print/i.test(name)) return printActionNote(result, opts, sigList);
   if (name === "ViewOptions") return { type: "—", note: "Not migrated — standard page view-options control (native Freedom capability), not a bespoke action." };
-  // ENG-94756 (Tags) — THE CONTROL IS FREE; THE DATA IS NOT, AND THAT IS WHAT THIS CELL USED TO DENY. This row is
-  // emitted only when the CLASSIC page carried a tag button, i.e. only for a migration where tagging was actually
-  // in use — so it is the one place the question is worth asking, and it costs nothing on every other plan. What
-  // it said was "nothing to migrate": true of the CONTROL (the Freedom form templates ship it, and this migration
-  // neither builds nor configures it) and false as a whole, because a page build moves no tag DATA and the platform
-  // has more than one place that data can live. Which one a given object's records are in is not knowable here:
-  // nothing this engine is given — the captured classic bodies, the object's own columns, the detail/child/section
-  // bundles, the component registry — says whether the object carries tag data at all, let alone where. So the
-  // cell states what is true of the control, names the open question and sends it on-stand, and asserts nothing
-  // more. A WITHDRAWN PREMISE, recorded so it is not rederived: an earlier draft of this work claimed tagging
-  // requires a per-object junction object derived from the entity name, and read its absence as proof a page's tag
-  // control was dead. That is WRONG — the control's default source is entity-agnostic — so no such object is
-  // named here or anywhere in the engine, and a test forbids it.
-  if (name === "Tag") return { type: "—", note: "The tag CONTROL is provided by the default Freedom template — nothing to build or configure for it. The tag DATA is a separate question this migration does not answer: a page build moves no records, and nothing available offline says where this object's existing tags are stored. ⚠ Confirm on-stand whether tagging is in use here and whether anything has to move." };
+  if (name === "Tag") return tagActionNote(result);
   return { type: "Action", note: DASH };
 }
 // The base-page standard action-menu buttons — inherited chrome on EVERY page, not a page's own customization.
