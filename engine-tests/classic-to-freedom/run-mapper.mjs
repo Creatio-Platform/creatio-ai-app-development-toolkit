@@ -7850,8 +7850,18 @@ check("ENG-94975 D6: template-provided components nested 4 levels deep in the me
    the platform's column preprocessor the moment the page opened — it reads `viewConfig.columns` before anything
    else runs. Measured on a live stand. ---- */
 const flRes = { changeSet: { viewConfigDiff: [], standardFeatures: [{ feature: "Attachments" }], details: [], cardActions: [] }, signals: {} };
+// ENG-94756 - this fixture's feature is Attachments, so on this branch the page ALSO owes the companion
+// `AttachmentListDS` data source, which is an EVIDENCE row (a data source is not a view item, so no element count
+// could ever close it). These fixtures describe pages whose data source WAS built, so they file that record and
+// its verdict. Without them the anti-vacuity arm below would read the data source's own open row while claiming to
+// measure the collection WIRING - the same "fails for the wrong reason" its own name rules out.
+const FL_DS_ID = "main#datasource:AttachmentListDS";
+const FL_EVIDENCE = {
+  evidence: { ...QG_EVIDENCE.evidence, [FL_DS_ID]: { referencePage: "the creation-flow reference page", components: ["crt.EntityDataSource"] } },
+  judge: { ...QG_EVIDENCE.judge, [FL_DS_ID]: { convincing: true, why: "read the page's model configuration on-stand" } },
+};
 const flPage = (values) => renderVerify(flRes, {}, { pages: { main: { parentSchemaName: "FormPageTemplate",
-  viewConfig: { items: [{ name: "Wrap", type: "crt.GridContainer", items: [{ name: "FL", type: "crt.FileList", ...values }] }] } } }, ...QG_EVIDENCE });
+  viewConfig: { items: [{ name: "Wrap", type: "crt.GridContainer", items: [{ name: "FL", type: "crt.FileList", ...values }] }] } } }, ...FL_EVIDENCE });
 const flBare = flPage({});
 const flWired = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }], items: "$FLItems" });
 const flHalf = flPage({ columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }] });
@@ -10624,8 +10634,14 @@ check("ENG-94756 T1 (R2/R3/R5 + R7): the Attachments Layout row ROUTES the build
 // check could pass for the wrong reason (a missing component, not a missing data source).
 const faVerifyRes = { changeSet: { viewConfigDiff: [], images: [],
   standardFeatures: [{ feature: "Attachments", uiShape: "component" }], details: [], cardActions: [] }, signals: {} };
+// The FileList is WIRED (`columns` + `items`) because this branch's collection gate reports a bare one as
+// MISSING. That gate measures the ELEMENT; this test measures the companion DATA SOURCE. A bare element would have
+// made every arm below fail for the collection gate's reason instead of the data source's - precisely the "passes
+// for the wrong reason" the paragraph above rules out. The control it describes is now stronger, not weaker:
+// `crt.FileList` is not merely PRESENT in every arm, it is COMPLETE in every arm.
 const faVerifyBuilt = { pages: { main: { parentSchemaName: "FormPageTemplate",
-  viewConfig: { items: [{ name: "Files", type: "crt.FileList" }] } } } };
+  viewConfig: { items: [{ name: "Files", type: "crt.FileList",
+    columns: [{ id: "g", code: "PDS_Name", caption: "Name", dataValueType: 28 }], items: "$FilesItems" }] } } } };
 const FA_DS_ID = "main#datasource:AttachmentListDS";
 const faDsRecord = { referencePage: "the creation-flow reference page", components: ["crt.EntityDataSource"] };
 const faNoDs = renderVerify(faVerifyRes, {}, { ...faVerifyBuilt, ...QG_EVIDENCE });
@@ -10709,14 +10725,24 @@ check("ENG-94756 R7 GUARD (source): no engine source file carries the canonical 
 // changes NOT ONE of those decisions — the honest statement of what it does and does not do. Pinning the existing
 // wording is what stops a later "while we are here" from quietly turning the flat flag into a claim about a
 // specific template, which is a different ticket needing measurements this branch does not have.
-check("ENG-94756 regression: the flat template-provided behaviour is untouched — Attachments still reads `template-provided`, Feed still reads `template context — provided by the Freedom template`, neither claims a NAMED template ships or omits it, and no expected count is filed for either",
+check("ENG-94756 regression: the route is APPENDED to each cell's own disposition and replaces none of them — Attachments still reads `template-provided`, Feed reads this branch's corrected `⚠ ADD — the Freedom template does NOT provide this`, neither names a SPECIFIC template as shipping or omitting the component, and no expected count is filed for either",
   () => {
     const att = faLayoutRow("Attachments"); const feed = faLayoutRow("Feed (ESN)");
     // The cell PREFIX, not the whole cell: this check's job is that the pre-existing disposition survived, so it
     // must stay green with or without the route appended after it. Demanding the separator too would turn a
     // regression guard into a second copy of T1/T2 and would go red on the baseline it is meant to describe.
-    return att.includes("| template-provided") && feed.includes("| template context — provided by the Freedom template")
-      && !/ships NO|ships Feed|ships Attachments|⚠ ADD/.test(`${att}\n${feed}`)
+    //
+    // ENG-94756 (rebase onto `claude/migration-orchestrated-todo-build`) - FEED'S DISPOSITION CHANGED ON THIS
+    // BRANCH AND THE CHANGE IS CORRECT, so the pin MOVES rather than going away. That branch carries each mapping
+    // row's `templateProvided` down into the widget def, and Feed's row says `false`; the cell now says the Freedom
+    // template does NOT ship Feed instead of claiming it does - the leap that cost a live run its Feed tab. So
+    // `⚠ ADD` leaves the forbidden list, because Feed legitimately carries it now. What this guard actually
+    // protects is untouched and still asserted: the route is APPENDED to whatever the cell already said (both
+    // prefixes are pinned), neither cell names a SPECIFIC template schema as shipping or omitting the component,
+    // and neither files an expected count. A later "while we are here" still goes red.
+    return att.includes("| template-provided")
+      && feed.includes("| ⚠ ADD — the Freedom template does NOT provide this; build it")
+      && !/ships NO|ships Feed|ships Attachments|`\w+Template`/.test(`${att}\n${feed}`)
       && !faRowRecs.some((r) => /Feed.*expected|Attachments.*expected/.test(r.label));
   },
   () => ({ attachments: faLayoutRow("Attachments"), feed: faLayoutRow("Feed (ESN)"),
