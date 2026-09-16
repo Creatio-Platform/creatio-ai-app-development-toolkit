@@ -1927,8 +1927,20 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => {
           const idx = readIndex(d);
           return /\| Step \| Task \| Page \| Writes \| Status \| Dispatched \|/.test(idx)
-            && /▶ started/.test(idx) && /⚠ never/.test(idx);
+            && /▶ started/.test(idx);
         }, () => readIndex(d).split("\n").slice(7, 11).join("\n"));
+      check("index: a task that is still OPEN reads `—`, never `⚠ never` — it has not had its turn yet, and a warning on every waiting row is what makes the ONE row that matters stop standing out",
+        () => !/⚠ never/.test(readIndex(d)) && /\| — \|/.test(readIndex(d)),
+        () => readIndex(d).split("\n").slice(7, 12).join("\n"));
+      check("index: `⚠ never` appears once the task is CLOSED with no dispatch — the warning marks work that was finished with nobody sent to do it, which is the whole point of the column",
+        () => {
+          const dN = gateDir();
+          const idN = idOf2(dN, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+          setStatus(dN, idN, "done");
+          syncTaskDir(dN, RUN, { ...OPTS, now: at(12) });
+          const idx = readIndex(dN);
+          return /⚠ never/.test(idx) && idx.split("\n").filter((l) => /⚠ never/.test(l)).length === 1;
+        }, () => "see the Dispatched column after one task closes undispatched");
       check("index: the Dispatched cell carries NO duration — the index is compared byte for byte, so two regenerations at different clock times must still be the same file",
         () => {
           const a = readIndex(d);

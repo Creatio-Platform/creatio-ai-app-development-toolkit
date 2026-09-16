@@ -727,7 +727,7 @@ const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 // `Dispatched` answers ONE question — was a sub-agent sent out for this task — in the MAIN table rather than in a
 // paragraph below it. It carries no duration: an elapsed time is noise beside that fact, and a cell with no clock
 // value in it is also a cell that cannot make the derived index differ between two regenerations.
-const DISPATCH_MARK = new Map([["yes", "✔ yes"], ["started", "▶ started"], ["never", "⚠ never"]]);
+const DISPATCH_MARK = new Map([["yes", "✔ yes"], ["started", "▶ started"], ["never", "⚠ never"], ["pending", "—"]]);
 
 function indexRows(tasks) {
   const L = ["| Step | Task | Page | Writes | Status | Dispatched | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
@@ -1638,7 +1638,10 @@ function attachDispatch(set, dir) {
   for (const t of set.tasks) {
     if (running[t.id]) t.dispatched = "started";
     else if (sampled.has(t.id)) t.dispatched = "yes";
-    else t.dispatched = "never";
+    // NO CLOCK MEANS TWO DIFFERENT THINGS, and only one of them is a warning. A task still OPEN has simply not
+    // had its turn yet; a CLOSED one was finished with nobody dispatched for it. Marking both the same way puts a
+    // warning on every row of a healthy queue, and the one row that matters then reads like the other sixteen.
+    else t.dispatched = CLOSED.has(t.status) ? "never" : "pending";
   }
   set.dispatch = audit;
   // Kept under its old name: the Attention section and every caller that reads "closed but never dispatched"
