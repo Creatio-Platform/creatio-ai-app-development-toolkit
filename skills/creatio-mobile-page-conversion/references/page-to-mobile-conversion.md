@@ -10,8 +10,8 @@ until the developer approves *after* seeing the plan.
 
 **Layering — where each rule lives.** This playbook owns the PROCESS: the flow, the gates, environment
 resolution, the plan/report format, and section registration. The body-building MECHANICS — how to turn
-`guide.elementMap` and the guide's data-section diffs into a mobile page body (per-operation rules,
-`mobileValues` paste-verbatim, adaptive/tab/normalization behavior, the paste-don't-rebuild data-section
+`guide.viewConfigDiff` and the guide's data-section diffs into a mobile page body (per-operation rules,
+`values` paste-verbatim, adaptive/tab/normalization behavior, the paste-don't-rebuild data-section
 rules) — are owned by the clio `freedom-page-web-to-mobile-conversion` guidance article (the ENGINE
 layer), which stays in lockstep with the converter. Load that article once (Load order step 2) and
 follow it for mechanics; this playbook does NOT restate them. If a mechanic and this playbook ever
@@ -101,7 +101,7 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      inheritance rules); `../../context/essentials.md` requires it before editing ANY mobile page body.
      Then **invoke the `creatio-ui-guidelines` skill** (per the skill Load order) and apply its
      mobile-relevant rules (component choice, lookups, fields, captions, tooltips, accessibility); run its
-     review checklist before step 8. The `mobileValues` paste is mechanical, but `create-page`/`update-page`
+     review checklist before step 8. The `values` paste is mechanical, but `create-page`/`update-page`
      still author a Freedom UI page body, so both the `mobile-page-modification` guidance and the UI/UX
      checklist apply.
    - Create the page from the confirmed `recommendedMobileTemplate` (confirm via `list-page-templates`
@@ -118,13 +118,15 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      when this split would happen — but pass `target-schema-uid` unconditionally so the body always lands in
      the one schema `create-page` made. (If the page already exists, get its UId via `list-pages`/`get-page`
      and pass it the same way.)
-   - **Build the mobile body by iterating `guide.elementMap`** (plain JSON: `viewConfigDiff` /
-     `viewModelConfigDiff` / `modelConfigDiff`) — one entry per source element with an explicit
-     `operation` (`merge` / `insert` / `drop` / `relocate-children`). Do NOT re-derive placement from
+   - **Build the mobile body from `guide.viewConfigDiff`** — it IS the mobile page's `viewConfigDiff`,
+     already in the applier's shape: apply the operations IN ORDER, `merge` and `insert` and no others.
+     An element that did NOT convert is not in it at all; it is in `guide.droppedElements` with a coded
+     reason, to report and never to apply. Do NOT re-derive placement from
      `containerMap` + `componentSuggestions`. **The MECHANICS of every operation are owned by the
      `freedom-page-web-to-mobile-conversion` guidance article (Load order step 2) — follow it field-by-field
      and do NOT restate those rules here.** In brief, so you know what to expect: paste
-     `elementMap[].mobileValues` VERBATIM and add only the value binding; register `guide.resourceStrings`
+     `viewConfigDiff[].values` VERBATIM — the value binding is already in there under `control`, so there
+     is nothing to add — and register `guide.resourceStrings`
      in one `update-page resources` call; and paste `guide.modelConfigDiff` / `guide.viewModelConfigDiff`
      VERBATIM (paste, don't rebuild — never source data-section attributes from a pre-existing body). The
      list-row, tabbed-page ordering, adaptive-layout, tab-body/Area, normalization, and data-section-diff
@@ -133,11 +135,11 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - Run `validate-page` and resolve findings before treating the page as done (undeclared bindings, a
      lookup-path attribute missing its `type`, a field missing its caption `label`). It is the backstop
      that blocks the save when a required property was dropped — the article details what it enforces.
-   - **Adaptive layout** — when `guide.adaptiveLayout` is present, present it to the user as a PROPOSAL
-     (see "Conversion plan"); they may adjust column counts / placement or decline. Both the container
-     columns and each child's placement are ALREADY baked into the `mobileValues` you pasted — there is NO
-     separate diff to apply. `guide.adaptiveLayout` is advisory (for presenting the proposal); the article
-     owns the field's shape.
+   - **Adaptive layout** — when `guide.adaptiveLayout` is present, state it at the gate as what the
+     conversion DID (see "Conversion plan"). Both the container columns and each child's placement are
+     ALREADY in the `values` you pasted — there is NO separate diff to apply, and no mechanism to decline
+     it: a different layout is an edit to those `values` before pasting. `guide.adaptiveLayout` is a
+     readable index of them; the article owns the field's shape.
 7b. **Register the mobile page** — only after **Gate S** (see below). The bullets below are independently
    conditional, NOT all gated on one flag: the section + workplace bullets apply only when
    `sectionRegistration.sourcePageIsSection` is true (a form/edit page is NOT a section — skip those two
@@ -160,7 +162,10 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    (how page rules convert is owned by the guidance article). For each `convertedRules[]` entry, pass its
    `rule` VERBATIM to `create-page-business-rule` (`environment-name`, `package-name`,
    `page-schema-name = <the new mobile page>`, `rule`). Report any `droppedRules[]` to the developer with
-   their reason (not transferred). Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
+   their coded reason (not transferred). Every `reason` the guide returns — on a dropped element, a
+   request binding, a business rule or a skipped normalization — is a LIST of `{code, params?}`, never a
+   sentence: branch on `code` and get the wording from `get-guidance name=freedom-page-mobile-reason-codes`.
+   Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
 8. **Deliver the conversion report** (see below).
 9. **Hand off.** Tell the developer to open the result in **Freedom UI Mobile Designer** for review
    and manual refinement.
@@ -234,17 +239,19 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   `sectionRegistration.probeOk` is false, say the environment could not be queried and registration
   must be verified manually.
 - **Adaptive layout (per-screen)** — when `guide.adaptiveLayout` is present, state it in plain words:
-  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* This
-  is a PROPOSAL — the developer can adjust the column counts / placement or decline it. (Both the container
-  columns and the child placement are already baked into the pasted `mobileValues`; nothing separate to apply.)
+  *"the fields in `<container>` will stack in one column on a phone and show 2 columns on a tablet."* State it
+  as what the conversion DID, not as something to accept or decline: both the container columns and each
+  child's placement are already in the pasted `values`, there is nothing separate to apply, and there is no
+  mechanism to honour a refusal. A different layout is an edit to those `values` before pasting.
 - **Other guide-surfaced facts to state** — if the guide reports a converted-tab body structure
   (`guide.tabAreaLayers`) or normalized properties (`guide.normalizations`), state each as ONE aggregated
   plain-language line. Per the guidance article these are FACTS to report at the gate, not decisions — never
   offer to skip them. Omit when the field is absent.
 - **Manual follow-ups** — page-level business rules are converted in `guide.pageBusinessRules` and
   re-created in step 7c; `droppedRules` (no surviving action) remain manual. Requests: supported ones are baked
-  into `mobileValues` (`guide.requestConversions`); components whose request the mobile app does not support are
-  DROPPED (elementMap `drop`) — list the removed action components. Plus mobile manifest /
+  into `values` (`guide.requestConversions`); a `crt.Button` whose request the mobile app does not support is
+  DROPPED (a `guide.droppedElements` entry) while any OTHER component type survives and only loses or keeps
+  its binding — list both, they are different reports. Plus mobile manifest /
   wizard registration. (The default mobile edit page is now automated via `create-related-page-addon` with `schema-type=mobile`.)
 
 Keep it skimmable. **On request (View details / Adjust)** — only if the developer asks to see more or
@@ -267,18 +274,21 @@ After `validate-page`, deliver a report:
   that registration was skipped/declined.
 - **Page-level business rules:** which `convertedRules` were recreated on the mobile page
   (`create-page-business-rule`) and which `droppedRules` did not convert.
-- **Requests (actions):** from `guide.requestConversions` — which event-binding requests were carried
-  (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
-  NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
+- **Requests (actions):** from `guide.requestConversions`, which has FOUR collections and you need all of
+  them — `convertedRequests` (carried, remapped where the mobile name differs), `droppedRequests` (a binding
+  lost, INCLUDING on a component that stayed on the page), `flaggedRequests` (an unknown request kept for
+  you to verify) and `unresolvedTargetRequests` (the action's navigation target could not be confirmed —
+  read `state` AND `bindingRemoved` together, per the article). A `crt.Button` whose request is unsupported
+  was **dropped entirely** (a `guide.droppedElements` entry whose coded reason names the request) — list
   those removed action components for the developer.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
-  phone, N columns on tablet), and whether the developer adjusted or declined it (both sides were applied
-  via the pasted `mobileValues` — nothing separate).
+  phone, N columns on tablet). Both sides were already applied via the pasted `values`; it is a report,
+  not a decision.
 - **Converted-tab body / normalized properties:** if the guide reported `guide.tabAreaLayers` or
   `guide.normalizations`, state each as one aggregated line (what standard was applied where).
-- **Remaining manual steps:** dropped business rules, dropped action components (a component whose
-  request the mobile app does not support is removed from the page entirely — elementMap `drop`, not a
-  "flagged" component that stayed on the page), mobile manifest / wizard registration, and any
+- **Remaining manual steps:** dropped business rules, dropped action components (a `crt.Button` whose
+  request the mobile app does not support is removed from the page entirely — a `droppedElements` entry,
+  not a "flagged" component that stayed on the page), mobile manifest / wizard registration, and any
   `requiresManualDecision` items still open.
 - **Hand off** to Freedom UI Mobile Designer (step 9) for final layout review and manual refinement.
 
@@ -293,9 +303,10 @@ live in the `freedom-page-web-to-mobile-conversion` guidance article — do not 
   `convertedRules[].rule` verbatim with `create-page-business-rule` on the mobile page (step 7c).
   **Object-/entity-level business rules are shared** across web and mobile — do NOT touch them.
 - **Requests, adaptive layout, tab bodies, and normalized properties are handled by the converter** and
-  baked into `guide.elementMap` / `mobileValues`; the advisory summaries live on the guide
+  already in `guide.viewConfigDiff[].values`; the advisory summaries live on the guide
   (`guide.requestConversions`, `guide.adaptiveLayout`, `guide.tabAreaLayers`, `guide.normalizations`).
-  Present the proposals/facts at the gate (see "Conversion plan"); the article owns how they apply.
+  Present them at the gate as FACTS (see "Conversion plan") — every one is already in the `values`, so none
+  of them is a proposal to accept or decline; the article owns how they apply.
 - One data source per page. If the web page used several (see `guide.dataSources`), keep only the primary one.
 - Apply the data sections by pasting `guide.modelConfigDiff` / `guide.viewModelConfigDiff` verbatim — never
   reconstruct attributes by hand and never source them from a pre-existing body (the article explains why).

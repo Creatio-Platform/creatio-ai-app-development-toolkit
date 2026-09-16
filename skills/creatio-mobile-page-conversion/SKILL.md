@@ -67,14 +67,14 @@ Before the Load order below, verify the converter is available: list the server 
    Follow it exactly.
 2. Read clio `get-guidance` with name `freedom-page-web-to-mobile-conversion` — the advisory ENGINE-layer
    guidance and the single source of truth for the body-building mechanics (component classification,
-   per-operation `elementMap` rules, `mobileValues` paste, the paste-verbatim data-section rules, adaptive /
+   per-operation `viewConfigDiff` rules, `values` paste, the paste-verbatim data-section rules, adaptive /
    tab-body / normalization behavior, the hard mobile rules). The playbook defers to it for all mechanics.
 3. Read `../../context/essentials.md` ("Freedom UI — Mobile Pages") for mobile platform basics
    (separate web/mobile pages, body format, component-registry differences).
 4. **Before authoring the mobile page body (Flow step 7):** (a) call clio `get-guidance` with name
    `mobile-page-modification` — the platform-mandated mobile page-authoring guidance (mobile component
    registry, body constraints, Scaffold inheritance rules). `../../context/essentials.md` requires this
-   call before editing ANY mobile page body, and the mechanical `mobileValues` paste does not exempt it.
+   call before editing ANY mobile page body, and the mechanical `values` paste does not exempt it.
    Then (b) **invoke the `creatio-ui-guidelines` skill** and apply its mobile-relevant rules (component
    choice, lookups, fields, captions, tooltips, accessibility), and run its review checklist before
    treating the page as done. `create-page` / `update-page` on a mobile page are the same page-authoring
