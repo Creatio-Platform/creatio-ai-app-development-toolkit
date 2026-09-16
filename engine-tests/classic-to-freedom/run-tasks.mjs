@@ -1784,27 +1784,37 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       }
     }
     {
-      // TWO TOKENS ON ONE ARTIFACT is the evasion every other check passes: one sub-agent handed both closes both
-      // with a valid signature, and per-page dispatch survives intact.
+      // ONE WRITER PER ARTIFACT is enforced by the dependency chain: `chainMerged` makes every task that writes an
+      // artifact depend on the previous writer of it, so two tasks on one artifact are serialized and `--start`
+      // refuses the second while the first is open. Two repair tasks of different causes on one page are that
+      // shape — same `writesTo`, the later chained onto the earlier. (`blockedByOverlap` is the secondary net for
+      // a folder that somehow omits the chain; the chain is what actually holds a single sub-agent off both.)
       const d = gateDir();
-      const all = syncTaskDir(d, RUN, OPTS).tasks;
-      const pair = all.filter((t) => t.writesTo).reduce((acc, t) => acc
-        || all.find((x) => x.id !== t.id && x.writesTo === t.writesTo && !x.dependsOn.includes(t.id)
-          && !t.dependsOn.includes(x.id)) && [t, all.find((x) => x.id !== t.id && x.writesTo === t.writesTo
-          && !x.dependsOn.includes(t.id) && !t.dependsOn.includes(x.id))], null);
-      if (pair) {
-        startTask(d, pair[0].id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
-        const res = startTask(d, pair[1].id, RUN, OPTS, null, at(1));
-        check("one writer: `--start` REFUSES a second token for an artifact a dispatched task is still writing — two open tokens on one artifact is exactly what lets a single sub-agent hold both and sign each correctly",
-          () => res.started === null && res.blockedByOverlap?.some((x) => x.id === pair[0].id)
-            && !readTimingsFile(d).running[pair[1].id],
-          () => ({ blocked: res.blockedByOverlap?.map((x) => x.id) }));
+      const reps = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written;
+      const set = syncTaskDir(d, RUN, OPTS);
+      const pool = reps.map((r) => set.tasks.find((t) => t.id === r.id)).filter((t) => t && t.writesTo);
+      const b = pool.find((t) => pool.some((x) => x.writesTo === t.writesTo && t.dependsOn.includes(x.id)));
+      const a = b && pool.find((x) => x.writesTo === b.writesTo && b.dependsOn.includes(x.id));
+      check("one writer (anti-vacuity): two repair tasks really write the SAME artifact and are chained — the later depends on the earlier, so the refusal below is asserted about a real pair",
+        () => !!a && !!b && a.writesTo === b.writesTo && b.dependsOn.includes(a.id),
+        () => ({ a: a && { id: a.id, writesTo: a.writesTo }, b: b && { id: b.id, dependsOn: b.dependsOn } }));
+      if (a && b) {
+        clearDepsOf(d, a.id, RUN, OPTS);
+        startTask(d, a.id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+        const res = startTask(d, b.id, RUN, OPTS, null, at(1));
+        check("one writer: `--start` REFUSES the second writer of an artifact while the first is open — the chain serializes same-artifact tasks so one sub-agent can never hold both at once",
+          () => res.started === null && res.blockedByDeps?.some((x) => x.id === a.id)
+            && !readTimingsFile(d).running[b.id],
+          () => ({ deps: res.blockedByDeps?.map((x) => x.id), overlap: res.blockedByOverlap?.map((x) => x.id) }));
       }
       // A read-only task claims no artifact, so it never conflicts and never blocks.
       const d2 = gateDir();
       const tasks2 = syncTaskDir(d2, RUN, OPTS).tasks;
       const writer = tasks2.find((t) => t.writesTo);
       const readOnly = tasks2.find((t) => !t.writesTo && !t.dependsOn.length);
+      check("one writer (anti-vacuity): the fixture really holds both a writer and an independent read-only task — otherwise the read-only-starts-beside-a-writer case runs zero assertions and still reports green",
+        () => !!writer && !!readOnly,
+        () => ({ writer: writer?.id, readOnly: readOnly?.id }));
       if (writer && readOnly) {
         startTask(d2, writer.id, RUN, OPTS, null, at(0));
         const res2 = startTask(d2, readOnly.id, RUN, OPTS, null, at(1));
@@ -1832,6 +1842,51 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       check("gate: re-running `--tasks` CLEARS it — the sample is recorded and the same folder then passes, so the remedy the message gives actually works",
         () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch.failing.length === 0,
         () => syncTaskDir(d, RUN, { ...OPTS, now: at(12) }).dispatch);
+    }
+
+    // ---- a dispatch that starts and closes within ONE timestamp tick ----
+    // `closeClocks` deletes the open clock the moment a task closes. If it recorded a sample only for a positive
+    // duration, a same-tick close (minute-granular `now`, or the clock skewing back) would leave neither clock
+    // nor sample, and the gate would read a correctly dispatched-and-closed task as NEVER dispatched — failing a
+    // run that did everything right. A sample is dispatch evidence first and a duration second.
+    {
+      const d = gateDir();
+      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+      clearDepsOf(d, id, RUN, OPTS);
+      startTask(d, id, RUN, { ...OPTS, dispatchToken: TOK_A }, null, at(0));
+      setStatus(d, id, "done");
+      setNonce(d, id, TOK_A);
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(0) });   // SAME tick as the start: zero elapsed
+      check("gate: a task started and closed within ONE tick is still a dispatch record — a zero-duration sample is written, the gate does NOT fail it, and it counts toward `dispatched N of M`",
+        () => set.dispatch.failing.length === 0
+          && !set.dispatch.never.some((t) => t.id === id)
+          && readTimingsFile(d).samples.some((s) => s.id === id)
+          && set.dispatch.dispatched >= 1,
+        () => ({ failing: set.dispatch.failing.map((t) => t.id), samples: readTimingsFile(d).samples.map((s) => ({ id: s.id, minutes: s.minutes })) }));
+      check("gate: the zero-duration sample stays OUT of the forecast — it proves dispatch, not timing, so `readTimings` (the forecast's source) does not carry it",
+        () => !readTimings(d).some((s) => s.id === id),
+        () => readTimings(d).map((s) => ({ id: s.id, minutes: s.minutes })));
+    }
+
+    // ---- an ORCHESTRATOR-origin closure the gate exempts must read `—`, not `⚠ never`, in the column ----
+    // `classifyUndispatched` exempts a non-engine-origin (repair) task from the dispatch gate. The Dispatched
+    // column has to agree, or a row the gate does not fail carries a warning the run's dispatch state does not.
+    {
+      const d = gateDir();
+      const rep = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written[0];
+      setStatus(d, rep.id, "done");   // closed with no dispatch record, exactly the shape the gate exempts
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      const adopted = set.tasks.find((t) => t.id === rep.id);
+      const rowRe = rep.file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      check("column (anti-vacuity): the repair task is adopted as `origin: orchestrator` — otherwise the exemption below is asserted about an engine-origin row",
+        () => adopted?.origin === "orchestrator",
+        () => adopted);
+      check("column: an orchestrator-origin task closed with no dispatch record does NOT fail the gate — the engine did not schedule it, so it is not held to a dispatch record",
+        () => set.dispatch.failing.every((t) => t.id !== rep.id) && !set.dispatch.never.some((t) => t.id === rep.id),
+        () => ({ failing: set.dispatch.failing.map((t) => t.id) }));
+      check("column: and its Dispatched cell reads `—`, not `⚠ never` — the column carries the warning only where the gate itself would",
+        () => adopted?.dispatched === "pending" && !new RegExp(`${rowRe}.*⚠ never`).test(readIndex(d)),
+        () => readIndex(d).split("\n").find((l) => l.includes(rep.file)));
     }
 
     // ---- the signature: a value the agent does not choose ----

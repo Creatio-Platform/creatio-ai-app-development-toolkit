@@ -1444,8 +1444,12 @@ function closeClocks(dir, tasks, now) {
     const minutes = (new Date(now) - new Date(clock.startedAt)) / 60000;
     // THE TOKEN OUTLIVES THE CLOCK, into the sample. `running` is deleted the moment the task closes, and a
     // closed task is the only kind whose signature can be checked at all.
-    if (Number.isFinite(minutes) && minutes > 0) {
-      state.samples.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(minutes.toFixed(2)),
+    // A sample is dispatch evidence first, a duration second: every real close records one, clamped to 0. A
+    // same-tick or backward-skew close (`minutes <= 0`) is useless to the forecast but still proof a sub-agent
+    // was dispatched; dropping it would leave the gate reading a correctly closed task as never dispatched.
+    // `usableSamples` keeps zero-duration out of the forecast. Only an unparseable timestamp records nothing.
+    if (Number.isFinite(minutes)) {
+      state.samples.push({ id: t.id, artifact: t.artifact, weight: t.weight, minutes: Number(Math.max(0, minutes).toFixed(2)),
         ...(clock.token ? { token: clock.token } : {}) });
     }
   }
@@ -1657,7 +1661,10 @@ function attachDispatch(set, dir) {
     // NO CLOCK MEANS TWO DIFFERENT THINGS, and only one of them is a warning. A task still OPEN has simply not
     // had its turn yet; a CLOSED one was finished with nobody dispatched for it. Marking both the same way puts a
     // warning on every row of a healthy queue, and the one row that matters then reads like the other sixteen.
-    else t.dispatched = CLOSED.has(t.status) ? "never" : "pending";
+    // THE COLUMN AGREES WITH THE GATE: `⚠ never` only where the gate would fail the row. `classifyUndispatched`
+    // exempts a non-engine-origin (orchestrator/repair) closure, so it reads `—` here too rather than a warning
+    // nothing else echoes.
+    else t.dispatched = CLOSED.has(t.status) && t.origin === TASK_ORIGIN_ENGINE ? "never" : "pending";
   }
   set.dispatch = audit;
   // Kept under its old name: the Attention section and every caller that reads "closed but never dispatched"
