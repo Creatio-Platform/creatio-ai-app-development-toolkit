@@ -468,7 +468,10 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
    artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
-   single sub-agent hold both and sign each correctly. Tasks on different artifacts may be open at once.
+   single sub-agent hold both and sign each correctly. **That second refusal is NARROWER than rule 2 and does not
+   replace it:** the engine blocks the same-artifact case, it does not serialise the run, so keeping dispatch to
+   one task at a time is still yours to honour. A `--start` that returns a token is not permission to leave the
+   previous one running.
 
    **`--start` prints a DISPATCH TOKEN. Put it in the sub-agent's prompt.** It is issued to that one task, it is
    deliberately NOT written into the task file, and the sub-agent copies it into `agentNonce:` before it finishes.
