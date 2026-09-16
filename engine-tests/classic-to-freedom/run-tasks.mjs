@@ -1792,7 +1792,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       const d = gateDir();
       const reps = syncRepairDir(d, RUN, VERIFY_PAGES, OPTS).written;
       const set = syncTaskDir(d, RUN, OPTS);
-      const pool = reps.map((r) => set.tasks.find((t) => t.id === r.id)).filter((t) => t && t.writesTo);
+      const pool = reps.map((r) => set.tasks.find((t) => t.id === r.id)).filter((t) => t?.writesTo);
       const b = pool.find((t) => pool.some((x) => x.writesTo === t.writesTo && t.dependsOn.includes(x.id)));
       const a = b && pool.find((x) => x.writesTo === b.writesTo && b.dependsOn.includes(x.id));
       check("one writer (anti-vacuity): two repair tasks really write the SAME artifact and are chained — the later depends on the earlier, so the refusal below is asserted about a real pair",
@@ -1877,7 +1877,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       setStatus(d, rep.id, "done");   // closed with no dispatch record, exactly the shape the gate exempts
       const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
       const adopted = set.tasks.find((t) => t.id === rep.id);
-      const rowRe = rep.file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rowRe = rep.file.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
       check("column (anti-vacuity): the repair task is adopted as `origin: orchestrator` — otherwise the exemption below is asserted about an engine-origin row",
         () => adopted?.origin === "orchestrator",
         () => adopted);
