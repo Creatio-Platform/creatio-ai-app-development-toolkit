@@ -56,7 +56,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2624,7 +2624,47 @@ function valueFlagArg(argv, flag, example, onBad) {
 // A PLAN-LEVEL GAP WRITES NOTHING. `gate` / `structure` / `coverage` describe the PLAN, and no build round closes
 // one — slicing a broken plan into tasks would hand sub-agents write access to a stand against deliverables the
 // plan cannot state. So this mode refuses BEFORE it creates the folder, rather than after a builder has run.
+// ⛔ THE DISPATCH GATE, in the words of the remedy rather than of the violation. Each finding names its files and
+// what to do with them; a generic "process violation" line leaves the caller to invent a repair, and the repair
+// differs per finding — a never-dispatched task must be rebuilt, a stale clock only needs the mode re-run.
+// The whole set is stated at once because `--start` refuses while ANY of it stands: fixing one file and
+// dispatching again would meet the same refusal.
+function dispatchFailureText(audit, dir) {
+  const L = [];
+  if (audit.never.length) {
+    L.push(`⛔ ${audit.never.length} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
+      + " measured them and nothing says who built them. For each: re-open it (`status: todo`), run"
+      + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:");
+    for (const t of audit.never) L.push(`   · ${t.file}  (--start ${t.id})`);
+  }
+  if (audit.openClock.length) {
+    L.push(`⛔ ${audit.openClock.length} task(s) closed while their clock is still open — the folder's books are`
+      + ` behind, not wrong. Re-run \`--tasks ${dir}\` to close them and record their samples:`);
+    for (const t of audit.openClock) L.push(`   · ${t.file}  (${t.id})`);
+  }
+  if (audit.naNoReason?.length) {
+    L.push(`⛔ ${audit.naNoReason.length} task(s) recorded \`n/a\` with no dispatch record and no reason under`
+      + " `## Notes`. The reason is what exempts an `n/a` from the dispatch gate. Write why each does not apply,"
+      + " or re-open and build it:");
+    for (const t of audit.naNoReason) L.push(`   · ${t.file}  (${t.id})`);
+  }
+  if (audit.signature.length) {
+    L.push(`⛔ ${audit.signature.length} task(s) closed carrying a signature dispatch did not issue for them —`
+      + " the context that closed each was not the one it was handed to. Re-open, `--start`, re-dispatch:");
+    for (const s of audit.signature) {
+      const who = s.owner ? `signed with the token issued for ${s.owner}` : (s.got ? "signed with an unissued value" : "carries no signature");
+      L.push(`   · ${s.task.file}  (${who})`);
+    }
+  }
+  return L.join("\n");
+}
+
+// Set by `runTaskMode` / the verify leg when the folder fails the dispatch gate, and read once at the exit-code
+// decision below. The mode has several early returns, so the verdict travels beside the text rather than in it.
+let dispatchGateFailure = null;
+
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
+  dispatchGateFailure = null;
   const gaps = planGaps(result);
   if (gaps.length) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
@@ -2643,6 +2683,29 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   }
   if (startId && set.unread) {
     return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
+  }
+  // NO NEW CLOCK OVER A BROKEN LEDGER. `--start` is the one command the orchestrator runs before every dispatch,
+  // so refusing here stops the run at the next dispatch instead of at the final gate.
+  if (startId && set.blockedByDispatch) {
+    dispatchGateFailure = { audit: set.blockedByDispatch, dir, started: false };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
+      + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
+      + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
+  }
+  // THE QUEUE ORDER AND THE ONE-WRITER RULE, refused at the moment a token would be issued. Both are field
+  // comparisons the engine can make, so neither depends on the caller remembering them.
+  if (startId && set.blockedByDeps) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` waits on ${set.blockedByDeps.length} task(s) that have not closed:\n`
+      + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
+      + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
+  }
+  if (startId && set.blockedByOverlap) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
+      + set.blockedByOverlap.map((c) => `   · ${c.file}  (${c.id})`).join("\n")
+      + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
+      + " one artifact is how a single sub-agent ends up holding both.\n";
   }
   if (startId && !set.started) {
     return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
@@ -2665,6 +2728,17 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   if (attention) lines.push(`⚠ ${attention} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
   // THE PROGRESS BLOCK, for the chat. Engine-rendered so what the user reads and what the folder holds cannot
   // drift apart, and printed on every run of the mode so the picture is current whenever the orchestrator speaks.
+  // THE TOKEN IS HANDED TO THE SUB-AGENT, not left in the folder. It prints here and nowhere else, because a
+  // token the sub-agent could read for itself would prove nothing about who dispatched it.
+  if (set.started && set.dispatchToken) {
+    lines.push("", `DISPATCH TOKEN for \`${set.started.id}\`: ${set.dispatchToken}`,
+      "Put this in the prompt of the ONE sub-agent you hand this task to. It copies the token into `agentNonce:`"
+      + " in its own task file before it finishes. Do not paste it into any other task, and do not write it"
+      + " into the file yourself.");
+  }
+  // THE FOLDER IS WRITTEN AND THE RUN STILL FAILS. The task files and the index are correct — what is wrong is
+  // that work was closed with nobody dispatched for it, which no re-slice can repair.
+  if (set.dispatch?.failing.length) dispatchGateFailure = { audit: set.dispatch, dir, started: true };
   lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd());
   // A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
   // scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
@@ -2685,6 +2759,16 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
 // REPAIR_ROUND_CAP rounds is PARKED rather than re-emitted — three sub-agents have failed at it, and a fourth is
 // not the answer; it is a decision for the user.
 function runRepairMode(result, dir, verifyRes, opts) {
+  // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: the folder is not re-sliced here,
+  // so this sees the recorded front matter and the clocks exactly as they stand. No repair task is written while
+  // it fails — a repair round adds sub-agents on top of closures nobody was dispatched for, and the rows it would
+  // open cannot be trusted to describe what was actually built.
+  const audit = dispatchAudit(readTaskDir(dir), dir);
+  if (audit.failing.length) {
+    dispatchGateFailure = { audit, dir, started: true };
+    return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this folder fails the dispatch gate, and a repair round would"
+      + " schedule more sub-agents against work nobody was dispatched for.\n" + dispatchFailureText(audit, dir) + "\n";
+  }
   if (planGaps(result).length) {
     return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this run has PLAN-level gaps, which no build round can close."
       + " Fix the plan first; repairing against it would spend sub-agents on rows the plan itself cannot state.\n";
@@ -2879,7 +2963,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || verifyIncomplete;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || verifyIncomplete || !!dispatchGateFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -2898,6 +2982,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The repair note goes out AFTER the table (or the wrote-to-file line), because it is about what was written
   // beside that artifact, not about the artifact itself.
   if (repairNote) process.stdout.write(repairNote);
+  // THE THIRD exit-2 verdict, and the only one that is about the RUN rather than the plan or the build: the
+  // deliverables may be fine and the folder is written, but tasks were closed with nobody dispatched for them.
+  // Stated separately so it is not read as either of the other two.
+  if (dispatchGateFailure?.startRefusal) {
+    process.stderr.write(`migrate.mjs: ⛔ DISPATCH GATE — nothing was started in ${dispatchGateFailure.dir}.`
+      + " The stdout block above names the task(s) this one waits on, or the task still writing its artifact.\n");
+  }
+  else if (dispatchGateFailure) {
+    const { audit, dir, started } = dispatchGateFailure;
+    process.stderr.write(`migrate.mjs: ⛔ DISPATCH GATE — ${audit.failing.length} closed task(s) in ${dir} have no`
+      + ` valid dispatch record (dispatched ${audit.dispatched} of ${audit.total}).`
+      + (started ? " The task files and the index WERE written and are current — what failed is the run, not the slice." : "")
+      + " This is NOT a plan gap and NOT a short build; re-running the plan changes nothing.\n");
+    process.stderr.write(dispatchFailureText(audit, dir) + "\n");
+  }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
@@ -2916,6 +3015,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
+  // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
+  // the built pages and nothing about who built them.
+  if (verifyMode && !tasksMode)
+    process.stderr.write(`migrate.mjs: ℹ no ${TASKS_FLAG} <dir> — this run checked the BUILT PAGES only; the dispatch`
+      + ` gate did not run. If this migration used a task folder, re-run with ${TASKS_FLAG} <that folder> before`
+      + " calling it done.\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
   // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse

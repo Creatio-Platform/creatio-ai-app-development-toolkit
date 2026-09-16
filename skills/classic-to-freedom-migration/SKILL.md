@@ -454,23 +454,39 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
    That sets the task `in-progress`, opens its clock in `timings.json` and regenerates `index.md` — so the index
-   moves when the work BEGINS, not only when an agent finishes. A task that reaches `done` without ever being
-   started is reported by name in the index's Attention section: nobody dispatched a sub-agent for it through the
-   engine. On the first live run that was the `Quality gates` task, closed by the orchestrator that had just
-   judged its own build — which is precisely what a separate review task exists to prevent. The clock is in
-   `timings.json`, never in the task file: it used to sit beside `status` and `agentNonce`, and the first builder
-   to meet it filled `endedAt` in itself with a rounded time, costing the run its only measurement. Until it existed a run in flight was indistinguishable from one
-   that had not started. The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after
-   every dispatch and every status change, so the user sees which task is running, how long it has been running,
-   what it is expected to take and what is left. Do not write a progress summary of your own — the block is
+   moves when the work BEGINS, not only when an agent finishes. The clock is in `timings.json`, never in the task
+   file, which is the caller's to edit.
+
+   **This is a GATE, not a warning.** A task recorded `done` that was never started this way FAILS the run: the
+   next `--start` refuses and opens no clock, a plain `--tasks` exits 2, and so does `--verify --tasks`. The
+   message names every such file and the `--start` that re-opens it. Re-open each one (`status: todo`), start it,
+   and hand it to its own sub-agent — the whole set, because `--start` refuses while any of it stands. `n/a` is
+   the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it that: an `n/a` with
+   nothing written there fails too.
+
+   **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
+   `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
+   artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
+   single sub-agent hold both and sign each correctly. Tasks on different artifacts may be open at once.
+
+   **`--start` prints a DISPATCH TOKEN. Put it in the sub-agent's prompt.** It is issued to that one task, it is
+   deliberately NOT written into the task file, and the sub-agent copies it into `agentNonce:` before it finishes.
+   A task closed carrying a different token — or none — fails the same gate. Never write it into the file
+   yourself: what the token establishes is that a context you dispatched closed the task, and you cannot attest to
+   that on its behalf.
+
+   The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after every dispatch and every
+   status change, so the user sees which task is running, how long it has been running, what it is expected to
+   take, what is left, and `dispatched N of M`. Do not write a progress summary of your own — the block is
    rendered from the folder, and a hand-written one drifts from it within two tasks.
 2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run two build
    sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and neither lists the other in
-   `dependsOn`, which in practice means a read-only task beside a build. Each sub-agent writes a value it mints
-   itself into `agentNonce:` before it finishes. You do not supply that value and you do not check it: the engine
-   reports the same nonce on two files, and a `done` task carrying none, on the index's `Attention` section. That
-   check exists because you are the wrong party to prove this rule held — in testing it was the orchestrator that
-   grouped twelve tasks onto five sub-agents and ten onto one.
+   `dependsOn`, which in practice means a read-only task beside a build. **Sequential is not an exception**: the
+   next task on the same page is a different sub-agent, so finishing one chunk of a page and picking up the next
+   in the same context is the violation this rule names, not a way of keeping the page coherent. Each sub-agent
+   echoes the dispatch token you handed it into `agentNonce:` before it finishes. You hand the token over and the
+   engine checks it; you are the wrong party to prove this rule held, which is why the check is neither yours nor
+   the sub-agent's to make.
 3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
    the sub-agent reported to you: the file is what survives your own session ending. A task whose sub-agent died
    without writing stays `todo`/`in-progress` and is re-dispatched.
@@ -574,6 +590,13 @@ closed on them alone would be arithmetic over self-assertion. The run closes on 
 Where the two disagree — every task `done` while `--verify` still names a MISSING row, or the reverse — the stand
 is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
 
+**On an orchestrated run the final gate carries `--tasks <migration-folder>/build-tasks` too:**
+`node engine/migrate.mjs <manifest> --verify --built <built-file> --tasks <migration-folder>/build-tasks`.
+That is what runs the dispatch gate over the folder — read-only, no re-slice — so the run cannot close while a
+task stands closed with nobody dispatched for it. While it fails, **no repair task is written**: a repair round
+would schedule more sub-agents on top of work nobody was dispatched for. Without `--tasks` the verify run checks
+the built pages only and says so; it is not the gate for a run that used a task folder.
+
 **The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --built <built-file>`, and `<built-file>` is a JSON **keyed BY PAGE**. The keys are the page keys the engine itself uses — the same ones `--checklist` groups its rows by: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). Read them off the checklist, never construct one: a key the engine did not publish is silently "not checked", not an error.
 
 ```jsonc
@@ -590,7 +613,7 @@ is right: re-open the task whose rows that row belongs to (`status: todo`) and r
 
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). Nothing in the plan carries a GUID, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists).
 
-**Exit 2 is TWO different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build.
+**Exit 2 is THREE different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names (`status: todo`), `--start` each, and hand each to its own sub-agent.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The `--verify` table is the ONLY sanctioned completion/status report — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.
