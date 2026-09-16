@@ -527,6 +527,15 @@ No task produces it, and a builder must not assemble its own verdict, so:
 - **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
   reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
   `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
+  **GROUNDS TO REJECT — the judge has to be able to say no, or the verdict is a formality.** A record that states
+  any part of its deliverable is blocked, deferred, residual, partial or not built **cannot** be `convincing:
+  true`, whatever else it contains and however complete the rest of the work reads: the record is then evidence
+  that the row is open, which is the one thing the verdict is being asked about. A record that does not name the
+  reference page it diffed against and the components it checked is a surface review and is not convincing
+  either. **The verdict must QUOTE the sentence it endorses** in `why` — a verdict that only asserts the record
+  is convincing cannot be told apart from a rubber stamp, and that is what a rubber stamp looks like from the
+  outside. Rule it `convincing: false` with the admission quoted; the row then stays open and its deliverable is
+  routed like any other unbuilt row rather than closing on a verdict nobody could check.
 
 Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
 

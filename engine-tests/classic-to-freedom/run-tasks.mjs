@@ -2607,6 +2607,50 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       && fs.readFileSync(vf, "utf8").includes("status: partial"),
     () => readIndex(dP).split("\n").slice(0, 4));
 
+  // THE REPAIR-MODE LEG OF THE SAME GATE. `--tasks` alone routes nothing, so the row above fails the run; the
+  // pairing below is the command that routes it. Asserted through the CLI because the wiring between
+  // `runRepairMode`, `partialGateFailure` and `notReady` lives there and nowhere else — a flag folded into the
+  // wrong variable, or an exit code not surfaced, is invisible to every in-process test.
+  const baseR = tmp("notbuilt-repair");
+  const dR = path.join(baseR, "build-tasks");
+  cliT(["--tasks", dR], MANIFEST);
+  // Dispatched and signed the way a real run closes a task (`--start` → token → nonce). Required: the repair leg
+  // checks the ledger BEFORE it schedules anything, so a folder that fails the dispatch gate writes no repair
+  // task at all — and a test that skipped this would assert the refusal, not the routing.
+  for (;;) {
+    const tasks = readTaskDir(dR);
+    const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
+      const dep = tasks.find((x) => x.id === d);
+      return !dep || dep.status === "done" || dep.status === "n/a";
+    }));
+    if (!next) break;
+    const started = cliT(["--tasks", dR, "--start", next.id], MANIFEST);
+    editFrontMatter(dR, next.id, "status", "done");
+    editFrontMatter(dR, next.id, "agentNonce", /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1] || "");
+    cliT(["--tasks", dR], MANIFEST);
+  }
+  const vic = readTaskDir(dR).find((t) => t.rows.length >= 2);
+  const vfR = path.join(dR, vic.file);
+  fs.writeFileSync(vfR, setOutcome(allBuilt(fs.readFileSync(vfR, "utf8")), 1, NOT_BUILT_BLOCKED));
+  const unrouted = cliT(["--tasks", dR], MANIFEST);
+  const builtR = path.join(baseR, "built.json");
+  fs.writeFileSync(builtR, JSON.stringify({ pages: {} }));
+  const routed = cliT(["--verify", "--built", builtR, "--tasks", dR], MANIFEST);
+  const repairCause = fs.readdirSync(dR).filter((f) => f.startsWith("task-repair-"))
+    .map((f) => parseTaskFile(fs.readFileSync(path.join(dR, f), "utf8")).meta.cause);
+
+  check("CLI (anti-vacuity): the same folder DOES fail `--tasks` first — otherwise the pairing below could be routing nothing and the two checks would agree for no reason",
+    () => unrouted.status === 2 && /⛔ NOT BUILT/.test(unrouted.stderr || ""),
+    () => ({ status: unrouted.status, stderr: (unrouted.stderr || "").slice(-500) }));
+
+  check("CLI `--verify --tasks`: the unbuilt row is ROUTED — a repair task keyed `not-built:<kind>` is written for it, which is exactly the command the `--tasks` failure told the user to run",
+    () => repairCause.some((c) => String(c).startsWith("not-built:")),
+    () => ({ status: routed.status, causes: repairCause, stdout: (routed.stdout || "").slice(-700) }));
+
+  check("CLI `--verify --tasks`: once routed, the row is no longer an unrouted NOT BUILT failure — the gate reads folder state, so the row that failed `--tasks` is somebody's open work here instead of a second identical refusal. This is the only test that drives `runRepairMode`'s gate wiring end to end",
+    () => !/⛔ NOT BUILT/.test(routed.stderr || ""),
+    () => (routed.stderr || "").slice(-700));
+
   // A clean folder must not trip the gate.
   const dOk = path.join(tmp("notbuilt-cli-ok"), "build-tasks");
   const ok = cliT(["--tasks", dOk], MANIFEST);
@@ -2689,6 +2733,25 @@ check("a `|` in a Classic caption does not shift the Outcome cell — deliverabl
     const piped = { ...SAMPLE, rows: [{ ...SAMPLE.rows[0], label: "Caption A | B" }, ...SAMPLE.rows.slice(1)] };
     return parseTaskFile(setOutcome(renderTaskFile(piped, SET), 1, NOT_BUILT_BLOCKED)).table[0];
   });
+
+check("a `|` typed INSIDE the Outcome cell keeps the whole reason — the agent hand-types free prose there (`n-a — <reason>`, the reason is REQUIRED), so a raw pipe is already in the file and cannot be escaped away on write; truncating at it left a HALF reason that still read as a validly-reasoned, accounted skip",
+  () => {
+    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]).tasks[0];
+    return m.rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter" && !m.rows[0].naNoReason;
+  }, () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "n-a — approved per CRM-123, replaces the A | B filter"))
+    .rows.map((r) => [r.outcomeKind, r.outcomeReason]));
+
+check("that reason SURVIVES the re-render — the engine escapes the cell on the way back out, so a second pass reads the same text rather than splitting it further each time the folder is re-sliced",
+  () => {
+    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const once = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]);
+    const twice = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(renderTaskFile(once.tasks[0], once)) }]);
+    return twice.tasks[0].rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter";
+  }, "the Outcome cell must round-trip a typed pipe");
 
 check("the generated task body names `blocked` and `n/a` as the two statuses the agent still writes — the file otherwise says \"do not set status\", which contradicts execution rule 5",
   () => /The two exceptions\s+are `blocked` and `n\/a`/.test(SAMPLE_TEXT) && /reason is REQUIRED/.test(SAMPLE_TEXT),

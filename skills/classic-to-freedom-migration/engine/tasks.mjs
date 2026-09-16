@@ -613,7 +613,7 @@ function renderRowTable(rows, repair = false) {
   // The Outcome cell is the agent's and is carried across a re-slice; every other cell in the row is the plan's.
   // An empty cell is NOT "built" — it is unaccounted, and a task cannot compute `done` over one.
   const L = ["| # | From | Deliverable | Closed by | Outcome |", "| --- | --- | --- | --- | --- |"];
-  rows.forEach((r, i) => L.push(`| ${i + 1} | ${cell(r.group) || "—"} | ${cell(r.label)} | ${cell(closedByOf(r))} | ${r.outcome || "—"} |`));
+  rows.forEach((r, i) => L.push(`| ${i + 1} | ${cell(r.group) || "—"} | ${cell(r.label)} | ${cell(closedByOf(r))} | ${cell(r.outcome) || "—"} |`));
   return L;
 }
 
@@ -794,7 +794,13 @@ function tableRows(bodyLines) {
     // UNESCAPED pipes only, so a `\|` inside a caption stays part of its cell instead of shifting every index.
     const cells = line.split(/(?<!\\)\|/);
     if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) continue;
-    out.push({ label: uncell(cells[3].trim()), mark: parseOutcome(cells[5].trim()) });
+    // THE OUTCOME IS THE LAST COLUMN AND THE ONE THE AGENT HAND-TYPES. Escaping it on write does not help a cell
+    // already in the file with a raw `|` in its reason, and reading `cells[5]` alone truncates the reason there
+    // while the row still parses as a validly-reasoned mark. Everything from column 5 up to the trailing empty
+    // cell IS the outcome, so rejoining puts a typed pipe back; `uncell` undoes the escaping the engine writes on
+    // its own re-render.
+    const outcome = cells.slice(5, -1).join("|");
+    out.push({ label: uncell(cells[3].trim()), mark: parseOutcome(uncell(outcome.trim())) });
   }
   return out;
 }
