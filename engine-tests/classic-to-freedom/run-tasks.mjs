@@ -2531,7 +2531,11 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
   check("the progress block — the one surface a watching user reads while the run happens — carries the partial count AND names each unbuilt row, because that is the boundary the two lost filters died at",
     () => {
       const prog = renderProgress(second, dir);
-      return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog) && /needs a decision/.test(prog);
+      // …and says what the row is waiting on WITHOUT claiming nothing can be scheduled for it: `notBuiltOpenRows`
+      // filters on no cause, so `--route` opens a round over a `needs-decision` row like any other.
+      return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog)
+        && /a decision settles it, not a re-run — route it once that decision exists/.test(prog)
+        && !/not re-dispatched/.test(prog);
     }, () => renderProgress(second, dir));
 
   check("`partial` RELEASES the tasks that depend on it — it holds up calling the run complete, not the queue. A state that halted dependents is exactly the state agents avoided by writing `done`",
@@ -2598,9 +2602,14 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       && /row 1 —/.test(run.stderr) && /blocked: the stand or a service was unreachable/.test(run.stderr),
     () => run.stderr.slice(-900));
 
-  check("CLI: the report names the ONE command that routes these rows, and names PARKED as where the routing ends — `--tasks` alone opens no repair round, so a report that only said \"decide\" would leave the user to invent the procedure the engine already has",
-    /--verify --tasks <dir>` to open a repair round/.test(run.stderr) && /PARKED and will not get another/.test(run.stderr),
-    () => run.stderr.slice(-400));
+  // The command it names has to be one a run with pages still unbuilt can take: `--verify` needs a `--built`
+  // payload for every page, `--route` needs none.
+  check("CLI: the report names the ONE command that routes these rows — `--tasks <dir> --route`, which needs no `--built` payload — warns off hand-writing a repair file, and names PARKED as where the routing ends",
+    () => /--tasks <dir> --route` to open a repair/.test(run.stderr)
+      && !/`--verify --tasks <dir>` to open a repair round/.test(run.stderr)
+      && /Do NOT hand-write a repair file/.test(run.stderr)
+      && /PARKED and will not get another/.test(run.stderr),
+    () => run.stderr.slice(-700));
 
   check("CLI: the task FOLDER and the index are still written — the run failed, the slice did not, so the record of what was built is not withheld as a punishment",
     () => fs.existsSync(path.join(dP, TASK_INDEX_FILE)) && /⚠ Partial:/.test(readIndex(dP))
@@ -2617,18 +2626,21 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   // Dispatched and signed the way a real run closes a task (`--start` → token → nonce). Required: the repair leg
   // checks the ledger BEFORE it schedules anything, so a folder that fails the dispatch gate writes no repair
   // task at all — and a test that skipped this would assert the refusal, not the routing.
-  for (;;) {
-    const tasks = readTaskDir(dR);
-    const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
-      const dep = tasks.find((x) => x.id === d);
-      return !dep || dep.status === "done" || dep.status === "n/a";
-    }));
-    if (!next) break;
-    const started = cliT(["--tasks", dR, "--start", next.id], MANIFEST);
-    editFrontMatter(dR, next.id, "status", "done");
-    editFrontMatter(dR, next.id, "agentNonce", /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1] || "");
-    cliT(["--tasks", dR], MANIFEST);
-  }
+  const closeAllViaCli = (dir) => {
+    for (;;) {
+      const tasks = readTaskDir(dir);
+      const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
+        const dep = tasks.find((x) => x.id === d);
+        return !dep || dep.status === "done" || dep.status === "n/a";
+      }));
+      if (!next) break;
+      const started = cliT(["--tasks", dir, "--start", next.id], MANIFEST);
+      editFrontMatter(dir, next.id, "status", "done");
+      editFrontMatter(dir, next.id, "agentNonce", /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1] || "");
+      cliT(["--tasks", dir], MANIFEST);
+    }
+  };
+  closeAllViaCli(dR);
   const vic = readTaskDir(dR).find((t) => t.rows.length >= 2);
   const vfR = path.join(dR, vic.file);
   fs.writeFileSync(vfR, setOutcome(allBuilt(fs.readFileSync(vfR, "utf8")), 1, NOT_BUILT_BLOCKED));
@@ -2636,8 +2648,11 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   const builtR = path.join(baseR, "built.json");
   fs.writeFileSync(builtR, JSON.stringify({ pages: {} }));
   const routed = cliT(["--verify", "--built", builtR, "--tasks", dR], MANIFEST);
-  const repairCause = fs.readdirSync(dR).filter((f) => f.startsWith("task-repair-"))
-    .map((f) => parseTaskFile(fs.readFileSync(path.join(dR, f), "utf8")).meta.cause);
+  // Read off the FILES, not off a return value: both legs below are asserting that the round reached the folder.
+  const repairFilesIn = (dir) => fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-"));
+  const repairCausesIn = (dir) => repairFilesIn(dir)
+    .map((f) => parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")).meta.cause);
+  const repairCause = repairCausesIn(dR);
 
   check("CLI (anti-vacuity): the same folder DOES fail `--tasks` first — otherwise the pairing below could be routing nothing and the two checks would agree for no reason",
     () => unrouted.status === 2 && /⛔ NOT BUILT/.test(unrouted.stderr || ""),
@@ -2650,6 +2665,60 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   check("CLI `--verify --tasks`: once routed, the row is no longer an unrouted NOT BUILT failure — the gate reads folder state, so the row that failed `--tasks` is somebody's open work here instead of a second identical refusal. This is the only test that drives `runRepairMode`'s gate wiring end to end",
     () => !/⛔ NOT BUILT/.test(routed.stderr || ""),
     () => (routed.stderr || "").slice(-700));
+
+  // ---- `--route`: THE SAME ROUND, WITHOUT A `--built` PAYLOAD ------------------------------------------------
+  // The leg above routes only from a verify run, which needs every page built. This one routes the same rows off
+  // the folder alone, so a run still building pages can clear the gate that names them.
+  const baseO = tmp("notbuilt-route");
+  const dO = path.join(baseO, "build-tasks");
+  cliT(["--tasks", dO], MANIFEST);
+  closeAllViaCli(dO);
+  const vicO = readTaskDir(dO).find((t) => t.rows.length >= 2);
+  const vfO = path.join(dO, vicO.file);
+  fs.writeFileSync(vfO, setOutcome(allBuilt(fs.readFileSync(vfO, "utf8")), 1, NOT_BUILT_BLOCKED));
+  const unroutedO = cliT(["--tasks", dO], MANIFEST);
+  const route = cliT(["--tasks", dO, "--route"], MANIFEST);
+  const routeCauses = repairCausesIn(dO);
+
+  check("CLI (anti-vacuity): the folder DOES fail `--tasks` before `--route` runs — otherwise the routing below could be routing nothing",
+    () => unroutedO.status === 2 && /⛔ NOT BUILT/.test(unroutedO.stderr || ""),
+    () => ({ status: unroutedO.status, stderr: (unroutedO.stderr || "").slice(-400) }));
+
+  check("CLI `--tasks --route`: the unbuilt row is routed with NO `--built` payload and no verify run — same repair machinery, keyed `not-built:<kind>`, reachable by a run that still has pages left to build",
+    () => routeCauses.some((c) => String(c).startsWith("not-built:")),
+    () => ({ status: route.status, causes: routeCauses, stdout: (route.stdout || "").slice(-700) }));
+
+  check("CLI `--tasks --route`: once routed the row is somebody's open work, so the unrouted-NOT-BUILT gate stops firing — the same folder state the `--verify` leg produces, reached without one",
+    () => !/⛔ NOT BUILT/.test(route.stderr || ""),
+    () => ({ status: route.status, stderr: (route.stderr || "").slice(-700) }));
+
+  check("CLI `--tasks --route`: the report says the rows came from a BUILD agent, not from a verify run — a sub-agent handed the repair task acts differently on 'the verifier could not find it' than on 'the agent wrote down that they did not build it'",
+    () => /recorded as NOT BUILT, merged by \(page, cause\)/.test(route.stdout || "")
+      && !/the open rows of THIS verify run/.test(route.stdout || ""),
+    () => (route.stdout || "").slice(-700));
+
+  check("CLI `--tasks --route`: it prints the progress block, which is what the orchestrator pastes after a status change — routing IS a status change, and a mode that changed the folder silently would leave the chat's count behind the folder's",
+    () => /--- progress ---/.test(route.stdout || "") && /dispatched \d+ of \d+/.test(route.stdout || ""),
+    () => (route.stdout || "").slice(-500));
+
+  check("CLI `--route` with nothing to route: a second run writes no new round and says so, rather than manufacturing one — a round is an ATTEMPT, and re-routing an unchanged folder would burn the cap with nobody having run",
+    () => {
+      const again = cliT(["--tasks", dO, "--route"], MANIFEST);
+      return repairFilesIn(dO).length === routeCauses.length && /already have an OPEN repair task/.test(again.stdout || "");
+    },
+    () => (cliT(["--tasks", dO, "--route"], MANIFEST).stdout || "").slice(-600));
+
+  // The flag is refused rather than ignored wherever it would silently do nothing or do two things at once.
+  for (const [why, args] of [
+    ["without `--tasks <dir>` there is no folder to open a round in", ["--route"]],
+    ["`--verify --tasks` already routes these rows, and `--route` beside it would claim a second, different round", ["--verify", "--built", builtR, "--tasks", dO, "--route"]],
+    ["`--start` marks a task for dispatch; routing SCHEDULES one, and one call doing both cannot say which task the printed token belongs to", ["--tasks", dO, "--route", "--start", "x"]],
+    ["`--split` CUTS a folder; `--route` opens a round in one already cut, reading the split frozen inside it", ["--tasks", dO, "--route", "--split", "./split.json"]],
+  ]) {
+    check(`CLI: \`--route\` is REFUSED, not ignored — ${why}`,
+      () => { const r = cliT(args, MANIFEST); return r.status === 1 && /migrate\.mjs: `--route`|`--route`/.test(r.stderr || ""); },
+      () => { const r = cliT(args, MANIFEST); return { status: r.status, stderr: (r.stderr || "").slice(0, 400) }; });
+  }
 
   // A clean folder must not trip the gate.
   const dOk = path.join(tmp("notbuilt-cli-ok"), "build-tasks");

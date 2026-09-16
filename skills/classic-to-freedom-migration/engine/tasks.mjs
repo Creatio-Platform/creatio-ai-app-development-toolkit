@@ -1023,7 +1023,7 @@ function attentionLines(set) {
   for (const it of notBuiltRows(set.tasks)) {
     let why;
     if (it.row?.naNoReason) why = "recorded `n-a` with NO reason — a row closed without building it needs one, so it counts as not built";
-    else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — needs a decision; nothing is re-dispatched for it"}`;
+    else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — a decision settles it, not a re-run; route it once that decision exists"}`;
     else why = "NOT ACCOUNTED FOR — the task recorded a closing status without marking this row either way";
     // The reason belongs under `## Notes` against the row number; a `not-built` row on a task with empty notes
     // has recorded the fact and not the reason. Same shape as the `n/a`-with-no-reason line the dispatch gate raises.
@@ -1180,7 +1180,9 @@ const brief = (s, n = 90) => { const t = String(s || "").replace(/\s+/g, " ").tr
 // No cause at all is the weaker claim of the two: nobody said anything about the row either way.
 function whyNotBuilt(cause) {
   if (!cause) return "unaccounted — the task closed without recording this row";
-  const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (needs a decision — not re-dispatched)";
+  // BOTH causes are routed — `notBuiltOpenRows` filters on neither. What differs is what CLOSES the row: a re-run
+  // for `blocked`, a person for `needs-decision`. Neither says the row cannot be scheduled.
+  const tail = RETRYABLE_CAUSES.has(cause) ? " (a re-run may clear it)" : " (a decision settles it, not a re-run — route it once that decision exists)";
   return `${cause}${tail}`;
 }
 
