@@ -38,7 +38,19 @@ Resolve exact tool names / parameters through `get-tool-contract` (do not hardco
 The tools used in this flow:
 
 - `get-mobile-page-conversion-guide` — **advisory only**: detects the source page type and returns a
-  conversion guide. It builds NO body and writes NOTHING to Creatio or disk.
+  conversion guide. It builds NO body and writes NOTHING to Creatio or disk. It also surfaces
+  `guide.requestConversions.missingTargetPages` (deduplicated `web-page` targets, each with `references[]`)
+  and `guide.requestConversions.unresolvedTargetRequests` (per-request detail, including
+  `entity-default-mobile-page` candidates with a `resolvedCandidateSchemaName`) — the data behind the
+  "Missing target pages" plan/report items and the sequential-conversion offer in step 8a. **`resolvedSourceType`
+  / `recommendedAction` always come back `null`** — the tool reports candidate NAMES only and does not read
+  the environment to classify them (no fixed read ceiling). There is no `existingMobileEquivalentSchemaName`
+  field on the wire either — the guide never searched for an existing mobile equivalent, shipped or
+  otherwise. YOU classify every distinct candidate yourself, including that search, before building the
+  plan — see step 3a.
+- `get-page`, `list-pages`, `find-entity-schema` — used in step 3a to classify each missing-target candidate
+  (existence, source type, and whether an existing mobile equivalent already covers the same object) before
+  the plan is built. Read-only, not gated.
 - `list-page-templates` (schema-type `mobile`), `create-page`, `update-page`, `validate-page` — persistence.
   Thread `create-page`'s returned `schemaUId` into `update-page` as `target-schema-uid` (see step 7) so the
   body lands in the created schema instead of a replacing schema in the design package.
@@ -79,6 +91,40 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      part of this stage). Do NOT create, update, or validate anything in Creatio.
    - **Freedom UI (`freedom-web`):** continue — the guide already analyzed components, layout,
      fields, actions, and (detected) business rules.
+3a. **Classify each missing-target candidate yourself, before building the plan.** The guide reports
+   candidate NAMES only — `resolvedSourceType` and `recommendedAction` come back `null` on every
+   `missingTargetPages[]` / `unresolvedTargetRequests[]` entry (it stopped reading the environment for
+   this — no fixed read ceiling). There is no `existingMobileEquivalentSchemaName` field either — the
+   equivalent search below is something YOU perform, not something the guide ever did. Skip this step entirely
+   when both lists are empty. Otherwise, for every DISTINCT candidate name (dedupe `target` /
+   `resolvedCandidateSchemaName` first — same grouping the "Missing target pages" plan section requires):
+   - **`entity-default-mobile-page` candidate with NO `resolvedCandidateSchemaName` at all:** clio could not
+     find the object's default WEB edit page either (both the mobile and the web `RelatedPage` add-ons came
+     back empty) — but the OBJECT name (`target`) is still known. **Do not jump straight to
+     `manual-candidate-not-found`.** Run the "Existing mobile equivalent" search below keyed on the OBJECT
+     name directly (skip the `get-page`-on-a-page-name step — `target` here is an object name, not a page
+     schema name, so there is nothing to read yet). A confirmed mobile match → `redirect-to-existing-mobile`.
+     Nothing found → `manual-candidate-not-found` — an empty add-on is a fact about the add-on, not proof no
+     mobile page exists anywhere for the object, so the equivalent search must run before giving up on it.
+   - **Existence + source type** (every other candidate — a `web-page` `target`, or an
+     `entity-default-mobile-page` candidate whose `resolvedCandidateSchemaName` IS set): call `get-page` with
+     that `schema-name`. A schema-not-found error means no web page exists at all — classify
+     `no-web-page-exists` (nothing to offer converting). Otherwise read the response `sourceType`:
+     `freedom-web` → `convert-directly`; `mobile` → `skip-already-mobile`; anything else (Classic UI,
+     unrecognized) → `convert-classic-first`. Any other read failure (transport, auth, unreadable body) →
+     `manual-candidate-not-found` — never guess.
+   - **Existing mobile equivalent** — runs for a candidate you are about to classify `convert-directly` /
+     `convert-classic-first`, AND (per the first bullet above) directly by object name for an
+     `entity-default-mobile-page` candidate with no `resolvedCandidateSchemaName` at all. `skip-already-mobile`
+     / `no-web-page-exists` never reach this check — they have nothing to redirect. Use `find-entity-schema` /
+     `list-pages` to check whether the object already has a mobile page under a different name — look at its
+     actual mobile pages rather than guessing one fixed naming pattern. Confirm any match's `sourceType` is
+     exactly `mobile` via `get-page`: **a same-named/suffix-matched CLASSIC UI schema counts as NO existing
+     mobile equivalent**, not a match — the Creatio Mobile app cannot open a Classic UI page any more than it
+     can open a web one. A confirmed mobile match sets/overrides the classification to
+     `redirect-to-existing-mobile`; carry its schema name forward.
+   - **One read per distinct name.** Two rows sharing the same `resolvedCandidateSchemaName` (or `target`)
+     resolve to ONE classification, reused for both.
 4. **Generate the conversion plan.** From the guide, produce a SHORT, plain-language plan — NOT
    technical detail. Lead with the Beta-release notice (see "Conversion plan" below) — verbatim at the
    very top. Then state: what will be transferred, what will be adapted (e.g. *"grid → mobile
@@ -161,9 +207,46 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    `rule` VERBATIM to `create-page-business-rule` (`environment-name`, `package-name`,
    `page-schema-name = <the new mobile page>`, `rule`). Report any `droppedRules[]` to the developer with
    their reason (not transferred). Object-/entity-level business rules are shared across web and mobile — do NOT touch them.
-8. **Deliver the conversion report** (see below).
+8. **Deliver the conversion report** (see below) — as ONE complete message, only once 7b and 7c are
+   fully resolved (Gate S answered — approved, declined, or skipped — and business rules recreated or
+   reported). Do NOT send a partial report before Gate S resolves and a separate summary afterward: the
+   report's "Section registration outcome" and "Missing pages" bullets need the Gate S answer and the
+   deduplicated missing-pages list to already be in hand, so gather them first, then deliver the report once.
+8a. **Offer sequential conversion of the missing target pages** — only when the report's "Missing pages"
+   list is non-empty. Ask the developer once, **after** the complete step 8 report (a separate question,
+   never bundled into the same prompt as the Gate S question from step 7b), whether to convert them now.
+   If they decline or give no answer, stop here — do not re-offer later in the same run.
+   - **Route by the classification from step 3a first:** offer `convert-directly` candidates for this same
+     flow; for `convert-classic-first` candidates, point the developer at the separate classic-web →
+     freedom-web converter instead of silently skipping them (this flow still does not perform that
+     migration); skip `skip-already-mobile` and `no-web-page-exists` entries entirely (nothing to offer);
+     for `redirect-to-existing-mobile`, tell the developer the object already has a mobile page under a
+     different name and offer repointing the binding to it instead of converting a new one; for
+     `manual-candidate-not-found` (step 3a already tried the equivalent search by object name too, when there
+     was no `resolvedCandidateSchemaName` to begin with — this is a genuine dead end), tell the developer no
+     candidate could be resolved automatically and ask them to supply one or decline it.
+   - **Offer the DEDUPLICATED report rows, not raw `unresolvedTargetRequests`.** The "Missing target pages"
+     report list already collapsed every `entity-default-mobile-page` row sharing the same
+     `resolvedCandidateSchemaName` (or `target`, when unresolved) into one candidate — offer from that
+     list. If you ever build the offer directly from `unresolvedTargetRequests` instead of the report,
+     group it the same way first: two buttons creating the same missing object must produce exactly ONE
+     offer, never two.
+   - **Strictly one page at a time.** On acceptance, take candidates one by one. Each one runs the
+     **full flow from step 1** (its resolved page name as the new source, re-resolving the environment if
+     it differs) through **Gate M**, the build, **Gate S** (if applicable), and its own step 8 report —
+     completed or explicitly declined — **before the next candidate starts.** Never batch, parallelize, or
+     pre-approve more than one missing-page conversion at once; Gate M stays "scoped to a single page"
+     (see below) for every one of these, exactly as for the original page.
+   - **Session-level dedup.** If a later candidate (from this page or an earlier follow-up) names a target
+     already converted, queued, or declined earlier in this same working session, do not offer it again —
+     reference the earlier outcome instead of repeating the offer.
+   - **Telemetry:** each accepted follow-up page still emits its own `work_item_completed` `variant=page`
+     (and `variant=section` if it also passes its own Gate S) — the same as the first page. The whole
+     chain (the original page plus every accepted follow-up) stays inside the ONE
+     `workflow_started`/`workflow_completed` pair opened for this run; see `SKILL.md`'s telemetry table.
 9. **Hand off.** Tell the developer to open the result in **Freedom UI Mobile Designer** for review
-   and manual refinement.
+   and manual refinement. (If step 8a converted follow-up pages, this covers all of them, not just the
+   original page.)
 
 ### Gate M — Mobile Conversion Approval (HARD STOP)
 
@@ -188,6 +271,10 @@ is FORBIDDEN until this gate passes. Gate M is analogous to Gate R, scoped to a 
 - **No skipping in autonomous / headless mode.** If you cannot get an interactive answer, you must
   still produce the preview/summary, ask for confirmation (`AskUserQuestion` or in text), and END THE
   TURN without persisting anything. Never self-approve.
+- **Applies per page, including step 8a follow-ups.** Converting a missing target page (step 8a) is a
+  new run of this same flow, not an extension of the page that just finished — it gets its own plan and
+  its own Gate M. A developer accepting the sequential-conversion OFFER is not pre-approving any
+  individual page's plan; never treat that acceptance as Gate M for the pages that follow.
 
 ### Gate S — Section Registration Approval (HARD STOP)
 
@@ -203,6 +290,11 @@ make. Section/workplace writes (`odata-update` on `SysModule`, `odata-create` on
 - **No skipping in autonomous / headless mode.** Show the registration plan, ask, and END THE TURN
   without any `odata-*` write if you cannot get an answer.
 - Section registration runs in step 7b, AFTER the mobile page exists (its schema UId is required).
+- **Resolve this gate BEFORE step 8.** Ask and resolve Gate S as its own interaction, before the step 8
+  conversion report and before the step 8a follow-up-page offer — never bundle the Gate S question with
+  the step 8a offer in one prompt, and never deliver the step 8 report while Gate S is still unanswered.
+  The report's "Section registration outcome" line must already state the final answer (registered /
+  declined / skipped), not "pending."
 
 ### Conversion plan (what step 5 must show)
 
@@ -227,6 +319,28 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **What is NOT supported / will be dropped** — e.g. Dashboards, Summaries, bulk actions. State it
   explicitly (this bucket takes the step-4 message shape).
 - **Needs a decision** (`requiresManualDecision`) — the items awaiting the developer's call.
+- **Missing target pages** — from `guide.requestConversions.missingTargetPages` (deduplicated `web-page`
+  targets) plus the verified-`missing` `entity-default-mobile-page` entries in `unresolvedTargetRequests`
+  (skip `unknown` ones here — they are reported, not queued). **Deduplicate the `entity-default-mobile-page`
+  entries yourself before listing them.** Unlike `missingTargetPages`, clio does NOT deduplicate this kind:
+  it emits one `unresolvedTargetRequests` row per BUTTON, so two buttons creating the same missing object
+  produce two rows sharing the same `resolvedCandidateSchemaName` (or the same `target` object name when
+  none resolved). Group those rows — by `resolvedCandidateSchemaName` when it is set, otherwise by
+  `target` — and combine every `elementName` that referenced the group into one candidate row, the same
+  shape `references[]` already gives you for a `web-page` target. List every remaining DISTINCT candidate
+  the guide could not find while analyzing this source page's action bindings. For each: the target name
+  (the resolved web edit page, `resolvedCandidateSchemaName`, for an `entity-default-mobile-page` target —
+  or the raw object name when no candidate could be resolved), which buttons/requests reference it
+  (`references[]`, or your combined `elementName`s for the entity case), and the recommended next step from
+  YOUR OWN classification (step 3a — the guide's `recommendedAction` is always `null`):
+  `convert-directly` (already Freedom UI web, ready for this same flow), `convert-classic-first` (Classic UI
+  or unrecognized source — needs a classic→freedom migration first), `skip-already-mobile` (already has a
+  mobile page under this same name — nothing to propose), `redirect-to-existing-mobile` (an object's mobile
+  page already exists under a DIFFERENT name — name it and offer repointing instead of converting a new
+  page), `no-web-page-exists` (confirmed absent — nothing to offer), or `manual-candidate-not-found` (the
+  read failed or no candidate resolved — flag it for the developer's own decision). This is informational
+  here — do NOT propose converting anything yet; the sequential conversion OFFER happens after the report,
+  in step 8a.
 - **Section registration intent** (from `guide.sectionRegistration`) — whether the page is a section
   and whether it would be made available in mobile, and in which workplace (existing mobile one, a new
   one, or skip); for a FORM page, whether to register it as the entity's default mobile edit page
@@ -254,7 +368,8 @@ schema-type `mobile`). Do NOT dump these in the default plan.
 
 ### Conversion report (step 8)
 
-After `validate-page`, deliver a report:
+After `validate-page`, and after Gate S has an answer and 7c has run, deliver ONE report (not a partial
+one followed by a later summary):
 
 - **Created/updated:** the mobile page schema, the package, and the environment.
 - **Actually transferred / adapted / dropped:** the real outcome per component (not just the plan).
@@ -271,6 +386,11 @@ After `validate-page`, deliver a report:
   (`convertedRequests`, remapped where the mobile name differs). Components whose request the mobile app does
   NOT support were **dropped entirely** (their `elementMap` entry is `drop`, reason names the request) — list
   those removed action components for the developer.
+- **Missing pages:** the same deduplicated list from the plan (`missingTargetPages` + verified-`missing`
+  `entity-default-mobile-page` targets), each with its `recommendedAction`. State whether the developer
+  accepted the step 8a offer to convert them, and for each accepted target: queued / converted (its own
+  report lands when its turn finishes) / declined / still open (the session ended before its turn). If the
+  offer was declined entirely, say so once and skip the per-page detail.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet), and whether the developer adjusted or declined it (both sides were applied
   via the pasted `mobileValues` — nothing separate).
