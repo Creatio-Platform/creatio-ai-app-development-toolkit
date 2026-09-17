@@ -131,7 +131,7 @@ function verifyIndex(verifyRes) {
 }
 function howVerified(vrow) {
   if (!vrow) return { how: "unknown", ok: false };
-  if (vrow.kind === "na") return { how: "na", ok: true };
+  if (vrow.kind === "na" || vrow.kind === "info") return { how: "na", ok: true };
   if (vrow.kind === "confirm") return { how: "hand", ok: false };
   if (vrow.vkType === "evidence") return { how: "judge", ok: vrow.outcome === "ok" };
   return { how: "machine", ok: vrow.outcome === "ok" };
@@ -330,7 +330,7 @@ function taskRows(t, vidx, keys) {
     if (keys.notBuilt.has(key) && r.outcomeKind === "not-built") state = "not-built";
     else if (keys.decided.has(key) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
     else if (r.outcomeKind === "n-a") state = keys.unbacked.has(key) ? "boundary" : "na";
-    else if (r.na || hv.how === "na") state = "na";
+    else if (r.na || r.info || hv.how === "na") state = "na";
     else if (!r.outcomeKind) state = "open";
     else if (hv.how === "hand") state = "hand";
     else if (hv.how === "unknown") state = "extra";

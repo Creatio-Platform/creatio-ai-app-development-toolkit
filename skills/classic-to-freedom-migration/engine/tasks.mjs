@@ -597,6 +597,7 @@ function renderFrontMatter(task, set) {
 function closedByOf(row) {
   if (row.vk) return "`--verify` (`" + row.vk + "`)";
   if (row.na) return "N/A — " + row.na;
+  if (row.info) return "informational — nothing to build or confirm; mark it `built` once its members are accounted for";
   return "an evidence record + a judge verdict";
 }
 

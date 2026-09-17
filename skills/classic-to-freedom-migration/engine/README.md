@@ -315,6 +315,13 @@ the full table is written beside the report as `plan-vs-built.md`; without it, a
 **Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound
 to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
 whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.
+**Machine rows that used to be confirm-on-stand (ENG-99126):** with `--built.pages[k].handlers` and `.viewModelConfig`
+(verbatim from get-page) the engine resolves `handler` rows (method name · folded caller · a branch on the method's
+Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
+(side profile / tab found by caption words / header, measured inside the container; a container-less payload is
+judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
+informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`
+row exists.
 
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a

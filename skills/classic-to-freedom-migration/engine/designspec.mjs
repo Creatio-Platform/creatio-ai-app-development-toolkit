@@ -2076,15 +2076,20 @@ export function renderPlan(result, opts = {}) {
 function buildLayoutGroupRows(cs, regionOf) {
   const top = (r) => { const s = String(r).split(" › ")[0]; return s === HEADER_TOP_REGION ? "Header" : s; };
   const order = [], byRegion = new Map();
-  const add = (region, label) => {
+  // ENG-99126 — the row also carries a `layout` vk (region kind, counts, widget types) so the built page's
+  // CONTAINERS answer it instead of a person. Before this every Layout row was vk-less and read "☐ confirm
+  // on-stand" while the same fields and grids stood confirmed on the page as a whole.
+  const add = (region, label, extra = {}) => {
     const k = top(region);
-    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, items: [] }); order.push(k); }
+    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, lists: 0, widgets: [], items: [] }); order.push(k); }
     const e = byRegion.get(k);
     if (label) e.items.push(label); else e.fields++;
+    if (extra.list) e.lists++;
+    if (extra.widgetType) e.widgets.push(extra.widgetType);
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
-  for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
+  for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`, { list: true });
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget), { widgetType: layoutWidgetType(w) });
   for (const w of cs.cardWidgets || []) {
     add(regionOf(w.region), `${esc(w.widgetKey)} (card widget)`);
   }
@@ -2093,8 +2098,22 @@ function buildLayoutGroupRows(cs, regionOf) {
     const parts = [];
     if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
     parts.push(...e.items);
-    return { label: `${k} — ${parts.join(" · ")}` };
+    let region = null, caption = null;
+    if (/^Side profile/.test(k)) region = "side";
+    else if (k === "Header") region = "header";
+    else if (/^Tab · /.test(k)) { region = "tab"; caption = k.replace(/^Tab · /, "").replace(/\s*\(new\)$/, "").trim(); }
+    const vk = region ? { type: "layout", region, caption, fields: e.fields, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
+    return { label: `${k} — ${parts.join(" · ")}`, ...(vk ? { vk } : {}) };
   });
+}
+// The Freedom component a Layout widget resolves to on the built page — the mapping row's `freedom` when it names
+// a component, else inferred from the widget's own name. What the `layout` vk looks for in the region.
+const LAYOUT_WIDGET_TYPE = [[/progress/i, "crt.EntityStageProgressBar"], [/feed|esn/i, "crt.Feed"], [/next steps/i, "crt.NextSteps"],
+  [/attach/i, "crt.FileList"], [/approval|visa/i, "crt.ApprovalList"], [/communication/i, "crt.CommunicationOptions"]];
+function layoutWidgetType(w) {
+  if (/^crt\./.test(String(w.freedom || ""))) return String(w.freedom).split(/\s|\(/)[0];
+  for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return t;
+  return null;
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
@@ -2656,7 +2675,9 @@ function buildCardActionRows(cs) {
     .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) {
-    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
+    // ENG-99126 — the template ships these controls under stable element names, so the row is machine-checkable.
+    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`,
+      vk: { type: "cardnative", names: natives.map((a) => a.replace(/Button$/, "")) } });
   }
   return rows;
 }
@@ -2711,6 +2732,13 @@ export function checklistGroups(result, opts = {}) {
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY)));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
+  // ENG-99126 — the Pages group carries an ungated `List page → <template>` identity row; when the list page is
+  // gated it ALSO carries the machine-checked `List template → …` row, so the first read "☐ confirm on-stand"
+  // beside a ✅ for the same fact. One fact, one row: drop the ungated twin whenever the gated one exists.
+  if (listRows.some((r) => r.vk?.type === "template")) {
+    const pages = groups.find((g) => g.title === "Pages");
+    if (pages) pages.rows = pages.rows.filter((r) => !/^List page → /.test(r.label));
+  }
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -2738,9 +2766,18 @@ export function checklistGroups(result, opts = {}) {
   const methodItems = [];
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
+  // ENG-99126 — each handler row carries a `handler` vk resolved against `--built.pages[k].handlers` (the page's
+  // handler source, verbatim from get-page). A Freedom port rarely keeps the Classic method NAME, so the vk also
+  // publishes the method's TRIGGERS (the attribute whose change ran it, the control it was bound to) and, for a
+  // helper folded under a caller, the caller's — a handler branching on that trigger is the port.
+  const stubByName = new Map((cs.handlerStubs || []).map((h) => [h.sourceMethod, h]));
+  const rootTrigger = (t) => (t?.kind === "internal" ? t.rootTrigger : t);
   for (const h of cs.handlerStubs || []) {
     const parent = foldedUnder.get(h.sourceMethod);
-    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+    const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
+    const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
+    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : ""),
+      vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } });
   }
   G("Form — Custom methods", methodItems);
   // The section dashboards are the LIST page's deliverables - the element lives on it, the migrated dashboards
@@ -2758,7 +2795,15 @@ export function checklistGroups(result, opts = {}) {
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
   G("⚠ Other declared logic worklist", (cs.needsDecision || [])
     .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
-    .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
+    // ENG-99126 — a virtual attribute is on the built page's `viewModelConfig.attributes` (`vmattr` vk); a
+    // `module-dep` row names Classic define() dependencies whose contribution lives in the handlers and rules that
+    // use them — nothing on the stand answers to it on its own, so it is informational, never a row to confirm.
+    .map((d) => {
+      const label = `[${esc(d.kind)}] ${esc(d.item)}`;
+      if (d.kind === "attribute-virtual") return { label, vk: { type: "vmattr", name: d.item } };
+      if (d.kind === "module-dep") return { label, info: "Classic define() dependencies — their contribution is carried by the handlers and rules that used them; nothing on the stand answers to this row on its own" };
+      return { label };
+    }));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
@@ -3497,6 +3542,96 @@ const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 // `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
 // stays a visible row: a boundary the reader cannot see is a boundary the next round re-litigates.
 const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan — nothing to build, nothing to check", "skip"];
+// An informational row (ENG-99126): recorded so the ledger is complete, never a thing to confirm on the stand.
+const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
+
+// ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
+const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const tokenIn = (src, name) => new RegExp(`(?<![\\w$])${reEsc(name)}(?![\\w$])`).test(src);
+// A handler branch on an attribute change: `request.attributeName === "X"` in any quoting / spacing.
+const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\`]${reEsc(attr)}["'\`]|["']attributeName["']\\s*:\\s*["']${reEsc(attr)}["']`).test(src);
+// HANDLERS. A Freedom port rarely keeps the Classic method name (measured: 2 of 10 on a real run — `setContactInfo`
+// became `reloadCommunicationOptions`, a filter method became a declarative filter). So the match is, in order: the
+// method name · the caller it was folded under · a handler BRANCH on the method's Classic trigger (the attribute
+// whose change ran it, the control it was bound to). None of them ⇒ ⚠ unverified, never MISSING: a port under
+// another name is legitimate, and the text says what to record so the row can be judged.
+export function resolveHandlerVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
+  if (ctx.handlersSrc == null) return ["⚠ verify", "handlers NOT checkable — this page entry carries no `handlers` slot; pass get-page's `bundle.handlers` verbatim so the port can be matched", "unverified"];
+  const src = ctx.handlersSrc;
+  if (tokenIn(src, vk.method)) return ["✅ Done", `a handler names \`${esc(vk.method)}\``, "ok"];
+  if (vk.parent && tokenIn(src, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler names`, "ok"];
+  for (const t of vk.triggers || []) {
+    if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
+      return ["✅ Done", `a handler branches on attribute \`${esc(t.attribute)}\` — the Classic trigger of \`${esc(vk.parent || vk.method)}\``, "ok"];
+    if (t.kind === "control" && t.element && tokenIn(src, t.element))
+      return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
+  }
+  const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
+  return ["⚠ verify", `no handler names \`${esc(vk.method)}\`${vk.parent ? ` or \`${esc(vk.parent)}\`` : ""}${trig ? ` and none branches on its trigger (${trig})` : ""} — a port under another name or as a declarative rule is legitimate: record how it was ported (a \`Check on stand\` line) so the row can be judged`, "unverified"];
+}
+export function resolveVmAttrVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the attribute cannot exist", "missing"];
+  if (!ctx.vmAttrs) return ["⚠ verify", "view-model attributes NOT checkable — this page entry carries no `viewModelConfig`; pass get-page's `bundle.viewModelConfig` verbatim", "unverified"];
+  if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
+  if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
+}
+// The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
+// "Basic information" is carried by `BasicInformationTabCaption`; words under 3 letters are noise.
+const captionWords = (c) => String(c || "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3).map((w) => w.toLowerCase());
+function tabMatches(container, caption) {
+  const hay = `${container.caption} ${container.name}`.toLowerCase();
+  const words = captionWords(caption);
+  return words.length > 0 && (hay.includes(words.join("")) || words.every((w) => hay.includes(w)));
+}
+export function resolveLayoutVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "this region of the page");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the region cannot exist", "missing"];
+  const want = [];
+  if (vk.fields) want.push(`${vk.fields} field${vk.fields === 1 ? "" : "s"}`);
+  if (vk.lists) want.push(`${vk.lists} related list${vk.lists === 1 ? "" : "s"}`);
+  for (const w of vk.widgets || []) want.push(w);
+  const judge = (c, where) => {
+    const short = [];
+    if (vk.fields && c.fields.length < vk.fields) short.push(`${c.fields.length}/${vk.fields} fields`);
+    if (vk.lists && c.lists.length < vk.lists) short.push(`${c.lists.length}/${vk.lists} related lists`);
+    for (const w of vk.widgets || []) if (!c.widgets.includes(w)) short.push(`no ${w}`);
+    if (!short.length) return ["✅ Done", `${where}: ${want.join(" · ") || "present"}`, "ok"];
+    return ["⚠ verify", `${where}: ${short.join(", ")}`, "unverified"];
+  };
+  if (vk.region === "header") return judge({ fields: [], lists: [], widgets: ctx.ops.map((o) => o.type).filter(Boolean) }, "on the built page");
+  // A payload with NO containers at all (the legacy flat `ops` shape, or a viewConfig with no container nodes)
+  // cannot place anything: measure the region against the page as a whole and say so, rather than fail every
+  // region row of a page whose fields and grids are all present.
+  if (!ctx.containers.length) {
+    const whole = collectLayout(ctx.ops.map((o) => ({ type: o.type, name: o.name })), { fields: [], lists: [], widgets: [] });
+    return judge(whole, "on the page as a whole (the payload carries no containers, so the region itself could not be located)");
+  }
+  if (vk.region === "side") {
+    const side = ctx.containers.filter((c) => /Side|Profile/i.test(c.name)).sort((a, b) => b.fields.length - a.fields.length)[0];
+    if (!side) return ["⚠ verify", "no side-profile container (`Side*` / `*Profile*`) on the built page", "unverified"];
+    return judge(side, `in \`${esc(side.name)}\``);
+  }
+  const tabs = ctx.containers.filter((c) => /Tab/.test(c.type) || /Tab/.test(c.name));
+  const size = (c) => c.fields.length + c.lists.length + c.widgets.length;
+  const tab = tabs.filter((c) => tabMatches(c, vk.caption)).sort((a, b) => size(b) - size(a))[0];
+  if (!tab) return ["⚠ verify", `no tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : ""}`, "unverified"];
+  return judge(tab, `in tab \`${esc(tab.name)}\``);
+}
+// The template's native card controls, by the element names it ships them under.
+const CARD_NATIVE_RE = { ViewOptions: /ViewOptions|CardActions|ActionButtons/i, ReloadData: /Reload/i, Tag: /Tag/i };
+export function resolveCardNativeVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the native card actions");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the card actions cannot exist", "missing"];
+  const names = ctx.ops.map((o) => String(o.name || ""));
+  const all = vk.names || [];
+  const missing = all.filter((n) => { const re = CARD_NATIVE_RE[n] || new RegExp(reEsc(n), "i"); return !names.some((x) => re.test(x)); });
+  if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
+  return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
+}
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
@@ -3510,6 +3645,10 @@ export function resolveVk(vk, ctx) {
   if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
   if (VK_CHILDPAGE.has(vk.type)) return resolveChildPageVk(vk, ctx);
   if (VK_EVIDENCE.has(vk.type)) return resolveEvidenceVk(vk, ctx);
+  if (vk.type === "handler") return resolveHandlerVk(vk, ctx);
+  if (vk.type === "vmattr") return resolveVmAttrVk(vk, ctx);
+  if (vk.type === "layout") return resolveLayoutVk(vk, ctx);
+  if (vk.type === "cardnative") return resolveCardNativeVk(vk, ctx);
   return unknownVk();
 }
 
@@ -3637,12 +3776,47 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
 // records are run-level, not page-level). `parentTpl` has NO plan fallback — reading the PLANNED template here
 // let `dcm-bar` show ✅ Done off a template nobody built while the `template` row went ⚠ on the same input.
+// ENG-99126 — the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
+// what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
+// matched loosely by the caption words the plan published.
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
+const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
+function collectLayout(node, acc) {
+  if (Array.isArray(node)) { for (const n of node) collectLayout(n, acc); return acc; }
+  if (!node || typeof node !== "object") return acc;
+  const t = String(node.type || "");
+  if (LAYOUT_FIELD_RE.test(t)) acc.fields.push(node.name);
+  else if (t === "crt.DataGrid") acc.lists.push(node.name);
+  else if (LAYOUT_WIDGETS.has(t)) acc.widgets.push(t);
+  return collectLayout(node.items, acc);
+}
+function pageContainersOf(entry) {
+  const e = entryObject(entry);
+  const out = [];
+  if (!e || e.viewConfig == null) return out;
+  const walk = (node) => {
+    if (Array.isArray(node)) { for (const n of node) walk(n); return; }
+    if (!node || typeof node !== "object") return;
+    if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
+      out.push({ name: String(node.name), type: String(node.type || ""), caption: String(node.caption ?? ""), ...collectLayout(node.items, { fields: [], lists: [], widgets: [] }) });
+    }
+    walk(node.items);
+  };
+  walk(e.viewConfig);
+  return out;
+}
 export function verifyCtx(root, pageKey) {
   const page = pageEntryOf(root, pageKey);
   const ops = pageOpsOf(page);
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
+  const entry = entryObject(page);
+  // `handlers` is get-page's `bundle.handlers` — the page's handler SOURCE, a string (a parsed array is accepted
+  // too); `vmAttrs` are `bundle.viewModelConfig.attributes` keys. Both OPTIONAL: absent ⇒ that row is not checkable.
+  const handlersSrc = entry?.handlers == null ? null : (typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers));
+  const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
   return {
-    pageKey, page, root, ops, typeCount,
+    pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
+    containers: pageContainersOf(page),
     // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
     // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
     gridColumns: pageGridColumnsOf(page),
@@ -3740,7 +3914,7 @@ export function renderVerify(result, opts = {}, built = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome, owner] = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
+      const [mark, ev, outcome, owner] = r.na ? naRow(r) : (r.info ? infoRow(r) : resolveVk(r.vk, ctxFor(key)));
       // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
       // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
       // one text, not a paraphrase of it.
@@ -3751,7 +3925,7 @@ export function renderVerify(result, opts = {}, built = {}) {
         owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
       // `kind` tells the four row kinds apart where `outcome` alone cannot: an approved boundary and a
       // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
-      const kind = r.na ? "na" : (r.vk ? "machine" : "confirm");
+      const kind = r.na ? "na" : (r.info ? "info" : (r.vk ? "machine" : "confirm"));
       rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
         vkType: r.vk?.type || null, owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
