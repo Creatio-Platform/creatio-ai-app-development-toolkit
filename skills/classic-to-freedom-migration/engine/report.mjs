@@ -223,8 +223,7 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
   if (decidedNotBuilt.length) L.push(`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`);
   const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
   L.push(`| Boundaries the agent closed | ${boundaries.length}${boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : ""} |`);
-  L.push(`| Plan items confirmed on the built page | ${rc.machineOk}/${rc.machine} |`);
-  L.push(`| Plan items confirmed by review (evidence record + independent reviewer) | ${rc.judgeOk}/${rc.judge} |`);
+  L.push(`| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`);
   L.push(`| Plan items to confirm manually | ${handLeft} |`);
   if (repair) {
     const parts = [];
@@ -342,11 +341,11 @@ const num = (secNo, title) => `## ${secNo}. ${title}`;
 
 function tasksSection(tasks, perTask, pageName, secNo) {
   const L = [num(secNo, `Tasks (${tasks.length})`), "",
-    "One row per task file. `Status` is computed from the task's own `Outcome` cells. The three confirmation columns"
-    + " count the task's plan items by WHO confirmed them: on the built page — the engine read the page through get-page and found the item;"
-    + " by review — the build agent filed an evidence record and a separate reviewer found it convincing; manually — nobody yet, a person has to open the page.", "",
-    "| Step | Task | Page | Status | Confirmed on the built page | Confirmed by review | To confirm manually | Not built |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |"];
+    "One row per task file. `Status` is computed from the task's own `Outcome` cells. The two confirmation columns"
+    + " count the task's plan items: **Confirmed** — the engine found the item on the built page (read through get-page), or the build"
+    + " agent's evidence record was found convincing by a separate reviewer; **To confirm manually** — nobody yet, a person has to open the page.", "",
+    "| Step | Task | Page | Status | Confirmed | To confirm manually | Not built |",
+    "| --- | --- | --- | --- | --- | --- | --- |"];
   tasks.forEach((t, i) => {
     const rows = perTask.get(t.id) || [];
     const count = (pred) => rows.filter(pred).length;
@@ -361,7 +360,7 @@ function tasksSection(tasks, perTask, pageName, secNo) {
     const dec = rows.filter((r) => r.state === "decided").map((r) => `${r.label} *(by decision)*`);
     const mark = t.unread ? "⚠ unread" : statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued");
     const handCell = hand ? `${hand}${extra ? ` (+${extra} not in the plan)` : ""}` : (extra ? `(${extra} not in the plan)` : "—");
-    L.push(`| ${i + 1} | [${cell(t.group || t.title || t.id)}](${t.file}) | ${pageName(t.pageKey)} | ${mark} | ${machine ? `${machineOk}/${machine}` : "—"} | ${judge ? `${judgeOk}/${judge}` : "—"} | ${handCell} | ${[...nb, ...dec].join("<br>") || "—"} |`);
+    L.push(`| ${i + 1} | [${cell(t.group || t.title || t.id)}](${t.file}) | ${pageName(t.pageKey)} | ${mark} | ${machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—"} | ${handCell} | ${[...nb, ...dec].join("<br>") || "—"} |`);
   });
   return L;
 }

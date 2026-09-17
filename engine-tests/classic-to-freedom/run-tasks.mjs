@@ -3467,16 +3467,16 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       return /## 1\. Needs a decision \(1\)/.test(s1) && s1.includes(victim.rows[rowN - 1].label)
         && /did not state the question/.test(s1) && s1.includes(`](${victim.file}), row ${rowN}`); },
     () => out.slice(out.indexOf("## 1."), out.indexOf("## 2.")));
-  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed on the built page / Confirmed by review / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
+  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
     () => { const s4 = out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/));
       const line = s4.split("\n").find((l) => l.includes(`](${victim.file})`)) || "";
-      return /\| Step \| Task \| Page \| Status \| Confirmed on the built page \| Confirmed by review \| To confirm manually \| Not built \|/.test(s4)
+      return /\| Step \| Task \| Page \| Status \| Confirmed \| To confirm manually \| Not built \|/.test(s4)
         && /◐ partial/.test(line) && line.includes(victim.rows[rowN - 1].label) && /needs a decision/.test(line)
         && !/Dispatch/i.test(s4) && !/Reference cache/.test(s4) && /Form page|Child page|List page|Whole run/.test(line) && !/\| `?(main|run)`? \|/.test(line); },
     () => out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/)).split("\n").slice(0, 8));
-  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, machine and evidence+judge verification, by-hand remainder — and nothing about dispatch",
+  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, one confirmed count, the manual remainder — and nothing about dispatch",
     () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ queued \d+)? \|/.test(out) && /\| Open questions \(plan items recorded NOT BUILT, no decision yet\) \| 1 \|/.test(out)
-      && /\| Plan items confirmed on the built page \| \d+\/\d+ \|/.test(out) && /\| Plan items confirmed by review \(evidence record \+ independent reviewer\) \| \d+\/\d+ \|/.test(out)
+      && /\| Plan items confirmed \(on the built page, or by review\) \| \d+\/\d+ \|/.test(out)
       && /\| Plan items to confirm manually \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
   check("ENG-99126 CLI: with `--out`, the full plan-vs-built table is written to `plan-vs-built.md` beside the report and the report LINKS it instead of carrying it",
