@@ -132,7 +132,7 @@ Append-only, chronological. One entry per working session.
 Engine-written, and not documentation: it is how the orchestrator schedules work and how a killed session resumes.
 - **A task file is the record of that task** — the `Outcome` column of its `## Deliverables` table and its `## Notes` are written by the sub-agent that did the work, never transcribed by the orchestrator.
 - `index.md` is derived. Never hand-author a task list, a status table or a progress summary beside it.
-- `status` is derived too: the engine computes `done` / `partial` from the Outcome cells and overwrites the front matter. Only `blocked` and `n/a` are set by hand. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks`, and it computes `done` when they close.
+- `status` is derived too: the engine computes `done` / `partial` from the Outcome cells and overwrites the front matter. Only `blocked` and `n/a` are set by hand. A `partial` task's unbuilt rows are re-filed as repair tasks by the next `--verify --tasks` or `--tasks --route`, and each row computes `done` when the repair round covering it records it built. A repair task is no exception — it carries an `Outcome` column and its status is computed from it like any other task's.
 - Do not hand-edit an engine task file's `## Deliverables` table apart from that `Outcome` column; the engine rewrites the rest from the plan on every re-slice.
 - What a task must do, and the statuses it may record, are in `references/build-task-execution.md`; the folder's own modes and gates are SKILL.md step 7.
 

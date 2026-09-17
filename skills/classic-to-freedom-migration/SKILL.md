@@ -554,10 +554,16 @@ they write, so the queue sequences them behind that page's build rather than bes
 - **Merged by (page, cause).** Sixteen handlers missing from one page is ONE task, not sixteen: a defect with
   many symptoms is one defect, and sixteen tasks is sixteen sub-agent startups to make one edit each. A merged
   task that outgrows the budget is cut like any other.
+- **A repair task CLOSES like any other task** — its sub-agent fills the `Outcome` cell of every row and the
+  engine computes the status from those cells. Every row accounted for reads `done` and closes the rows this
+  round covers in the tasks they came from; a round that fixed some of them reads `partial`, and those rows alone
+  go to the next round. A round nobody dispatched closes nothing, whatever its cells say.
 - **A round is an ATTEMPT, not a verify run.** Re-verifying an unchanged page opens no second round — the rows
   are still the work of the round already in the folder. A new round opens only after the previous one was closed
   and the rows came back.
-- **Three rounds, then PARKED.** After three attempts at one cause the engine writes no fourth task and says so.
+- **Three rounds, then PARKED.** After three attempts at one KIND of row on one page the engine writes no fourth
+  task and says so. The cap counts the kind, not the cause: a row `--verify` could not confirm comes back from
+  the round that failed to fix it recorded as not built, and counting those separately is three more agents.
   Take it to the user: at that point the plan, the stand or the expectation is wrong, not the build. Do not
   hand-write a fourth task to get around this.
 - **What is YOURS in repair** is only what no sub-agent can do: proposing a PLAN change (to the user, recorded in

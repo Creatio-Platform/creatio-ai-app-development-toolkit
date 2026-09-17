@@ -559,6 +559,8 @@ const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order"
 // its bucket closed credits rows nobody looked at. The labels are hashed rather than written out: they are
 // customer captions, up to a paragraph long, and the front matter is read by a person.
 const REPAIR_KEYS = ["kind", "cause", "repairRound", "covers"];
+// ⚠ THE LABEL ALONE, with no occurrence suffix — unlike `rowKeys`, which appends `::n`. Two rows of one task that
+// carry identical `Deliverable` text are ONE key here: they are routed once and they close together.
 const coverKey = (label) => shortHash(String(label || "").trim().toLowerCase().replace(/\s+/g, " "));
 
 function renderFrontMatter(task, set) {
@@ -605,9 +607,12 @@ function renderRowTable(rows, repair = false) {
   // sent to fix a row needs what was actually observed; re-describing it in the engine's own words is how a repair
   // round gets spent on a row that was never the problem. The source is `--verify` for a machine-checked row and
   // the build agent's own Outcome cell for a `not-built` one, so the heading names neither.
+  // The `Outcome` column is the agent's here too: one status word over N rows cannot say which of them the round
+  // fixed, and the rows are what the next round and the routed task read.
   if (repair) {
-    const L = ["| # | Deliverable | What was recorded | Evidence behind it |", "| --- | --- | --- | --- |"];
-    rows.forEach((r, i) => L.push(`| ${i + 1} | ${r.label} | ${r.status || "—"} | ${r.evidence || "—"} |`));
+    const L = ["| # | Deliverable | What was recorded | Evidence behind it | Outcome |",
+      "| --- | --- | --- | --- | --- |"];
+    rows.forEach((r, i) => L.push(`| ${i + 1} | ${cell(r.label)} | ${cell(r.status) || "—"} | ${cell(r.evidence) || "—"} | ${cell(r.outcome) || "—"} |`));
     return L;
   }
   // The Outcome cell is the agent's and is carried across a re-slice; every other cell in the row is the plan's.
@@ -662,7 +667,24 @@ function oneAgentBlock(task) {
 
 // How a task closes, in the file the sub-agent is handed. The status word is deliberately absent: one word over
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
-function outcomeBlock() {
+// A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
+// with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
+function outcomeBlock(repair = false) {
+  if (repair) {
+    return [
+      "- **How you close this task:** fill the `Outcome` cell of EVERY row below, exactly as a build task does."
+        + " Do **not** set `status:` — the engine computes it from those cells. The two exceptions are `blocked`"
+        + " and `n/a`: those you DO write, and the engine never computes over them.",
+      `  - \`${O_BUILT}\` — the row is on the stand now.`,
+      `  - \`${O_NOT_BUILT} — <cause>\`, cause being one of ${NOT_BUILT_CAUSES.map((c) => "`" + c + "`").join(" · ")}`
+        + " — you could not fix it. Say what it is waiting on under `## Notes`, against the row number.",
+      `  - \`${O_NA} — <reason>\` — an approved boundary, and the reason says who approved it. It is not yours to`
+        + " assert: a row open because the PLAN is wrong is a proposal under `## Notes`, not a row you close here.",
+      "- **A row you fix is `built`, a row you cannot is `not-built`, and a cell left `—` is neither.** Every row"
+        + " accounted for computes `done` and closes the rows this round covers in the task they came from; any row"
+        + " left `not-built` or unaccounted computes `partial`, and those rows alone go to the next repair round.",
+    ];
+  }
   return [
     "- **How you close this task:** fill the `Outcome` cell of EVERY row below. Do **not** set `status:` — the"
       + " engine computes it from those cells and overwrites whatever the front matter says. The two exceptions"
@@ -687,7 +709,6 @@ function outcomeBlock() {
 
 export function renderTaskFile(task, set = {}) {
   const naNote = task.naRows ? `, ${task.naRows} N/A` : "";
-  const statusVocabulary = TASK_STATUSES.map((s) => `\`${s}\``).join(" · ");
   const body = [
     ...renderFrontMatter(task, set),
     "",
@@ -712,9 +733,7 @@ export function renderTaskFile(task, set = {}) {
     `- **Page key:** \`${task.pageKey}\``,
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
-    ...(task.kind === REPAIR_KIND
-      ? [`- **Status vocabulary:** ${statusVocabulary} — set \`status\` in the front matter above`]
-      : outcomeBlock()),
+    ...outcomeBlock(task.kind === REPAIR_KIND),
     ...oneAgentBlock(task),
     "",
     ENGINE_BODY_HEADING,
@@ -778,6 +797,29 @@ function outcomesOf(bodyLines) {
   return out;
 }
 
+// Split a rendered table line on UNESCAPED pipes only, so a `\|` inside a caption stays part of its cell instead
+// of shifting every index after it.
+const tableCells = (line) => line.split(/(?<!\\)\|/);
+
+// WHICH COLUMN IS WHICH, read off the header the engine wrote rather than assumed. Two table shapes carry an
+// `Outcome` column and put the deliverable in different places — `| # | From | Deliverable | Closed by | Outcome |`
+// for a plan task, `| # | Deliverable | What was recorded | Evidence behind it | Outcome |` for a repair one — and
+// reading a repair row at the plan's positions files the outcome under the wrong deliverable.
+// A header with NO `Outcome` column yields no marks at all, and the file stands on its recorded status.
+// NO header at all falls back to the PLAN positions: on a plan table they keep the agent's cells, on a repair
+// table they land on the wrong column so nothing parses as a mark and that file stands on its recorded status
+// too. Neither shape reads a mark out of the wrong cell.
+const PLAN_LABEL_COL = 3, PLAN_OUTCOME_COL = 5;
+function headerColumns(lines) {
+  for (const line of lines) {
+    const cells = tableCells(line);
+    if (cells.length < 3 || cells[1].trim() !== "#") continue;
+    const at = (name) => cells.findIndex((c, i) => i > 1 && c.trim().toLowerCase() === name);
+    return { label: at("deliverable"), outcome: at("outcome") };
+  }
+  return { label: PLAN_LABEL_COL, outcome: PLAN_OUTCOME_COL };
+}
+
 // The rendered table read back in ORDER, so the read-only path (`--verify`) sees the same rows and numbers the
 // sub-agent saw and can name the unbuilt deliverable.
 function tableRows(bodyLines) {
@@ -789,18 +831,20 @@ function tableRows(bodyLines) {
   if (from < 0) return out;
   const rest = bodyLines.slice(from + 1);
   const to = rest.findIndex((l) => l.trim() === NOTES_HEADING);
-  for (const line of (to < 0 ? rest : rest.slice(0, to))) {
-    // `| n | From | Deliverable | Closed by | Outcome |` — five cells, the first a bare ordinal. Split on
-    // UNESCAPED pipes only, so a `\|` inside a caption stays part of its cell instead of shifting every index.
-    const cells = line.split(/(?<!\\)\|/);
-    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) continue;
+  const lines = to < 0 ? rest : rest.slice(0, to);
+  const col = headerColumns(lines);
+  if (col.label < 0 || col.outcome < 0) return out;
+  for (const line of lines) {
+    // Five cells, the first a bare ordinal.
+    const cells = tableCells(line);
+    if (cells.length <= col.outcome + 1 || !/^\s*\d+\s*$/.test(cells[1])) continue;
     // THE OUTCOME IS THE LAST COLUMN AND THE ONE THE AGENT HAND-TYPES. Escaping it on write does not help a cell
-    // already in the file with a raw `|` in its reason, and reading `cells[5]` alone truncates the reason there
-    // while the row still parses as a validly-reasoned mark. Everything from column 5 up to the trailing empty
-    // cell IS the outcome, so rejoining puts a typed pipe back; `uncell` undoes the escaping the engine writes on
-    // its own re-render.
-    const outcome = cells.slice(5, -1).join("|");
-    out.push({ label: uncell(cells[3].trim()), mark: parseOutcome(uncell(outcome.trim())) });
+    // already in the file with a raw `|` in its reason, and reading the outcome cell alone truncates the reason
+    // there while the row still parses as a validly-reasoned mark. Everything from that column up to the trailing
+    // empty cell IS the outcome, so rejoining puts a typed pipe back; `uncell` undoes the escaping the engine
+    // writes on its own re-render.
+    const outcome = cells.slice(col.outcome, -1).join("|");
+    out.push({ label: uncell(cells[col.label].trim()), mark: parseOutcome(uncell(outcome.trim())) });
   }
   return out;
 }
@@ -1097,16 +1141,33 @@ export function notBuiltRows(tasks) {
 // The residual of a `partial` task is ordinary repair work, so it goes through the SAME machinery a `--verify`
 // miss does — grouped by (page, cause), merged into one task per cause, capped at `REPAIR_ROUND_CAP` rounds and
 // parked after them. Shaped as `renderVerify`'s `pages` map because that is what `buildRepairTasks` reads.
+// ONE ENTRY PER DELIVERABLE, whatever recorded it. A row is open work in the round that failed it AND in the task
+// it came from, whose cell keeps reading `not-built` for as long as it stands. The LATEST round to have recorded
+// it wins — that is the evidence the next agent reads; the task it came from is round 0.
+function latestPerDeliverable(items) {
+  const best = new Map();
+  for (const it of items) {
+    const k = `${it.task.pageKey} ${coverKey(it.row.label)}`;
+    const round = it.task.repairRound || 0;
+    if (best.has(k) && best.get(k).round >= round) continue;
+    best.set(k, { round, it });
+  }
+  return [...best.values()].map((x) => x.it);
+}
+
 export function notBuiltOpenRows(tasks) {
+  // A ROW A ROUND HAS ALREADY SETTLED IS NOT ROUTED AGAIN: it is on the stand, and a new round's `open` mark
+  // would overrule the closure that settled it.
+  const items = latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
   const pages = {};
-  for (const it of notBuiltRows(tasks)) {
+  for (const it of items) {
     const key = it.task.pageKey;
     if (!pages[key]) pages[key] = { openRows: [] };
     pages[key].openRows.push({
       deliverable: it.row.label,
       outcome: O_NOT_BUILT,
-      // What the BUILD agent wrote in the Outcome cell, verbatim, and where it wrote it. A blank cell is a row
-      // the task closed without accounting for, which the repair round has to be told rather than left to infer.
+      // What the agent wrote in the Outcome cell, verbatim, and where it wrote it. A blank cell is a row the task
+      // closed without accounting for, which the repair round has to be told rather than left to infer.
       status: it.row.outcome || "left blank — the task closed without accounting for this row",
       evidence: `recorded on ${it.task.file}, row ${it.n}`,
     });
@@ -1114,11 +1175,22 @@ export function notBuiltOpenRows(tasks) {
   return pages;
 }
 
-const mergePages = (a = {}, b = {}) => {
+// The two legs, deduped on the same key: both can hold one deliverable — the agent recorded it not built AND
+// `--verify` could not find it — and a round's table carries it once.
+// THE RESIDUAL WINS. The build agent's record names a CAUSE and points at its `## Notes`; the verifier's says only
+// that nothing is on the stand, which a row nobody built implies anyway. It also decides the lineage sentence the
+// repair file opens with, and a row somebody tried and stopped at calls for a different first move than one the
+// verifier could not find. Taken as named legs rather than argument order, which is not a place to put a rule.
+const mergePages = ({ residual = {}, verified = {} }) => {
   const out = {};
-  for (const [k, v] of [...Object.entries(a), ...Object.entries(b)]) {
+  for (const [k, v] of [...Object.entries(residual), ...Object.entries(verified)]) {
     if (!out[k]) out[k] = { ...v, openRows: [] };
-    out[k].openRows = [...out[k].openRows, ...(v.openRows || [])];
+    const seen = new Set(out[k].openRows.map((r) => coverKey(r.deliverable)));
+    for (const row of v.openRows || []) {
+      if (seen.has(coverKey(row.deliverable))) continue;
+      seen.add(coverKey(row.deliverable));
+      out[k].openRows.push(row);
+    }
   }
   return out;
 };
@@ -1134,33 +1206,65 @@ const mergePages = (a = {}, b = {}) => {
 // Which rows the repair tasks in this set have OPEN work against, and which they have closed. Keyed per ROW off
 // `covers`: keying on the cause would credit every row that ever lands in that bucket to the first task that
 // closed there — including rows recorded after it ran, which nobody has looked at.
+// A row this round ACCOUNTED FOR: built, or an approved boundary with the reason that earns it. `parseOutcome`
+// has already turned a reasonless `n-a` into `not-built`, so there is no self-certified skip to filter here.
+const ROW_SETTLED = new Set([O_BUILT, O_NA]);
+
 function repairCoverage(tasks) {
-  const open = new Set(), closed = new Set();
+  // THE LATEST ROUND TO SPEAK ABOUT A ROW IS THE AUTHORITY. A round that could not fix a row keeps `not-built` in
+  // its own cell after the NEXT round fixes it, so an earlier open mark never overrules a later closure. At equal
+  // rounds `open` wins: two rounds of one number are concurrent work, and the row is not finished while either
+  // still has it.
+  const latest = new Map();
+  const say = (key, round, state) => {
+    const prev = latest.get(key);
+    if (prev && (prev.round > round || (prev.round === round && prev.state === "open"))) return;
+    latest.set(key, { round, state });
+  };
   for (const t of tasks || []) {
     if (t.kind !== REPAIR_KIND) continue;
+    // A `blocked` round is NEITHER open nor closed. The round ran and said why it could not proceed, and the
+    // existing machinery deliberately does not auto-reopen one — so nothing is scheduled against that row any
+    // more, and counting it as open work would let the run pass over a deliverable a second agent has now also
+    // failed to build.
+    if (t.status === S_BLOCKED) continue;
     // A CLOSURE ONLY COUNTS IF SOMEBODY WAS DISPATCHED FOR IT. A repair file is exempt from the dispatch gate
     // (`adoptOrchestrated` rewrites its origin), and `--verify` re-measures the page, so that exemption costs the
     // machine-checked lineage nothing. A `not-built` row is re-measured by nobody: its ONLY evidence is the repair
-    // task's status, so without this the whole gate clears by typing `done` into the file one over.
-    if (CLOSED.has(t.status) && t.dispatched !== "yes") continue;
-    // A `blocked` round is NEITHER. The round ran and said why it could not proceed, and the existing machinery
-    // deliberately does not auto-reopen one — so nothing is scheduled against that row any more, and counting it
-    // as open work would let the run pass over a deliverable a second agent has now also failed to build.
-    if (t.status === S_BLOCKED) continue;
-    const into = CLOSED.has(t.status) ? closed : open;
-    for (const c of t.covers || []) into.add(`${t.pageKey} ${c}`);
+    // task's own record, so without this the whole gate clears by typing into the file one over.
+    const credits = t.dispatched === "yes";
+    if (CLOSED.has(t.status) && !credits) continue;
+    const round = t.repairRound || 1;
+    // NOTHING RECORDED IN THE CELLS AT ALL means the status word is the only account there is — a file carrying
+    // no `Outcome` column, or one whose agent filled none of it — and the round is read WHOLE off that word. The
+    // same guard `computeStatus` applies, so the two cannot disagree about which record they are reading.
+    const whole = !(t.rows || []).some((r) => r.outcome);
+    // NOT-BUILT WINS WITHIN A ROUND, and an unaccounted cell with it. `coverKey` hashes the label alone — no `::n`
+    // disambiguation, unlike `rowKeys` — so two rows of one table can share a key, and a `built` cell must not
+    // close the deliverable its twin recorded.
+    const settled = new Set(), unsettled = new Set();
+    if (!whole) {
+      for (const r of t.rows) {
+        (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${t.pageKey} ${coverKey(r.label)}`);
+      }
+    }
+    // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
+    for (const c of t.covers || []) {
+      const k = `${t.pageKey} ${c}`;
+      const done = whole ? CLOSED.has(t.status) : (credits && settled.has(k) && !unsettled.has(k));
+      say(k, round, done ? "closed" : "open");
+    }
   }
-  // An OPEN round wins over a closed earlier one: the row came back, so it is somebody's work again.
-  return (key) => {
-    if (open.has(key)) return "open";
-    return closed.has(key) ? "closed" : null;
-  };
+  return (key) => latest.get(key)?.state || null;
 }
 
 function resolvePartials(set) {
   const residualOf = repairCoverage(set.tasks);
   for (const t of set.tasks || []) {
-    if (t.status !== S_PARTIAL || t.unread || t.kind === REPAIR_KIND) continue;
+    // A REPAIR round is resolved too: its unfixed rows open the NEXT round, and its own cells keep reading
+    // `not-built` after that round fixes them, so it closes on its residual like any other task.
+    // `REPAIR_ROUND_CAP` bounds the chain; a row it never reaches is PARKED and goes to the user.
+    if (t.status !== S_PARTIAL || t.unread) continue;
     let residuals = 0, settled = 0;
     for (const r of t.rows || []) {
       if (r.outcomeKind !== O_NOT_BUILT && r.outcome) continue;
@@ -1187,7 +1291,9 @@ function whyNotBuilt(cause) {
 }
 
 function notBuiltLines(tasks) {
-  const items = notBuiltRows(tasks);
+  // Deduped on the same rule the routing uses, so the count the user reads is a count of DELIVERABLES and the
+  // file named beside each one is the round that last held it.
+  const items = latestPerDeliverable(notBuiltRows(tasks));
   if (!items.length) return [];
   const L = [`⚠ NOT BUILT — ${items.length} deliverable(s) across ${new Set(items.map((x) => x.task.id)).size} task(s):`];
   for (const it of items) {
@@ -1361,7 +1467,10 @@ function computeStatus(task, recorded, outcomes) {
   // `blocked` is the only halt an agent can reach (`build-task-execution.md` rule 5). It must keep halting:
   // `partial` releases dependents, so computing it over `blocked` would walk the queue past a deliberate stop.
   if (recorded === S_NA || recorded === S_BLOCKED) return recorded;
-  if (task.origin !== TASK_ORIGIN_ENGINE || task.kind === REPAIR_KIND) return recorded;
+  // A REPAIR task is computed like any other: the engine wrote its table, so the cells mean what they mean
+  // everywhere else. Only a HAND-WRITTEN orchestrator task stands on its recorded word — the engine never
+  // authored that body and cannot say what its cells are.
+  if (task.kind !== REPAIR_KIND && task.origin !== TASK_ORIGIN_ENGINE) return recorded;
   const rows = task.rows || [];
   if (!rows.length || !outcomes?.size) return recorded;
   const keys = rowKeys(rows.map((r) => r.label));
@@ -1408,16 +1517,32 @@ function carryOver(task, prev) {
   };
 }
 
+// The parsed table as task rows. Same shape `readTaskDir` builds, and the shape `computeStatus`, `notBuiltRows`
+// and `assertedBoundaryRows` all read.
+const rowsFromTable = (table) => (table || []).map((r) => ({
+  label: r.label, group: "", vk: null, na: null,
+  outcome: r.mark?.text || "", outcomeKind: r.mark?.outcome || null, outcomeCause: r.mark?.cause || null,
+  outcomeReason: r.mark?.reason || "", naNoReason: !!r.mark?.naNoReason,
+}));
+
 // An orchestrator task is read, not authored: the engine keeps its file and its status and only places it in the
 // order. `order` may be absent or unparseable, so it sorts after every engine task rather than at the front.
 function adoptOrchestrated(e) {
   const n = Number(e.meta.order);
   const label = e.meta.group || "(orchestrator task)";
+  // A REPAIR file's body IS the engine's, so its rows are read and its status computed from them. A hand-written
+  // orchestrator file is adopted on its recorded word alone. The discriminator is `kind:` in the front matter,
+  // which a caller can type — SKILL.md forbids hand-writing a repair file, and the dispatch gate still refuses to
+  // credit the rows of one nobody was sent out for.
+  const repair = e.meta.kind === REPAIR_KIND;
+  const rows = repair ? rowsFromTable(e.table) : [];
+  const recorded = e.meta.status || S_TODO;
   return {
     id: e.meta.id, pageKey: e.meta.pageKey || "?", group: label, title: label,
     order: Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER,
-    phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR, status: e.meta.status || S_TODO,
-    rows: [], gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
+    phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR,
+    status: repair ? computeStatus({ origin: TASK_ORIGIN_ENGINE, kind: REPAIR_KIND, rows }, recorded, e.outcomes) : recorded,
+    rows, gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
     // The engine does not own this body, so `rows` stays empty — but the index still has to say how many
     // deliverables the file lists. Null when the file carries no readable table: the index shows `—` for that,
     // never `0`.
@@ -1429,8 +1554,8 @@ function adoptOrchestrated(e) {
     kind: e.meta.kind || null,
     cause: e.meta.cause || null,
     repairRound: Number(e.meta.repairRound) || null,
-    // A repair file renders a four-column table, which `tableRows` (seven cells, plan shape) reads as no rows at
-    // all — so `rows` is empty here and the covered labels have to come off the front matter.
+    // The AUTHORITATIVE list of rows this round was opened over, kept even though the table is now read: a row
+    // deleted from the body would otherwise stop being open work, and deleting it is not building it.
     covers: (e.meta.covers || "").split(/\s+/).filter(Boolean),
     artifact: e.meta.writesTo || `orchestrator:${e.meta.id}`,
     writesTo: e.meta.writesTo || "",
@@ -1531,6 +1656,13 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
 export const REPAIR_ROUND_CAP = 3;
 const REPAIR_KIND = "repair";
 
+// WHAT THE CAP COUNTS, which is not what the cause SAYS. A cause carries WHY a row is open as well as what kind
+// of row it is, and the why moves between rounds: a row `--verify` could not confirm (`unverified:…`) comes back
+// from the round that failed it recorded as `not-built:…`. Keyed on the whole cause that is a fresh bucket at
+// round 1 and the cap never fires. The KIND is what holds, so the cap and the one-round-at-a-time rule are per
+// (page, kind); the cause on the file still says where this round's rows came from.
+const capKey = (pageKey, cause) => `${pageKey} ${String(cause || "").split(":").pop()}`;
+
 // The CAUSE is what a single sub-agent can fix in one pass. `unverified` is separated from `missing` first,
 // because they need opposite work: `missing` is a thing to build, `unverified` is a record to file about a thing
 // that may well be there. Beyond that the kind is read off the same row shapes the weights use.
@@ -1583,10 +1715,14 @@ function repairRounds(existing) {
   const rounds = new Map();
   for (const e of existing) {
     if (e.meta?.kind !== REPAIR_KIND) continue;
-    const key = `${e.meta.pageKey} ${e.meta.cause || ""}`;
+    const key = capKey(e.meta.pageKey, e.meta.cause);
     const n = Number(e.meta.repairRound) || 1;
     const prev = rounds.get(key);
-    if (!prev || n >= prev.round) rounds.set(key, { round: n, status: e.meta.status || S_TODO });
+    // COMPUTED, not read off the front matter: a round is closed by its `Outcome` cells, so a file whose agent
+    // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
+    const status = computeStatus({ origin: TASK_ORIGIN_ENGINE, kind: REPAIR_KIND, rows: rowsFromTable(e.table) },
+      e.meta.status || S_TODO, e.outcomes);
+    if (!prev || n >= prev.round) rounds.set(key, { round: n, status });
   }
   return rounds;
 }
@@ -1626,7 +1762,7 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       byCause.get(cause).push(row);
     }
     for (const [cause, rows] of byCause) {
-      const next = nextRound(rounds.get(`${pageKey} ${cause}`));
+      const next = nextRound(rounds.get(capKey(pageKey, cause)));
       if (next.hold === "pending") {
         pending.push({ pageKey, cause, rows: rows.length, round: next.round, status: next.status });
         continue;
@@ -1702,7 +1838,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // one round cap for both kinds of open row. Read off the merged set because the Outcome cells live in the
   // files, and a task is only `partial` once those cells have been parsed back.
   const residual = notBuiltOpenRows(resolvePartials(attachDispatch(mergeTaskSet(fresh, existing), dir)).tasks);
-  const { tasks, parked, pending } = buildRepairTasks(result, mergePages(verifyPages, residual), opts, existing);
+  const { tasks, parked, pending } = buildRepairTasks(result, mergePages({ residual, verified: verifyPages }), opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
   fs.mkdirSync(dir, { recursive: true });
   const written = [];
@@ -2003,11 +2139,7 @@ export function readTaskDir(dir) {
     .filter((e) => !e.malformed && e.meta?.id)
     .map((e) => {
       const origin = TASK_ORIGINS.includes(e.meta.origin) ? e.meta.origin : TASK_ORIGIN_ENGINE;
-      const rows = (e.table || []).map((r) => ({
-        label: r.label, outcome: r.mark?.text || "",
-        outcomeKind: r.mark?.outcome || null, outcomeCause: r.mark?.cause || null,
-        outcomeReason: r.mark?.reason || "", naNoReason: !!r.mark?.naNoReason,
-      }));
+      const rows = rowsFromTable(e.table);
       const recorded = e.meta.status || S_TODO;
       // Re-computed off the file's own cells. `--tasks` writes the computed value into the front matter; a status
       // edited by hand afterwards must not turn a `partial` back into a `done`.
@@ -2112,7 +2244,12 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   for (const t of merged.tasks) {
     // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
-    if (t.origin === TASK_ORIGIN_ORCHESTRATOR || untouchable.has(t.file) || t.unread) continue;
+    if (untouchable.has(t.file) || t.unread) continue;
+    // A REPAIR FILE IS THE RECORD OF ITS ROUND and is never re-authored — its rows are one verify run's, not the
+    // plan's. Its `status` is computed from the cells, so that ONE line is written back: the file is what a
+    // resumed orchestrator reads, and it must not disagree with the index, the progress block and the gate.
+    if (t.kind === REPAIR_KIND) { setFrontMatterStatus(dir, t.file, t.status); continue; }
+    if (t.origin === TASK_ORIGIN_ORCHESTRATOR) continue;
     fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
