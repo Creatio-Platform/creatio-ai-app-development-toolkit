@@ -3753,7 +3753,7 @@ export function renderVerify(result, opts = {}, built = {}) {
       // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
       const kind = r.na ? "na" : (r.vk ? "machine" : "confirm");
       rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
-        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
+        vkType: r.vk?.type || null, owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }

@@ -618,14 +618,19 @@ partial and three handlers recorded not built, and the table was what the user w
 
 **On an orchestrated run the final gate is the MIGRATION RESULT REPORT, and the command that writes it is:**
 `node engine/migrate.mjs <manifest> --verify --built <built-file> --tasks <migration-folder>/build-tasks --out <migration-folder>/migration-result.md`.
-With `--tasks` the engine prints ONE report computed from the task ledger AND the built pages — verdict first
-(`✅ COMPLETE` / `⛔ NOT COMPLETE — <every reason>`), then a summary, then in the order a person acts on them:
-**1.** deliverables recorded not built (needs a decision / blocked, with the task file and row), **2.** boundaries
-the agent asserted (`n-a` where the plan marked none), **3.** machine rows still open, **4.** the task ledger,
-**5.** the ☐ confirm-on-stand rows as the manual follow-up list, **6.** the full plan-vs-built table. The verdict
-is the CONJUNCTION: COMPLETE only when every task is closed and dispatched, nothing stands recorded not built,
-and every machine-checked deliverable is present. **Present that file verbatim as your final report.** Do not
-present `build-tasks/index.md` or the bare table in its place (both are inside it), and never a summary of your own.
+With `--tasks` the engine writes ONE report computed from the task ledger AND the built pages, in the language of
+the plan the user approved (a *plan item*, a page named by its Freedom schema) — verdict first (`✅ COMPLETE` /
+`⛔ NOT COMPLETE — <every reason>`), then a summary, then in the order a person acts on them: **1.** plan items
+recorded not built that still need a decision — each with the `Decision needed (row N)` line the build agent wrote,
+**2.** boundaries the agent closed `n-a` — those citing a recorded decision (`D<N>` in `decisions.md`, `Adjustment N`
+in the plan) as information, those citing none as a question, **3.** machine rows the engine could not confirm (only
+when there are any), **4.** the task ledger with HOW each task was verified (machine / evidence + judge / by hand),
+**5.** per-task details of what is left, with each build agent's `Check on stand (row N)` line. The full plan-vs-built
+table is written beside it as `plan-vs-built.md`. The verdict is the CONJUNCTION: COMPLETE only when every task is
+closed, nothing stands recorded not built without a decision, no boundary was asserted without one, and every
+machine-checked plan item is present. **Present that file verbatim as your final report.** Do not present
+`build-tasks/index.md` or the bare table in its place, and never a summary of your own. Copy `name` from `get-page`
+into each `--built` page entry as `schemaName` — that is how the report names the pages.
 Where the ledger and the built page disagree — a task `done` while the table names a MISSING row, or the reverse —
 the stand is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
 
@@ -638,7 +643,7 @@ is not the gate for a run that used a task folder.
 **The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --built <built-file>`, and `<built-file>` is a JSON **keyed BY PAGE**. The keys are the page keys the engine itself uses — the same ones `--checklist` groups its rows by: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). Read them off the checklist, never construct one: a key the engine did not publish is silently "not checked", not an error.
 
 ```jsonc
-{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
+{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>", "schemaName": "<page.name — the result report names the page by it>" },
              "child:InternalRequest": false },     // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
   "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"] } },

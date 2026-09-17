@@ -669,6 +669,21 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
+// THE TWO LINES THE FINAL REPORT READS OFF `## Notes` (ENG-99126). Free prose under the row number is still
+// yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
+// migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
+// question", which is true and unhelpful.
+function markersBlock() {
+  return [
+    "- **Two lines the final report quotes verbatim — write them under `## Notes`, one line each:**",
+    "  - for every `not-built — needs-decision` row: `Decision needed (row N): <the question, and the options a"
+      + " person can choose between — 1-3 sentences>`. Not why you stopped (that goes in the prose) — WHAT is being"
+      + " decided.",
+    "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
+      + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
+      + " can follow without reading the rest of your notes.",
+  ];
+}
 function outcomeBlock(repair = false) {
   if (repair) {
     return [
@@ -734,6 +749,7 @@ export function renderTaskFile(task, set = {}) {
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
     ...outcomeBlock(task.kind === REPAIR_KIND),
+    ...markersBlock(),
     ...oneAgentBlock(task),
     "",
     ENGINE_BODY_HEADING,

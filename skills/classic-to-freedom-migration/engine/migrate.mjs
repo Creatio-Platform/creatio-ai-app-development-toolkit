@@ -3263,7 +3263,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       const set = rep.set || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
-      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, repair: rep.repair });
+      // With `--out`, the full plan-vs-built table goes to its own file BESIDE the report (the repair round and a
+      // reader wanting per-row evidence still have it); the report links it instead of carrying 50+ rows. Without
+      // `--out` there is one stream, so the table is appended to the report.
+      let tableFile = null;
+      if (outFile) {
+        tableFile = path.join(path.dirname(outFile), "plan-vs-built.md");
+        try { fs.writeFileSync(tableFile, verifyRes.markdown + "\n"); }
+        catch (e) { fail(`cannot write plan-vs-built table '${tableFile}': ${e.message}`); }
+      }
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, tableFile });
       output = finalReport.markdown + "\n";
       ledgerIncomplete = !finalReport.complete;
     }

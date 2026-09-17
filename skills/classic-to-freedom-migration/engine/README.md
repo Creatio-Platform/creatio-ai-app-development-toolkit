@@ -302,11 +302,16 @@ round closes one.
 verify run prints ONE artifact computed from the task LEDGER and the BUILT PAGES, and its verdict is their
 conjunction — `✅ COMPLETE` only when every task is closed and dispatched, no deliverable stands recorded
 `not-built`, and every machine-checked row is present; otherwise `⛔ NOT COMPLETE — <every reason>`, exit 2 with a
-`⛔ RUN NOT COMPLETE` stderr line. Sections, in the order a person acts on them: summary counts → **1** deliverables
-recorded not built (cause, task file, row) → **2** boundaries the agent asserted (`n-a` the plan did not mark) →
-**3** machine rows still open → **4** the task ledger → **5** ☐ confirm-on-stand rows as the manual follow-up
-list → **6** the full plan-vs-built table. `renderVerify` publishes `rows` (every row with `pageKey`, `kind`
-`machine|confirm|na`, `status`, `outcome`) for it. Without `--tasks` the bare table is printed as before.
+`⛔ RUN NOT COMPLETE` stderr line. Written in the plan's vocabulary (*plan item*, pages by `--built.pages[k].schemaName`),
+sections in the order a person acts on them: summary → **1** plan items recorded not built that need a decision
+(quoting the agent's `Decision needed (row N):` line from `## Notes`) → **2** boundaries the agent closed `n-a`,
+split by whether the reason cites a recorded decision (`## D<N> — …` in `decisions.md`, `N. **…**` under the plan's
+Adjustments) → **3** machine rows still open (omitted when none) → **4** the task ledger with per-task Machine /
+Evidence + judge / By hand counts (the reference-cache task is not a plan task and is not listed; dispatch is not
+reported — it stays an engine gate) → **5** per-task details quoting `Check on stand (row N):` lines. With `--out`
+the full table is written beside the report as `plan-vs-built.md`; without it, appended. `renderVerify` publishes
+`rows` (every row with `pageKey`, `kind` `machine|confirm|na`, `vkType`, `status`, `outcome`) for it. Without
+`--tasks` the bare table is printed as before.
 **Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound
 to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
 whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.

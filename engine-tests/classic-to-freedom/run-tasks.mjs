@@ -3437,40 +3437,55 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   // THE INCIDENT'S SHAPE: every task dispatched and closed, one of them with a handler-like row the agent recorded
   // as NOT BUILT because it needs a decision. The built payload reports the pages absent, so the machine table is
   // short too — the report has to say BOTH, and say the not-built one first.
-  const victim = readTaskDir(dir).find((t) => t.rows.length >= 2);
+  // A PLAN task, not the engine's reference cache (also ≥2 rows, first in the folder, and deliberately absent
+  // from the report).
+  // The small fixture collapses to ONE whole-run task (page key `run`) plus the read-only reference cache, which
+  // is also keyed `run` but writes nothing — the writer is the plan task.
+  const victim = readTaskDir(dir).filter((t) => t.writesTo && t.rows.length >= 1).sort((a, b) => b.rows.length - a.rows.length)[0];
+  const rowN = Math.min(2, victim.rows.length);
   const vf = path.join(dir, victim.file);
-  fs.writeFileSync(vf, setOutcome(allBuilt(fs.readFileSync(vf, "utf8")), 2, "not-built — needs-decision"));
+  fs.writeFileSync(vf, setOutcome(allBuilt(fs.readFileSync(vf, "utf8")), rowN, "not-built — needs-decision"));
   const built = path.join(base, "built.json");
   fs.writeFileSync(built, JSON.stringify({ pages: { main: false } }));
   const run = cliR(["--verify", "--built", built, "--tasks", dir], MANIFEST);
   const out = run.stdout || "";
 
-  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT, not the bare plan-vs-built table — it opens with the report heading and the verdict, and the table is INSIDE it (section 6)",
+  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT, not the bare plan-vs-built table — it opens with the report heading and the verdict; without `--out` the table is appended after the report",
     () => /^# Migration result/.test(out) && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
-      && /## 6\. Plan-vs-built — the full machine table/.test(out) && /Plan-vs-Done — VERIFIED against the built page/.test(out)
-      && out.indexOf("**Verdict:**") < out.indexOf("## 6."),
+      && /## Appendix — plan-vs-built, the full machine table/.test(out) && /Plan-vs-Done — VERIFIED against the built page/.test(out)
+      && out.indexOf("**Verdict:**") < out.indexOf("## Appendix"),
     () => out.slice(0, 600));
-  check("ENG-99126 CLI: the verdict line names EVERY reason in the order a person acts on them — the deliverable recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm",
+  check("ENG-99126 CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
     () => { const v = out.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
       // The verify leg WRITES a repair round into the folder, so the ledger the report reads now also holds that
-      // round's `todo` tasks — open work, counted as such in the same line.
-      return /1 deliverable recorded NOT BUILT \(1 need a decision\)/.test(v) && /\d+ tasks? not closed \(◐ partial 1( · ☐ todo \d+)?\)/.test(v)
-        && /machine-checked deliverable(s)? MISSING/.test(v) && v.indexOf("NOT BUILT") < v.indexOf("MISSING"); },
+      // round's queued tasks — open work, counted as such in the same line.
+      return /1 plan item recorded NOT BUILT \(1 needs a decision\)/.test(v) && /\d+ tasks? not closed \(◐ partial 1( · ☐ queued \d+)?\)/.test(v)
+        && /machine-checked plan items? MISSING/.test(v) && v.indexOf("NOT BUILT") < v.indexOf("MISSING") && !/deliverable/i.test(out.slice(0, out.indexOf("## 1."))); },
     () => out.split("\n").find((l) => l.startsWith("**Verdict:**")));
-  check("ENG-99126 CLI: section 1 lists the not-built deliverable by name with its cause, the task file and the row — the fact the old table never carried",
+  check("ENG-99126 CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",
     () => { const s1 = out.slice(out.indexOf("## 1."), out.indexOf("## 2."));
-      return /## 1\. Needs a decision \/ not built \(1\)/.test(s1) && s1.includes(victim.rows[1].label)
-        && /needs a decision — a person settles it/.test(s1) && s1.includes(`\`${victim.file}\` row 2`); },
+      return /## 1\. Needs a decision \(1\)/.test(s1) && s1.includes(victim.rows[rowN - 1].label)
+        && /did not state the question/.test(s1) && s1.includes(`](${victim.file}), row ${rowN}`); },
     () => out.slice(out.indexOf("## 1."), out.indexOf("## 2.")));
-  check("ENG-99126 CLI: section 4 is the ledger — every task with its computed status and its dispatch mark, the partial one showing how many rows it did not build",
-    () => { const s4 = out.slice(out.indexOf("## 4."), out.indexOf("## 5."));
-      const line = s4.split("\n").find((l) => l.includes(`[${victim.file}]`)) || "";
-      return new RegExp(`## 4\\. Tasks \\(${readTaskDir(dir).length}\\)`).test(s4) && /◐ partial/.test(line) && /✔ yes/.test(line) && /\| 1 \| \[/.test(line); },
-    () => out.slice(out.indexOf("## 4."), out.indexOf("## 5.")).split("\n").slice(0, 8));
-  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, not-built deliverables, machine rows by outcome, confirm-on-stand rows, dispatch",
-    () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ todo \d+)? \|/.test(out) && /\| Deliverables recorded NOT BUILT \(still open\) \| 1 — needs a decision 1 · blocked 0 \|/.test(out)
-      && /\| Machine-checked deliverables \| \d+ — ✅ \d+ · ❌ missing \d+ · ⚠ unconfirmed \d+ \|/.test(out) && /\| Dispatch \| \d+ of \d+ tasks dispatched \|/.test(out),
+  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Machine / Evidence + judge / By hand columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
+    () => { const s4 = out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/));
+      const line = s4.split("\n").find((l) => l.includes(`](${victim.file})`)) || "";
+      return /\| Step \| Task \| Page \| Status \| Machine \| Evidence \+ judge \| By hand \| Not built \|/.test(s4)
+        && /◐ partial/.test(line) && line.includes(victim.rows[rowN - 1].label) && /needs a decision/.test(line)
+        && !/Dispatch/i.test(s4) && !/Reference cache/.test(s4) && /Form page|Child page|List page|Whole run/.test(line) && !/\| `?(main|run)`? \|/.test(line); },
+    () => out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/)).split("\n").slice(0, 8));
+  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, machine and evidence+judge verification, by-hand remainder — and nothing about dispatch",
+    () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ queued \d+)? \|/.test(out) && /\| Open questions \(plan items recorded NOT BUILT, no decision yet\) \| 1 \|/.test(out)
+      && /\| Verified by the machine \(read off the built page\) \| \d+\/\d+ \|/.test(out) && /\| Verified by evidence \+ an independent judge \| \d+\/\d+ \|/.test(out)
+      && /\| Left to check by hand on the stand \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
+  check("ENG-99126 CLI: with `--out`, the full plan-vs-built table is written to `plan-vs-built.md` beside the report and the report LINKS it instead of carrying it",
+    () => { const outFile = path.join(base, "report-split.md");
+      cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
+      const rep = fs.readFileSync(outFile, "utf8");
+      const tbl = path.join(base, "plan-vs-built.md");
+      return fs.existsSync(tbl) && /^### ✅ Plan-vs-Done/.test(fs.readFileSync(tbl, "utf8")) && /\[plan-vs-built\.md\]\(plan-vs-built\.md\)/.test(rep) && !/## Appendix/.test(rep); },
+    () => fs.readdirSync(base));
   check("ENG-99126 CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
     () => run.status === 2 && /⛔ RUN NOT COMPLETE — .*recorded NOT BUILT/.test(run.stderr || "") && /migration result report/.test(run.stderr || ""),
     () => ({ status: run.status, stderr: (run.stderr || "").slice(0, 700) }));
@@ -3488,25 +3503,55 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   // THE HEADLINE DEFECT, in isolation: a machine table with NOTHING open over a ledger that still holds work. The
   // old verdict read ✅ here. The report's does not, and says why.
   const greenVerify = { markdown: "### ✅ Plan-vs-Done — VERIFIED against the built page\n\n(all rows ✅)", missing: 0, unverified: 0, complete: true, pages: {},
-    rows: [{ n: 1, pageKey: "main", group: "Pages", deliverable: "Form page", status: "✅ Done", evidence: "built", outcome: "ok", kind: "machine", owner: "builder" },
-      { n: 2, pageKey: "main", group: "Form — Custom methods", deliverable: "Handler — `init`", status: "☐ confirm on-stand", evidence: "not derivable", outcome: "skip", kind: "confirm", owner: "builder" }] };
+    rows: [{ n: 1, pageKey: "main", group: "Pages", deliverable: "Form page", status: "✅ Done", evidence: "built", outcome: "ok", kind: "machine", vkType: "formpage", owner: "builder" },
+      { n: 2, pageKey: "main", group: "Form — Custom methods", deliverable: "Handler — `init`", status: "☐ confirm on-stand", evidence: "not derivable", outcome: "skip", kind: "confirm", vkType: null, owner: "builder" }] };
   const dOpen = path.join(tmp("result-report-open"), "build-tasks");
   syncTaskDir(dOpen, RUN, OPTS);   // every task `todo`, nothing dispatched
   const openSet = readMergedTaskDir(dOpen, RUN, OPTS);
   const openRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: openSet, dir: dOpen });
-  check("ENG-99126 renderFinalReport: a GREEN machine table over a ledger of `todo` tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
-    () => openRep.complete === false && openRep.reasons.some((r) => /task(s)? not closed \(☐ todo \d+\)/.test(r))
+  check("ENG-99126 renderFinalReport: a GREEN machine table over a ledger of queued tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
+    () => openRep.complete === false && openRep.reasons.some((r) => /task(s)? not closed \(☐ queued \d+\)/.test(r))
       && /⛔ \*\*NOT COMPLETE\*\*/.test(openRep.markdown) && !openRep.reasons.some((r) => /MISSING|not confirmed/.test(r)),
     () => openRep.reasons);
-  check("ENG-99126 renderFinalReport: the ☐ confirm-on-stand rows are the manual follow-up list (section 5), grouped by page and numbered as in the table — they are neither hidden nor counted as failures",
-    () => /## 5\. Manual follow-up — confirm on-stand \(1\)/.test(openRep.markdown) && /\*\*`main`\*\* \(1\)/.test(openRep.markdown)
-      && /- row 2 · Handler — `init`/.test(openRep.markdown) && /\| Manual confirmation \(☐ confirm on-stand\) \| 1 \|/.test(openRep.markdown),
-    () => openRep.markdown.slice(openRep.markdown.indexOf("## 5."), openRep.markdown.indexOf("## 6.")));
+  check("ENG-99126 renderFinalReport: the confirm-on-stand row is counted as 'left to check by hand' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
+    () => /\| Left to check by hand on the stand \| 1 \|/.test(openRep.markdown) && /## 4\. Task details/.test(openRep.markdown)
+      // The task is still queued, so its rows have no outcome yet — the details say THAT, not "check by hand".
+      && /\| \d+ \| .+ \| — \| — no outcome recorded yet \(task ☐ todo\) \|/.test(openRep.markdown)
+      && !/Reference cache/.test(openRep.markdown) && !/\| Dispatch/.test(openRep.markdown),
+    () => openRep.markdown.slice(openRep.markdown.indexOf("## 4."), openRep.markdown.indexOf("## Appendix")));
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
-  check("ENG-99126 renderFinalReport: with every task closed and dispatched, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many rows need a manual confirmation, so ✅ never reads as 'nothing left to look at'",
-    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 row in section 5 still need a manual on-stand confirmation/.test(doneRep.markdown),
+  check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
+    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm by hand on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
+  // THE DECISION MARKER: what section 1 quotes. A `needs-decision` row whose task notes carry
+  // `Decision needed (row N): …` shows that sentence; a boundary whose reason cites a recorded decision is
+  // information, one that cites nothing is a question; a decision the reason cites but nobody recorded is named.
+  {
+    const base2 = tmp("result-report-markers");
+    const d2 = path.join(base2, "build-tasks");
+    fs.mkdirSync(base2, { recursive: true });
+    fs.writeFileSync(path.join(base2, "decisions.md"), "# Decisions\n\n## D7 — Print is not migrated (2026-09-17)\n\nno printables exist.\n");
+    syncTaskDir(d2, RUN, OPTS);
+    const t2 = readTaskDir(d2).find((t) => t.rows.length >= 3);
+    const f2 = path.join(d2, t2.file);
+    let text2 = setOutcome(allBuilt(fs.readFileSync(f2, "utf8")), 1, "not-built — needs-decision");
+    text2 = setOutcome(text2, 2, "n-a — approved by D7, see decisions");
+    text2 = setOutcome(text2, 3, "n-a — nothing to build here, D99 says so");
+    text2 += "\nDecision needed (row 1): keep the Classic allow-list behaviour (a) or drop it as inert in Freedom (b)?\nCheck on stand (row 1): open any record → the field is read-only.\n";
+    fs.writeFileSync(f2, text2);
+    const set2 = readMergedTaskDir(d2, RUN, OPTS);
+    const rep2 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: set2, dir: d2 });
+    check("ENG-99126 markers: section 1 quotes the `Decision needed (row N)` line verbatim as the decision the person has to make",
+      () => /\| 1 \| .* \| keep the Classic allow-list behaviour \(a\) or drop it as inert in Freedom \(b\)\? \| /.test(rep2.markdown),
+      () => rep2.markdown.slice(rep2.markdown.indexOf("## 1."), rep2.markdown.indexOf("## 2.")));
+    check("ENG-99126 boundaries: an `n-a` citing a decision that decisions.md records is listed as information with the decision's title; one citing a decision nobody recorded is a question and names the missing reference — and only the latter is a verdict reason",
+      () => { const s2 = rep2.markdown.slice(rep2.markdown.indexOf("## 2."), rep2.markdown.indexOf("## 3."));
+        return /Closed by a recorded decision \(1\)/.test(s2) && /\*\*D7\*\* — Print is not migrated/.test(s2)
+          && /Without a recorded decision \(1\)/.test(s2) && /cites D99, not found in decisions\.md/.test(s2)
+          && rep2.reasons.some((r) => /1 boundary closed by the agent with NO recorded decision/.test(r)); },
+      () => ({ reasons: rep2.reasons, s2: rep2.markdown.slice(rep2.markdown.indexOf("## 2."), rep2.markdown.indexOf("## 3.")) }));
+  }
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
