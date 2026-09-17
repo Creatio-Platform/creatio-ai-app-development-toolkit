@@ -151,8 +151,8 @@ check("--stubs totals carry `members`, and the shortcut needs BOTH counts explic
 // emits no section scope). This pin only keeps the construction in its own function: inlined back into
 // `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
 check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /function sectionStubScopes\(manifest, opts, sectionSchemas\)/.test(mgSrc)
-    && /if \(opts\.scopeSchema \|\| !sectionSchemas\.length\) return \[\];/.test(mgSrc)
+  /function sectionStubScopes\(manifest, opts, sectionEff\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionEff\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: an unusable Context result is a failed run, not a surface with nothing to describe — and the guard is a SHAPE check, not a truthiness test",
   // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
@@ -187,9 +187,14 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
 // growing `LIST_DECISION_KINDS`, so the check above would pass on a stale doc — the exact drift it exists to catch.
 const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
-  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 8,
+  // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 10 and the check stays
+  // green. Naming the kinds a PR adds is what makes the assertion say which set it is pinning;
+  // ENG-94714 added `list-grid-config` and `list-section-element`, so both are named here.
+  !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 10
+    && LIST_DECISION_KINDS.includes("list-grid-config") && LIST_DECISION_KINDS.includes("list-section-element"),
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
-    registrySize: LIST_DECISION_KINDS.length }));
+    registrySize: LIST_DECISION_KINDS.length,
+    missingNamed: ["list-grid-config", "list-section-element"].filter((k) => !LIST_DECISION_KINDS.includes(k)) }));
 
 /* ================================================================================================
    Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level

@@ -270,9 +270,12 @@ section: `--plan --out` rewrites the file, so an appended index is lost on every
 of hand-pasting stdout (its Overview/Main-scope values come from `manifest.planMeta`).
 
 **Exit codes & gates.** Bad input (missing/invalid manifest, unreadable schema `file`) → exit **1**. Otherwise
-the run computes three gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
-skeletal seed), `structure.complete` (input completeness: unresolved detail / child-page schemas) and
-`coverage.complete` (member coverage: every schema member accounted for) — plus, in
+the run computes four gates — `gate.blocked` (correctness: parse errors / unresolved parents / merge warnings /
+skeletal seed), `structure.complete` (input completeness: unresolved detail / child-page schemas),
+`coverage.complete` (member coverage: every schema member accounted for) and `listGate.blocked` (the LIST
+deliverable alone: the SECTION's evidence is incomplete — its body would not parse, its `diff` did not statically
+resolve, its fold raised a correctness warning, or its parents did not resolve; scoped to the list page so a
+section-side gap never blocks the form page) — plus, in
 `--plan` mode only, a fourth **plan-completeness** check: required `manifest.planMeta` still `<FILL: …>`
 (`planMetaMissing`) or unresolved on-stand `signals` (`signalsMissing`). If any of these is bad the CLI prints a
 `⛔` banner to stderr and exits **2** (the artifact is still written/printed, with the banner at the top, so you
@@ -282,7 +285,8 @@ see *what* to fix). Exit **0** = all applicable gates clear = an approvable plan
 `--verify --built` applies the same exit-**2** done-gate whenever a deliverable is MISSING/unverified (or `planGaps`
 is non-empty). The stderr line names which of the two it is: `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is
 repairable on-stand (build the missing pieces, file the evidence, re-verify); `⛔ GATE BLOCKED` / `STRUCTURE
-INCOMPLETE` / `COVERAGE INCOMPLETE` describe the PLAN and fire in every mode — no build round closes one.
+INCOMPLETE` / `COVERAGE INCOMPLETE` / `LIST GATE BLOCKED` describe the PLAN and fire in every mode — no build
+round closes one.
 
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a
