@@ -1464,7 +1464,8 @@ function renderImperativeLogic(cs) {
   for (const { stub: h, depth, parent } of ordered) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
-    const target = parent ? `port with \`${esc(parent)}\`` : (h.listMapped ? LIST_MAPPED_TARGET : targetText(h));
+    const unfolded = h.listMapped ? LIST_MAPPED_TARGET : targetText(h);
+    const target = parent ? `port with \`${esc(parent)}\`` : unfolded;
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -2489,7 +2490,8 @@ function handlerStubRows(cs) {
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   return (cs.handlerStubs || []).map((h) => {
     const parent = foldedUnder.get(h.sourceMethod);
-    const note = parent ? ` (ported with \`${esc(parent)}\`)` : (h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "");
+    const unfolded = h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "";
+    const note = parent ? ` (ported with \`${esc(parent)}\`)` : unfolded;
     return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note };
   });
 }

@@ -221,7 +221,7 @@ const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards",
   "quickFilterConfigCompletedByBuilder"]);
 const fieldsOfReturn = (startsAt) => {
   const at = mapperSrc.indexOf(startsAt);
-  const m = at < 0 ? null : /\n  return \{([\s\S]*?)\n  \};/.exec(mapperSrc.slice(at));
+  const m = at < 0 ? null : /\n {2}return \{([\s\S]*?)\n {2}\};/.exec(mapperSrc.slice(at));
   return m ? [...m[1].matchAll(/[\s{,]([a-zA-Z][a-zA-Z0-9]*)\s*[,:}]/g)].map((x) => x[1]) : [];
 };
 // BOTH ChangeSets the plan renders: the record page's, and the list page's (read as `lcs.` there).
@@ -229,13 +229,13 @@ const changeSetFields = [...new Set([
   ...fieldsOfReturn("const baseFieldOverrides"),
   ...fieldsOfReturn("export function buildListChangeSet("),
 ])];
-const NL = String.fromCharCode(10);
+const NL = "\n";
 const checklistSrc = CHECKLIST_BUILDERS.map((n) => {
   const at = designspecSrc.indexOf("function " + n + "(");
   return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
 }).join(NL);
 // `?.` counts as a read: the list ChangeSet is optional at most call sites, so every read of it is chained.
-const readsField = (src, f) => new RegExp("\\b(?:cs|lcs|changeSet|listChangeSet)\\??\\." + f + "\\b").test(src);
+const readsField = (src, f) => new RegExp(String.raw`\b(?:cs|lcs|changeSet|listChangeSet)\??\.${f}\b`).test(src);
 const planOnlyFields = changeSetFields.filter((f) =>
   readsField(designspecSrc, f) && !readsField(checklistSrc, f) && !PLAN_ONLY_CHANGESET_FIELDS.has(f));
 check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a checklist builder — a field only the plan reads reaches no build task",
