@@ -8,6 +8,31 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.12.0 (2026-09-17)
+
+**Your Classic section's dashboards now reach Freedom UI instead of quietly disappearing.** A section's dashboards live in stand data, not in schema code, so migration never saw them and dropped them without a word. The toolkit now discovers them, puts them in the plan you approve, installs the Dashboards Migrator through clio, hands the migration over and verifies the result. The same release stops a section's own declared elements from being dropped, rewrites the migration plan for the human who approves it, and repairs mobile conversion against the converter's new response shape.
+
+### 📊 Classic dashboards migrate instead of disappearing
+
+- **A section's dashboards are found and shown in the plan** ([#153](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/153)). Discovery resolves them from stand data and records each dashboard's delivery mode — packaged or stand-only — so `--plan` stays non-zero until the question is answered; `present:false` is a valid answer.
+- **The Dashboards Migrator is installed for you** ([#178](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/178)). When a section has dashboards and the stand carries no migrator, the skill installs it with `clio install-dashboards-migrator` after confirming the environment with you, and leaves running the migration to you in System Designer. A clio too old to carry the verb records a gap instead of blocking the migration.
+
+### 🧩 A section's own elements reach the plan
+
+- **The section schema's `diff` is read, not ignored** ([#176](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/176)). Classic→Freedom `diff` handling existed for page schemas only, so any element a section declared reached nothing — the same button migrates from a page and was dropped from a section. The section's own diff is now folded and mapped into the list ChangeSet.
+
+### 📝 A migration plan a human can read
+
+- **Worklists carry What-it-does and Use-case columns** ([#179](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/179)). Custom methods and other declared logic are described in human terms instead of mechanical Trigger / Body-does / Reads→writes columns, and the ⚠ Confirm block is leaner. Rendering only — what gets built did not change.
+
+### 📱 Mobile conversion follows the converter
+
+- **The skill reads the fields the converter actually ships** ([#180](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/180)). The build step iterated `guide.elementMap`, which the converter no longer returns, so it produced an empty page body — and validation passed on it. The skill now names `guide.viewConfigDiff` and `guide.droppedElements`.
+
+### 🧭 Page and app creation guidance
+
+- **Fields that are not finished alone get their companion** ([#174](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/174)). Amounts and totals ask for the analytics that make them useful, via new mandatory rules, reference sections and checklist items in the guidelines skill, plus a supporting tweak to app-orchestrator. Guidance only — no tooling changes.
+
 ## 1.11.0 (2026-09-15)
 
 **Installing the toolkit into Codex CLI now actually gives you the skills.** The Codex install step called a `codex plugin add` subcommand that does not exist, so every Codex install failed silently and no CAADT skill was ever available in a Codex session — this release fixes that end to end, install and update. It also teaches Classic → Freedom migration to convert classic card widgets through the migrator instead of asking you to hand-build a chart substitute.
