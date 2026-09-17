@@ -30,6 +30,9 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    a SEPARATE context judges it and cannot ask you: the shipped reference page you diffed against and each
    component you checked with `get-component-info`), the on-stand reads you ran, and for every `not-built` row what
    it is waiting on. A session killed mid-task costs that task alone, but only because you wrote as you went.
+   **Append it with an in-place edit — never a shell heredoc, never a whole-file write.** A note put through the
+   shell breaks on quoting and on command-length limits, and the table above your notes is the engine's: rewriting
+   the file drops the `Outcome` cells your status is computed from.
 4. **A row you could not build is `not-built`, never a cell left blank and never absorbed into `done`.** Every row
    `built` or `n-a` computes `done`; any row `not-built` — or left unaccounted — computes `partial`. `partial` does
    not hold up the tasks that depend on yours; it holds up calling the RUN finished, and the engine names each
