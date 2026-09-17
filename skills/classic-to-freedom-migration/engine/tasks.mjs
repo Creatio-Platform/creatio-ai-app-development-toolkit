@@ -1210,6 +1210,47 @@ const mergePages = ({ residual = {}, verified = {} }) => {
 // has already turned a reasonless `n-a` into `not-built`, so there is no self-certified skip to filter here.
 const ROW_SETTLED = new Set([O_BUILT, O_NA]);
 
+// The keys this round's own cells account for, and the keys they leave open. A row with no outcome is unsettled.
+// NOT-BUILT WINS WITHIN A ROUND, and an unaccounted cell with it: `coverKey` hashes the label alone — no `::n`
+// disambiguation, unlike `rowKeys` — so two rows of one table can share a key, and a `built` cell must not close
+// the deliverable its twin recorded.
+function rowVerdicts(t) {
+  const settled = new Set(), unsettled = new Set();
+  for (const r of t.rows || []) {
+    (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${t.pageKey} ${coverKey(r.label)}`);
+  }
+  return { settled, unsettled };
+}
+
+// What ONE round says about each row it covers, or null when it says nothing.
+// A `blocked` round is NEITHER open nor closed: it ran and said why it could not proceed, nothing is scheduled
+// against that row any more, and counting it as open work would let the run pass over a deliverable a second
+// agent has now also failed to build.
+// A CLOSURE ONLY COUNTS IF SOMEBODY WAS DISPATCHED FOR IT. A repair file is exempt from the dispatch gate
+// (`adoptOrchestrated` rewrites its origin), and `--verify` re-measures the page, so that exemption costs the
+// machine-checked lineage nothing. A `not-built` row is re-measured by nobody: its ONLY evidence is the repair
+// task's own record, so without this the whole gate clears by typing into the file one over.
+function roundCoverage(t) {
+  if (t.kind !== REPAIR_KIND || t.status === S_BLOCKED) return null;
+  const credits = t.dispatched === "yes";
+  if (CLOSED.has(t.status) && !credits) return null;
+  // NOTHING RECORDED IN THE CELLS AT ALL means the status word is the only account there is — a file carrying no
+  // `Outcome` column, or one whose agent filled none of it — and the round is read WHOLE off that word. The same
+  // guard `computeStatus` applies, so the two cannot disagree about which record they are reading.
+  const whole = !(t.rows || []).some((r) => r.outcome);
+  const { settled, unsettled } = rowVerdicts(t);
+  const closes = whole
+    ? () => CLOSED.has(t.status)
+    : (k) => credits && settled.has(k) && !unsettled.has(k);
+  // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
+  const states = new Map();
+  for (const c of t.covers || []) {
+    const k = `${t.pageKey} ${c}`;
+    states.set(k, closes(k) ? "closed" : "open");
+  }
+  return { round: t.repairRound || 1, states };
+}
+
 function repairCoverage(tasks) {
   // THE LATEST ROUND TO SPEAK ABOUT A ROW IS THE AUTHORITY. A round that could not fix a row keeps `not-built` in
   // its own cell after the NEXT round fixes it, so an earlier open mark never overrules a later closure. At equal
@@ -1218,42 +1259,12 @@ function repairCoverage(tasks) {
   const latest = new Map();
   const say = (key, round, state) => {
     const prev = latest.get(key);
-    if (prev && (prev.round > round || (prev.round === round && prev.state === "open"))) return;
-    latest.set(key, { round, state });
+    if (!prev || round > prev.round || (round === prev.round && state === "open")) latest.set(key, { round, state });
   };
   for (const t of tasks || []) {
-    if (t.kind !== REPAIR_KIND) continue;
-    // A `blocked` round is NEITHER open nor closed. The round ran and said why it could not proceed, and the
-    // existing machinery deliberately does not auto-reopen one — so nothing is scheduled against that row any
-    // more, and counting it as open work would let the run pass over a deliverable a second agent has now also
-    // failed to build.
-    if (t.status === S_BLOCKED) continue;
-    // A CLOSURE ONLY COUNTS IF SOMEBODY WAS DISPATCHED FOR IT. A repair file is exempt from the dispatch gate
-    // (`adoptOrchestrated` rewrites its origin), and `--verify` re-measures the page, so that exemption costs the
-    // machine-checked lineage nothing. A `not-built` row is re-measured by nobody: its ONLY evidence is the repair
-    // task's own record, so without this the whole gate clears by typing into the file one over.
-    const credits = t.dispatched === "yes";
-    if (CLOSED.has(t.status) && !credits) continue;
-    const round = t.repairRound || 1;
-    // NOTHING RECORDED IN THE CELLS AT ALL means the status word is the only account there is — a file carrying
-    // no `Outcome` column, or one whose agent filled none of it — and the round is read WHOLE off that word. The
-    // same guard `computeStatus` applies, so the two cannot disagree about which record they are reading.
-    const whole = !(t.rows || []).some((r) => r.outcome);
-    // NOT-BUILT WINS WITHIN A ROUND, and an unaccounted cell with it. `coverKey` hashes the label alone — no `::n`
-    // disambiguation, unlike `rowKeys` — so two rows of one table can share a key, and a `built` cell must not
-    // close the deliverable its twin recorded.
-    const settled = new Set(), unsettled = new Set();
-    if (!whole) {
-      for (const r of t.rows) {
-        (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${t.pageKey} ${coverKey(r.label)}`);
-      }
-    }
-    // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
-    for (const c of t.covers || []) {
-      const k = `${t.pageKey} ${c}`;
-      const done = whole ? CLOSED.has(t.status) : (credits && settled.has(k) && !unsettled.has(k));
-      say(k, round, done ? "closed" : "open");
-    }
+    const round = roundCoverage(t);
+    if (!round) continue;
+    for (const [key, state] of round.states) say(key, round.round, state);
   }
   return (key) => latest.get(key)?.state || null;
 }

@@ -3055,9 +3055,9 @@ check("a round that fixed SOME of its rows closes those and only those — the w
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
-    const residuals = backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean);
+    const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean));
     return backAt(set, tgt.id).status === "partial"
-      && residuals.includes("closed") && residuals.includes("open");
+      && residuals.has("closed") && residuals.has("open");
   }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2]);
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
     return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).rows.map((r) => [r.outcome, r.residual]); });
