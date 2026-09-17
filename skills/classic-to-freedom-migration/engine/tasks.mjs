@@ -1239,30 +1239,38 @@ function rowVerdicts(t) {
 // (`adoptOrchestrated` rewrites its origin), and `--verify` re-measures the page, so that exemption costs the
 // machine-checked lineage nothing. A `not-built` row is re-measured by nobody: its ONLY evidence is the repair
 // task's own record, so without this the whole gate clears by typing into the file one over.
+// Which of the keys a round covers it has SETTLED.
+// NOTHING RECORDED IN THE CELLS AT ALL means the status word is the only account there is — a file carrying no
+// `Outcome` column, or one whose agent filled none of it — and the round is read WHOLE off that word, which
+// speaks for every row it covers. The same guard `computeStatus` applies, so the two cannot disagree about which
+// record they are reading.
+function settledCovers(t, credits) {
+  const coveredKeys = () => new Set((t.covers || []).map((c) => `${t.pageKey} ${c}`));
+  if (!(t.rows || []).some((r) => r.outcome)) return CLOSED.has(t.status) ? coveredKeys() : new Set();
+  if (!credits) return new Set();
+  const { settled, unsettled } = rowVerdicts(t);
+  const out = new Set();
+  for (const k of settled) if (!unsettled.has(k)) out.add(k);
+  return out;
+}
+
 function roundCoverage(t) {
   if (t.kind !== REPAIR_KIND || t.status === S_BLOCKED) return null;
   const credits = t.dispatched === "yes";
   if (CLOSED.has(t.status) && !credits) return null;
-  // NOTHING RECORDED IN THE CELLS AT ALL means the status word is the only account there is — a file carrying no
-  // `Outcome` column, or one whose agent filled none of it — and the round is read WHOLE off that word. The same
-  // guard `computeStatus` applies, so the two cannot disagree about which record they are reading.
-  const whole = !(t.rows || []).some((r) => r.outcome);
-  const { settled, unsettled } = rowVerdicts(t);
-  const closes = whole
-    ? () => CLOSED.has(t.status)
-    : (k) => credits && settled.has(k) && !unsettled.has(k);
+  const closed = settledCovers(t, credits);
   const round = t.repairRound || 1;
   // A ROW THE CAP HAS EXHAUSTED IS NOT OPEN WORK. The last round ran and did not settle it, and `buildRepairTasks`
   // PARKS the (page, kind) rather than writing a fourth — so nothing is scheduled against that row ever again.
   // Said as its OWN state rather than by staying silent: silence leaves an earlier round's `open` standing, and
   // `open` reads as scheduled work and clears the gate over a deliverable nobody built. Same end state as a
   // `blocked` round, which is excluded for the same reason; parking is otherwise only a line on stdout.
-  const exhausted = round >= REPAIR_ROUND_CAP && ROUND_ATTEMPTED.has(t.status);
+  const unsettledState = round >= REPAIR_ROUND_CAP && ROUND_ATTEMPTED.has(t.status) ? "parked" : "open";
   // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
   const states = new Map();
   for (const c of t.covers || []) {
     const k = `${t.pageKey} ${c}`;
-    states.set(k, closes(k) ? "closed" : (exhausted ? "parked" : "open"));
+    states.set(k, closed.has(k) ? "closed" : unsettledState);
   }
   return { round, states };
 }

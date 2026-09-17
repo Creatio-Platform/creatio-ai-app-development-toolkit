@@ -3106,13 +3106,13 @@ check("a row a round has SETTLED stops being named as NOT BUILT — its own Outc
     syncRepairDir(d, RUN, {}, OPTS);
     runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
-    const residuals = backAt(set, tgt.id).rows.map((r) => r.residual);
+    const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual));
     const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
     // Before either round runs, BOTH rows are open and the line has to count two of them on one task — a list
     // that only ever renders `1` cannot say it lost one.
     const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2]);
     const both = renderProgress(syncTaskDir(d2, RUN, OPTS), d2);
-    return residuals.includes("closed") && residuals.includes("open")
+    return residuals.has("closed") && residuals.has("open")
       && /⚠ NOT BUILT — 2 deliverable\(s\) across 1 task\(s\)/.test(both)
       && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
       && idxLines.length === 1;
