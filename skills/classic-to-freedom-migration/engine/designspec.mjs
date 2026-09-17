@@ -2904,17 +2904,25 @@ function resolveStructuralVk(vk, ctx) {
 // shown to exist. Identity was never checked, yet the status text read as though it had been. When names are
 // expected, a nameless built set is NOT weaker evidence, it is NO evidence: return `unverified` and say so.
 //
-// NB the guard is `ops.length && !builtNames.size`, not `!builtNames.size`. A page whose entry IS present and
+// NB the guard is `ops.length && !identities.size`, not `!identities.size`. A page whose entry IS present and
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
-// `name` is the uncheckable case.
-function resolveFieldsByIdentity(vk, names, ops) {
-  const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
-  if (ops.length && !builtNames.size) return ["⚠ verify",
-    `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const missing = names.filter((n) => !builtNames.has(n));
+// `name` OR a resolvable binding is the uncheckable case.
+//
+// ENG-98554 — identity is the element NAME **or** the COLUMN the element is BOUND to (`bindingColumn`). Matching on
+// the name alone was the defect: a builder that follows the Freedom conventions names the element after the widget
+// and binds it to the column (`ContactField` → `$PDS_Contact`), and two runs of the same section reported `0/19
+// expected fields present` on a page where every expected column was there. The binding is ADDED to the name, never
+// substituted for it — a page whose elements ARE named for their columns (an earlier run's post-rename repair) has
+// to keep closing, which is why this is a union of identities and the shortfall is computed over both.
+function resolveFieldsByIdentity(vk, names, ctx) {
+  const ops = ctx.ops;
+  const identities = new Set([...ops.filter((o) => o.name).map((o) => o.name), ...ctx.boundColumns]);
+  if (ops.length && !identities.size) return ["⚠ verify",
+    `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name or a resolvable value binding, so none of the ${vk.n} expected field(s) could be matched by name or by bound column (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\` and its \`control\``, "unverified"];
+  const missing = names.filter((n) => !identities.has(n));
   const b = names.length - missing.length;
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME or BY BOUND COLUMN on the built page`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
@@ -2928,7 +2936,7 @@ function resolveFieldsByIdentity(vk, names, ops) {
 function resolveFieldsVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.n} expected field(s)`);
   const names = [...new Set(vk.names || [])];
-  if (names.length) return resolveFieldsByIdentity(vk, names, ctx.ops);
+  if (names.length) return resolveFieldsByIdentity(vk, names, ctx);
   const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present by TYPE — this deliverable published no expected field names, so identity was not checkable`, "ok"];
   return ["⚠ verify", `${b}/${vk.n} components of a field type present — this deliverable published no expected field names, so identity was not checkable`, "unverified"];
@@ -3083,12 +3091,26 @@ export function resolveComponentVk(vk, ctx) {
 // / `condition` / `actions` but not their inner shape, so tokenizing the whole rule survives a shape change.
 // The rule's tokens, or `null` when the slot was never populated (nobody read the rules). Own fn so `resolveRuleVk`
 // stays under Sonar CC 15.
-function builtRuleTokens(built) {
+function builtRuleTokens(built, elementColumns) {
   let rules = null;
   if (Array.isArray(built)) rules = built;
   else if (Array.isArray(built?.rules)) rules = built.rules;
   if (rules == null) return null;
-  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_]\w*/g) || []));
+  return rules.map((r) => {
+    const toks = new Set(String(JSON.stringify(r)).match(/[A-Za-z_]\w*/g) || []);
+    // ENG-98554 — a PAGE rule names the ELEMENT it governs (`actions: [{ items: ["RejectReasonField"] }]`), never the
+    // column, so an expected target attribute is simply not in the rule. Resolve every element the rule mentions to
+    // the column that element is BOUND to, and match on that too. On the ENG-98487 artifact this is the difference
+    // between `2/5` and `5/5`: the two that matched there matched off a human-written CAPTION ("RejectReason
+    // required on…"), which is prose the builder could have worded any other way — never evidence.
+    //
+    // Deliberately narrow, and this is the anti-vacuity guard: ONLY element names the rule actually mentions
+    // contribute a column. A rule that does not name the element contributes no token for it, so widening the token
+    // set cannot let an unrelated rule satisfy an expected column. (An ENTITY rule already names its
+    // `targetAttribute` as the column, and keeps matching through the plain whole-token leg.)
+    for (const t of [...toks]) { const col = elementColumns?.get(t); if (col) toks.add(col); }
+    return toks;
+  });
 }
 export function resolveRuleVk(vk, ctx) {
   const want = [...new Set(vk.names || [])];
@@ -3099,7 +3121,7 @@ export function resolveRuleVk(vk, ctx) {
   // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
   if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
-  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules);
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules, ctx.elementColumns);
   if (tokenSets == null) return ["⚠ verify",
     `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
   const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
@@ -3483,9 +3505,77 @@ function walkViewConfig(node, out = []) {
     // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
     const cols = columnsOf(node);
     const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}) });
+    // ENG-98554 — and the VALUE binding, for the same reason: it is data on the node that a `{name, type}` walk goes
+    // straight past, and it is the only property that says which COLUMN the element actually shows.
+    const ctrl = controlBindingOf(node);
+    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}),
+      ...(ctrl ? { control: ctrl } : {}) });
   }
   return walkViewConfig(node.items, out);
+}
+// ENG-98554 — the VALUE binding of a field component: `control: "$PDS_Contact"` on a rendered node, `values.control`
+// on a diff op, and `value` for the components that spell it that way.
+//
+// Restricted to `control` / `value` ON PURPOSE. `caption`, `label` and `tip` carry `$…` strings too — a built field's
+// label is `"$Resources.Strings.PDS_Contact"` — and reading those would resolve a field from its LABEL, which is a
+// resource key that survives the column being re-bound. The binding is the only property that moves with the data.
+const CONTROL_KEYS = ["control", "value"];
+function controlBindingOf(node) {
+  for (const k of CONTROL_KEYS) {
+    for (const v of [node[k], node.values?.[k]]) if (typeof v === "string" && v.startsWith("$")) return v;
+  }
+  return null;
+}
+// `viewModelConfig.attributes[<attr>]` → the path it reads, under the three spellings the platform uses for it
+// (a bare string, `modelConfig.path`, or a plain `path`). Own fn so `bindingColumn` keeps one level of nesting.
+function attributePath(viewModelConfig, attr) {
+  const a = viewModelConfig?.attributes?.[attr];
+  if (typeof a === "string") return a;
+  const p = a?.modelConfig?.path ?? a?.path;
+  return typeof p === "string" ? p : null;
+}
+// ENG-98554 — `$PDS_Contact` → `Contact`: the COLUMN a built element is bound to, which is the identity an expected
+// field (or an expected rule target) has to be matched against. THE defect this closes: a builder names the element
+// `ContactField` and binds it to the column, the gate matched the expected column against the element NAME, and a
+// correctly built page reported `0/19 expected fields present` — twice, on two runs of the same section.
+// On the ENG-98487 artifact four of the nineteen elements do not contain their column in the name at ALL
+// (`RoleInCompanyField` → `$PDS_Job`), so no naming heuristic could have recovered them — only the binding can.
+//
+// A PRECEDENCE, not a union of guesses — the first leg that answers wins:
+//   1. `viewModelConfig.attributes[<attr>]`, the page's own model. AUTHORITATIVE: it is the page stating which
+//      column the attribute reads, so it is right even when the attribute is named nothing like the column, and it
+//      must therefore OUTRANK the textual leg rather than sit beside it.
+//   2. strip a leading `$` and a `PDS_` / `PDS.` prefix. Correct for the overwhelming majority of built pages and,
+//      critically, for every payload RECORDED BEFORE `viewModelConfig` was part of the `--built` contract —
+//      including the ENG-98487 artifact this change is proven against, which carries no model at all. The bindings
+//      there are NOT uniformly prefixed (`$PDS_Contact` sits beside `$Email`, `$Skype`, `$StaffUnit`), so the
+//      prefix is optional: stripping it must not become a precondition for resolving at all.
+// A dotted remainder names the column FIRST (`Contact.Name` is this entity's `Contact` column, read through the
+// lookup), and a binding that resolves to nothing returns `null` — the caller then falls back to the element name.
+export function bindingColumn(binding, viewModelConfig) {
+  if (typeof binding !== "string" || !binding.startsWith("$")) return null;
+  const attr = binding.slice(1).trim();
+  if (!attr) return null;
+  const col = (attributePath(viewModelConfig, attr) || attr).replace(/^PDS[._]/, "").split(".")[0];
+  return /^[A-Za-z_]\w*$/.test(col) ? col : null;
+}
+// The page's BINDING INDEX, built once per page beside `ops`:
+//   · `boundColumns`   — every column some element on the page is bound to. An expected FIELD matches against this.
+//   · `elementColumns` — element name → the column it is bound to. A page business RULE targets an ELEMENT
+//                        (`items: ["RejectReasonField"]`), never the column, so it is matched through this map.
+// Reads each op's own node shape rather than the flattened `control`, so a legacy `--built.ops` array (which
+// `pageOpsOf` returns verbatim, with its `values.control` intact) resolves exactly like a walked `viewConfig`.
+function bindingIndexOf(entry, ops) {
+  const vmc = entryObject(entry)?.viewModelConfig;
+  const boundColumns = new Set();
+  const elementColumns = new Map();
+  for (const o of ops) {
+    const col = bindingColumn(controlBindingOf(o), vmc);
+    if (!col) continue;
+    boundColumns.add(col);
+    if (o.name) elementColumns.set(o.name, col);
+  }
+  return { boundColumns, elementColumns };
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
 // DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
@@ -3579,6 +3669,10 @@ export function verifyCtx(root, pageKey) {
     // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
     // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
     gridColumns: pageGridColumnsOf(page),
+    // ENG-98554 — `boundColumns` / `elementColumns`, read once per page for the same reason: they are the identity a
+    // field and a business rule are matched on when the builder named the element after the widget and BOUND it to
+    // the column, which is what a builder following the Freedom conventions actually produces.
+    ...bindingIndexOf(page, ops),
     // D6 tri-state, decided ONCE here where `pageEntryOf`'s three outcomes are still distinguishable: `undefined`
     // = no entry (nobody looked) · `false` = reported absent · an object = looked at, whatever it contained. Past
     // `pageOpsOf` the first two are both `[]` and no resolver can tell them apart any more.

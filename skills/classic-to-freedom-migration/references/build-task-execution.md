@@ -42,6 +42,20 @@ done-gate applies to every task that touches a page's layout, and the clio-safet
 
 **Build preflight (Contract rule 7), scoped to YOUR task.** Before you create or edit the artifact your task names: (a) the plan's `⚠ Confirm` list is your worklist — every item is RESOLVED by running its on-stand query and recording the answer (DCM `SysSchema ManagerName='DcmSchemaManager'`, `ProcessInModules`, `SysModuleReport`, `get-component-info`), not deferred as "probably N/A"; (b) you build the plan's layout/components exactly — every island, tab, group, and both halves of a two-part component. Any simplification is a proposal to the user, not a silent change. → the mapping reference's build recipes.
 
+**(c) Name every element for the COLUMN it shows, and bind it to that column.** The element name is `Contact` —
+**not** `ContactField`, `ContactLookup` or `ContactInput` — and its binding is `$PDS_Contact`. A business rule
+targets that same column-named element, and a list column keeps its `PDS_<Column>` code. That is the identity
+`--verify` accepts a `fields`, `rule` or `listcolumns` row on, and it is restated on those rows in the `Closed by`
+cell of your task file.
+
+> Why this gets a clause of its own: two runs of the same section named every element `<Something>Field`, built the
+> page correctly, and still read `0/19 expected fields present` and `2/5 business rule(s) matched` — then spent a
+> repair round each renaming elements that had never been wrong. The gate now resolves a field through its binding,
+> so a `<Something>Field` page does pass; naming for the column is what keeps the built page legible against the
+> plan and keeps the match on the element's own name instead of on a fallback. The corollary matters as much: do
+> NOT rename elements on an already-built page to satisfy the gate. If a row is open and the element is bound to
+> the right column, that is a finding for `## Notes`, not work.
+
 > The `⚠ Confirm` rows you must resolve are the ones in YOUR task. A page's questions are the FIRST rows of that page's own build task, so the sub-agent that answers them is the one that builds against the answers — and when a page is big enough to be cut into several build tasks, the later ones read those answers out of the `## Notes` of the task they name in `dependsOn`. Two things precede every page: the run's `Reference cache` (the clio guidance articles and the design spec — read them from `refs/` by path instead of re-fetching; it does NOT hold tool contracts or component docs, so call `get-tool-contract` and `get-component-info` yourself for the tools and components YOUR task touches, and read the answer whole) and `Scaffolding` (the app, package, section and page shells). That ordering is deliberate: a question that could change WHICH pages exist (an unresolved detail, an unverified child page) blocks the PLAN through the structure gate, so it can never reach a task at all; what reaches the Confirm worklist is about a page's CONTENT, which is built after it.
 
 **Use the `creatio-ui-guidelines` skill while building the page — not only when asked.** Consult it BEFORE and WHILE authoring any Freedom page or part (placing/ordering fields, choosing a component, grid `layoutConfig`/`colSpan`/nesting, container styling, captions/tooltips) and run its review on each page you build. It catches layout defects the migration engine does not model — overlapping ExpansionPanels, lone-field islands, spacing/color/border-radius mismatches, accessibility. Do not wait for the user to ask for a UI review.
