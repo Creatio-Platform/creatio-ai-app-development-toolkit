@@ -33,7 +33,7 @@ const strip = (s) => (s == null ? "" : String(s)
 // HTML-encoded so it can never be a tag), and a Markdown link/image (`[x](javascript:…)` / `![x](…)` → break
 // the `](` so it renders literally). `&` is left as-is: a legitimate caption like "R&D" must read cleanly, and
 // since `<`/`>` are encoded there is no tag for a bare `&` to complete.
-const esc = (s) => strip(s)
+export const esc = (s) => strip(s)
   .replaceAll("`", "ˋ")
   .replaceAll("|", String.raw`\|`)
   .replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -2908,13 +2908,33 @@ function resolveStructuralVk(vk, ctx) {
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
 // `name` is the uncheckable case.
+//
+// ENG-99126 — WHAT COUNTS AS THE SAME FIELD. The plan publishes the CLASSIC element names, which are the bare
+// column names (`Contact`); a Freedom builder names the element `ContactField` and binds it `control: "$Contact"`,
+// and the Interface Designer names it `PDS_Contact_<hash>`-bound. Measured on a real run: all 19 expected fields
+// on the stand, every one bound to its column, and this row read `0/19 expected fields present` because the
+// comparison was the element name, verbatim. So an expected name `n` is satisfied by a built component whose
+//   · element name is `n`, or
+//   · element name is `n` + `Field` (the builder convention the platform's own pages follow), or
+//   · bound attribute is `n` (`boundAttributeOf` — the column the field actually reads/writes).
+// Each built component satisfies at most ONE expected name (two classic items binding one column — `col`, `col_2`
+// — still need two built fields), so a page with one field cannot close a row that expects two on the same column.
+function fieldMatches(o, n) {
+  return o.name === n || o.name === `${n}Field` || o.bound === n;
+}
 function resolveFieldsByIdentity(vk, names, ops) {
-  const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
-  if (ops.length && !builtNames.size) return ["⚠ verify",
+  const identified = ops.filter((o) => o.name || o.bound);
+  if (ops.length && !identified.length) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const missing = names.filter((n) => !builtNames.has(n));
+  const claimed = new Set();
+  const missing = names.filter((n) => {
+    const i = identified.findIndex((o, idx) => !claimed.has(idx) && fieldMatches(o, n));
+    if (i < 0) return true;
+    claimed.add(i);
+    return false;
+  });
   const b = names.length - missing.length;
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
@@ -3083,12 +3103,39 @@ export function resolveComponentVk(vk, ctx) {
 // / `condition` / `actions` but not their inner shape, so tokenizing the whole rule survives a shape change.
 // The rule's tokens, or `null` when the slot was never populated (nobody read the rules). Own fn so `resolveRuleVk`
 // stays under Sonar CC 15.
+//
+// ENG-99126 — WHAT IS TOKENIZED, and what a token has to look like to count. Two measured defects on one run:
+//   · the whole rule was tokenized, `caption` included, so a rule captioned "Employee is visible when Source is
+//     Internal recommendation" satisfied the expected identities `Employee` AND `Source` by its prose alone — a
+//     false ✅ on a row whose whole point is that the rule GOVERNS the column;
+//   · a page rule names the ELEMENT it acts on (`actions[].items: ["RejectReasonField"]`), never the bare column,
+//     so `RejectReason` was "missing" while the rule requiring it sat on the stand.
+// So only the parts that state what the rule reads and does (`condition`, `actions`) are tokenized, and every
+// token is ALSO indexed under its column form: `<Col>Field` → `<Col>`, `PDS_<Col>_<hash>` → `<Col>`. `name` and
+// `caption` are labels, and a label that happens to contain a column name is not evidence the rule governs it.
+const GOVERNED_KEYS = ["condition", "actions"];
+function columnFormsOf(token) {
+  const out = [token];
+  const field = /^(.+)Field$/.exec(token);
+  if (field) out.push(field[1]);
+  const pds = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(token);
+  if (pds) out.push(pds[1]);
+  return out;
+}
 function builtRuleTokens(built) {
   let rules = null;
   if (Array.isArray(built)) rules = built;
   else if (Array.isArray(built?.rules)) rules = built.rules;
   if (rules == null) return null;
-  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_]\w*/g) || []));
+  return rules.map((r) => {
+    // A rule with none of the governed keys (an unknown shape) falls back to the whole record, minus its labels —
+    // narrowing to nothing would make every such rule match nothing and read as a shortfall the builder cannot fix.
+    const governed = r && typeof r === "object" && GOVERNED_KEYS.some((k) => k in r)
+      ? Object.fromEntries(GOVERNED_KEYS.filter((k) => k in r).map((k) => [k, r[k]]))
+      : (r && typeof r === "object" ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== "caption" && k !== "name")) : r);
+    const raw = String(JSON.stringify(governed)).match(/[A-Za-z_]\w*/g) || [];
+    return new Set(raw.flatMap(columnFormsOf));
+  });
 }
 export function resolveRuleVk(vk, ctx) {
   const want = [...new Set(vk.names || [])];
@@ -3107,10 +3154,13 @@ export function resolveRuleVk(vk, ctx) {
   // A shortfall is ⚠ unverified, not ❌ MISSING — the same conservative choice `resolveFieldsByIdentity` makes for a
   // by-identity match: this ticket's whole point is to STOP built work reading as MISSING, and a rule matched by a
   // whole-token heuristic must not cry ❌ on a rule the builder named so the column token does not literally appear.
-  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule`, "ok"];
+  // The count the plan's label carries (`× N` rules) and the count matched here (distinct target attributes) are
+  // two different numbers, and a reader shown `2/5` under `× 7` cannot tell which one is short. Name both.
+  const built = tokenSets.length;
+  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule (${b} of ${want.length} target attribute(s), ${built} rule(s) on the built page)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}`;
-  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute${miss}`, "unverified"];
+  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) on the built page)${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
@@ -3474,6 +3524,21 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // `bundle.viewConfig` is a JSON TREE (`items` nesting) — plain JSON, no parser involved. Walk it into the flat
 // `{name, type}` op list every resolver already counts. Nodes carry no `parentName`; that is safe, because no
 // resolver reads one (fields match on `name`, everything else counts `type`).
+// The page attribute a FIELD component binds to, read off the node's own binding (`control: "$Contact"` for an
+// input, `value` / `checked` for the value-bound kinds). It is the field's COLUMN identity as the built page states
+// it, and the identity leg of the fields row (`resolveFieldsByIdentity`) matches on it beside the element name —
+// see that function for why the name alone was not enough. Returns null for anything that is not a `$` binding.
+// `PDS_<Column>_<hash>` is the attribute name the Interface Designer mints (a page built in the Designer, or one
+// whose fields were added there after the build): the column sits between the prefix and the hash, so it is
+// unwrapped to the bare column here. Deliberately NOT unwrapped: a name with no `PDS_` prefix — the builder chose
+// it, and it is compared as written.
+export function boundAttributeOf(node) {
+  const b = [node.control, node.value, node.checked].find((v) => typeof v === "string" && v.startsWith("$"));
+  if (!b) return null;
+  const attr = b.slice(1);
+  const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
+  return m ? m[1] : attr;
+}
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
@@ -3481,9 +3546,11 @@ function walkViewConfig(node, out = []) {
     // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
     // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
     // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
+    // A FIELD component keeps a third: the attribute it binds (`bound`), the column identity the fields row reads.
     const cols = columnsOf(node);
     const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}) });
+    const attr = boundAttributeOf(node);
+    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
   }
   return walkViewConfig(node.items, out);
 }
@@ -3665,6 +3732,10 @@ export function renderVerify(result, opts = {}, built = {}) {
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
   const L = []; let n = 0;
+  // EVERY row, not only the open ones (ENG-99126): the final report the orchestrated run closes on needs the
+  // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
+  // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
+  const rows = [];
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
@@ -3678,6 +3749,11 @@ export function renderVerify(result, opts = {}, built = {}) {
       // its own without re-deriving the classification the engine already made.
       tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome,
         owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
+      // `kind` tells the four row kinds apart where `outcome` alone cannot: an approved boundary and a
+      // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
+      const kind = r.na ? "na" : (r.vk ? "machine" : "confirm");
+      rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
+        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
     }
   }
@@ -3687,5 +3763,5 @@ export function renderVerify(result, opts = {}, built = {}) {
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages };
+  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows };
 }

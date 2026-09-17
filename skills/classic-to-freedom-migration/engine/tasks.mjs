@@ -46,7 +46,7 @@ import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "
 // WHO SETS WHICH. `todo` and `in-progress` are the engine's lifecycle (file created, `--start`). `done` and
 // `partial` are COMPUTED from the Outcome cells and never typed. `blocked` and `n/a` are the agent's own
 // decisions and are never computed over — see `computeStatus`.
-const S_TODO = "todo", S_IN_PROGRESS = "in-progress", S_DONE = "done", S_BLOCKED = "blocked", S_NA = "n/a";
+export const S_TODO = "todo", S_IN_PROGRESS = "in-progress", S_DONE = "done", S_BLOCKED = "blocked", S_NA = "n/a";
 // Distinct from `blocked` because it must not halt dependents.
 export const S_PARTIAL = "partial";
 export const TASK_STATUSES = [S_TODO, S_IN_PROGRESS, S_DONE, S_BLOCKED, S_NA, S_PARTIAL];
@@ -917,7 +917,7 @@ const STATUS_MARK = new Map([
   [S_PARTIAL, "◐ partial"],
 ]);
 // An unrecognised status is shown as itself and counted as neither done nor open.
-const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
+export const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 
 // `Step` is the position in the QUEUE, which is not the same fact as a task file's `order` field: an
 // orchestrator-authored file is never rewritten, so the `order` it declared for itself stands even where the queue
@@ -1094,7 +1094,7 @@ function attentionLines(set) {
   return out;
 }
 
-function countStatuses(tasks) {
+export function countStatuses(tasks) {
   const counts = { done: 0, open: 0, partial: 0, other: 0 };
   for (const t of tasks) {
     if (t.unread) counts.other++;
@@ -1907,6 +1907,20 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   resolvePartials(merged);
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { written, parked, pending, set: merged };
+}
+
+// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY (ENG-99126). The final report reads the ledger
+// through this — the same merge `syncRepairDir` makes (plan rows carry `na`, so an agent-asserted boundary is
+// tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
+// where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say
+// what the folder holds: a run refused at the gate is exactly the run whose ledger the user most needs to see.
+export function readMergedTaskDir(dir, result, opts = {}) {
+  const fresh = taskSetFor(dir, result, opts);
+  if (fresh.refused) return { ...fresh, tasks: [] };
+  const merged = mergeTaskSet(fresh, readExisting(dir));
+  attachDispatch(merged, dir);
+  resolvePartials(merged);
+  return merged;
 }
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every

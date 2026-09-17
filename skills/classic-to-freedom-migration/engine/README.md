@@ -19,7 +19,7 @@ node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first mar
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
-node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks
+node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # the MIGRATION RESULT REPORT: ledger + built pages, one verdict (plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
@@ -297,6 +297,19 @@ is non-empty). The stderr line names which of the two it is: `⛔ VERIFY INCOMPL
 repairable on-stand (build the missing pieces, file the evidence, re-verify); `⛔ GATE BLOCKED` / `STRUCTURE
 INCOMPLETE` / `COVERAGE INCOMPLETE` / `LIST GATE BLOCKED` describe the PLAN and fire in every mode — no build
 round closes one.
+
+**The migration result report (`--verify --built <f> --tasks <dir>`, `report.mjs`).** With a task folder the
+verify run prints ONE artifact computed from the task LEDGER and the BUILT PAGES, and its verdict is their
+conjunction — `✅ COMPLETE` only when every task is closed and dispatched, no deliverable stands recorded
+`not-built`, and every machine-checked row is present; otherwise `⛔ NOT COMPLETE — <every reason>`, exit 2 with a
+`⛔ RUN NOT COMPLETE` stderr line. Sections, in the order a person acts on them: summary counts → **1** deliverables
+recorded not built (cause, task file, row) → **2** boundaries the agent asserted (`n-a` the plan did not mark) →
+**3** machine rows still open → **4** the task ledger → **5** ☐ confirm-on-stand rows as the manual follow-up
+list → **6** the full plan-vs-built table. `renderVerify` publishes `rows` (every row with `pageKey`, `kind`
+`machine|confirm|na`, `status`, `outcome`) for it. Without `--tasks` the bare table is printed as before.
+**Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound
+to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
+whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.
 
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a

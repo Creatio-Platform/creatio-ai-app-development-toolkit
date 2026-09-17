@@ -9032,6 +9032,73 @@ check("ENG-94975 M1: the fields row tells the three inputs APART — fetched-and
   && !/identity NOT checked/.test(m12Row(m1NoEntry, "Fields — 1 expected")),
   () => ({ empty: m12Row(m1Empty, "Fields — 1 expected").slice(0, 200), noEntry: m12Row(m1NoEntry, "Fields — 1 expected").slice(0, 200) }));
 
+/* ---- ENG-99126 — WHAT COUNTS AS THE SAME FIELD. Measured on the Applicants run (2026-09-17): all 19 expected
+   fields on the stand, each element named `<Column>Field` and bound `control: "$<Column>"`, and the row read
+   `0/19 expected fields present` because the comparison was the element name, verbatim. The plan publishes the
+   CLASSIC element names (bare columns); a Freedom builder follows the platform's own `<Column>Field` convention;
+   the Interface Designer binds `$PDS_<Column>_<hash>`. All three are the same field. ---- */
+{
+  const named = (name, control) => [{ name, type: "crt.Input", ...(control ? { control } : {}) }, ...M12_NAMED.slice(1)];
+  const rowOf = (items) => m12Row(renderVerify(m12Run, m12Opts, m12Built(m12Page(items))), "Fields — 1 expected");
+  check("ENG-99126 fields: an element named `<Column>Field` (the builder convention) satisfies the expected bare column name — ✅, not `0/1 present` (the measured false negative)",
+    () => /\| ✅ Done \|/.test(rowOf(named("MainFField"))) && /matched BY NAME/.test(rowOf(named("MainFField"))),
+    () => rowOf(named("MainFField")));
+  check("ENG-99126 fields: an element with ANY name whose `control` binds the expected column (`$MainF`) satisfies it — the bound column is the field's identity as the built page states it",
+    () => /\| ✅ Done \|/.test(rowOf(named("SomethingElse", "$MainF"))),
+    () => rowOf(named("SomethingElse", "$MainF")));
+  check("ENG-99126 fields: the Interface Designer's `$PDS_<Column>_<hash>` binding is unwrapped to the column and satisfies it too",
+    () => /\| ✅ Done \|/.test(rowOf(named("PDS_MainF_abc123", "$PDS_MainF_abc123def"))),
+    () => rowOf(named("PDS_MainF_abc123", "$PDS_MainF_abc123def")));
+  check("ENG-99126 fields (guard): an unrelated name bound to an unrelated column is STILL a shortfall naming the missing field — the widening does not turn every input into a match",
+    () => /0\/1 expected fields present — missing: MainF/.test(rowOf(named("OtherField", "$Other"))),
+    () => rowOf(named("OtherField", "$Other")));
+  check("ENG-99126 fields (guard): one built field satisfies ONE expected name — two expected names on the same column still need two built fields",
+    () => {
+      const g = checklistGroups(m12Run, m12Opts).flatMap((x) => x.rows).find((r) => r.pageKey === "main" && r.vk?.type === "fields");
+      const vk = { ...g.vk, n: 2, names: ["MainF", "MainF_2"] };
+      const ctx = verifyCtx(m12Built(m12Page(named("MainFField", "$MainF"))), "main");
+      const [mark, ev] = resolveVk(vk, ctx);
+      return mark === "⚠ verify" && /1\/2 expected fields present — missing: MainF_2/.test(ev);
+    }, () => resolveVk({ type: "fields", n: 2, names: ["MainF", "MainF_2"] }, verifyCtx(m12Built(m12Page(named("MainFField", "$MainF"))), "main")));
+}
+
+/* ---- ENG-99126 — WHAT A BUSINESS RULE GOVERNS. Two measured defects on the same run: the rule row read `2/5`
+   with `RejectReason` "missing" while the rule requiring it sat on the stand (`actions[].items: ["RejectReasonField"]`
+   names the ELEMENT, never the bare column), and the two rules that DID match matched on their `caption` prose
+   ("Employee is visible when Source is…") — a label mentioning a column is not a rule governing it. ---- */
+{
+  const ruleRoot = (rules) => verifyCtx({ pages: { main: { viewConfig: { items: [] }, businessRules: { count: rules.length, rules } } } }, "main");
+  const elementRule = { name: "BusinessRule_1", caption: "Reject reason is required at stage Rejected", enabled: true,
+    condition: { conditions: [{ leftExpression: { type: "AttributeValue", path: "PDS.Stage" } }] },
+    actions: [{ type: "make-required", items: ["RejectReasonField"] }] };
+  const captionOnly = { name: "BusinessRule_2", caption: "Employee is visible when Source is Internal recommendation", enabled: true,
+    condition: { conditions: [{ leftExpression: { type: "AttributeValue", path: "PDS.Kind" } }] },
+    actions: [{ type: "make-visible", items: ["SomeOtherField"] }] };
+  check("ENG-99126 rules: a rule whose action names the ELEMENT (`RejectReasonField`) governs the expected column `RejectReason` — ✅, not `missing: RejectReason` (the measured false negative)",
+    () => { const [mark, ev, outcome] = resolveRuleVk({ type: "rule", n: 1, names: ["RejectReason"] }, ruleRoot([elementRule]));
+      return mark === "✅ Done" && outcome === "ok" && /1 of 1 business rule/.test(ev); },
+    () => resolveRuleVk({ type: "rule", n: 1, names: ["RejectReason"] }, ruleRoot([elementRule])));
+  check("ENG-99126 rules (guard): a column named ONLY in a rule's `caption` does NOT satisfy it — a label mentioning `Employee` and `Source` is not a rule governing either (the measured false positive)",
+    () => { const [mark, ev, outcome] = resolveRuleVk({ type: "rule", n: 2, names: ["Employee", "Source"] }, ruleRoot([captionOnly]));
+      return mark === "⚠ verify" && outcome === "unverified" && /0\/2 business rule/.test(ev) && /missing: Employee, Source/.test(ev); },
+    () => resolveRuleVk({ type: "rule", n: 2, names: ["Employee", "Source"] }, ruleRoot([captionOnly])));
+  check("ENG-99126 rules: the shortfall text names BOTH counts a reader sees — distinct target attributes expected vs the plan's rule count, and how many rules the built page carries — so `2/5` under `× 7` stops reading as three different numbers",
+    () => { const [, ev] = resolveRuleVk({ type: "rule", n: 7, names: ["RejectReason", "Employee"] }, ruleRoot([elementRule, captionOnly]));
+      return /1\/2 business rule/.test(ev) && /2 distinct target attribute\(s\) expected across the plan's 7 rule\(s\); 2 rule\(s\) on the built page/.test(ev); },
+    () => resolveRuleVk({ type: "rule", n: 7, names: ["RejectReason", "Employee"] }, ruleRoot([elementRule, captionOnly])));
+}
+
+/* ---- ENG-99126 — `renderVerify` publishes EVERY row, not only the open ones: the final report needs the
+   ☐ confirm-on-stand rows (the manual follow-up list) and the ✅ count, which the per-page open-row tally by
+   design never kept. Same cells, same numbering as the table. ---- */
+check("ENG-99126 renderVerify: `rows` carries every table row with its page, kind (machine / confirm / na), status and outcome, numbered exactly as the table",
+  () => {
+    const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED)));
+    const tableRows = v.markdown.split("\n").filter((l) => /^\| \d+ \|/.test(l)).length;
+    return Array.isArray(v.rows) && v.rows.length === tableRows && v.rows.every((r, i) => r.n === i + 1 && r.pageKey && r.deliverable && r.status)
+      && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na"].includes(r.kind));
+  }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
+
 /* ---- M2: D6's tri-state for the COMPONENT rows (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
    `resolveCountVk`. So a page whose `--built.pages` key was never supplied reported hard ❌ MISSING on all three —
