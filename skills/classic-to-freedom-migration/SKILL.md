@@ -498,8 +498,14 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    separate pieces of work, or add one the plan does not model, by writing a new file with `origin: orchestrator`
    (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. Give it
    a `writesTo:` naming the artifact it writes (copy the value from the task whose page it touches) so the engine
-   chains it behind the other writers of that page; a repair task added for an already-built page is exactly this
-   case, and without the field it sits in the queue writing a page body with nothing sequencing it. You may NOT
+   chains it behind the other writers of that page; a corrective task for a decision that changes an already-built
+   page is exactly this case, and without the field it sits in the queue writing a page body with nothing
+   sequencing it. **What you may NOT hand-write is a task that settles another task's `not-built` row.** A repair
+   task is recognised by front matter the engine writes — `kind` / `cause` / `repairRound` / `covers`, whose row
+   keys are hashed labels you cannot type — so one you author settles nothing however it is titled: the `partial`
+   task stays `partial`, the run keeps failing over a row somebody has already rebuilt, and the next verify opens
+   a second round for the same work. Route it instead: `--tasks <dir> --route`, which opens that round mid-run,
+   with none of the `--built` payload `--verify` needs. You may NOT
    delete or edit an engine task, and a deviation from the plan itself is a proposal to the user, recorded in
    `decisions.md`, never an edit you make on their behalf.
 6. **Report after every task, and never report completion yourself.** Tell the user which task closed, what the
@@ -527,6 +533,15 @@ No task produces it, and a builder must not assemble its own verdict, so:
 - **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
   reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
   `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
+  **GROUNDS TO REJECT — the judge has to be able to say no, or the verdict is a formality.** A record that states
+  any part of its deliverable is blocked, deferred, residual, partial or not built **cannot** be `convincing:
+  true`, whatever else it contains and however complete the rest of the work reads: the record is then evidence
+  that the row is open, which is the one thing the verdict is being asked about. A record that does not name the
+  reference page it diffed against and the components it checked is a surface review and is not convincing
+  either. **The verdict must QUOTE the sentence it endorses** in `why` — a verdict that only asserts the record
+  is convincing cannot be told apart from a rubber stamp, and that is what a rubber stamp looks like from the
+  outside. Rule it `convincing: false` with the admission quoted; the row then stays open and its deliverable is
+  routed like any other unbuilt row rather than closing on a verdict nobody could check.
 
 Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
 
@@ -539,10 +554,16 @@ they write, so the queue sequences them behind that page's build rather than bes
 - **Merged by (page, cause).** Sixteen handlers missing from one page is ONE task, not sixteen: a defect with
   many symptoms is one defect, and sixteen tasks is sixteen sub-agent startups to make one edit each. A merged
   task that outgrows the budget is cut like any other.
+- **A repair task CLOSES like any other task** — its sub-agent fills the `Outcome` cell of every row and the
+  engine computes the status from those cells. Every row accounted for reads `done` and closes the rows this
+  round covers in the tasks they came from; a round that fixed some of them reads `partial`, and those rows alone
+  go to the next round. A round nobody dispatched closes nothing, whatever its cells say.
 - **A round is an ATTEMPT, not a verify run.** Re-verifying an unchanged page opens no second round — the rows
   are still the work of the round already in the folder. A new round opens only after the previous one was closed
   and the rows came back.
-- **Three rounds, then PARKED.** After three attempts at one cause the engine writes no fourth task and says so.
+- **Three rounds, then PARKED.** After three attempts at one KIND of row on one page the engine writes no fourth
+  task and says so. The cap counts the kind, not the cause: a row `--verify` could not confirm comes back from
+  the round that failed to fix it recorded as not built, and counting those separately is three more agents.
   Take it to the user: at that point the plan, the stand or the expectation is wrong, not the build. Do not
   hand-write a fourth task to get around this.
 - **What is YOURS in repair** is only what no sub-agent can do: proposing a PLAN change (to the user, recorded in
@@ -616,7 +637,7 @@ the built pages only and says so; it is not the gate for a run that used a task 
 
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). Nothing in the plan carries a GUID, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists).
 
-**Exit 2 is THREE different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names (`status: todo`), `--start` each, and hand each to its own sub-agent.
+**Exit 2 is FOUR different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names (`status: todo`), `--start` each, and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The `--verify` table is the ONLY sanctioned completion/status report — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.

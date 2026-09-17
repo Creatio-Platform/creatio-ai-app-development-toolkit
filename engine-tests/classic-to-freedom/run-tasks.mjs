@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir,
+import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
@@ -520,8 +520,8 @@ check("renderTaskFile: a row with no machine verifier is closed by an evidence r
     const text = renderTaskFile(t, SET);
     return text.includes("| an evidence record + a judge verdict |") && text.includes("| N/A — agreed boundary |");
   }, () => renderTaskFile({ ...SAMPLE, rows: [{ label: "prose row" }, { label: "out of scope", na: "agreed boundary" }] }, SET));
-check("renderTaskFile: the deliverable block is marked ENGINE-OWNED and the notes block is marked as the caller's — the two ownerships are stated in the file, not only in the module",
-  /ENGINE-OWNED\. Rewritten from the plan on every/.test(SAMPLE_TEXT) && /YOURS\. Never rewritten/.test(SAMPLE_TEXT),
+check("renderTaskFile: the deliverable block is marked engine-owned EXCEPT the Outcome column, and the notes block is marked as the caller's — the ownerships are stated in the file, not only in the module",
+  /ENGINE-OWNED except the `Outcome` column, which is YOURS/.test(SAMPLE_TEXT) && /YOURS\. Never rewritten/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
 check("parseTaskFile: `## Notes` is read back verbatim, with the guidance comment stripped — the caller's own record survives the round trip",
   () => parseTaskFile(renderTaskFile({ ...SAMPLE, notes: "built C1F\nevidence: ev-42" }, SET)).notes === "built C1F\nevidence: ev-42",
@@ -1351,11 +1351,11 @@ check("repair: a repair task WRITES the page's artifact, so it is chained behind
     const { tasks } = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []);
     return tasks.every((t) => t.writesTo === taskAt(SET, "main", DRIFT_GROUP).writesTo);
   }, () => buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks.map((t) => t.writesTo));
-check("repair: the rendered file shows what `--verify` ACTUALLY SAW per row — a sub-agent sent to fix a row needs the gate's own status and evidence, because re-describing it is how a round gets spent on a row that was never the problem",
+check("repair: the rendered file shows what was ACTUALLY RECORDED per row — a sub-agent sent to fix a row needs the observation itself, because re-describing it is how a round gets spent on a row that was never the problem; the heading names no source, since the row may come from `--verify` or from a build agent's own Outcome cell",
   () => {
     const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
     const text = renderTaskFile(t, SET);
-    return /\| # \| Deliverable \| `--verify` said \| Evidence it read \|/.test(text)
+    return /\| # \| Deliverable \| What was recorded \| Evidence behind it \|/.test(text)
       && text.includes("❌ MISSING") && text.includes("not on the built page");
   }, () => renderTaskFile(buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0], SET));
 check("repair: the file says it is a REPAIR round and carries NO spec slice — the deliverable is the failing row, not the page's whole design, and it states that a row open because the PLAN is wrong is a proposal, never a row closed by asserting it",
@@ -2354,5 +2354,1057 @@ check("pageGroup: the SAME group name on two different pages yields the same `ba
     return named.length >= 2 && new Set(named.map((g) => g.title)).size === named.length;
   }, () => GROUPS.filter((g) => g.baseTitle === "Quality gates").map((g) => g.title));
 
+console.log("\n===== the OUTCOME column: the status is computed from the rows, not typed =====");
+// Rewrites the Outcome cell of row `n` (1-based) of a rendered task file. The agent edits this cell and nothing
+// else in the table; every test below goes through the same path a sub-agent would.
+function setOutcome(text, n, value) {
+  let seen = 0;
+  return text.split("\n").map((line) => {
+    const cells = line.split(/(?<!\\)\|/);
+    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
+    seen++;
+    if (seen !== n) return line;
+    cells[5] = ` ${value} `;
+    return cells.join("|");
+  }).join("\n");
+}
+// Hoisted: written by most checks below.
+const NOT_BUILT_BLOCKED = "not-built — blocked";
+const rowCount = (text) => text.split("\n").filter((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); }).length;
+const allBuilt = (text) => {
+  let t = text;
+  for (let i = 1; i <= rowCount(text); i++) { t = setOutcome(t, i, "built"); }
+  return t;
+};
+// One task re-read through the merge, exactly as `syncTaskDir` does it: render → edit → parse → carry over.
+const reread = (task, set, edit) => {
+  const text = edit(renderTaskFile(task, set));
+  const merged = mergeTaskSet({ ...set, tasks: [task] }, [{ file: task.file, ...parseTaskFile(text) }]);
+  return merged.tasks[0];
+};
+
+check("BACKWARD COMPATIBLE: a task whose Outcome column is entirely empty keeps the status it recorded — every folder written before this existed is in exactly that shape, and turning them all `partial` on the first re-slice would make the new state meaningless",
+  () => {
+    const asDone = reread(SAMPLE, SET, (t) => t.replace("status: todo", "status: done"));
+    const asTodo = reread(SAMPLE, SET, (t) => t);
+    return asDone.status === "done" && asTodo.status === "todo";
+  }, () => ({ done: reread(SAMPLE, SET, (t) => t.replace("status: todo", "status: done")).status }));
+
+check("BACKWARD COMPATIBLE: a file carrying the OLD four-column table (no Outcome column at all) parses to no outcomes and keeps its recorded status — the parser must not read the `Closed by` cell as an outcome",
+  () => {
+    const old = renderTaskFile(SAMPLE, SET)
+      .replace("| # | From | Deliverable | Closed by | Outcome |", "| # | From | Deliverable | Closed by |")
+      .replace("| --- | --- | --- | --- | --- |", "| --- | --- | --- | --- |")
+      .split("\n").map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|\s*—\s*\|\s*$/, "|") : l)).join("\n")
+      .replace("status: todo", "status: done");
+    const parsed = parseTaskFile(old);
+    return parsed.outcomes.size === 0 && parsed.meta.status === "done";
+  }, () => parseTaskFile(renderTaskFile(SAMPLE, SET)).outcomes.size);
+
+check("a table the AGENT wrote under `## Notes` is NOT read as deliverables — a real recorded run carries a nine-row list-column table there whose rows have enough cells to look exactly like a deliverables row, and computing a task's status off a table the engine never wrote is the same defect one level down",
+  () => {
+    const withNotesTable = renderTaskFile(SAMPLE, SET).replace(/## Notes\n/, [
+      "## Notes", "",
+      "| # | Column | Type | Source | Outcome |",
+      "| --- | --- | --- | --- | --- |",
+      "| 1 | PDS_TsName | Text | profile | built |",
+      "| 2 | PDS_TsAccount | Lookup | profile | built |",
+      "",
+    ].join("\n"));
+    const parsed = parseTaskFile(withNotesTable);
+    return parsed.outcomes.size === 0 && parsed.table.length === SAMPLE.rows.length;
+  }, () => parseTaskFile(renderTaskFile(SAMPLE, SET)).table.length);
+
+check("every row `built` computes `done` — the agent does not type the word, so a task nobody set to `done` still closes once its rows are accounted for",
+  () => reread(SAMPLE, SET, allBuilt).status === "done",
+  () => reread(SAMPLE, SET, allBuilt).status);
+
+check("ONE row `not-built` computes `partial` — this is the whole point: an agent that built every row but one now has a state to record, instead of `done` plus a sentence in `## Notes`",
+  () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 2, NOT_BUILT_BLOCKED)).status === "partial",
+  () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 2, NOT_BUILT_BLOCKED)).status);
+
+check("`done` CANNOT BE SET BY HAND over a `not-built` row — the front matter says `done`, the rows say otherwise, and the rows win. This is also what stops a later reader overwriting a sub-agent's verdict",
+  () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "not-built — needs-decision").replace("status: todo", "status: done")).status === "partial",
+  () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "not-built — needs-decision").replace("status: todo", "status: done")).status);
+
+check("a CLOSING status claimed over rows nobody accounted for computes `partial` — an unaccounted row is not a built row, and a task cannot close by leaving cells blank",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: done")).status === "partial",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: done")).status);
+
+check("a task still IN PROGRESS with only some rows filled stays `in-progress` — an agent part-way through its own table is not a finding, and flagging it would put a warning on every healthy run in flight",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: in-progress")).status === "in-progress",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: in-progress")).status);
+
+check("`n/a` survives an outcome cell — it is the one closure that legitimately has no builder, it is earned by the reason under `## Notes` that the dispatch gate reads, and a stale cell must not take that exemption away",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: n/a")).status === "n/a",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: n/a")).status);
+
+check("`blocked` survives an outcome cell too — it is the only HALT an agent can reach (rule 5 asks for it when migrated content reads like an instruction), and since `partial` releases dependents, computing `partial` over it would walk the queue past a stop set on purpose",
+  () => {
+    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked"));
+    return t.status === "blocked" && notBuiltRows([t]).length === 0;
+  }, () => reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked")).status);
+
+check("a `blocked` task still HALTS its dependents — `--start` refuses a task whose `dependsOn` is blocked, exactly as before this change; only `partial` releases them",
+  () => {
+    const d = tmp("blockhalt");
+    const s1 = syncTaskDir(d, RUN, OPTS);
+    // `Page build`, NOT `Quality gates` — the gates task is a leaf and nothing depends on it, so a halt asserted
+    // over it asserts nothing.
+    const tgt = taskAt(s1, "child:G1", "Page build");
+    const fp = path.join(d, tgt.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked"));
+    const s2 = syncTaskDir(d, RUN, OPTS);
+    const dep = s2.tasks.find((t) => (t.dependsOn || []).includes(tgt.id));
+    // No dependent means the FIXTURE stopped exercising the halt, which has to fail rather than pass quietly.
+    return !!dep && s2.tasks.find((t) => t.id === tgt.id).status === "blocked"
+      && !!startTask(d, dep.id, RUN, OPTS).blockedByDeps;
+  }, "a blocked dependency must still refuse the dispatch");
+
+check("an outcome is keyed by the DELIVERABLE, not by the row number — it survives a re-slice that renumbers the rows, because a mark that silently detaches from its row is the same loss this change exists to prevent",
+  () => {
+    const text = setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, NOT_BUILT_BLOCKED);
+    const { outcomes } = parseTaskFile(text);
+    const shuffled = { ...SAMPLE, rows: [...SAMPLE.rows].reverse() };
+    const merged = mergeTaskSet({ ...SET, tasks: [shuffled] }, [{ file: SAMPLE.file, ...parseTaskFile(text) }]);
+    const t = merged.tasks[0];
+    const marked = t.rows.filter((r) => r.outcomeKind === "not-built");
+    return outcomes.size === SAMPLE.rows.length && t.status === "partial"
+      && marked.length === 1 && marked[0].label === SAMPLE.rows[0].label;
+  }, () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, NOT_BUILT_BLOCKED)).rows.map((r) => [r.label, r.outcomeKind]));
+
+check("the cause vocabulary is exactly the two ways routing branches — `blocked` (a re-run may clear it) and `needs-decision` (a person settles it); a third token nothing branches on is one the agent has to guess between",
+  () => NOT_BUILT_CAUSES.length === 2 && NOT_BUILT_CAUSES.join(",") === "blocked,needs-decision",
+  () => NOT_BUILT_CAUSES);
+
+check("a cause outside that vocabulary degrades to `needs-decision` rather than being dropped — the row is still not built, and a token the engine cannot route is by definition one a person has to look at",
+  () => {
+    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, "not-built — no-surface"));
+    return t.status === "partial" && notBuiltRows([t])[0].cause === "needs-decision";
+  }, () => notBuiltRows([reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, "not-built — no-surface"))]));
+
+check("a `not-built` with no recognised cause still counts as not built and routes to a human — dropping it would turn a written admission back into an empty cell, which is the failure mode itself",
+  () => {
+    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, "not-built — ran out of time"));
+    return t.status === "partial" && notBuiltRows([t])[0].cause === "needs-decision";
+  }, () => notBuiltRows([reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, "not-built — ran out of time"))]));
+
+check("notBuiltRows names the DELIVERABLE and its cause, not just the task — `task 5 is partial` is not the fact anyone needs; `the static Type filter was not built, and the stand was unreachable` is",
+  () => {
+    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED));
+    const items = notBuiltRows([t]);
+    return items.length === 1 && items[0].n === 2 && items[0].cause === "blocked"
+      && items[0].row.label === SAMPLE.rows[1].label;
+  }, () => notBuiltRows([reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED))]));
+
+console.log("\n===== `partial` on the index, the progress block and the gates =====");
+{
+  const dir = tmp("partial");
+  const first = syncTaskDir(dir, RUN, OPTS);
+  const target = taskAt(first, "child:G1", "Quality gates");
+  const p = path.join(dir, target.file);
+  fs.writeFileSync(p, setOutcome(allBuilt(fs.readFileSync(p, "utf8")), 1, "not-built — needs-decision"));
+  const second = syncTaskDir(dir, RUN, OPTS);
+  const idx = readIndex(dir);
+  const back = second.tasks.find((t) => t.id === target.id);
+
+  check("syncTaskDir: the computed `partial` is WRITTEN BACK into the front matter — the next reader of that file, and any tool that only greps `status:`, sees the computed value rather than what the agent last typed",
+    () => back.status === "partial" && /status: partial/.test(fs.readFileSync(p, "utf8")),
+    () => fs.readFileSync(p, "utf8").split("\n").slice(0, 4));
+
+  check("two deliverables of ONE task that share a long common prefix keep SEPARATE outcomes — the `Quality gates` rows differ only in their last sentence, and filing both under a truncated key let the second silently overwrite the first",
+    () => {
+      const rows = second.tasks.find((t) => t.id === target.id).rows;
+      return rows.length === 2 && rows[0].label.slice(0, 60) === rows[1].label.slice(0, 60)
+        && rows[0].outcomeKind === "not-built" && rows[1].outcomeKind === "built";
+    }, () => second.tasks.find((t) => t.id === target.id).rows.map((r) => r.outcomeKind));
+
+  check("the index counts `partial` in its OWN bucket and NOT as done — a run with unbuilt deliverables that reads `Done: 9 · Open: 0` has told the reader the opposite of the truth",
+    () => /\*\*⚠ Partial:\*\* 1/.test(idx) && !/\*\*Done:\*\* 1 /.test(idx) && /◐ partial/.test(idx),
+    () => idx.split("\n").slice(0, 4));
+
+  check("the index Attention section names the unbuilt DELIVERABLE, its cause and where the detail is — the file that recorded it is where the reason lives, so the line points there rather than repeating prose",
+    () => /## Attention/.test(idx) && /row 1 — \*\*not built\*\*/.test(idx)
+      && /needs-decision/.test(idx) && /`## Notes`/.test(idx),
+    () => idx.slice(idx.indexOf("## Attention")).split("\n").slice(0, 6));
+
+  check("the progress block — the one surface a watching user reads while the run happens — carries the partial count AND names each unbuilt row, because that is the boundary the two lost filters died at",
+    () => {
+      const prog = renderProgress(second, dir);
+      // …and says what the row is waiting on WITHOUT claiming nothing can be scheduled for it: `notBuiltOpenRows`
+      // filters on no cause, so `--route` opens a round over a `needs-decision` row like any other.
+      return /⚠ partial 1/.test(prog) && /⚠ NOT BUILT — 1 deliverable/.test(prog)
+        && /a decision settles it, not a re-run — route it once that decision exists/.test(prog)
+        && !/not re-dispatched/.test(prog);
+    }, () => renderProgress(second, dir));
+
+  check("a `partial` task with NO `agentNonce` is named by the nonce audit exactly as a `done` one is — it is a task that stopped claiming work was done by somebody, and a closed state the audit skips is the cheapest way past the one-sub-agent contract",
+    // Scoped to the audit LINE: every task file is also listed in the index table above, so a whole-document
+    // search passes whether the audit named it or not.
+    () => {
+      const line = readIndex(dir).split("\n").find((l) => /with NO `agentNonce`/.test(l)) || "";
+      return line.includes(target.file);
+    }, () => readIndex(dir).split("\n").filter((l) => /agentNonce/.test(l)));
+
+  const todoCount = (set, d) => Number(/todo (\d+)/.exec(renderProgress(set, d))?.[1]);
+  check("a `partial` task leaves the OPEN set — it is settled, so it stops being counted as `todo` and its weight leaves the remaining-minutes forecast. Counted as open it quotes a queue deeper and a run longer than they are",
+    () => todoCount(second, dir) === todoCount(first, dir) - 1,
+    () => ({ beforePartial: todoCount(first, dir), afterPartial: todoCount(second, dir) }));
+
+  check("`partial` RELEASES the tasks that depend on it — it holds up calling the run complete, not the queue. A state that halted dependents is exactly the state agents avoided by writing `done`",
+    // Built on its OWN folder around `Page build`: the `Quality gates` task this block otherwise uses is a leaf,
+    // so a release asserted over it asserts nothing. The source is dispatched and signed so the only thing that
+    // could refuse the dependent is the dependency rule under test.
+    () => {
+      const d = tmp("partial-releases");
+      const s1 = syncTaskDir(d, RUN, OPTS);
+      const src = taskAt(s1, "child:G1", "Page build");
+      const dependent = s1.tasks.find((t) => (t.dependsOn || []).includes(src.id));
+      if (!dependent) return false;
+      clearDepsOf(d, src.id, RUN, OPTS);
+      const token = `tok-${src.id}`;
+      startTask(d, src.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(80));
+      const fp = taskFilePath(d, src.id);
+      fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-built — needs-decision"));
+      editFrontMatter(d, src.id, "agentNonce", token);
+      const s2 = syncTaskDir(d, RUN, { ...OPTS, now: AT(81) });
+      if (s2.tasks.find((t) => t.id === src.id).status !== "partial") return false;
+      const res = startTask(d, dependent.id, RUN, { ...OPTS, dispatchToken: "tok-dep" }, null, AT(82));
+      return !!res.started && !res.blockedByDeps;
+    }, "a `partial` dependency must not refuse the dispatch of what waits on it");
+
+  check("a `partial` task is still held to the DISPATCH gate — it was worked and finished, so it must carry a dispatch record exactly as a `done` one does; exempting it would make `partial` the new way to close a task nobody was sent out for",
+    () => dispatchAudit(readTaskDir(dir), dir).never.some((t) => t.id === target.id),
+    () => dispatchAudit(readTaskDir(dir), dir).never.map((t) => t.id));
+
+  check("readTaskDir RE-COMPUTES the status off the file's own cells — a `partial` edited back to `done` by hand is still `partial` to the read-only path, so the gate cannot be cleared with a text editor",
+    () => {
+      const tampered = fs.readFileSync(p, "utf8").replace("status: partial", "status: done");
+      fs.writeFileSync(p, tampered);
+      const seen = readTaskDir(dir).find((t) => t.id === target.id);
+      return seen.status === "partial" && seen.recordedStatus === "done";
+    }, () => readTaskDir(dir).find((t) => t.id === target.id));
+}
+
+
+console.log("\n===== end to end through the CLI: the run FAILS and the list is generated, not summarised =====");
+{
+  const cliT = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args],
+    { input: JSON.stringify(manifest), encoding: "utf8" });
+  const dP = path.join(tmp("notbuilt-cli"), "build-tasks");
+  cliT(["--tasks", dP], MANIFEST);
+  const victim = readTaskDir(dP).find((t) => t.rows.length >= 2);
+  const vf = path.join(dP, victim.file);
+  let text = fs.readFileSync(vf, "utf8");
+  let seen = 0;
+  text = text.split("\n").map((line) => {
+    const cells = line.split(/(?<!\\)\|/);
+    if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
+    seen++;
+    // TWO rows on ONE page — the shape the incident had. One unbuilt row can be named by a list that cannot
+    // count, and a gate that reports one deliverable while two are open is the failure being replaced.
+    cells[5] = seen <= 2 ? " not-built — blocked " : " built ";
+    return cells.join("|");
+  }).join("\n");
+  fs.writeFileSync(vf, text);
+  const run = cliT(["--tasks", dP], MANIFEST);
+
+  check("CLI: a folder holding an unbuilt deliverable exits 2 — the run cannot report success over work its own agent recorded as not done",
+    run.status === 2, () => ({ status: run.status, stderr: run.stderr.slice(0, 400) }));
+
+  check("CLI: the failure names EVERY unbuilt deliverable, its task and its cause on stderr, and says what the cause means — this is the text that replaces a summary composed from memory, which is where the two filters were lost",
+    () => /⛔ NOT BUILT — 2 deliverable\(s\)/.test(run.stderr) && run.stderr.includes(victim.file)
+      && /row 1 —/.test(run.stderr) && /row 2 —/.test(run.stderr)
+      && /blocked: the stand or a service was unreachable/.test(run.stderr),
+    () => run.stderr.slice(-900));
+
+  // The command it names has to be one a run with pages still unbuilt can take: `--verify` needs a `--built`
+  // payload for every page, `--route` needs none.
+  check("CLI: the report names the ONE command that routes these rows — `--tasks <dir> --route`, which needs no `--built` payload — warns off hand-writing a repair file, and names PARKED as where the routing ends",
+    () => /--tasks <dir> --route` to open a repair/.test(run.stderr)
+      && !/`--verify --tasks <dir>` to open a repair round/.test(run.stderr)
+      && /Do NOT hand-write a repair file/.test(run.stderr)
+      && /PARKED and will not get another/.test(run.stderr),
+    () => run.stderr.slice(-700));
+
+  check("CLI: the task FOLDER and the index are still written — the run failed, the slice did not, so the record of what was built is not withheld as a punishment",
+    () => fs.existsSync(path.join(dP, TASK_INDEX_FILE)) && /⚠ Partial:/.test(readIndex(dP))
+      && fs.readFileSync(vf, "utf8").includes("status: partial"),
+    () => readIndex(dP).split("\n").slice(0, 4));
+
+  // THE REPAIR-MODE LEG OF THE SAME GATE. `--tasks` alone routes nothing, so the row above fails the run; the
+  // pairing below is the command that routes it. Asserted through the CLI because the wiring between
+  // `runRepairMode`, `partialGateFailure` and `notReady` lives there and nowhere else — a flag folded into the
+  // wrong variable, or an exit code not surfaced, is invisible to every in-process test.
+  const baseR = tmp("notbuilt-repair");
+  const dR = path.join(baseR, "build-tasks");
+  cliT(["--tasks", dR], MANIFEST);
+  // Dispatched and signed the way a real run closes a task (`--start` → token → nonce). Required: the repair leg
+  // checks the ledger BEFORE it schedules anything, so a folder that fails the dispatch gate writes no repair
+  // task at all — and a test that skipped this would assert the refusal, not the routing.
+  const closeAllViaCli = (dir) => {
+    for (;;) {
+      const tasks = readTaskDir(dir);
+      const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
+        const dep = tasks.find((x) => x.id === d);
+        return !dep || dep.status === "done" || dep.status === "n/a";
+      }));
+      if (!next) break;
+      const started = cliT(["--tasks", dir, "--start", next.id], MANIFEST);
+      editFrontMatter(dir, next.id, "status", "done");
+      editFrontMatter(dir, next.id, "agentNonce", /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1] || "");
+      cliT(["--tasks", dir], MANIFEST);
+    }
+  };
+  closeAllViaCli(dR);
+  const vic = readTaskDir(dR).find((t) => t.rows.length >= 2);
+  const vfR = path.join(dR, vic.file);
+  fs.writeFileSync(vfR, setOutcome(allBuilt(fs.readFileSync(vfR, "utf8")), 1, NOT_BUILT_BLOCKED));
+  const unrouted = cliT(["--tasks", dR], MANIFEST);
+  const builtR = path.join(baseR, "built.json");
+  fs.writeFileSync(builtR, JSON.stringify({ pages: {} }));
+  const routed = cliT(["--verify", "--built", builtR, "--tasks", dR], MANIFEST);
+  // Read off the FILES, not off a return value: both legs below are asserting that the round reached the folder.
+  const repairFilesIn = (dir) => fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-"));
+  const repairCausesIn = (dir) => repairFilesIn(dir)
+    .map((f) => parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")).meta.cause);
+  const repairCause = repairCausesIn(dR);
+
+  check("CLI (anti-vacuity): the same folder DOES fail `--tasks` first — otherwise the pairing below could be routing nothing and the two checks would agree for no reason",
+    () => unrouted.status === 2 && /⛔ NOT BUILT/.test(unrouted.stderr || ""),
+    () => ({ status: unrouted.status, stderr: (unrouted.stderr || "").slice(-500) }));
+
+  check("CLI `--verify --tasks`: the unbuilt row is ROUTED — a repair task keyed `not-built:<kind>` is written for it, which is exactly the command the `--tasks` failure told the user to run",
+    () => repairCause.some((c) => String(c).startsWith("not-built:")),
+    () => ({ status: routed.status, causes: repairCause, stdout: (routed.stdout || "").slice(-700) }));
+
+  check("CLI `--verify --tasks`: once routed, the row is no longer an unrouted NOT BUILT failure — the gate reads folder state, so the row that failed `--tasks` is somebody's open work here instead of a second identical refusal. This is the only test that drives `runRepairMode`'s gate wiring end to end",
+    () => !/⛔ NOT BUILT/.test(routed.stderr || ""),
+    () => (routed.stderr || "").slice(-700));
+
+  // ---- `--route`: THE SAME ROUND, WITHOUT A `--built` PAYLOAD ------------------------------------------------
+  // The leg above routes only from a verify run, which needs every page built. This one routes the same rows off
+  // the folder alone, so a run still building pages can clear the gate that names them.
+  const baseO = tmp("notbuilt-route");
+  const dO = path.join(baseO, "build-tasks");
+  cliT(["--tasks", dO], MANIFEST);
+  closeAllViaCli(dO);
+  const vicO = readTaskDir(dO).find((t) => t.rows.length >= 2);
+  const vfO = path.join(dO, vicO.file);
+  fs.writeFileSync(vfO, setOutcome(allBuilt(fs.readFileSync(vfO, "utf8")), 1, NOT_BUILT_BLOCKED));
+  const unroutedO = cliT(["--tasks", dO], MANIFEST);
+  const route = cliT(["--tasks", dO, "--route"], MANIFEST);
+  const routeCauses = repairCausesIn(dO);
+
+  check("CLI (anti-vacuity): the folder DOES fail `--tasks` before `--route` runs — otherwise the routing below could be routing nothing",
+    () => unroutedO.status === 2 && /⛔ NOT BUILT/.test(unroutedO.stderr || ""),
+    () => ({ status: unroutedO.status, stderr: (unroutedO.stderr || "").slice(-400) }));
+
+  check("CLI `--tasks --route`: the unbuilt row is routed with NO `--built` payload and no verify run — same repair machinery, keyed `not-built:<kind>`, reachable by a run that still has pages left to build",
+    () => routeCauses.some((c) => String(c).startsWith("not-built:")),
+    () => ({ status: route.status, causes: routeCauses, stdout: (route.stdout || "").slice(-700) }));
+
+  check("CLI `--tasks --route`: once routed the row is somebody's open work, so the unrouted-NOT-BUILT gate stops firing — the same folder state the `--verify` leg produces, reached without one",
+    () => !/⛔ NOT BUILT/.test(route.stderr || ""),
+    () => ({ status: route.status, stderr: (route.stderr || "").slice(-700) }));
+
+  check("CLI `--tasks --route`: the report says the rows came from a BUILD agent, not from a verify run — a sub-agent handed the repair task acts differently on 'the verifier could not find it' than on 'the agent wrote down that they did not build it'",
+    () => /recorded as NOT BUILT, merged by \(page, cause\)/.test(route.stdout || "")
+      && !/the open rows of THIS verify run/.test(route.stdout || ""),
+    () => (route.stdout || "").slice(-700));
+
+  check("CLI `--tasks --route`: it prints the progress block, which is what the orchestrator pastes after a status change — routing IS a status change, and a mode that changed the folder silently would leave the chat's count behind the folder's",
+    () => /--- progress ---/.test(route.stdout || "") && /dispatched \d+ of \d+/.test(route.stdout || ""),
+    () => (route.stdout || "").slice(-500));
+
+  check("CLI `--route` with nothing to route: a second run writes no new round and says so, rather than manufacturing one — a round is an ATTEMPT, and re-routing an unchanged folder would burn the cap with nobody having run",
+    () => {
+      const again = cliT(["--tasks", dO, "--route"], MANIFEST);
+      return repairFilesIn(dO).length === routeCauses.length && /already have an OPEN repair task/.test(again.stdout || "");
+    },
+    () => (cliT(["--tasks", dO, "--route"], MANIFEST).stdout || "").slice(-600));
+
+  // The flag is refused rather than ignored wherever it would silently do nothing or do two things at once.
+  for (const [why, args] of [
+    ["without `--tasks <dir>` there is no folder to open a round in", ["--route"]],
+    ["`--verify --tasks` already routes these rows, and `--route` beside it would claim a second, different round", ["--verify", "--built", builtR, "--tasks", dO, "--route"]],
+    ["`--start` marks a task for dispatch; routing SCHEDULES one, and one call doing both cannot say which task the printed token belongs to", ["--tasks", dO, "--route", "--start", "x"]],
+    ["`--split` CUTS a folder; `--route` opens a round in one already cut, reading the split frozen inside it", ["--tasks", dO, "--route", "--split", "./split.json"]],
+  ]) {
+    check(`CLI: \`--route\` is REFUSED, not ignored — ${why}`,
+      () => { const r = cliT(args, MANIFEST); return r.status === 1 && /migrate\.mjs: `--route`|`--route`/.test(r.stderr || ""); },
+      () => { const r = cliT(args, MANIFEST); return { status: r.status, stderr: (r.stderr || "").slice(0, 400) }; });
+  }
+
+  // A clean folder must not trip the gate.
+  const dOk = path.join(tmp("notbuilt-cli-ok"), "build-tasks");
+  const ok = cliT(["--tasks", dOk], MANIFEST);
+  check("CLI (no false positive): a folder with no outcomes recorded anywhere does NOT trip the gate — every folder written before this existed is in that shape, and a gate that fires on all of them is a gate nobody keeps",
+    ok.status === 0 && !/NOT BUILT/.test(ok.stderr), () => ({ status: ok.status, stderr: ok.stderr.slice(0, 300) }));
+}
+
+
+console.log("\n===== review fixes: mid-flight, n-a, drift remedy, escaped pipes =====");
+
+check("MID-FLIGHT: a `not-built` cell recorded while other rows are still blank leaves the task `in-progress` — the agent fills cells as it goes, so settling there would stop the clock, release dependents and demand a dispatch record from a sub-agent still running",
+  () => {
+    let t = renderTaskFile(SAMPLE, SET).replace("status: todo", "status: in-progress");
+    t = setOutcome(t, 1, "built");
+    t = setOutcome(t, 2, NOT_BUILT_BLOCKED);
+    const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0];
+    return SAMPLE.rows.length > 2 && m.status === "in-progress" && notBuiltRows([m]).length === 0;
+  }, () => {
+    let t = renderTaskFile(SAMPLE, SET).replace("status: todo", "status: in-progress");
+    t = setOutcome(setOutcome(t, 1, "built"), 2, NOT_BUILT_BLOCKED);
+    return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
+  });
+
+check("MID-FLIGHT: once the LAST blank cell is filled the same `not-built` computes `partial` — the reorder must not disable the feature, only defer it until the task is actually accounted for",
+  () => {
+    let t = allBuilt(renderTaskFile(SAMPLE, SET)).replace("status: todo", "status: in-progress");
+    t = setOutcome(t, 2, NOT_BUILT_BLOCKED);
+    const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0];
+    return m.status === "partial" && notBuiltRows([m]).length === 1;
+  }, () => {
+    let t = allBuilt(renderTaskFile(SAMPLE, SET)).replace("status: todo", "status: in-progress");
+    return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(t, 2, NOT_BUILT_BLOCKED)) }]).tasks[0].status;
+  });
+
+check("`n-a` WITHOUT a reason counts as `not-built` — a row closed without being built and without a reason is a self-certified skip, and it must not compute `done` the way the task-level `n/a` must carry a reason to skip its dispatch record",
+  () => {
+    let t = renderTaskFile(SAMPLE, SET);
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0];
+    return m.status === "partial" && notBuiltRows([m]).length === SAMPLE.rows.length;
+  }, () => {
+    let t = renderTaskFile(SAMPLE, SET);
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
+  });
+
+check("`n-a` WITH a reason closes its row, but on a row the plan did not mark N/A it is named on Attention — the plan's own boundaries are approved and silent; an agent asserting one is a claim someone should see",
+  () => {
+    let t = allBuilt(renderTaskFile(SAMPLE, SET));
+    t = setOutcome(t, 1, "n-a — no Freedom analog, confirmed with the user");
+    const set = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]);
+    const m = set.tasks[0];
+    const idx = renderTaskIndex(set);
+    return m.status === "done" && !SAMPLE.rows[0].na
+      && assertedBoundaryRows([m]).length === 1
+      && /recorded `n-a` on a row the plan did NOT mark N\/A/.test(idx);
+  }, () => {
+    let t = setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, "n-a — no Freedom analog, confirmed with the user");
+    return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
+  });
+
+check("a drifted `partial` is NOT told to re-open as `status: todo` — the status is computed, so a hand-set `todo` recomputes straight back; the remedy names the cells and `rowsDigest:` instead",
+  () => {
+    const drifted = { ...SAMPLE, status: "partial", drifted: true, file: SAMPLE.file };
+    const idx = renderTaskIndex({ ...SET, tasks: [drifted] });
+    return /Re-opening it as `status: todo` will NOT clear this/.test(idx)
+      && !/This clears when the task is\s+re-opened/.test(idx.slice(idx.indexOf("computes `partial`")));
+  }, () => renderTaskIndex({ ...SET, tasks: [{ ...SAMPLE, status: "partial", drifted: true }] }).slice(-400));
+
+check("a `|` in a Classic caption does not shift the Outcome cell — deliverable labels are customer captions, and the column is read back by position, so an unescaped pipe would truncate the label and read the outcome out of the wrong cell",
+  () => {
+    const piped = { ...SAMPLE, rows: [{ ...SAMPLE.rows[0], label: "Caption A | B" }, ...SAMPLE.rows.slice(1)] };
+    const t = setOutcome(renderTaskFile(piped, SET), 1, NOT_BUILT_BLOCKED);
+    const parsed = parseTaskFile(t);
+    const m = mergeTaskSet({ ...SET, tasks: [piped] }, [{ file: piped.file, ...parseTaskFile(t) }]).tasks[0];
+    return parsed.table[0].label === "Caption A | B"
+      && parsed.table[0].mark?.outcome === "not-built"
+      && m.rows[0].outcomeKind === "not-built";
+  }, () => {
+    const piped = { ...SAMPLE, rows: [{ ...SAMPLE.rows[0], label: "Caption A | B" }, ...SAMPLE.rows.slice(1)] };
+    return parseTaskFile(setOutcome(renderTaskFile(piped, SET), 1, NOT_BUILT_BLOCKED)).table[0];
+  });
+
+check("a `|` typed INSIDE the Outcome cell keeps the whole reason — the agent hand-types free prose there (`n-a — <reason>`, the reason is REQUIRED), so a raw pipe is already in the file and cannot be escaped away on write; truncating at it left a HALF reason that still read as a validly-reasoned, accounted skip",
+  () => {
+    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]).tasks[0];
+    return m.rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter" && !m.rows[0].naNoReason;
+  }, () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "n-a — approved per CRM-123, replaces the A | B filter"))
+    .rows.map((r) => [r.outcomeKind, r.outcomeReason]));
+
+check("that reason SURVIVES the re-render — the engine escapes the cell on the way back out, so a second pass reads the same text rather than splitting it further each time the folder is re-sliced",
+  () => {
+    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const once = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]);
+    const twice = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
+      [{ file: SAMPLE.file, ...parseTaskFile(renderTaskFile(once.tasks[0], once)) }]);
+    return twice.tasks[0].rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter";
+  }, "the Outcome cell must round-trip a typed pipe");
+
+check("the generated task body names `blocked` and `n/a` as the two statuses the agent still writes — the file otherwise says \"do not set status\", which contradicts execution rule 5",
+  () => /The two exceptions\s+are `blocked` and `n\/a`/.test(SAMPLE_TEXT) && /reason is REQUIRED/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT.slice(SAMPLE_TEXT.indexOf("How you close this task"), SAMPLE_TEXT.indexOf("How you close this task") + 700));
+
+
+check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md` — a row nobody built that appears only in a file the user may never open is the shape this whole change exists to prevent, one step over",
+  () => {
+    const d = tmp("asserted-progress");
+    const s1 = syncTaskDir(d, RUN, OPTS);
+    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const fp = path.join(d, tgt.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — no Freedom equivalent, my call"));
+    const s2 = syncTaskDir(d, RUN, OPTS);
+    const prog = renderProgress(s2, d);
+    const back = s2.tasks.find((t) => t.id === tgt.id);
+    return back.status === "done"
+      && /agent-asserted boundary/.test(prog)
+      && /no Freedom equivalent, my call/.test(prog)
+      && !/⚠ partial/.test(prog);
+  }, () => {
+    const d = tmp("asserted-progress-d");
+    const s1 = syncTaskDir(d, RUN, OPTS);
+    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const fp = path.join(d, tgt.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — no Freedom equivalent, my call"));
+    return renderProgress(syncTaskDir(d, RUN, OPTS), d);
+  });
+
+check("an asserted boundary does NOT fail the run — gating it is the open decision this change deliberately leaves alone, so the line is informational and the exit code is untouched",
+  () => {
+    const d = tmp("asserted-nogate");
+    const s1 = syncTaskDir(d, RUN, OPTS);
+    const tgt = taskAt(s1, "child:G1", "Quality gates");
+    const fp = path.join(d, tgt.file);
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — approved boundary"));
+    const s2 = syncTaskDir(d, RUN, OPTS);
+    return notBuiltRows(s2.tasks).length === 0 && assertedBoundaryRows(s2.tasks).length === 1;
+  }, "an asserted boundary must not enter notBuiltRows, which is what sets the exit-2 gate");
+
+
+console.log("\n===== the residual is ROUTED: a not-built row becomes a repair round, and closes the task when it closes =====");
+
+// A folder whose one `Quality gates` deliverable the build agent recorded as NOT BUILT — dispatched, signed and
+// closed the way a real run closes it, because the residual's closure is checked against the dispatch record.
+const partialFolder = (name, notBuilt = [1]) => {
+  const d = tmp(name);
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  clearDepsOf(d, tgt.id, RUN, OPTS);
+  const token = `tok-${tgt.id}`;
+  startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(40));
+  const fp = taskFilePath(d, tgt.id);
+  let text = allBuilt(fs.readFileSync(fp, "utf8"));
+  for (const n of notBuilt) text = setOutcome(text, n, "not-built — blocked");
+  fs.writeFileSync(fp, text);
+  editFrontMatter(d, tgt.id, "agentNonce", token);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(41) });
+  return { d, tgt, fp };
+};
+const repairFiles = (d) => fs.readdirSync(d).filter((f) => f.startsWith("task-repair-"));
+const repairIds = (d) => repairFiles(d)
+  .map((f) => parseTaskFile(fs.readFileSync(path.join(d, f), "utf8")).meta?.id).filter(Boolean);
+// Dispatched, signed and closed — the same three steps a build task takes.
+let repairMin = 50;
+const nextMin = () => { repairMin += 2; return repairMin; };
+const closeRepairs = (d) => repairIds(d).forEach((id) => runTask(d, id, RUN, OPTS, nextMin()));
+// Dispatched, signed, and closed THE WAY A BUILD TASK IS: every `Outcome` cell filled, no status word typed.
+// `mark` may be a function of the row number, for a round that fixed some of its rows and not others.
+const runRepair = (d, id, mark = "built") => {
+  startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
+  const f = taskFilePath(d, id);
+  let text = fs.readFileSync(f, "utf8");
+  for (let i = 1; i <= rowCount(text); i++) text = setOutcome(text, i, typeof mark === "function" ? mark(i) : mark);
+  fs.writeFileSync(f, text);
+  editFrontMatter(d, id, "agentNonce", `tok-${id}`);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(repairMin + 1) });
+};
+const runRepairs = (d, mark) => repairIds(d).forEach((id) => runRepair(d, id, mark));
+// The round ran and the sub-agent stated why it could not proceed.
+const blockRepairsAs = (d, status) => repairIds(d).forEach((id) => {
+  startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
+  editFrontMatter(d, id, "status", status);
+  editFrontMatter(d, id, "agentNonce", `tok-${id}`);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(repairMin + 1) });
+});
+const backAt = (set, id) => set.tasks.find((t) => t.id === id);
+
+check("the residual goes through the EXISTING repair machinery — a row the build agent recorded as not built opens a repair task keyed `not-built:<kind>`, on a verify run that found nothing open itself, so the routing is the residual's own and not a side effect of a short build",
+  () => {
+    const { d } = partialFolder("residual-routed");
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    return res.written.length === 1 && res.written[0].cause.startsWith("not-built:")
+      && res.written[0].pageKey === "child:G1" && res.written[0].kind === "repair";
+  }, () => syncRepairDir(partialFolder("residual-routed-d").d, RUN, {}, OPTS).written.map((t) => `${t.pageKey} ${t.cause} r${t.repairRound}`));
+
+check("the repair file carries what the BUILD agent wrote in the Outcome cell and where it wrote it — a repair round is spent on the wrong row when the engine paraphrases the observation instead of handing it over",
+  () => {
+    const { d, tgt } = partialFolder("residual-evidence");
+    syncRepairDir(d, RUN, {}, OPTS);
+    const text = fs.readFileSync(path.join(d, repairFiles(d)[0]), "utf8");
+    return text.includes("not-built — blocked") && text.includes(tgt.file);
+  }, () => { const { d } = partialFolder("residual-evidence-d"); syncRepairDir(d, RUN, {}, OPTS);
+    return fs.readFileSync(path.join(d, repairFiles(d)[0]), "utf8"); });
+
+check("a row with an OPEN repair round is no longer a gate failure — it is somebody's scheduled work, and a gate that keeps failing over a row already routed is a gate that can never be cleared by doing the work",
+  () => {
+    const { d } = partialFolder("residual-gate-open");
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    const rows = notBuiltRows(res.set.tasks);
+    return rows.length === 1 && rows[0].residual === "open";
+  }, () => notBuiltRows(syncRepairDir(partialFolder("residual-gate-open-d").d, RUN, {}, OPTS).set.tasks).map((r) => r.residual));
+
+check("the task STAYS `partial` while its residual is open — the deliverable is still not built, so nothing about opening a repair round makes the page finished",
+  () => {
+    const { d, tgt } = partialFolder("residual-stays-partial");
+    return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).status === "partial";
+  }, "an open residual must not close its originating task");
+
+check("the task closes to `done` when its residual closes — COMPUTED from the repair task's status, never typed, so the one way to clear a `partial` is to actually build the row",
+  () => {
+    const { d, tgt } = partialFolder("residual-closes");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const after = syncTaskDir(d, RUN, OPTS);
+    return backAt(after, tgt.id).status === "done" && notBuiltRows(after.tasks).length === 0;
+  }, () => { const { d, tgt } = partialFolder("residual-closes-d"); syncRepairDir(d, RUN, {}, OPTS); closeRepairs(d);
+    return backAt(syncTaskDir(d, RUN, OPTS), tgt.id).status; });
+
+check("the closure survives a re-read: the Outcome cell still says `not-built`, so `computeStatus` recomputes `partial` on every read and the residual re-closes it — a one-shot flip would come undone on the next run",
+  () => {
+    const { d, tgt } = partialFolder("residual-idempotent");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    syncTaskDir(d, RUN, OPTS);
+    return backAt(syncTaskDir(d, RUN, OPTS), tgt.id).status === "done";
+  }, "the resolution must hold across repeated syncs");
+
+// A repair round the sub-agent could not complete either. The existing machinery answers a `blocked` round with a
+// person, not a fourth identical task — so this is where the automatic procedure ENDS for a residual.
+const blockRepairs = (d) => blockRepairsAs(d, "blocked");
+
+check("a BLOCKED repair round puts the row back in front of the user — nothing is scheduled against it any more, so it reads as unrouted and the run keeps failing; a blocked round counted as open work would let a run pass over a deliverable TWO agents have now failed to build",
+  () => {
+    const { d, tgt } = partialFolder("residual-blocked");
+    syncRepairDir(d, RUN, {}, OPTS);
+    blockRepairs(d);
+    const after = syncTaskDir(d, RUN, OPTS);
+    const rows = notBuiltRows(after.tasks);
+    return backAt(after, tgt.id).status === "partial" && rows.length === 1 && rows[0].residual === null;
+  }, () => { const { d } = partialFolder("residual-blocked-d"); syncRepairDir(d, RUN, {}, OPTS); blockRepairs(d);
+    return notBuiltRows(syncTaskDir(d, RUN, OPTS).tasks).map((r) => r.residual); });
+
+check("a blocked round is not re-opened by re-verifying — the cause stays `pending` rather than manufacturing a second identical task, which is the existing rule for a sub-agent that stated why it could not proceed",
+  () => {
+    const { d } = partialFolder("residual-blocked-norepeat");
+    syncRepairDir(d, RUN, {}, OPTS);
+    blockRepairs(d);
+    const again = syncRepairDir(d, RUN, {}, OPTS);
+    return again.written.length === 0 && again.pending.some((p) => p.cause.startsWith("not-built:"));
+  }, () => { const { d } = partialFolder("residual-blocked-norepeat-d"); syncRepairDir(d, RUN, {}, OPTS); blockRepairs(d);
+    const a = syncRepairDir(d, RUN, {}, OPTS); return { written: a.written.length, pending: a.pending }; });
+
+check("a residual closes its task only if SOMEBODY WAS DISPATCHED for it — typing `done` into the repair file clears nothing. A repair file is exempt from the dispatch gate and `--verify` re-measures the page, so that exemption is free for a machine-checked row; a `not-built` row is re-measured by NOBODY, and its repair task's status is the only evidence there is",
+  () => {
+    const { d, tgt } = partialFolder("residual-handedit");
+    syncRepairDir(d, RUN, {}, OPTS);
+    for (const f of repairFiles(d)) {
+      const p = path.join(d, f);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^status: .*$/m, "status: done"));
+    }
+    const after = syncTaskDir(d, RUN, OPTS);
+    const rows = notBuiltRows(after.tasks);
+    return backAt(after, tgt.id).status === "partial" && rows.length === 1 && rows[0].residual === null;
+  }, () => { const { d, tgt } = partialFolder("residual-handedit-d"); syncRepairDir(d, RUN, {}, OPTS);
+    for (const f of repairFiles(d)) { const p = path.join(d, f);
+      fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^status: .*$/m, "status: done")); }
+    const a = syncTaskDir(d, RUN, OPTS);
+    return { status: backAt(a, tgt.id).status, residual: notBuiltRows(a.tasks).map((r) => r.residual) }; });
+
+check("a `partial` repair round counts as an ATTEMPT — left out of the round vocabulary it holds its cause `pending` forever: no next round opens and the cap that would park it never fires, so the residual deadlocks behind a round nobody can close",
+  () => {
+    const first = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const prior = [{ file: "task-repair-round1-x.md", notes: "", malformed: null,
+      meta: { id: "r1", status: "partial", origin: "engine", pageKey: first.pageKey, kind: "repair",
+        cause: first.cause, repairRound: "1" } }];
+    const r = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, prior);
+    return r.tasks.some((t) => t.cause === first.cause && t.repairRound === 2)
+      && !r.pending.some((p) => p.cause === first.cause);
+  }, "a `partial` prior round must open round 2, not hold the cause pending");
+
+console.log("\n===== a repair task closes the way every other task does: its own Outcome cells =====");
+
+check("a repair file carries an `Outcome` column and says it closes on those cells — one status word over N rows cannot say WHICH of them the round fixed, and a second closing contract for the same reader is how the two drift apart",
+  () => {
+    const t = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0];
+    const text = renderTaskFile(t, SET);
+    return /\| # \| Deliverable \| What was recorded \| Evidence behind it \| Outcome \|/.test(text)
+      && /fill the `Outcome` cell of EVERY row below, exactly as a build task does/.test(text)
+      && /Do \*\*not\*\* set `status:`/.test(text)
+      && !/Status vocabulary/.test(text);
+  }, () => renderTaskFile(buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0], SET));
+
+check("a `|` in a Classic caption does not shift the REPAIR table either — the repair branch interpolated the label raw while nothing parsed it; a parsed table reads the outcome out of the wrong cell the moment a caption carries a pipe",
+  () => {
+    const pages = { main: { openRows: [{ deliverable: "Caption A | B", outcome: "missing", status: "⚠ verify", evidence: "none" }] } };
+    const t = buildRepairTasks(RUN, pages, OPTS, []).tasks[0];
+    const text = setOutcome(renderTaskFile(t, SET), 1, NOT_BUILT_BLOCKED);
+    const row = parseTaskFile(text).table[0];
+    return row.label === "Caption A | B" && row.mark?.outcome === "not-built";
+  }, () => parseTaskFile(renderTaskFile(buildRepairTasks(RUN,
+    { main: { openRows: [{ deliverable: "Caption A | B", outcome: "missing", status: "s", evidence: "e" }] } },
+    OPTS, []).tasks[0], SET)).table[0]);
+
+check("the round's OWN status is computed from its cells — every row `built` reads `done` and the routed task closes; every row `not-built` reads `partial` and it does not, whatever the front matter says",
+  () => {
+    const fixed = partialFolder("repair-cells-built");
+    syncRepairDir(fixed.d, RUN, {}, OPTS); runRepairs(fixed.d, "built");
+    const a = syncRepairDir(fixed.d, RUN, {}, OPTS).set;
+    const failed = partialFolder("repair-cells-notbuilt");
+    syncRepairDir(failed.d, RUN, {}, OPTS); runRepairs(failed.d, NOT_BUILT_BLOCKED);
+    const b = syncRepairDir(failed.d, RUN, {}, OPTS).set;
+    return backAt(a, fixed.tgt.id).status === "done" && a.tasks.find((t) => t.kind === "repair").status === "done"
+      && backAt(b, failed.tgt.id).status === "partial" && b.tasks.find((t) => t.kind === "repair").status === "partial";
+  }, () => { const { d, tgt } = partialFolder("repair-cells-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { task: backAt(s, tgt.id).status, round: s.tasks.find((t) => t.kind === "repair").status }; });
+
+check("a round that fixed SOME of its rows closes those and only those — the whole point of per-row outcomes: crediting every row it covers because one status word said `done` is the bucket problem one level down",
+  () => {
+    const { d, tgt } = partialFolder("repair-cells-some", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS);
+    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean));
+    return backAt(set, tgt.id).status === "partial"
+      && residuals.has("closed") && residuals.has("open");
+  }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).rows.map((r) => [r.outcome, r.residual]); });
+
+check("the rows a round could not fix open the NEXT round, and the cap does not reset behind them — a row routed as `unverified:…` comes back recorded `not-built:…`, so a cap keyed on the whole cause is a fresh bucket at round 1 and three agents quietly become six",
+  () => {
+    const { d } = partialFolder("repair-cap-lineage");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    return res.written.length === 1 && res.written[0].repairRound === 2;
+  }, () => { const { d } = partialFolder("repair-cap-lineage-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    return syncRepairDir(d, RUN, {}, OPTS).written.map((t) => `${t.cause} r${t.repairRound}`); });
+
+check("a deliverable is routed ONCE however many files record it — a `partial` round leaves the row open in its own table AND in the task it came from, whose cell keeps reading `not-built` by design, so routing per source doubles every round and puts two rows with one label in one agent's table",
+  () => {
+    const { d } = partialFolder("repair-dedupe");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    return r2.rows.length === 1 && r2.covers.length === 1
+      && new Set(r2.covers).size === r2.covers.length;
+  }, () => { const { d } = partialFolder("repair-dedupe-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    return { rows: r2.rows.length, covers: r2.covers }; });
+
+check("a row a round has SETTLED stops being named as NOT BUILT — its own Outcome cell reads `not-built` for good, so the progress block and the index Attention kept printing a deliverable that is on the stand while the gate had correctly stopped counting it; two surfaces disagreeing about one row is how a reader learns to skip the list",
+  () => {
+    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS);
+    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual));
+    const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
+    // Before either round runs, BOTH rows are open and the line has to count two of them on one task — a list
+    // that only ever renders `1` cannot say it lost one.
+    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2]);
+    const both = renderProgress(syncTaskDir(d2, RUN, OPTS), d2);
+    return residuals.has("closed") && residuals.has("open")
+      && /⚠ NOT BUILT — 2 deliverable\(s\) across 1 task\(s\)/.test(both)
+      && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
+      && idxLines.length === 1;
+  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { progress: renderProgress(s, d).split("\n").filter((l) => /NOT BUILT/.test(l)),
+      attention: renderTaskIndex(s).split("\n").filter((l) => /\*\*not built\*\*/.test(l)) }; });
+
+check("a row the cap has EXHAUSTED fails the gate instead of passing as scheduled work — the last round ran and did not build it, `buildRepairTasks` parks the (page, kind) and writes no fourth, so reading it as an open round exits 0 over a deliverable nobody built and nothing will ever schedule",
+  () => {
+    const { d, tgt } = partialFolder("cap-exhausted");
+    for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+      const res = syncRepairDir(d, RUN, {}, OPTS);
+      if (!res.written.length) break;
+      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+    }
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const items = notBuiltOpenItems(set.tasks);
+    return backAt(set, tgt.id).status === "partial"
+      && backAt(set, tgt.id).rows.every((r) => r.residual === null || r.residual === undefined)
+      && items.length === 1 && items.every((it) => !it.residual);
+  }, () => { const { d, tgt } = partialFolder("cap-exhausted-d");
+    for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+      const res = syncRepairDir(d, RUN, {}, OPTS);
+      if (!res.written.length) break;
+      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+    }
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { parent: backAt(s, tgt.id).status, residuals: backAt(s, tgt.id).rows.map((r) => r.residual),
+      unrouted: notBuiltOpenItems(s.tasks).filter((it) => !it.residual).length }; });
+
+check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
+  () => {
+    const openOther = [{ file: "task-repair-round1-main-unverified-fields-x.md", notes: "", malformed: null,
+      meta: { id: "rx", status: "todo", origin: "engine", pageKey: "main", kind: "repair",
+        cause: "unverified:fields", repairRound: "1", covers: "aaaa" } }];
+    const pages = { main: { openRows: [{ deliverable: "Fields — 3 fields", outcome: "not-built",
+      status: "not-built — blocked", evidence: "recorded on task-x.md, row 1" }] } };
+    const opened = buildRepairTasks(RUN, pages, OPTS, openOther);
+    // The KIND still caps: three rounds on this page's field rows is three, whatever each was opened for.
+    const capped = [1, 2, 3].map((n) => ({ file: `task-repair-round${n}-main-unverified-fields-${n}.md`, notes: "", malformed: null,
+      meta: { id: `rc${n}`, status: "done", origin: "engine", pageKey: "main", kind: "repair",
+        cause: "unverified:fields", repairRound: String(n), covers: "aaaa" } }));
+    const atCap = buildRepairTasks(RUN, pages, OPTS, capped);
+    return opened.tasks.some((t) => t.cause === "not-built:fields") && !opened.pending.length
+      && !atCap.tasks.length && atCap.parked.some((p) => p.cause === "not-built:fields");
+  }, () => "an open round on one cause must not hold a different cause of the same kind pending");
+
+check("the ⚠ NOT BUILT list names each deliverable ONCE — the verdict was right while the list a human reads carried the same row under the parent file and under every round that had held it",
+  () => {
+    const { d } = partialFolder("repair-notbuilt-count");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const items = notBuiltRows(set.tasks);
+    // Two files hold the row — the task it came from and the round that failed it — and it is ONE deliverable.
+    return items.length === 2 && new Set(items.map((x) => x.row.label)).size === 1
+      && notBuiltOpenRows(set.tasks)["child:G1"].openRows.length === 1
+      && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d));
+  }, () => { const { d } = partialFolder("repair-notbuilt-count-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { rows: notBuiltRows(s.tasks).map((x) => x.task.file),
+      routed: Object.values(notBuiltOpenRows(s.tasks)).map((p) => p.openRows.length) }; });
+
+check("NOT-BUILT WINS WITHIN A ROUND — `coverKey` hashes the label alone (no `::n`, unlike `rowKeys`), so two rows of one table can share a key; a settled-keys Set alone let a `built` cell close the deliverable its same-label twin recorded `not-built`, and the run reported success over it",
+  () => {
+    const { d, tgt } = partialFolder("repair-veto");
+    syncRepairDir(d, RUN, {}, OPTS);
+    const id = repairIds(d)[0];
+    startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
+    const f = taskFilePath(d, id);
+    // The same deliverable listed twice in one round — one key, two cells.
+    const lines = fs.readFileSync(f, "utf8").split("\n");
+    const at = lines.findIndex((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); });
+    const twin = lines[at].split(/(?<!\\)\|/); twin[1] = " 2 ";
+    lines.splice(at + 1, 0, twin.join("|"));
+    const covers = lines.findIndex((l) => l.startsWith("covers:"));
+    lines[covers] = `${lines[covers]} ${lines[covers].split(/\s+/)[1]}`;
+    let text = lines.join("\n");
+    text = setOutcome(setOutcome(text, 1, "built"), 2, NOT_BUILT_BLOCKED);
+    fs.writeFileSync(f, text);
+    editFrontMatter(d, id, "agentNonce", `tok-${id}`);
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    return backAt(set, tgt.id).status === "partial"
+      && set.tasks.find((t) => t.kind === "repair").status === "partial";
+  }, () => "a `built` cell must not close the deliverable its same-label twin recorded not-built");
+
+check("a repair round's COMPUTED status is written back into its front matter — the file the standard calls the record of that task would otherwise say `in-progress` for good while the index, the progress block and the gate all read `done`, and a resumed orchestrator reads the file",
+  () => {
+    const { d } = partialFolder("repair-writeback");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, "built");
+    syncTaskDir(d, RUN, OPTS);
+    const onDisk = repairIds(d).map((id) => parseTaskFile(fs.readFileSync(taskFilePath(d, id), "utf8")).meta.status);
+    // The body is still the round's own record: the engine writes the one line and re-authors nothing.
+    const body = fs.readFileSync(taskFilePath(d, repairIds(d)[0]), "utf8");
+    return onDisk.every((s) => s === "done") && /REPAIR — round 1 of at most/.test(body);
+  }, () => { const { d } = partialFolder("repair-writeback-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, "built"); syncTaskDir(d, RUN, OPTS);
+    return repairIds(d).map((id) => parseTaskFile(fs.readFileSync(taskFilePath(d, id), "utf8")).meta.status); });
+
+check("the round that started the chain closes when a LATER round fixes its rows — its own cells still read `not-built` forever, so the latest round to speak about a row is the authority; taking any open mark over any closed one holds the row open for as long as the folder exists",
+  () => {
+    const { d, tgt } = partialFolder("repair-chain");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);   // round 1 fails
+    const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    runRepair(d, r2.id, "built");                                         // round 2 fixes it
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const rounds = set.tasks.filter((t) => t.kind === "repair").map((t) => t.status);
+    return backAt(set, tgt.id).status === "done" && rounds.every((s) => s === "done");
+  }, () => { const { d, tgt } = partialFolder("repair-chain-d");
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    runRepair(d, r2.id, "built");
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { task: backAt(s, tgt.id).status, rounds: s.tasks.filter((t) => t.kind === "repair").map((t) => `${t.cause} r${t.repairRound} ${t.status}`) }; });
+
+check("a round still being worked holds its cause PENDING — some cells filled and the rest blank is a sub-agent mid-task, and opening the next round over it would put a second agent on rows the first has not reached",
+  () => {
+    const { d } = partialFolder("repair-midflight", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS);
+    const id = repairIds(d)[0];
+    startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
+    const f = taskFilePath(d, id);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, "built"));   // row 2 still blank
+    editFrontMatter(d, id, "agentNonce", `tok-${id}`);
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    return res.written.length === 0 && res.set.tasks.find((t) => t.kind === "repair").status === "in-progress";
+  }, () => { const { d } = partialFolder("repair-midflight-d", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS);
+    const id = repairIds(d)[0];
+    startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
+    const f = taskFilePath(d, id);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, "built"));
+    const r = syncRepairDir(d, RUN, {}, OPTS);
+    return { written: r.written.length, round: r.set.tasks.find((t) => t.kind === "repair").status }; });
+
+check("BACKWARD COMPATIBLE: a repair file with a FOUR-COLUMN table — written before the `Outcome` column existed — closes on its status word, because a header carrying no `Outcome` cell yields no marks at all rather than a row read out of the wrong column",
+  () => {
+    const { d, tgt } = partialFolder("repair-4col");
+    syncRepairDir(d, RUN, {}, OPTS);
+    const id = repairIds(d)[0];
+    const f = taskFilePath(d, id);
+    // A four-column table: the `Outcome` column absent from the header and from every row.
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").split("\n").map((l) => {
+      const c = l.split(/(?<!\\)\|/);
+      return c.length >= 7 && (/^\s*\d+\s*$/.test(c[1]) || c[1].trim() === "#" || c[1].trim() === "---")
+        ? [...c.slice(0, 5), ""].join("|") : l;
+    }).join("\n"));
+    runTask(d, id, RUN, OPTS, nextMin());          // status word only — there is no column to fill
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    return backAt(set, tgt.id).status === "done" && set.tasks.find((t) => t.kind === "repair").status === "done";
+  }, () => "a four-column repair file must keep closing exactly as it did before");
+
+check("BACKWARD COMPATIBLE: a repair file with nothing in its cells still closes on the status word it recorded — every folder written before the `Outcome` column existed is in exactly that shape, and reading them all as `partial` on the first re-slice would strand a finished run",
+  () => {
+    const { d, tgt } = partialFolder("repair-legacy");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);                                  // status word only, no cells filled
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    return backAt(set, tgt.id).status === "done" && set.tasks.find((t) => t.kind === "repair").status === "done";
+  }, () => { const { d, tgt } = partialFolder("repair-legacy-d");
+    syncRepairDir(d, RUN, {}, OPTS); closeRepairs(d);
+    return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).status; });
+
+console.log("\n===== a residual credits the ROWS IT COVERS, never the cause bucket =====");
+
+// The fixture above, carried one step further: the residual is routed, dispatched and CLOSED, so the task reads
+// `done`. Everything below then changes the task AFTER that, which is the case the earlier checks never made.
+const closedResidual = (name) => {
+  const { d, tgt } = partialFolder(name);
+  syncRepairDir(d, RUN, {}, OPTS);
+  closeRepairs(d);
+  return { d, tgt };
+};
+
+check("a repair task records WHICH ROWS it covers — a cause is a bucket (`causeOf` falls through to `other` for any label the six kind patterns miss, so most of a page shares one), and a bucket cannot say whose work closed",
+  () => {
+    const { d } = partialFolder("covers-recorded");
+    const t = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    const meta = parseTaskFile(fs.readFileSync(path.join(d, t.file), "utf8")).meta;
+    return (t.covers || []).length === 1 && meta.covers === t.covers.join(" ");
+  }, () => { const { d } = partialFolder("covers-recorded-d");
+    const t = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    return { covers: t.covers, onDisk: parseTaskFile(fs.readFileSync(path.join(d, t.file), "utf8")).meta.covers }; });
+
+check("a repair task's rows are READ, and `covers` is carried beside them — the rows are what say which of them this round fixed, and the front-matter list is what says which rows it was opened over at all",
+  () => {
+    const { d } = closedResidual("covers-frontmatter");
+    const rep = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.kind === "repair");
+    return (rep.rows || []).length === 1 && (rep.covers || []).length === 1;
+  }, () => { const { d } = closedResidual("covers-frontmatter-d");
+    const rep = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.kind === "repair");
+    return { rows: rep.rows, covers: rep.covers }; });
+
+check("a SECOND row recorded not-built after the first residual closed is NOT credited by it — same page, same cause bucket, a repair task that never listed it. Crediting it is this ticket's own failure mode: the run would report success over a deliverable the build agent wrote down as not built",
+  () => {
+    const { d, tgt } = closedResidual("covers-second-row");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
+    const after = syncTaskDir(d, RUN, OPTS);
+    const back = after.tasks.find((t) => t.id === tgt.id);
+    const rows = notBuiltRows(after.tasks);
+    const unrouted = rows.filter((r) => !r.residual);
+    // Row 1 is still `not-built` in its cell and still listed — it is CREDITED, which is a different fact.
+    return back.status === "partial" && rows.length === 2
+      && rows.find((r) => r.n === 1).residual === "closed"
+      && unrouted.length === 1 && unrouted[0].n === 2;
+  }, () => { const { d, tgt } = closedResidual("covers-second-row-d");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
+    const a = syncTaskDir(d, RUN, OPTS);
+    return { status: a.tasks.find((t) => t.id === tgt.id).status,
+      rows: notBuiltRows(a.tasks).map((r) => `${r.n}:${r.residual}`) }; });
+
+check("that second row opens a NEW repair round rather than sitting uncredited — the prior round closed `done`, which is an ATTEMPT, so the cause advances to round 2 and the cap stays the terminal",
+  () => {
+    const { d, tgt } = closedResidual("covers-second-round");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
+    const next = syncRepairDir(d, RUN, {}, OPTS);
+    return next.written.length === 1 && next.written[0].repairRound === 2
+      && next.written[0].cause.startsWith("not-built:");
+  }, () => { const { d, tgt } = closedResidual("covers-second-round-d");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "not-built — blocked"));
+    const n = syncRepairDir(d, RUN, {}, OPTS);
+    return n.written.map((t) => `${t.cause} r${t.repairRound}`); });
+
+check("a row BLANKED after the residual closed is not credited either — an unaccounted row is the weaker claim of the two (nobody said anything about it at all), so a bucket that credits it is the same defect with less evidence",
+  () => {
+    const { d, tgt } = closedResidual("covers-blanked");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
+    const after = syncTaskDir(d, RUN, OPTS);
+    const unrouted = notBuiltRows(after.tasks).filter((r) => !r.residual);
+    return after.tasks.find((t) => t.id === tgt.id).status === "partial"
+      && unrouted.length === 1 && unrouted[0].n === 2 && unrouted[0].cause === null;
+  }, () => { const { d, tgt } = closedResidual("covers-blanked-d");
+    const fp = taskFilePath(d, tgt.id);
+    fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 2, "—"));
+    const a = syncTaskDir(d, RUN, OPTS);
+    return { status: a.tasks.find((t) => t.id === tgt.id).status,
+      rows: notBuiltRows(a.tasks).map((r) => `${r.n}:${r.cause}/${r.residual}`) }; });
+
+check("a RE-SLICE after the residual closed keeps the credit on the row it was earned on — `covers` is a label hash, so it survives the task ids and the row numbering being re-derived, which is the whole reason the folder is re-read rather than remembered",
+  () => {
+    const { d, tgt } = closedResidual("covers-reslice");
+    const one = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+    const two = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+    return one.status === "done" && two.status === "done"
+      && two.rows[0].residual === "closed" && notBuiltRows(syncTaskDir(d, RUN, OPTS).tasks).length === 0;
+  }, () => { const { d, tgt } = closedResidual("covers-reslice-d");
+    const t = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === tgt.id);
+    return { status: t.status, residuals: t.rows.map((r) => r.residual) }; });
+
+check("the residual's repair file does NOT tell its sub-agent the rows came from `--verify` — one says the verifier could not find it, the other says the previous agent wrote down that they did not build it, and those call for different first moves",
+  () => {
+    const { d } = partialFolder("residual-blockquote");
+    const t = syncRepairDir(d, RUN, {}, OPTS).written[0];
+    const text = fs.readFileSync(path.join(d, t.file), "utf8");
+    return /recorded as NOT BUILT by the agent that built the page/.test(text)
+      && !/left OPEN by a `--verify`/.test(text);
+  }, () => { const { d } = partialFolder("residual-blockquote-d");
+    return fs.readFileSync(path.join(d, syncRepairDir(d, RUN, {}, OPTS).written[0].file), "utf8"); });
+
+check("when BOTH legs hold one deliverable the build agent's record wins — a row nobody built is usually also one `--verify` cannot find, and the verifier's copy says only that nothing is on the stand while the agent's names a cause and points at its `## Notes`",
+  () => {
+    const { d, tgt } = partialFolder("lineage-overlap");
+    // The verify leg reports the SAME deliverable the task recorded not built.
+    const label = tgt.rows[0].label;
+    const pages = { [tgt.pageKey]: { openRows: [{ deliverable: label, outcome: "missing",
+      status: "MISSING on the stand", evidence: "get-page did not return it" }] } };
+    const res = syncRepairDir(d, RUN, pages, OPTS);
+    const text = fs.readFileSync(path.join(d, res.written[0].file), "utf8");
+    return res.written.length === 1 && res.written[0].rows.length === 1
+      && String(res.written[0].cause).startsWith("not-built:")
+      && /recorded as NOT BUILT by the agent that built the page/.test(text)
+      && !/left OPEN by a `--verify`/.test(text);
+  }, () => { const { d, tgt } = partialFolder("lineage-overlap-d");
+    const pages = { [tgt.pageKey]: { openRows: [{ deliverable: tgt.rows[0].label, outcome: "missing",
+      status: "MISSING on the stand", evidence: "get-page did not return it" }] } };
+    const res = syncRepairDir(d, RUN, pages, OPTS);
+    return res.written.map((t) => `${t.cause} rows=${t.rows.length} recorded=${t.rows[0]?.status}`); });
+
+check("a `--verify` repair file still says its rows came from `--verify` — the branch must not rewrite the machine-checked lineage, which is the one this sentence was written for",
+  () => {
+    const dir = tmp("verify-blockquote");
+    const t = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0];
+    const text = fs.readFileSync(path.join(dir, t.file), "utf8");
+    return /left OPEN by a `--verify`/.test(text) && !/recorded as NOT BUILT/.test(text);
+  }, () => { const dir = tmp("verify-blockquote-d");
+    return fs.readFileSync(path.join(dir, syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0].file), "utf8"); });
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

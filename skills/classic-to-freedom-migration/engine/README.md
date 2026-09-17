@@ -16,6 +16,7 @@ node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis hand
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
+node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks
@@ -163,9 +164,18 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   stderr and left byte for byte as it is — its task simply gets no file that run. Rewriting it would destroy the
   `## Notes` that may be the only record of work already done on a stand. An orchestrator file carrying an engine
   task's id (the natural result of copying a task file as a template) is refused for the same reason.
-- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a`); an unrecognised one is
-  reported, never read as "not done". A status recorded against an older row set keeps its held `rowsDigest`, so the
-  drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
+- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a` / `partial`); an
+  unrecognised one is reported, never read as "not done". `done` and `partial` are COMPUTED from the `Outcome`
+  column of the task's `## Deliverables` table and written into the front matter; `blocked` and `n/a` are the
+  agent's own and are never computed over. A `partial` task's unbuilt rows are routed into the SAME repair
+  machinery a short `--verify` uses — grouped by (page, cause), one task per cause, one round per attempt — and
+  the task computes `done` once that repair task closes. A row with no repair task open against it (none yet, or
+  the round came back `blocked`) is what fails the run. **`--tasks <dir> --route` is how a run in flight routes
+  them**: the same round, without the `--built` payload `--verify` needs, since mid-run most pages are not built
+  yet. A repair task is recognised by front matter the ENGINE writes (`kind` / `cause` / `repairRound` / `covers`,
+  whose row keys are hashed labels), so a repair file written by hand settles no row however it is titled — which
+  is why routing is a mode and not a convention. A status recorded against an older row set keeps its held `rowsDigest`,
+  so the drift warning survives every re-slice until the task is re-opened (`status: todo`) or that line is emptied.
 
 A **plan-level gap writes NOTHING and exits 2** — `gate` / `structure` / `coverage`. Slicing a plan with a gap would
 hand sub-agents write access to a stand against deliverables the plan cannot state, so this mode refuses before it
