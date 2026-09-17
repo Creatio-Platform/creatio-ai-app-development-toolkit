@@ -42,7 +42,7 @@ The tools used in this flow:
   `guide.requestConversions.missingTargetPages` (deduplicated `web-page` targets, each with `references[]`)
   and `guide.requestConversions.unresolvedTargetRequests` (per-request detail, including
   `entity-default-mobile-page` candidates with a `resolvedCandidateSchemaName`) — the data behind the
-  "Missing target pages" plan/report items and the sequential-conversion offer in step 8a. **`resolvedSourceType`
+  "Missing target pages" plan/report items and the one-level-deep sequential-conversion offer in step 8a. **`resolvedSourceType`
   / `recommendedAction` always come back `null`** — the tool reports candidate NAMES only and does not read
   the environment to classify them (no fixed read ceiling). There is no `existingMobileEquivalentSchemaName`
   field on the wire either — the guide never searched for an existing mobile equivalent, shipped or
@@ -220,10 +220,19 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    reported). Do NOT send a partial report before Gate S resolves and a separate summary afterward: the
    report's "Section registration outcome" and "Missing pages" bullets need the Gate S answer and the
    deduplicated missing-pages list to already be in hand, so gather them first, then deliver the report once.
-8a. **Offer sequential conversion of the missing target pages** — only when the report's "Missing pages"
-   list is non-empty. Ask the developer once, **after** the complete step 8 report (a separate question,
-   never bundled into the same prompt as the Gate S question from step 7b), whether to convert them now.
-   If they decline or give no answer, stop here — do not re-offer later in the same run.
+8a. **Offer sequential conversion of the missing target pages — one level only.** Only when the CURRENT
+   page is the original page the developer asked to convert (not itself a step-8a follow-up) and its
+   step 8 report's "Missing pages" list is non-empty. Ask the developer once, **after** the complete
+   step 8 report (a separate question, never bundled into the same prompt as the Gate S question from
+   step 7b), whether to convert them now. If they decline or give no answer, stop here — do not re-offer
+   later in the same run.
+   - **A follow-up page never gets its own step 8a.** A page converted through this step runs the full
+     flow from step 1 through its own step 8 report, but that report's own "Missing pages" list is
+     reported ONLY — never offered for further sequential conversion, no matter how many candidates it
+     names. This caps the offer at one level of depth: it can only fire for gaps the ORIGINAL page named,
+     never for gaps a follow-up page introduces. If the developer wants a follow-up's own missing pages
+     converted too, that is a new, separate conversion request — say so in the follow-up's step 8 report
+     instead of prompting again.
    - **Route by the classification from step 3a first:** offer `convert-directly` candidates for this same
      flow; for `convert-classic-first` candidates, point the developer at the separate classic-web →
      freedom-web converter instead of silently skipping them (this flow still does not perform that
@@ -405,10 +414,13 @@ one followed by a later summary):
   `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements` entry whose
   coded reason names the request) — list those removed action components for the developer.
 - **Missing pages:** the same deduplicated list from the plan (`missingTargetPages` + verified-`missing`
-  `entity-default-mobile-page` targets), each with its `recommendedAction`. State whether the developer
-  accepted the step 8a offer to convert them, and for each accepted target: queued / converted (its own
-  report lands when its turn finishes) / declined / still open (the session ended before its turn). If the
-  offer was declined entirely, say so once and skip the per-page detail.
+  `entity-default-mobile-page` targets), each with its `recommendedAction`. On the ORIGINAL page's report,
+  state whether the developer accepted the step 8a offer to convert them, and for each accepted target:
+  queued / converted (its own report lands when its turn finishes) / declined / still open (the session
+  ended before its turn). If the offer was declined entirely, say so once and skip the per-page detail.
+  On a **follow-up page's own report** (converted via step 8a), list this same list but say it is
+  reported only, not offered — no step 8a runs for a follow-up's own missing pages (see step 8a above);
+  tell the developer they can ask for those to be converted as a separate, new request.
 - **Adaptive layout:** from `guide.adaptiveLayout` — which containers got a per-screen layout (stack on
   phone, N columns on tablet). Both sides were already applied via the pasted `values`; it is a report,
   not a decision.

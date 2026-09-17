@@ -121,10 +121,12 @@ request collapse this into a single unattended pass. The invariants:
   `create-related-page-addon` with `schema-type=mobile`).
 - **The initial request is NOT approval**, and in headless / autonomous mode you present the plan, ask,
   and END THE TURN without writing — never self-approve.
-- **Missing target pages are converted one at a time, never as a batch.** The playbook's step 8a proposes
-  converting the pages listed in the conversion report's "Missing pages" block, but each accepted page is
-  a full separate run of this flow with its own Gate M (and Gate S if applicable). The developer accepting
-  the sequential-conversion offer is not blanket approval for every page in the list.
+- **Missing target pages are converted one at a time, never as a batch — and the offer is one level
+  deep.** The playbook's step 8a proposes converting the pages listed in the conversion report's "Missing
+  pages" block, but each accepted page is a full separate run of this flow with its own Gate M (and Gate S
+  if applicable). The developer accepting the sequential-conversion offer is not blanket approval for
+  every page in the list. A follow-up page's OWN missing targets are reported in its own step 8 report but
+  are never offered for further sequential conversion — converting those is a new, separate request.
 
 The AUTHORITATIVE, detailed gate rules — the two-choice (View details / Adjust vs Approve) flow, what the
 plan must contain, and the exact FORBIDDEN-until-approved tool lists — live in the "Gate M" / "Gate S"
