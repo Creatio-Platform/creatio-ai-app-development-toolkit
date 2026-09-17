@@ -45,12 +45,11 @@ The tools used in this flow:
   "Missing target pages" plan/report items and the one-level-deep sequential-conversion offer in step 8a. A
   `web-page` target verified `missing` also gets its binding REMOVED (`bindingRemoved: true`), with the
   removed shape preserved on `originalBinding` for the repoint sub-step in 8a — see the "Requests (actions)"
-  report bullet. **`resolvedSourceType`
-  / `recommendedAction` always come back `null`** — the tool reports candidate NAMES only and does not read
-  the environment to classify them (no fixed read ceiling). There is no `existingMobileEquivalentSchemaName`
-  field on the wire either — the guide never searched for an existing mobile equivalent, shipped or
-  otherwise. YOU classify every distinct candidate yourself, including that search, before building the
-  plan — see step 3a.
+  report bullet. **The tool reports candidate NAMES only and never classifies them** (no fixed read
+  ceiling, no `resolvedSourceType` / `recommendedAction` field on the wire at all). There is no
+  `existingMobileEquivalentSchemaName` field either — the guide never searched for an existing mobile
+  equivalent, shipped or otherwise. YOU classify every distinct candidate yourself, including that search,
+  before building the plan — see step 3a.
 - `get-page`, `list-pages`, `find-entity-schema` — used in step 3a to classify each missing-target candidate
   (existence, source type, and whether an existing mobile equivalent already covers the same object) before
   the plan is built. Read-only, not gated.
@@ -95,8 +94,8 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    - **Freedom UI (`freedom-web`):** continue — the guide already analyzed components, layout,
      fields, actions, and (detected) business rules.
 3a. **Classify each missing-target candidate yourself, before building the plan.** The guide reports
-   candidate NAMES only — `resolvedSourceType` and `recommendedAction` come back `null` on every
-   `missingTargetPages[]` / `unresolvedTargetRequests[]` entry (it stopped reading the environment for
+   candidate NAMES only — there is no `resolvedSourceType` / `recommendedAction` field on the wire at all
+   for `missingTargetPages[]` / `unresolvedTargetRequests[]` (it does not read the environment for
    this — no fixed read ceiling). There is no `existingMobileEquivalentSchemaName` field either — the
    equivalent search below is something YOU perform, not something the guide ever did. Skip this step entirely
    when both lists are empty. Otherwise, for every DISTINCT candidate name (dedupe `target` /
@@ -378,7 +377,8 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
   (the resolved web edit page, `resolvedCandidateSchemaName`, for an `entity-default-mobile-page` target —
   or the raw object name when no candidate could be resolved), which buttons/requests reference it
   (`references[]`, or your combined `elementName`s for the entity case), and the recommended next step from
-  YOUR OWN classification (step 3a — the guide's `recommendedAction` is always `null`):
+  YOUR OWN classification (step 3a — there is no `recommendedAction` field on the wire; the guide never
+  classifies a candidate):
   `convert-directly` (already Freedom UI web, ready for this same flow), `convert-classic-first` (Classic UI
   or unrecognized source — needs a classic→freedom migration first), `skip-already-mobile` (already has a
   mobile page under this same name — nothing to propose), `redirect-to-existing-mobile` (an object's mobile
@@ -445,7 +445,8 @@ one followed by a later summary):
   `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements` entry whose
   coded reason names the request) — list those removed action components for the developer.
 - **Missing pages:** the same deduplicated list from the plan (`missingTargetPages` + verified-`missing`
-  `entity-default-mobile-page` targets), each with its `recommendedAction`. On the ORIGINAL page's report,
+  `entity-default-mobile-page` targets), each with the next step from YOUR OWN step 3a classification (there
+  is no wire `recommendedAction` to copy from). On the ORIGINAL page's report,
   state whether the developer accepted the step 8a offer to convert them, and for each accepted target:
   queued / converted (its own report lands when its turn finishes) / declined / still open (the session
   ended before its turn). If the offer was declined entirely, say so once and skip the per-page detail.
