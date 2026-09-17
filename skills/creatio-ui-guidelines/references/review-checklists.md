@@ -1,6 +1,23 @@
 # Review checklists and output templates
 
-Use this reference for audits, acceptance criteria, and final checks.
+Use this reference for audits, acceptance criteria, and final checks. It is the fast operating index — each item is one line and points to the section that owns the rule (`→ page-layout: …` = `page-layout-and-controls.md`; `→ accessibility: …` = `accessibility-and-colors.md`). Open that section when you need the full rule; do not re-derive it here.
+
+Run the **Critical gate first**. If any gate item fails, the page is not shippable — fix it or raise it explicitly before anything else. Then run the grouped checklist for the rest.
+
+## Critical gate — never ship if any of these fails
+
+- [ ] **Rendered page reviewed, not just the schema** — you opened the actual page and walked the user's fill scenario before reconciling with metadata. → page-layout: Choosing the component
+- [ ] **Page created from the template its composition needs** — a staged/DCM record uses the progress-bar template (decided before `create-page`, not a bar hand-placed into a default form page). → page-layout: Choosing the page template
+- [ ] **Few-value lookups are dropdowns, not selection windows** — small enum-like catalogs (status/type/category/stage/priority) are `simple-lookup: true`. → page-layout: Fields
+- [ ] **Composites are built in full** — every part a `composite='<caption>'` recipe names is built, not only the part you recognized. → page-layout: Choosing the component
+- [ ] **Related lists use the "Expanded list" composite and have a working add** — never a hand-built substitute, never an add button wired to an unregistered page. → page-layout: Grouping and page flow
+- [ ] **Content sits in real white card islands** — no fields/widgets dropped into bare, chrome-less containers on the page background. → page-layout: New island / card container
+- [ ] **No empty layout gaps** — within each container `layoutConfig.row` runs 1..N with no skips and every `column`/`colSpan` is within the container's own column count. → page-layout: Layout coordinates and container nesting
+- [ ] **Left and right columns are balanced** — the left/profile column is filled to at least the end of the content, not a couple of fields beside a long content area. → page-layout: Page composition
+- [ ] **Field-driven companions are present where required** — amount → analytics on its value; deadline → a timer; business-relationship Contact/Account → a read-only profile island. → page-layout: Field-driven companions
+- [ ] **Contrast and accessible names pass** — standard/small text ≥ 4.5:1, large ≥ 3:1; every accessible name/`Title` filled, never empty or a default. → accessibility: Contrast rules
+- [ ] **Destructive or irreversible actions are protected** — confirm, undo, or cancel before execution. → page-layout: Long-running and destructive actions
+- [ ] **No silent custom CSS and no global restyle** — native inputs first; custom CSS only after a one-line upgrade-risk warning and confirmation; components keep the base Creatio appearance. → page-layout: Typography
 
 ## Quick audit checklist
 
@@ -23,8 +40,8 @@ Answer these from the user's perspective before the detailed checks:
 ### Scenario and consistency
 
 - [ ] Main user role and task are clear.
-- [ ] The page follows an analogous Creatio/Freedom UI pattern where one exists.
-- [ ] Custom functionality does not visually conflict with base Creatio styling.
+- [ ] The page follows an analogous Creatio/Freedom UI pattern where one exists. → page-layout: General product fit
+- [ ] Custom functionality does not visually conflict with base Creatio styling. → page-layout: General product fit
 - [ ] The interface can be understood by a new user without project-team explanation.
 
 ### Navigation and object setup
@@ -36,130 +53,130 @@ Answer these from the user's perspective before the detailed checks:
 
 ### Layout and structure
 
-- [ ] Ready templates are reused where possible.
-- [ ] The page was created from the template its composition needs (resolved via `list-page-templates`) — a staged/DCM record uses the progress-bar template, not the default form page with a bar hand-placed into it.
-- [ ] Header is not overloaded.
-- [ ] Important fields fit in the header/profile area.
-- [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold.
-- [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups.
-- [ ] No container (group / tab / profile island) holds a single lone data-entry field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups.
-- [ ] Fields are grouped by business meaning; related fields are adjacent.
-- [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name.
-- [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists.
-- [ ] Each related list has a **working** add affordance. Default: a quick-add **mini page** wired to "+ Add" plus the full record page for editing; **inline / editable-grid add** only for simple line-item lists or when explicitly requested. For a section-less child the add/edit pages are registered so "+ Add" resolves. No related list is read-only, and no add button is wired to an unregistered page.
-- [ ] **Every related list uses the "Expanded list" composite as its required skeleton.** Resolve the current assembly with `get-component-info composite='Expanded list'` and the data binding and action requirements with `get-guidance name=related-list`; verify the resulting list against both contracts, including working toolbar actions and data wiring. An **inline / editable-grid list uses the same composite**, with inline editing configured on its DataGrid according to the current `get-component-info` contract and related-list guidance; it is not a separate composite or a hand-built substitute. Apply the inline-add scope from the preceding item.
-- [ ] The Expanded list host follows the current component defaults resolved through `get-component-info`, including its `fullWidthHeader` setting; do not copy defaults from an older recipe. Override the header layout only when a specific page composition requires it, and verify that the title and toolbar fit the rendered panel.
-- [ ] Required/frequently edited fields are on the first tab and visible without long scrolling.
-- [ ] Empty space is not created by an oversized side island with too little content.
-- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area.
-- [ ] Page content actually reads as proper **islands (white cards with rounded corners and padding)**, not fields/widgets dropped into bare structural containers. Every group of fields, every profile/metric block, and every related list sits inside a real card island (or an `ExpansionPanel` styled to match) — a transparent/chrome-less container holding content directly on the page background is a defect. Judge this on the RENDERED page, not the schema: a group that looks like loose fields on grey with no card edge fails even if the schema "has containers".
-- [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults.
-- [ ] One-column/two-column mixes do not break reading flow.
-- [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2).
-- [ ] No empty layout gaps: within each container `layoutConfig.row` runs 1..N with no skipped indices, no oversized `rowSpan`, and group containers use `rows: "auto"`.
-- [ ] Every field's `parentName` is its intended group container (nesting is correct; coordinates are container-local, not global).
-- [ ] ExpansionPanels are full width and stacked vertically — none placed side by side, in two columns, or with a partial `colSpan`.
-- [ ] Read-only details have inline editing turned off on the List (not just the add button hidden), so existing rows can't be edited in place.
-- [ ] Analytic widgets are at the top (top of profile island or first in the tab; a dedicated Analytics tab if many); the profile island holds only small (XS/S) metrics, with icons, not large charts.
-- [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page.
-- [ ] **Style parity — verified with tools, not eyeballed.** For EVERY component you added: open a shipped reference page on the same template, run `get-component-info` on that component type, and diff the concrete props against the native one — container `color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` (never a raw `title`), `labelPosition`, widget size, column count. A screenshot/metadata glance is NOT this check. New/empty page → copy these conventions from a shipped page on the same template. (`toggleType`, `title`-instead-of-`caption`, and island card settings are the props runs most often get wrong here.)
-- [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even.
-- [ ] Reference context or tools (customer summary, connected accounts) use a closable contextual side panel, not inline in the page body or a blocking modal.
-- [ ] Long-form content pages use a full-width reading column + meta/byline row, not the field grid or side islands.
+- [ ] Ready templates are reused where possible. → page-layout: Page composition
+- [ ] The page was created from the template its composition needs (resolved via `list-page-templates`) — a staged/DCM record uses the progress-bar template, not the default form page with a bar hand-placed into it. → page-layout: Choosing the page template
+- [ ] Header is not overloaded. → page-layout: Page composition
+- [ ] Important fields fit in the header/profile area. → page-layout: Page composition
+- [ ] Long pages are split into tabs, groups, islands, or wizard steps; tabs/key navigation are not pushed far below the fold. → page-layout: Page composition
+- [ ] Field groups have clear names and no unnecessary one-field duplicate-title groups. → page-layout: Grouping and page flow
+- [ ] No container (group / tab / profile island) holds a single lone data-entry field, and thin 1–2-field groups are avoided; each holds a logically related block (≥3–4 fields as a rule of thumb) — merge or fill stubs rather than scatter tiny groups. → page-layout: Grouping and page flow
+- [ ] Fields are grouped by business meaning; related fields are adjacent. → page-layout: Grouping and page flow
+- [ ] The main-information block (profile island + general tab) carries the record's core descriptive attributes (who/what/when/status), not just Name. → page-layout: Grouping and page flow
+- [ ] Every related (1:M child) business object surfaced as a `Related list <name>` in §6 of the plan is present as a related list on the parent record page (not omitted for "simple" apps); lookups are NOT related lists. → page-layout: Grouping and page flow
+- [ ] Each related list has a **working** add affordance. Default: a quick-add **mini page** wired to "+ Add" plus the full record page for editing; **inline / editable-grid add** only for simple line-item lists or when explicitly requested. For a section-less child the add/edit pages are registered so "+ Add" resolves. No related list is read-only, and no add button is wired to an unregistered page. → page-layout: Grouping and page flow
+- [ ] **Every related list uses the "Expanded list" composite as its required skeleton.** Resolve the current assembly with `get-component-info composite='Expanded list'` and the data binding and action requirements with `get-guidance name=related-list`; verify the resulting list against both contracts, including working toolbar actions and data wiring. An **inline / editable-grid list uses the same composite**, with inline editing configured on its DataGrid according to the current `get-component-info` contract and related-list guidance; it is not a separate composite or a hand-built substitute. Apply the inline-add scope from the preceding item. → page-layout: Grouping and page flow
+- [ ] The Expanded list host follows the current component defaults resolved through `get-component-info`, including its `fullWidthHeader` setting; do not copy defaults from an older recipe. Override the header layout only when a specific page composition requires it, and verify that the title and toolbar fit the rendered panel. → page-layout: Grouping and page flow
+- [ ] Required/frequently edited fields are on the first tab and visible without long scrolling. → page-layout: Adding and editing data
+- [ ] Empty space is not created by an oversized side island with too little content. → page-layout: Page composition
+- [ ] Left/profile column is filled — for objects with many columns a second left island (same settings) is added so the left side isn't near-empty; the left column is proportional in length to the right (filled to at least the end of the content), not a couple of fields beside a long content area. → page-layout: Page composition
+- [ ] Page content actually reads as proper **islands (white cards with rounded corners and padding)**, not fields/widgets dropped into bare structural containers. Every group of fields, every profile/metric block, and every related list sits inside a real card island (or an `ExpansionPanel` styled to match) — a transparent/chrome-less container holding content directly on the page background is a defect. Judge this on the RENDERED page, not the schema: a group that looks like loose fields on grey with no card edge fails even if the schema "has containers". → page-layout: New island / card container
+- [ ] New islands use the standard settings (white color, column spacing Large, row spacing None, border radius Medium, padding T/B Medium · L/R Large); plain inner input grids use transparent color, column spacing Large, row spacing None, border radius None, padding None — not designer defaults. → page-layout: New island / card container
+- [ ] One-column/two-column mixes do not break reading flow. → page-layout: Page composition
+- [ ] Container column count was checked first (not assumed 12); `column`/`colSpan` are within that count (two-column = column 1 + column N/2+1, each colSpan N/2). → page-layout: Layout coordinates and container nesting
+- [ ] No empty layout gaps: within each container `layoutConfig.row` runs 1..N with no skipped indices, no oversized `rowSpan`, and group containers use `rows: "auto"`. → page-layout: Layout coordinates and container nesting
+- [ ] Every field's `parentName` is its intended group container (nesting is correct; coordinates are container-local, not global). → page-layout: Layout coordinates and container nesting
+- [ ] ExpansionPanels are full width and stacked vertically — none placed side by side, in two columns, or with a partial `colSpan`. → page-layout: Grouping and page flow
+- [ ] Read-only details have inline editing turned off on the List (not just the add button hidden), so existing rows can't be edited in place. → page-layout: Grouping and page flow
+- [ ] Analytic widgets are at the top (top of profile island or first in the tab; a dedicated Analytics tab if many); the profile island holds only small (XS/S) metrics, with icons, not large charts. → page-layout: Analytics and metric widgets
+- [ ] Section (list) page: custom filters in `LeftFilterContainer`/`RightFilterContainer`, extra actions in `ActionButtonsContainer`, analytics/dashboards in the Dashboard component (or `DashboardsTabContainer`) — nothing dropped loose on the page. → page-layout: List (section) page layout
+- [ ] **Style parity — verified with tools, not eyeballed.** For EVERY component you added: open a shipped reference page on the same template, run `get-component-info` on that component type, and diff the concrete props against the native one — container `color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` (never a raw `title`), `labelPosition`, widget size, column count. A screenshot/metadata glance is NOT this check. New/empty page → copy these conventions from a shipped page on the same template. (`toggleType`, `title`-instead-of-`caption`, and island card settings are the props runs most often get wrong here.) → page-layout: Page composition
+- [ ] Spacing fits the content: inputs have no row spacing but do have column spacing; widgets/charts/metrics use proportional row + column spacing; gaps between siblings look even. → page-layout: New island / card container
+- [ ] Reference context or tools (customer summary, connected accounts) use a closable contextual side panel, not inline in the page body or a blocking modal. → page-layout: Page composition
+- [ ] Long-form content pages use a full-width reading column + meta/byline row, not the field grid or side islands. → page-layout: Page composition
 
 ### Fields and data entry
 
-- [ ] Fields are ordered in the sequence users fill or read them.
-- [ ] Standard record fields use two columns where appropriate.
-- [ ] Labels are short, clear, and in Sentence case.
-- [ ] Abbreviations, units, codes, and formats are explained in tooltip/placeholder/help.
-- [ ] Lookup fields are filtered to relevant values.
-- [ ] Small enum-like lookups (status, type, category, ~<20 rows) are simple lookups → render as dropdowns (`simple-lookup: true`); large/related lookups (Contact, Account, parent) use the selection window.
-- [ ] Date-only business fields are not rendered with a time picker.
-- [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder).
-- [ ] Non-obvious fields have a placeholder (example/format hint) and/or a tooltip (meaning, units, allowed values); the form is not a wall of bare inputs.
-- [ ] Tooltip/placeholder text is authored as localizable resource strings, not inline literals.
-- [ ] Inputs in a group/panel use a consistent `labelPosition` — prefer an explicit value (`above`/`left`); `"auto"` is acceptable when it already renders consistently (do not restyle a component's appearance just to force an explicit position).
-- [ ] Required fields are marked.
-- [ ] Only the real minimum is required — fields are mandatory only when the record cannot be created without them; the rest stay optional.
-- [ ] Default values, validation, and auto-substitution are configured where helpful.
-- [ ] Checkboxes/logical fields are placed after related fields.
-- [ ] Status/stage/order uses DCM/progress bar where appropriate.
-- [ ] Field guidance uses the right channel — placeholder (format) / tooltip (on-demand) / permanent description line (must-see) — not all three at once.
-- [ ] Empty optional fields show an actionable "Add …" placeholder, not a blank.
-- [ ] Toggles are used for settings/modes, checkboxes for plain record booleans.
-- [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns.
-- [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input.
-- [ ] The primary display name is auto-composed from key fields where derivable, and kept editable.
-- [ ] Every money/quantity field the user reasons about (typed or calculated — amount, total, price, hours, …) has useful analytics on its value nearby — rollup, comparison, or trend as an XS/S island metric or an Analytics-tab chart — not a bare number and not a widget repeating the field. (A bare line-item quantity the user does not reason about — e.g. a qty on a mini page — is out of scope.)
-- [ ] Every deadline/due-date/SLA field has a timer beside it showing time left/overdue, in the same block, with the date itself still visible (not hidden or replaced by the timer; a read-only/calculated SLA date is fine) — or, where the target version's catalog has no timer component, the closest native alternative was offered instead of a hand-built process-maintained countdown.
-- [ ] Every business-relationship Contact/Account lookup (responsible, primary contact, customer, supplier, owner — someone the user needs to reach) has a read-only related-record profile island — identity plus communication options, captioned for the relationship, visible only when the lookup is filled; multiple profiles stack vertically. Pure audit lookups (Created by / Modified by) are out of scope.
+- [ ] Fields are ordered in the sequence users fill or read them. → page-layout: Fields
+- [ ] Standard record fields use two columns where appropriate. → page-layout: Fields
+- [ ] Labels are short, clear, and in Sentence case. → page-layout: Text, labels, and messages
+- [ ] Abbreviations, units, codes, and formats are explained in tooltip/placeholder/help. → page-layout: Fields
+- [ ] Lookup fields are filtered to relevant values. → page-layout: Fields
+- [ ] Small enum-like lookups (status, type, category, ~<20 rows) are simple lookups → render as dropdowns (`simple-lookup: true`); large/related lookups (Contact, Account, parent) use the selection window. → page-layout: Fields
+- [ ] Date-only business fields are not rendered with a time picker. → page-layout: Fields
+- [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder). → page-layout: Fields
+- [ ] Non-obvious fields have a placeholder (example/format hint) and/or a tooltip (meaning, units, allowed values); the form is not a wall of bare inputs. → page-layout: Fields
+- [ ] Tooltip/placeholder text is authored as localizable resource strings, not inline literals. → page-layout: Fields
+- [ ] Inputs in a group/panel use a consistent `labelPosition` — prefer an explicit value (`above`/`left`); `"auto"` is acceptable when it already renders consistently (do not restyle a component's appearance just to force an explicit position). → page-layout: Fields
+- [ ] Required fields are marked. → page-layout: Fields
+- [ ] Only the real minimum is required — fields are mandatory only when the record cannot be created without them; the rest stay optional. → page-layout: Fields
+- [ ] Default values, validation, and auto-substitution are configured where helpful. → page-layout: Adding and editing data
+- [ ] Checkboxes/logical fields are placed after related fields. → page-layout: Fields
+- [ ] Status/stage/order uses DCM/progress bar where appropriate. → page-layout: Fields
+- [ ] Field guidance uses the right channel — placeholder (format) / tooltip (on-demand) / permanent description line (must-see) — not all three at once. → page-layout: Fields
+- [ ] Empty optional fields show an actionable "Add …" placeholder, not a blank. → page-layout: Fields
+- [ ] Toggles are used for settings/modes, checkboxes for plain record booleans. → page-layout: Button vs menu action vs checkbox
+- [ ] Meaningful 2–3-way choices use selectable cards (icon + title + one-line consequence); ordinary value picks stay dropdowns. → page-layout: Button vs menu action vs checkbox
+- [ ] Sliders are used for by-feel bounded numerics; values that must be exact keep a numeric input. → page-layout: Fields
+- [ ] The primary display name is auto-composed from key fields where derivable, and kept editable. → page-layout: Fields
+- [ ] Every money/quantity field the user reasons about (typed or calculated — amount, total, price, hours, …) has useful analytics on its value nearby — rollup, comparison, or trend as an XS/S island metric or an Analytics-tab chart — not a bare number and not a widget repeating the field. (A bare line-item quantity the user does not reason about — e.g. a qty on a mini page — is out of scope.) → page-layout: Field-driven companions
+- [ ] Every deadline/due-date/SLA field has a timer beside it showing time left/overdue, in the same block, with the date itself still visible (not hidden or replaced by the timer; a read-only/calculated SLA date is fine) — or, where the target version's catalog has no timer component, the closest native alternative was offered instead of a hand-built process-maintained countdown. → page-layout: Field-driven companions
+- [ ] Every business-relationship Contact/Account lookup (responsible, primary contact, customer, supplier, owner — someone the user needs to reach) has a read-only related-record profile island — identity plus communication options, captioned for the relationship, visible only when the lookup is filled; multiple profiles stack vertically. Pure audit lookups (Created by / Modified by) are out of scope. → page-layout: Field-driven companions
 
 ### Buttons, actions, and dialogs
 
-- [ ] Page-level buttons are in the upper-right area.
-- [ ] General/page-level actions are in `ActionButtonsContainer`; context-specific actions (fill/compute a field) sit next to the component that shows the result.
-- [ ] Buttons are inside a `crt.FlexContainer` (not dropped on a grid); a button next to an input shares one flex with that input.
-- [ ] There is no more than one Primary button per context.
-- [ ] Rare actions are moved into a menu.
-- [ ] Buttons, menu items, and multiple filters have fitting, distinct icons where they aid recognition (consistent icon style), not a row of identical/icon-less items.
-- [ ] Buttons have consistent height and alignment.
-- [ ] Buttons are visible/active only when applicable.
-- [ ] Destructive or irreversible actions require confirmation, undo, or cancellation.
-- [ ] Long-running actions show warning and progress/status.
-- [ ] Operations over 30 seconds or unknown duration are asynchronous with notification.
-- [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls.
-- [ ] Dialog button labels are consistent and result-oriented.
-- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M).
-- [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin.
-- [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline.
-- [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header.
-- [ ] Primary actions with close variants use a split button; it still counts as the single primary per context.
-- [ ] Report printing uses the dedicated Print button (auto-builds its reports menu), not a custom button/menu.
-- [ ] A semantic-green primary is used only for launch/activate actions, with the meaning in the label; no ad-hoc button colors.
-- [ ] An operation needing a focused set of parameters gathers them in a modal (only the needed fields, required marked, instructions above) — not a full page.
+- [ ] Page-level buttons are in the upper-right area. → page-layout: Buttons and actions
+- [ ] General/page-level actions are in `ActionButtonsContainer`; context-specific actions (fill/compute a field) sit next to the component that shows the result. → page-layout: Buttons and actions
+- [ ] Buttons are inside a `crt.FlexContainer` (not dropped on a grid); a button next to an input shares one flex with that input. → page-layout: Buttons and actions
+- [ ] There is no more than one Primary button per context. → page-layout: Buttons and actions
+- [ ] Rare actions are moved into a menu. → page-layout: Buttons and actions
+- [ ] Buttons, menu items, and multiple filters have fitting, distinct icons where they aid recognition (consistent icon style), not a row of identical/icon-less items. → page-layout: Buttons and actions
+- [ ] Buttons have consistent height and alignment. → page-layout: Buttons and actions
+- [ ] Buttons are visible/active only when applicable. → page-layout: Buttons and actions
+- [ ] Destructive or irreversible actions require confirmation, undo, or cancellation. → page-layout: Long-running and destructive actions
+- [ ] Long-running actions show warning and progress/status. → page-layout: Long-running and destructive actions
+- [ ] Operations over 30 seconds or unknown duration are asynchronous with notification. → page-layout: Long-running and destructive actions
+- [ ] Dialogs follow Creatio/mini-page styling and place instructions before controls. → page-layout: Dialogs and modals
+- [ ] Dialog button labels are consistent and result-oriented. → page-layout: Dialogs and modals
+- [ ] Modal/dialog field labels use `labelPosition: "above"` (a `left` side position is acceptable only on a wide L/XL modal, never on S/M). → page-layout: Dialogs and modals
+- [ ] Text-heavy dialogs are structured, not a wall of text — real heading levels (not faked bold), consistent fonts, blocks separated by spacing, nothing crammed against the right margin. → page-layout: Dialogs and modals
+- [ ] Long or conditional explanations are moved into an `i` tooltip next to the control (with an instruction link where relevant), not kept inline. → page-layout: Dialogs and modals
+- [ ] Record-level actions acting on a profile/summary island's record sit in that island's footer (flex), not the page header. → page-layout: Buttons and actions
+- [ ] Primary actions with close variants use a split button; it still counts as the single primary per context. → page-layout: Buttons and actions
+- [ ] Report printing uses the dedicated Print button (auto-builds its reports menu), not a custom button/menu. → page-layout: Buttons and actions
+- [ ] A semantic-green primary is used only for launch/activate actions, with the meaning in the label; no ad-hoc button colors. → page-layout: Buttons and actions
+- [ ] An operation needing a focused set of parameters gathers them in a modal (only the needed fields, required marked, instructions above) — not a full page. → page-layout: Dialogs and modals
 
 ### Copy and content
 
-- [ ] Labels and headings use Sentence case, not Title Case/all caps.
-- [ ] Button labels are short and describe the result.
-- [ ] Error messages explain what the user can do next.
-- [ ] Admin technical details are not exposed to regular users unless necessary.
-- [ ] User-facing text is in one language or intentionally localized.
-- [ ] Non-obvious sections/tabs have a one-line localizable intro under the heading (skipped where self-explanatory).
+- [ ] Labels and headings use Sentence case, not Title Case/all caps. → page-layout: Text, labels, and messages
+- [ ] Button labels are short and describe the result. → page-layout: Text, labels, and messages
+- [ ] Error messages explain what the user can do next. → page-layout: Text, labels, and messages
+- [ ] Admin technical details are not exposed to regular users unless necessary. → page-layout: Text, labels, and messages
+- [ ] User-facing text is in one language or intentionally localized. → accessibility: Localization, links & status
+- [ ] Non-obvious sections/tabs have a one-line localizable intro under the heading (skipped where self-explanatory). → page-layout: Text, labels, and messages
 
 ### Typography and visual style
 
-- [ ] Montserrat and predefined Freedom UI typography are used.
-- [ ] Font sizes/styles are minimized and based on Headline 1-4, Body, Caption.
-- [ ] Colors are minimized and based on predefined palette.
-- [ ] Color is not the only indication of status or meaning.
-- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = draft/paused, red = stopped/overdue/lost, gray = inactive); same state = same color everywhere, always paired with a text label and adequate contrast.
-- [ ] Custom global styles/themes have a clear business reason.
-- [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position).
+- [ ] Montserrat and predefined Freedom UI typography are used. → page-layout: Typography
+- [ ] Font sizes/styles are minimized and based on Headline 1-4, Body, Caption. → page-layout: Typography
+- [ ] Colors are minimized and based on predefined palette. → page-layout: Typography
+- [ ] Color is not the only indication of status or meaning. → accessibility: Freedom UI color guidance
+- [ ] Status colors follow one semantic scale (green = on-track/ready/done, amber = draft/paused, red = stopped/overdue/lost, gray = inactive); same state = same color everywhere, always paired with a text label and adequate contrast. → accessibility: Freedom UI color guidance
+- [ ] Custom global styles/themes have a clear business reason. → page-layout: Typography
+- [ ] Components keep the default Creatio appearance — no global restyle (e.g. `crt.Input` switched to `appearance: "outline"`, custom borders/fonts) that makes the form look different from the base product; no restyle done just to satisfy another rule (e.g. label position). → page-layout: Typography
 
 ### Accessibility
 
-- [ ] **`references/accessibility-and-colors.md` was actually opened and applied (not skipped, not from memory).** Accessibility is a required dimension of every page/review, not an optional final step — run these checks for every design and audit.
-- [ ] Standard/small text contrast is at least 4.5:1.
-- [ ] Large text contrast is at least 3:1.
-- [ ] Custom tab, Area, chart, glass, and wallpaper combinations are contrast-checked.
-- [ ] All interactive elements are reachable and usable by keyboard.
-- [ ] Icon-only actions have tooltips/accessibility names.
-- [ ] Informative images have alt text; decorative images are ignored by screen readers.
-- [ ] Charts/diagrams have text alternative or data table where needed.
-- [ ] Each component's accessibility parameters (accessible name/`aria-label`, label/caption, tooltip, alt) are present AND filled in — not empty or left at default.
-- [ ] Status changes/no-result messages are announced when relevant; key actions (e.g. Save) give a meaningful status message (SC 4.1.3).
-- [ ] Every element has a meaningful `Title` (incl. icon-only / visually-hidden), not "Button 1" (SC 4.1.2).
-- [ ] Input errors are identified with correction hints; required fields marked at entry; critical/irreversible actions have confirm or Undo (SC 3.3.1/3.3.3/3.3.4).
-- [ ] No redundant entry — known/linked values (lookups, defaults, process-step data) are pre-populated, not re-asked (SC 3.3.7).
-- [ ] Interactive targets are ≥24×24 px or spaced apart (container gap ≥8 px) (SC 2.5.8).
-- [ ] The same function is identified consistently across pages — same icon/label/tooltip/position (SC 3.2.4).
-- [ ] `PageTitle` is kept; exactly one H1 per page/modal with logical heading order (SC 2.4.2, 1.3.1).
-- [ ] Shell (`BaseShell`/`MainShell`) is not altered, so bypass/skip-link behavior is preserved; customizations stay in the content area (SC 2.4.1).
-- [ ] Navigation and inline-help placement are consistent across pages (SC 3.2.3, 3.2.6).
-- [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4).
-- [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2).
+- [ ] **`references/accessibility-and-colors.md` was actually opened and applied (not skipped, not from memory).** Accessibility is a required dimension of every page/review, not an optional final step — run these checks for every design and audit. → accessibility: WCAG principles to apply
+- [ ] Standard/small text contrast is at least 4.5:1. → accessibility: Contrast rules
+- [ ] Large text contrast is at least 3:1. → accessibility: Contrast rules
+- [ ] Custom tab, Area, chart, glass, and wallpaper combinations are contrast-checked. → accessibility: Contrast rules
+- [ ] All interactive elements are reachable and usable by keyboard. → accessibility: WCAG principles to apply
+- [ ] Icon-only actions have tooltips/accessibility names. → accessibility: Images, icons, and non-text content
+- [ ] Informative images have alt text; decorative images are ignored by screen readers. → accessibility: Images, icons, and non-text content
+- [ ] Charts/diagrams have text alternative or data table where needed. → accessibility: Images, icons, and non-text content
+- [ ] Each component's accessibility parameters (accessible name/`aria-label`, label/caption, tooltip, alt) are present AND filled in — not empty or left at default. → accessibility: WCAG principles to apply
+- [ ] Status changes/no-result messages are announced when relevant; key actions (e.g. Save) give a meaningful status message (SC 4.1.3). → accessibility: Localization, links & status
+- [ ] Every element has a meaningful `Title` (incl. icon-only / visually-hidden), not "Button 1" (SC 4.1.2). → accessibility: Inputs, forms & validation
+- [ ] Input errors are identified with correction hints; required fields marked at entry; critical/irreversible actions have confirm or Undo (SC 3.3.1/3.3.3/3.3.4). → accessibility: Inputs, forms & validation
+- [ ] No redundant entry — known/linked values (lookups, defaults, process-step data) are pre-populated, not re-asked (SC 3.3.7). → accessibility: Inputs, forms & validation
+- [ ] Interactive targets are ≥24×24 px or spaced apart (container gap ≥8 px) (SC 2.5.8). → accessibility: Element size & appearance
+- [ ] The same function is identified consistently across pages — same icon/label/tooltip/position (SC 3.2.4). → accessibility: Element size & appearance
+- [ ] `PageTitle` is kept; exactly one H1 per page/modal with logical heading order (SC 2.4.2, 1.3.1). → accessibility: Page structure
+- [ ] Shell (`BaseShell`/`MainShell`) is not altered, so bypass/skip-link behavior is preserved; customizations stay in the content area (SC 2.4.1). → accessibility: Page structure
+- [ ] Navigation and inline-help placement are consistent across pages (SC 3.2.3, 3.2.6). → accessibility: Page structure
+- [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4). → accessibility: Localization, links & status
+- [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2). → accessibility: Localization, links & status
 
 ## Audit output template
 
