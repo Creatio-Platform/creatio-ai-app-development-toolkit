@@ -110,9 +110,20 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **[list-filter-type]** `<FilterName>` — its Classic `dataValueType` maps to no known `quickFilterType` …
 - **[list-filter-attributes]** `<Items>.filterAttributes` — a `merge` REPLACES the array, so re-list every entry the
   starter list page already registers alongside this ChangeSet's contribution …
-- **[list-command-bar]** command-bar buttons: `<set>` — only `getSectionActions()` items are read; a button the
-  section adds through its view `diff` is not folded at all …
+- **[list-command-bar]** command-bar buttons: `<set>` — the set the run resolved, from BOTH surfaces: the
+  `getSectionActions()` menu and the buttons the section inserts through its own view `diff` (ENG-94714). What the
+  item still asks is where each one belongs on the Freedom command bar …
 - **[list-row-action]** row action: `<DataGridActiveRow…>` — its enablement condition must become Freedom state …
+- **[list-grid-config]** element config: `<Element>` — the element declares configuration keys the engine models on
+  no field, read off the section's own view `diff` and carried here rather than dropped (ENG-94714). The founding
+  case is the section's `merge DataGrid` setting `controlColumnName` / `applyControlConfig` / `controlCellClass`,
+  which renders a control inside a grid cell and has no obvious Freedom analog. ONE item per element, listing its
+  keys — the real `OpportunitySectionV2` grid declares twenty of them, and twenty separate rows would bury the two
+  that carry a real question …
+- **[list-section-element]** section element: `<Element>` — the section declares this element in its own view
+  `diff` and the list vocabulary has no reading for it, or its ancestry reaches no recognised list container
+  (usually because `section.seed` was not supplied). Published so it is not silently dropped, which is what
+  happened to every section-declared element before ENG-94714 …
 - **[list-process]** section process: `<names>` — the Classic section launches it; wire it as a list-page
   run-process action …
 
@@ -182,7 +193,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 > **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.
 
 #### ⚠ Confirm before I build (1)
-- **[list-command-bar]** command-bar buttons: runBulkAssign — only `getSectionActions()` items are read; a button the section adds through its view `diff` (and a `DataGridActiveRow…` row action) is not folded at all, so neither reaches this ChangeSet — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar
+- **[list-command-bar]** command-bar buttons: runBulkAssign — read from BOTH classic surfaces — the `getSectionActions()` menu and the buttons the section inserts through its own view `diff` (each row's Source cell says which) — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar
 
 ### Applicant form page
 #### Layout
