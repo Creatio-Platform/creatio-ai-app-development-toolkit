@@ -39,20 +39,13 @@ The tools used in this flow:
 
 - `get-mobile-page-conversion-guide` — **advisory only**: detects the source page type and returns a
   conversion guide. It builds NO body and writes NOTHING to Creatio or disk. It also surfaces
-  `guide.requestConversions.missingTargetPages` (deduplicated `web-page` targets, each with `references[]`)
-  and `guide.requestConversions.unresolvedTargetRequests` (per-request detail, including
-  `entity-default-mobile-page` candidates with a `resolvedCandidateSchemaName`) — the data behind the
-  "Missing target pages" plan/report items and the one-level-deep sequential-conversion offer in step 8a. A
-  `web-page` target verified `missing` also gets its binding REMOVED (`bindingRemoved: true`), with the
-  removed shape preserved on `originalBinding` for the repoint sub-step in 8a — see the "Requests (actions)"
-  report bullet. **The tool reports candidate NAMES only and never classifies them** (no fixed read
-  ceiling, no `resolvedSourceType` / `recommendedAction` field on the wire at all). There is no
-  `existingMobileEquivalentSchemaName` field either — the guide never searched for an existing mobile
-  equivalent, shipped or otherwise. YOU classify every distinct candidate yourself, including that search,
-  before building the plan — see step 3a.
-- `get-page`, `list-pages`, `find-entity-schema` — used in step 3a to classify each missing-target candidate
-  (existence, source type, and whether an existing mobile equivalent already covers the same object) before
-  the plan is built. Read-only, not gated.
+  `guide.requestConversions.missingTargetPages` (deduplicated across BOTH `web-page` and
+  `entity-default-mobile-page` targets, each with `references[]`) — the data behind the "Missing target
+  pages" plan/report items and the one-level-deep sequential-conversion offer in step 8a — and
+  `guide.existingMobilePages` (any mobile page(s) already covering the entity/page being converted), the
+  data behind the reuse-vs-convert check in step 2a. A `web-page` target verified `missing` also gets its
+  binding REMOVED (`bindingRemoved: true`), with the removed shape preserved on `originalBinding` for the
+  repoint sub-step in 8a — see the "Requests (actions)" report bullet.
 - `list-page-templates` (schema-type `mobile`), `create-page`, `update-page`, `validate-page` — persistence.
   Thread `create-page`'s returned `schemaUId` into `update-page` as `target-schema-uid` (see step 7) so the
   body lands in the created schema instead of a replacing schema in the design package.
@@ -87,49 +80,17 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    `get-guidance freedom-page-web-to-mobile-conversion` ONCE here and reuse it for the rest of the run.
 2. **Analyze the source page:** run `get-mobile-page-conversion-guide` with the source `schema-name`.
    It reads the page and returns the conversion guide. It writes nothing.
+2a. **Check for an existing mobile equivalent.** From `guide.existingMobilePages`: if the entity/page
+   being converted already has a mobile page, ask the developer before Gate M — reuse the existing page,
+   or convert again. If none is reported, continue. This check runs the same way every time this flow is
+   entered, including on every step 8a follow-up re-entry — it is a fact the guide reports, not a search
+   you perform by hand.
 3. **Determine the source page type** from the returned `sourceType`:
    - **Classic UI / not `freedom-web`:** conversion STOPS here. Offer the developer a separate
      Classic UI → Freedom UI migration first (a dedicated classic-web → freedom-web converter — not
      part of this stage). Do NOT create, update, or validate anything in Creatio.
    - **Freedom UI (`freedom-web`):** continue — the guide already analyzed components, layout,
      fields, actions, and (detected) business rules.
-3a. **Classify each missing-target candidate yourself, before building the plan.** The guide reports
-   candidate NAMES only — there is no `resolvedSourceType` / `recommendedAction` field on the wire at all
-   for `missingTargetPages[]` / `unresolvedTargetRequests[]` (it does not read the environment for
-   this — no fixed read ceiling). There is no `existingMobileEquivalentSchemaName` field either — the
-   equivalent search below is something YOU perform, not something the guide ever did. Skip this step entirely
-   when both lists are empty. Otherwise, for every DISTINCT candidate name (dedupe `target` /
-   `resolvedCandidateSchemaName` first — same grouping the "Missing target pages" plan section requires — AND
-   ACROSS the two sources: a `web-page` row's `target` and an `entity-default-mobile-page` row's
-   `resolvedCandidateSchemaName` that name the SAME schema are ONE candidate, not two, even though they came
-   from different lists):
-   - **`entity-default-mobile-page` candidate with NO `resolvedCandidateSchemaName` at all:** clio could not
-     find the object's default WEB edit page either (both the mobile and the web `RelatedPage` add-ons came
-     back empty) — but the OBJECT name (`target`) is still known. **Do not jump straight to
-     `manual-candidate-not-found`.** Run the "Existing mobile equivalent" search below keyed on the OBJECT
-     name directly (skip the `get-page`-on-a-page-name step — `target` here is an object name, not a page
-     schema name, so there is nothing to read yet). A confirmed mobile match → `redirect-to-existing-mobile`.
-     Nothing found → `manual-candidate-not-found` — an empty add-on is a fact about the add-on, not proof no
-     mobile page exists anywhere for the object, so the equivalent search must run before giving up on it.
-   - **Existence + source type** (every other candidate — a `web-page` `target`, or an
-     `entity-default-mobile-page` candidate whose `resolvedCandidateSchemaName` IS set): call `get-page` with
-     that `schema-name`. A schema-not-found error means no web page exists at all — classify
-     `no-web-page-exists` (nothing to offer converting). Otherwise read the response `sourceType`:
-     `freedom-web` → `convert-directly`; `mobile` → `skip-already-mobile`; anything else (Classic UI,
-     unrecognized) → `convert-classic-first`. Any other read failure (transport, auth, unreadable body) →
-     `manual-candidate-not-found` — never guess.
-   - **Existing mobile equivalent** — runs for a candidate you are about to classify `convert-directly` /
-     `convert-classic-first`, AND (per the first bullet above) directly by object name for an
-     `entity-default-mobile-page` candidate with no `resolvedCandidateSchemaName` at all. `skip-already-mobile`
-     / `no-web-page-exists` never reach this check — they have nothing to redirect. Use `find-entity-schema` /
-     `list-pages` to check whether the object already has a mobile page under a different name — look at its
-     actual mobile pages rather than guessing one fixed naming pattern. Confirm any match's `sourceType` is
-     exactly `mobile` via `get-page`: **a same-named/suffix-matched CLASSIC UI schema counts as NO existing
-     mobile equivalent**, not a match — the Creatio Mobile app cannot open a Classic UI page any more than it
-     can open a web one. A confirmed mobile match sets/overrides the classification to
-     `redirect-to-existing-mobile`; carry its schema name forward.
-   - **One read per distinct name.** Two rows sharing the same `resolvedCandidateSchemaName` (or `target`)
-     resolve to ONE classification, reused for both.
 4. **Generate the conversion plan.** From the guide, produce a SHORT, plain-language plan — NOT
    technical detail. Lead with the Beta-release notice (see "Conversion plan" below) — verbatim at the
    very top. Then state: what will be transferred, what will be adapted (e.g. *"grid → mobile
@@ -235,22 +196,16 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      never for gaps a follow-up page introduces. If the developer wants a follow-up's own missing pages
      converted too, that is a new, separate conversion request — say so in the follow-up's step 8 report
      instead of prompting again.
-   - **Route by the classification from step 3a first:** offer `convert-directly` candidates for this same
-     flow; for `convert-classic-first` candidates, point the developer at the separate classic-web →
-     freedom-web converter instead of silently skipping them (this flow still does not perform that
-     migration); skip `skip-already-mobile` and `no-web-page-exists` entries entirely (nothing to offer);
-     for `redirect-to-existing-mobile`, tell the developer the object already has a mobile page under a
-     different name and offer repointing the binding to it instead of converting a new one (mechanics: the
-     "Repoint the referencing page(s)" sub-step below); for
-     `manual-candidate-not-found` (step 3a already tried the equivalent search by object name too, when there
-     was no `resolvedCandidateSchemaName` to begin with — this is a genuine dead end), tell the developer no
-     candidate could be resolved automatically and ask them to supply one or decline it.
-   - **Offer the DEDUPLICATED report rows, not raw `unresolvedTargetRequests`.** The "Missing target pages"
-     report list already collapsed every `entity-default-mobile-page` row sharing the same
-     `resolvedCandidateSchemaName` (or `target`, when unresolved) into one candidate — offer from that
-     list. If you ever build the offer directly from `unresolvedTargetRequests` instead of the report,
-     group it the same way first: two buttons creating the same missing object must produce exactly ONE
-     offer, never two.
+   - **Take each accepted candidate one at a time, re-entering the full flow at step 2.** If the
+     candidate has a resolved page name (a `web-page` target, or an `entity-default-mobile-page` target
+     with a `resolvedCandidateSchemaName`), run it as the new source through step 2 onward: step 3's
+     `sourceType` check stops it there if it turns out to be Classic UI, and step 2a's existing-mobile
+     check offers reuse-vs-convert if an equivalent already exists — neither needs pre-classifying here.
+     If the candidate has NO resolved page name at all (only an object/entity `target`), there is nothing
+     to re-enter the flow with: tell the developer no candidate could be found automatically and ask them
+     to supply a page name or decline it — do not re-offer it later in this run.
+   - **Offer from the deduplicated `missingTargetPages` list**, which clio already dedupes across both
+     `web-page` and `entity-default-mobile-page` targets — no additional grouping needed on this side.
    - **Strictly one page at a time.** On acceptance, take candidates one by one. Each one runs the
      **full flow from step 1** (its resolved page name as the new source, re-resolving the environment if
      it differs) through **Gate M**, the build, **Gate S** (if applicable), and its own step 8 report —
@@ -259,8 +214,8 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      (see below) for every one of these, exactly as for the original page.
    - **Repoint the referencing page(s) once a `web-page` target resolves.** This applies ONLY to a
      `web-page` candidate whose binding was actually removed (`bindingRemoved: true` on the finding) —
-     `convert-directly` once its own step 8 report lands, or `redirect-to-existing-mobile` as soon as the
-     developer accepts it (no new page build needed there). An `entity-default-mobile-page` candidate needs
+     once its own step 8 report lands for a freshly-converted page, or as soon as the developer accepts
+     "reuse the existing page" from step 2a (no new page build needed there). An `entity-default-mobile-page` candidate needs
      NO repoint: its request is scoped by `entityName`, not a page name, so registering the object's default
      mobile page via `create-related-page-addon` (step 7b) makes the existing binding work again on its own.
      For a `web-page` target, for EVERY entry in its `missingTargetPages[].references[]` (each carries its
@@ -268,8 +223,8 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      reference the same target): `get-page` the page that carries `elementName` (with its `target-schema-uid`
      for `update-page`, same rule as step 7), clone that reference's `originalBinding`, replace only its
      `params.schemaName` with the RESOLVED mobile schema name (from `create-page`'s result for a fresh
-     conversion, or from the confirmed match for `redirect-to-existing-mobile` — never a guessed naming
-     pattern), set it back onto the element's `binding` property, then `update-page` and `validate-page`.
+     conversion, or from the reused page confirmed at step 2a — never a guessed naming pattern), set it
+     back onto the element's `binding` property, then `update-page` and `validate-page`.
      This is itself a write to an ALREADY-converted page and needs no separate Gate M — the developer already
      approved it by accepting this candidate — but report the outcome, per reference, in that page's own
      step 8 report (see the "Missing pages" report bullet below). **Known limit:** `references[]` only
@@ -359,34 +314,12 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **What is NOT supported / will be dropped** — e.g. Dashboards, Summaries, bulk actions. State it
   explicitly (this bucket takes the step-4 message shape).
 - **Needs a decision** (`requiresManualDecision`) — the items awaiting the developer's call.
-- **Missing target pages** — from `guide.requestConversions.missingTargetPages` (deduplicated `web-page`
-  targets) plus the verified-`missing` `entity-default-mobile-page` entries in `unresolvedTargetRequests`
-  (skip `unknown` ones here — they are reported, not queued). **Deduplicate the `entity-default-mobile-page`
-  entries yourself before listing them.** Unlike `missingTargetPages`, clio does NOT deduplicate this kind:
-  it emits one `unresolvedTargetRequests` row per BUTTON, so two buttons creating the same missing object
-  produce two rows sharing the same `resolvedCandidateSchemaName` (or the same `target` object name when
-  none resolved). Group those rows — by `resolvedCandidateSchemaName` when it is set, otherwise by
-  `target` — and combine every `elementName` that referenced the group into one candidate row, the same
-  shape `references[]` already gives you for a `web-page` target. **Then merge ACROSS the two sources**:
-  clio never checks whether a `web-page` target's schema name coincides with an `entity-default-mobile-page`
-  candidate's `resolvedCandidateSchemaName` — if it does (a direct `crt.OpenPageRequest` on a page that also
-  happens to be some object's default mobile edit page), they name the SAME missing page and must become
-  ONE row with the combined `references[]`, not two rows offering the same conversion twice. List every
-  remaining DISTINCT candidate the guide could not find while analyzing this source page's action bindings.
-  For each: the target name
-  (the resolved web edit page, `resolvedCandidateSchemaName`, for an `entity-default-mobile-page` target —
-  or the raw object name when no candidate could be resolved), which buttons/requests reference it
-  (`references[]`, or your combined `elementName`s for the entity case), and the recommended next step from
-  YOUR OWN classification (step 3a — there is no `recommendedAction` field on the wire; the guide never
-  classifies a candidate):
-  `convert-directly` (already Freedom UI web, ready for this same flow), `convert-classic-first` (Classic UI
-  or unrecognized source — needs a classic→freedom migration first), `skip-already-mobile` (already has a
-  mobile page under this same name — nothing to propose), `redirect-to-existing-mobile` (an object's mobile
-  page already exists under a DIFFERENT name — name it and offer repointing instead of converting a new
-  page), `no-web-page-exists` (confirmed absent — nothing to offer), or `manual-candidate-not-found` (the
-  read failed or no candidate resolved — flag it for the developer's own decision). This is informational
-  here — do NOT propose converting anything yet; the sequential conversion OFFER happens after the report,
-  in step 8a.
+- **Missing target pages** — from `guide.requestConversions.missingTargetPages`: clio deduplicates this
+  list itself across BOTH `web-page` and `entity-default-mobile-page` targets, so list it as reported, one
+  row per distinct target with the buttons/requests that reference it (`references[]`). This is
+  informational only — do NOT propose converting anything yet, and do NOT classify or group the rows
+  yourself; the sequential conversion OFFER happens after the report, in step 8a, and any Classic-UI /
+  already-mobile / existing-equivalent handling happens when that offer is accepted (step 2a, step 3).
 - **Section registration intent** (from `guide.sectionRegistration`) — whether the page is a section
   and whether it would be made available in mobile, and in which workplace (existing mobile one, a new
   one, or skip); for a FORM page, whether to register it as the entity's default mobile edit page
@@ -444,14 +377,13 @@ one followed by a later summary):
   unreachable environment is never proof enough to strip a working action. A
   `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements` entry whose
   coded reason names the request) — list those removed action components for the developer.
-- **Missing pages:** the same deduplicated list from the plan (`missingTargetPages` + verified-`missing`
-  `entity-default-mobile-page` targets), each with the next step from YOUR OWN step 3a classification (there
-  is no wire `recommendedAction` to copy from). On the ORIGINAL page's report,
-  state whether the developer accepted the step 8a offer to convert them, and for each accepted target:
-  queued / converted (its own report lands when its turn finishes) / declined / still open (the session
-  ended before its turn). If the offer was declined entirely, say so once and skip the per-page detail.
-  For every **`web-page` target that resolved** (converted now, or matched to an existing mobile page under
-  `redirect-to-existing-mobile`), also state the **repoint outcome** — see step 8a's repoint sub-step: which
+- **Missing pages:** the same deduplicated `missingTargetPages` list from the plan. On the ORIGINAL page's
+  report, state whether the developer accepted the step 8a offer to convert them, and for each accepted
+  target: queued / converted (its own report lands when its turn finishes) / declined / still open (the
+  session ended before its turn). If the offer was declined entirely, say so once and skip the per-page
+  detail.
+  For every **`web-page` target that resolved** (converted now, or reused via the step 2a existing-mobile
+  check), also state the **repoint outcome** — see step 8a's repoint sub-step: which
   `elementName`s got their action restored, and any that could not be (report the failure, never leave it
   silent). An `entity-default-mobile-page` target needs no repoint report line: registering its default
   mobile page is the whole fix, nothing on the source page changes.
