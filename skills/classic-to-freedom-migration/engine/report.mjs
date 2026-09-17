@@ -18,7 +18,7 @@
 //   · a `needs-decision` row states WHICH decision is needed, read from a marker the build agent writes;
 //   · a boundary the agent closed with a recorded decision (`D<N>`, `Adjustment N`) is information; one closed
 //     without is the only thing that needs an answer;
-//   · the ledger table carries HOW each task was verified (machine / evidence + judge / by hand) per task;
+//   · the ledger table says WHO confirmed each plan item per task (on the built page / by review / nobody yet — manually);
 //   · the dispatch gate is the engine's own safeguard and is not reported here at all — the reader does not care
 //     which context closed a task; the engine still fails the run over it on stderr;
 //   · the engine's own preparation task (the reference cache) is not a plan task and is not listed.
@@ -137,7 +137,7 @@ function howVerified(vrow) {
   return { how: "machine", ok: vrow.outcome === "ok" };
 }
 const HOW_TEXT = { machine: "✅ machine — read off the built page", judge: "✅ evidence filed + judged convincing",
-  hand: "☐ by hand", na: "— approved boundary (N/A in the plan)", unknown: "— not in this run's plan-vs-built table" };
+  hand: "☐ confirm manually", na: "— approved boundary (N/A in the plan)", unknown: "— not in this run's plan-vs-built table" };
 
 // --- the ledger, as the report sees it ------------------------------------------------------------------------
 function planTasks(tasks) {
@@ -223,9 +223,9 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
   if (decidedNotBuilt.length) L.push(`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`);
   const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
   L.push(`| Boundaries the agent closed | ${boundaries.length}${boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : ""} |`);
-  L.push(`| Verified by the machine (read off the built page) | ${rc.machineOk}/${rc.machine} |`);
-  L.push(`| Verified by evidence + an independent judge | ${rc.judgeOk}/${rc.judge} |`);
-  L.push(`| Left to check by hand on the stand | ${handLeft} |`);
+  L.push(`| Plan items confirmed on the built page | ${rc.machineOk}/${rc.machine} |`);
+  L.push(`| Plan items confirmed by review (evidence record + independent reviewer) | ${rc.judgeOk}/${rc.judge} |`);
+  L.push(`| Plan items to confirm manually | ${handLeft} |`);
   if (repair) {
     const parts = [];
     if (repair.written?.length) parts.push(`wrote ${plural(repair.written.length, "repair task")}`);
@@ -342,10 +342,10 @@ const num = (secNo, title) => `## ${secNo}. ${title}`;
 
 function tasksSection(tasks, perTask, pageName, secNo) {
   const L = [num(secNo, `Tasks (${tasks.length})`), "",
-    "One row per task file. `Status` is computed from the task's own `Outcome` cells. The three verification columns"
-    + " say how many of the task's plan items were confirmed by each mechanism — the machine reading the built page,"
-    + " an evidence record judged by an independent context, or nobody yet (a person opens the page).", "",
-    "| Step | Task | Page | Status | Machine | Evidence + judge | By hand | Not built |",
+    "One row per task file. `Status` is computed from the task's own `Outcome` cells. The three confirmation columns"
+    + " count the task's plan items by WHO confirmed them: on the built page — the engine read the page through get-page and found the item;"
+    + " by review — the build agent filed an evidence record and a separate reviewer found it convincing; manually — nobody yet, a person has to open the page.", "",
+    "| Step | Task | Page | Status | Confirmed on the built page | Confirmed by review | To confirm manually | Not built |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   tasks.forEach((t, i) => {
     const rows = perTask.get(t.id) || [];
@@ -369,9 +369,9 @@ function tasksSection(tasks, perTask, pageName, secNo) {
 const SETTLED_STATES = new Set(["machine", "judge", "na", "decided", "extra"]);
 function detailsSection(tasks, perTask, pageName, secNo) {
   const needs = tasks.filter((t) => (perTask.get(t.id) || []).some((r) => !SETTLED_STATES.has(r.state)));
-  const L = [num(secNo, `Task details — what is left per task (${needs.length})`), ""];
+  const L = [num(secNo, `Task details — what is still open per task (${needs.length})`), ""];
   if (!needs.length) { L.push("Nothing — every plan item of every task was confirmed by the machine or by evidence + judge."); return L; }
-  L.push("Only the tasks with something left: a plan item to check by hand, a decision to make, or a row the machine"
+  L.push("Only the tasks with something still open: a plan item to confirm manually, a decision to make, or an item the built page"
     + " could not confirm. A ☐ row carries the check the build agent wrote (`Check on stand`), or points at the task's"
     + " notes. Rows of an orchestrator-authored task that are not plan items (\"+N not in the plan\" above) are not"
     + " listed — the agent recorded them built and nothing else can check them.", "");
@@ -379,7 +379,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
     const rows = (perTask.get(t.id) || []).filter((r) => !SETTLED_STATES.has(r.state));
     const checks = markers(t.notes, CHECK_MARKER);
     L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${t.file})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
-      "| # | Plan item | Agent recorded | How to close it |", "| --- | --- | --- | --- |");
+      "| # | Plan item | Build agent recorded | What closes it |", "| --- | --- | --- | --- |");
     for (const r of rows) {
       let how;
       if (r.state === "not-built") how = "decision needed — see section 1";
@@ -388,7 +388,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
       else if (r.state === "open") how = r.v ? `${r.v.status} — ${cell(brief(r.v.evidence, 140))}` : "⚠ recorded by the agent but not in this run's plan-vs-built table";
       else {
         const c = checks.get(r.n);
-        how = c ? `☐ by hand — ${cell(c)}` : `☐ by hand — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
+        how = c ? `☐ confirm manually — ${cell(c)}` : `☐ confirm manually — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
       }
       L.push(`| ${r.n} | ${r.label} | ${cell(r.outcome)} | ${how} |`);
     }
@@ -424,7 +424,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   const complete = reasons.length === 0;
   const verdict = complete
-    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${handLeft ? `; ${plural(handLeft, "plan item")} still to confirm by hand on the stand (section 5)` : ""}`
+    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : ""}`
     : `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}`;
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);

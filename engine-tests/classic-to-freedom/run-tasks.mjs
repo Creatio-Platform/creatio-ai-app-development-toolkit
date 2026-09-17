@@ -3467,17 +3467,17 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       return /## 1\. Needs a decision \(1\)/.test(s1) && s1.includes(victim.rows[rowN - 1].label)
         && /did not state the question/.test(s1) && s1.includes(`](${victim.file}), row ${rowN}`); },
     () => out.slice(out.indexOf("## 1."), out.indexOf("## 2.")));
-  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Machine / Evidence + judge / By hand columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
+  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed on the built page / Confirmed by review / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
     () => { const s4 = out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/));
       const line = s4.split("\n").find((l) => l.includes(`](${victim.file})`)) || "";
-      return /\| Step \| Task \| Page \| Status \| Machine \| Evidence \+ judge \| By hand \| Not built \|/.test(s4)
+      return /\| Step \| Task \| Page \| Status \| Confirmed on the built page \| Confirmed by review \| To confirm manually \| Not built \|/.test(s4)
         && /◐ partial/.test(line) && line.includes(victim.rows[rowN - 1].label) && /needs a decision/.test(line)
         && !/Dispatch/i.test(s4) && !/Reference cache/.test(s4) && /Form page|Child page|List page|Whole run/.test(line) && !/\| `?(main|run)`? \|/.test(line); },
     () => out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/)).split("\n").slice(0, 8));
   check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, machine and evidence+judge verification, by-hand remainder — and nothing about dispatch",
     () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ queued \d+)? \|/.test(out) && /\| Open questions \(plan items recorded NOT BUILT, no decision yet\) \| 1 \|/.test(out)
-      && /\| Verified by the machine \(read off the built page\) \| \d+\/\d+ \|/.test(out) && /\| Verified by evidence \+ an independent judge \| \d+\/\d+ \|/.test(out)
-      && /\| Left to check by hand on the stand \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
+      && /\| Plan items confirmed on the built page \| \d+\/\d+ \|/.test(out) && /\| Plan items confirmed by review \(evidence record \+ independent reviewer\) \| \d+\/\d+ \|/.test(out)
+      && /\| Plan items to confirm manually \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
   check("ENG-99126 CLI: with `--out`, the full plan-vs-built table is written to `plan-vs-built.md` beside the report and the report LINKS it instead of carrying it",
     () => { const outFile = path.join(base, "report-split.md");
@@ -3513,8 +3513,8 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => openRep.complete === false && openRep.reasons.some((r) => /task(s)? not closed \(☐ queued \d+\)/.test(r))
       && /⛔ \*\*NOT COMPLETE\*\*/.test(openRep.markdown) && !openRep.reasons.some((r) => /MISSING|not confirmed/.test(r)),
     () => openRep.reasons);
-  check("ENG-99126 renderFinalReport: the confirm-on-stand row is counted as 'left to check by hand' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
-    () => /\| Left to check by hand on the stand \| 1 \|/.test(openRep.markdown) && /## 4\. Task details/.test(openRep.markdown)
+  check("ENG-99126 renderFinalReport: the confirm-on-stand row is counted as 'to confirm manually' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
+    () => /\| Plan items to confirm manually \| 1 \|/.test(openRep.markdown) && /## 4\. Task details/.test(openRep.markdown)
       // The task is still queued, so its rows have no outcome yet — the details say THAT, not "check by hand".
       && /\| \d+ \| .+ \| — \| — no outcome recorded yet \(task ☐ todo\) \|/.test(openRep.markdown)
       && !/Reference cache/.test(openRep.markdown) && !/\| Dispatch/.test(openRep.markdown),
@@ -3522,7 +3522,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
   check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
-    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm by hand on the stand/.test(doneRep.markdown),
+    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
   // THE DECISION MARKER: what section 1 quotes. A `needs-decision` row whose task notes carry
   // `Decision needed (row N): …` shows that sentence; a boundary whose reason cites a recorded decision is
