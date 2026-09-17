@@ -79,6 +79,8 @@ const GROUP_PHASE = new Map([
   ["⚠ Confirm worklist", 10],
   ["Pages", 20],
   ["Form — Layout (by tab/region)", 30],
+  // Applied ONTO the template's existing fields, so the fields must be laid out first and counted after.
+  ["Form — Base-field overrides", 35],
   ["Form — Coverage (verified)", 40],
   ["Card actions", 50],
   ["Form — Logic", 60],

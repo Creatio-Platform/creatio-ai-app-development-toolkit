@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -1738,6 +1738,82 @@ check("ENG-95218 / ENG-96327 (134fe62): the list page renders POSITIONED tables 
     && /`LeftFilterContainerInner` · index 1/.test(lpRun.designSpec)
     && !/- \*\*Quick filters:\*\*/.test(lpRun.designSpec) && !/- \*\*Section actions:\*\*/.test(lpRun.designSpec),
   () => lpRun.designSpec.split("\n").filter((l) => /List columns|Quick filter|Command-bar|Section actions/.test(l)).slice(0, 12));
+// A SECTION's own methods and imperative members are the LIST page's to port, exactly as the record page's are
+// the form page's — build rows, not only a `--stubs` handoff scope.
+const lpSectionGroups = checklistGroups(lpRun, lpOpts).filter((g) => g.baseTitle === "List — Custom methods");
+check("a section's own methods are BUILD rows on the list page, not only a `--stubs` handoff scope",
+  (lpRun.listChangeSet?.handlerStubs || []).length > 0
+    && lpSectionGroups.length === 1 && lpSectionGroups[0].pageKey === "list"
+    && lpSectionGroups[0].rows.length === lpRun.listChangeSet.handlerStubs.length,
+  () => ({ stubs: (lpRun.listChangeSet?.handlerStubs || []).map((h) => h.sourceMethod),
+    groups: lpSectionGroups.map((g) => [g.pageKey, g.rows.length]) }));
+// …and when the list key is WITHHELD (no gated list row) they ride the form page's key rather than vanishing: a
+// row on a key nobody builds is a row nobody works.
+const secOnMain = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "A1Section", listTemplate: "ListFreedomTemplate" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{initContextHelp:function(){this.set("ContextHelpId",7);}},diff:[]};});' }],
+});
+const secOnMainGroups = checklistGroups(secOnMain, {}).filter((g) => g.baseTitle === "List — Custom methods");
+check("with no gated list row the section's methods degrade onto the form page's key — they are never dropped",
+  secOnMainGroups.length === 1 && secOnMainGroups[0].pageKey === "main" && secOnMainGroups[0].rows.length === 1,
+  () => secOnMainGroups.map((g) => [g.pageKey, g.rows.map((r) => r.label)]));
+// …and BOTH documents carry them. Rows in the task files that the approved plan never mentions is the same defect
+// as a plan line that reaches no task, pointing the other way: the approver would sign off on less than gets built.
+const secPlanBlock = secOnMain.designSpec.slice(secOnMain.designSpec.indexOf("### List page"));
+const secNames = (secOnMain.listChangeSet?.handlerStubs || []).map((h) => h.sourceMethod);
+check("a section's methods are carried by BOTH documents — the plan's List page block and the build rows — from the one ChangeSet",
+  secNames.length > 0 && secNames.every((n) => secPlanBlock.includes(n))
+    && secOnMainGroups[0].rows.length === secNames.length,
+  () => ({ names: secNames, inPlan: secNames.filter((n) => secPlanBlock.includes(n)),
+    rows: secOnMainGroups[0]?.rows.length }));
+// …and the step-5.1 ANSWERS reach those rows: a `<Section>::<method>` key must describe them, or the tables
+// render with every cell `⚠ not described` and the answers are still lost.
+const secDescribed = runMigration({ entity: "Applicant",
+  planMeta: { sectionSchema: "A1Section", listTemplate: "ListFreedomTemplate" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{initContextHelp:function(){this.set("ContextHelpId",7);}},diff:[]};});' }],
+  behaviourIndex: { "A1Section::initContextHelp": { card: "sec/C02", ac: ["AC2"],
+    whatItDoes: "Points the help button at the Applicants article", useCase: "A new user opens contextual help" } },
+});
+const secDescribedRow = secDescribed.designSpec.split(String.fromCharCode(10))
+  .find((l) => l.startsWith("| initContextHelp |")) || "";
+check("a `<Section>::<method>` behaviour answer describes the section's OWN row — scoped to the section schema, so the answer arrives instead of naming a row that does not exist",
+  secDescribedRow.includes("Points the help button") && secDescribedRow.includes("A new user opens contextual help")
+    && secDescribedRow.includes("sec/C02"),
+  () => secDescribedRow || "no section method row rendered");
+// …including when `planMeta.sectionSchema` is ABSENT. The digest labels that scope `Section`, so the answers come
+// back keyed `Section::<method>`; a second fallback spelling here resolves nothing while `unmatched` stays empty.
+const secNoSchema = runMigration({ entity: "Applicant", planMeta: { listTemplate: "ListFreedomTemplate" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{initContextHelp:function(){this.set("ContextHelpId",7);}},diff:[]};});' }],
+  behaviourIndex: { "Section::initContextHelp": { card: "sec/C09", ac: ["AC9"],
+    whatItDoes: "Points the help button at the Applicants article", useCase: "A new user opens help" } },
+});
+const secNoSchemaRow = secNoSchema.designSpec.split(String.fromCharCode(10))
+  .find((l) => l.startsWith("| initContextHelp |")) || "";
+check("the section scope label is ONE value: with no `planMeta.sectionSchema` the digest's `Section::` key still describes its row, instead of matching and landing on nothing",
+  secNoSchema.stubIndex.at(-1)?.schema === "Section"
+    && secNoSchemaRow.includes("Points the help button") && secNoSchemaRow.includes("sec/C09"),
+  () => ({ scope: secNoSchema.stubIndex.at(-1)?.schema, row: secNoSchemaRow }));
+// A method the LIST analyzer already read is recorded, never asked for a second time: its effect is in the
+// positioned list ops, and the same document would otherwise carry both the ops and a port-it row.
+const secViewRun = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "A1Section", listTemplate: "ListFreedomTemplate" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){var c=this.callParent(arguments);c.Name={path:"Name"};return c;},ownHelper:function(){this.set("X",1);}},diff:[]};});' }],
+});
+const secViewRows = checklistGroups(secViewRun, {}).filter((g) => g.baseTitle === "List — Custom methods")
+  .flatMap((g) => g.rows).map((r) => r.label);
+check("a section method the list analyzer consumes is marked as already mapped, and one it does not is not",
+  secViewRows.some((l) => /getGridDataColumns/.test(l) && /already mapped into the list page/.test(l))
+    && secViewRows.some((l) => /ownHelper/.test(l) && !/already mapped/.test(l)),
+  () => secViewRows);
+// The section's decisions are its MEMBERS only. `mapToFreedom` maps a record page, so its view-shaped kinds
+// describe regions a list page has not got — and on the degraded key they collide with the form page's own ids.
+const secKinds = [...new Set((secViewRun.listChangeSet?.needsDecision || []).map((d) => d.kind))];
+check("only member kinds fold from the section body into the list ChangeSet — a record-page decision never rides in",
+  secKinds.every((k) => k.startsWith("list-") || MEMBER_WORKLIST_KINDS.has(k)),
+  () => secKinds);
 check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — columns and filters are MEASURED off the built page (like a form field), while a command-bar action, whose Freedom container is unresolved until ENG-94714, stays an evidence row; closing a body-answerable row on a filed record would let the builder's own claim stand in for the page",
   () => { const rows = checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list");
     const ids = rows.filter((r) => r.vk?.type === "evidence").map((r) => r.vk.id);
@@ -3150,6 +3226,39 @@ const guidCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:1,attribute:"Stage"},rightExpression:{type:0,value:"c28f7c8f-1234-4abc-9def-000000000001",dataValueType:10}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"Header",propertyName:"items",values:{bindTo:"Contact"}}]};});` }] }, { baseDir: FIX });
 check("C2 / ENG-96327 (D): a rule condition comparing a lookup GUID DOES surface a [lookup-value] resolve-on-stand note — with no --units channel the plan is the build agent's worklist, so this builder decision stays visible",
   /\[lookup-value\][\s\S]*resolve each GUID/.test(guidCs.designSpec));
+// The row is a RECORD, not a string the plan printer invents: `confirmWorklistRows` maps decisions and nothing
+// else, so a print-time row reaches plan.md and never the checklist, `--verify` or a build task.
+const guidDecisions = (guidCs.changeSet.needsDecision || []).filter((d) => d.kind === "lookup-value");
+const guidRows = checklistGroups(guidCs, {}).flatMap((g) => g.rows).filter((x) => /\[lookup-value\]/.test(x.label));
+check("C2: the lookup-GUID prompt is a needsDecision record, so it reaches the BUILD channel and not only plan.md",
+  guidDecisions.length === 1 && guidRows.length === 1 && guidRows[0].vk?.type === "evidence",
+  () => ({ decisions: guidDecisions, rows: guidRows.map((r) => [r.label, r.vk?.type]) }));
+// The `item` is the evidence id and must not move when a rule is added; the targets ride in `reason`, which
+// feeds no id.
+check("C2: the row's `item` is fixed and the rule targets ride in `reason` — an id that moves detaches its status",
+  guidDecisions[0]?.item === "business-rule conditions" && /conditions on Contact/.test(guidDecisions[0]?.reason || ""),
+  () => guidDecisions[0]);
+// GUARD — every ⚠ Confirm row in a rendered plan is built from the decision record: a row invented at print time
+// is carried by no other channel.
+const confirmKindsOf = (md) => {
+  const lines = String(md).split("\n");
+  const start = lines.findIndex((l) => l.startsWith("#### ⚠ Confirm before I build"));
+  if (start < 0) return [];
+  const kinds = [];
+  for (const l of lines.slice(start + 1)) {
+    if (l.startsWith("#")) break;
+    const m = /^- \*\*\[([a-z-]+)\]\*\*/.exec(l);
+    if (m) kinds.push(m[1]);
+  }
+  return [...new Set(kinds)];
+};
+const unrecordedConfirmKinds = (run) => {
+  const recorded = new Set((run.changeSet?.needsDecision || []).map((d) => d.kind));
+  return confirmKindsOf(run.designSpec || "").filter((k) => !recorded.has(k));
+};
+check("GUARD: every ⚠ Confirm row is rendered from the decision record — no kind originates in the plan printer",
+  [guidCs, imgTwoExplicit].every((run) => unrecordedConfirmKinds(run).length === 0),
+  () => [guidCs, imgTwoExplicit].map(unrecordedConfirmKinds));
 // Problem 3 — declarative page business rules render in the LOGIC table (where a reader looks for them),
 // with the driving attribute as the trigger; they are NOT shown in the Layout Rule column next to the field.
 check("P3: page business rule shows in the Logic table (field · when <attr> · effect · page business rule)",
@@ -5641,6 +5750,16 @@ check("T3 dashboards checklist: the list-page element row and the migrated row a
   && /Dashboards migrated/.test(dashTwo.checklist),
   () => dashTwo.checklist.split("\n").filter((l) => /Dashboard/.test(l)));
 
+// `signals` is run-level and every folded sub-page inherits it, so the dashboards rows are the ROOT scope's alone:
+// a sub-render that builds its own set files a duplicate under its own page key.
+const dashTwoOpts = checklistOpts(dashMani(DASH_TWO));
+const dashRootGroups = checklistGroups(dashTwo, dashTwoOpts).filter((g) => g.baseTitle === "Dashboards");
+const dashSubGroups = checklistGroups(dashTwo, { ...dashTwoOpts, pageKey: "child::XPage", isChildPage: true })
+  .filter((g) => g.baseTitle === "Dashboards");
+check("dashboards are a SECTION deliverable: ONE group on the list page's key, and a sub-page scope emits none",
+  dashRootGroups.length === 1 && dashRootGroups[0].pageKey === "list" && dashSubGroups.length === 0,
+  () => ({ root: dashRootGroups.map((g) => g.pageKey), sub: dashSubGroups.map((g) => g.pageKey) }));
+
 // BR3 — dashboards are migrated by the platform migrator, never rebuilt as page components by the agent, so a
 // resolved signal must NOT leak a dashboard into the widgets/Layout the design spec tells the agent to build.
 check("BR3 dashboards: a resolved signal never becomes a page component to hand-build (the migrator owns it)",
@@ -7815,11 +7934,18 @@ check("handoff OUT: a section scope NEVER has a null schema — without `planMet
 // its own advisory key so "matched" cannot read as "rendered in the plan".
 const secBack = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
   behaviourIndex: { setOwner: { card: "C05", ac: ["AC-1"] } } });
-check("handoff BACK: a section-only behaviourIndex key is NOT `unmatched` and IS reported as `sectionOnly`",
-  !secBack.behaviourIndex.unmatched.includes("setOwner")
-    && secBack.behaviourIndex.sectionOnly.includes("setOwner"));
-check("handoff BACK: a section-only key renders a ⚠ plan banner — matched must not read as rendered",
-  /address only the SECTION scope/.test(renderPlan(secBack, {})));
+check("handoff BACK: a section-scope behaviourIndex key is NOT `unmatched` — the section is a scope like any other",
+  !secBack.behaviourIndex.unmatched.includes("setOwner"),
+  () => JSON.stringify(secBack.behaviourIndex.unmatched));
+// A section key folds onto the section's own row, so there is nothing left to warn about: a banner for a
+// condition that cannot occur trains a reader to skip banners.
+const secBackPlan = renderPlan(secBack, {});
+check("handoff BACK: a section-scope key DESCRIBES the section's own row, and raises no advisory",
+  /setOwner/.test(secBackPlan) && /C05/.test(secBackPlan)
+    && !/address only the SECTION scope/.test(secBackPlan)
+    && secBack.behaviourIndex.sectionOnly === undefined,
+  () => ({ hasCard: /C05/.test(secBackPlan), banner: /address only the SECTION scope/.test(secBackPlan),
+    sectionOnly: secBack.behaviourIndex.sectionOnly }));
 // All THREE key kinds in ONE run. `sectionOnly` and `unmatched` are computed by calling the same scope-digest
 // helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
 // filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
@@ -7833,16 +7959,15 @@ const secSplit = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "
   } });
 const secBanners = (k) => [
   secSplit.behaviourIndex.unmatched.includes(k) && "unmatched",
-  secSplit.behaviourIndex.sectionOnly.includes(k) && "sectionOnly",
+  secSplit.behaviourIndex.wiringOnly.includes(k) && "wiringOnly",
 ].filter(Boolean);
-check("handoff BACK: page-only / section-only / owned-by-nobody each land in EXACTLY ONE bucket — never both banners, never neither",
-  secBanners("onStageChanged").length === 0
-    && secBanners("setOwner").join() === "sectionOnly"
+check("handoff BACK: a key owned by a PAGE scope and one owned by the SECTION scope are both silent — only a key no scope owns is bannered",
+  secBanners("onStageChanged").length === 0 && secBanners("setOwner").length === 0
     && secBanners("ghostMethod").join() === "unmatched",
   () => JSON.stringify({ onStageChanged: secBanners("onStageChanged"), setOwner: secBanners("setOwner"), ghostMethod: secBanners("ghostMethod") }));
-check("handoff BACK: the two banners are DISJOINT — `unmatched` is computed over every scope, so a `sectionOnly` key is matched by construction and can never appear in both",
-  secSplit.behaviourIndex.unmatched.every((k) => !secSplit.behaviourIndex.sectionOnly.includes(k)),
-  () => JSON.stringify({ unmatched: secSplit.behaviourIndex.unmatched, sectionOnly: secSplit.behaviourIndex.sectionOnly }));
+check("handoff BACK: `unmatched` is computed over EVERY scope, so a section-owned key is matched by construction and only the ownerless one is listed",
+  !secSplit.behaviourIndex.unmatched.includes("setOwner") && secSplit.behaviourIndex.unmatched.includes("ghostMethod"),
+  () => JSON.stringify(secSplit.behaviourIndex.unmatched));
 
 // `wiringOnly` is the THIRD consumer of `stubIndex`. Its key set is already pinned further down (`wiringOnly: a
 // `mixin:` row and an `externalRef` method … and ONLY they`) — but on a single-scope fixture, which is what this
@@ -7884,9 +8009,9 @@ const wiringBannerLine = wiringPlanLines.find((l) => /name only a wiring card/.t
 check("handoff BACK: a wiring-only row renders its ⚠ plan banner naming EVERY wiring-only key ON THAT LINE — the advisory is the ONLY signal for an `externalRef` row, which never blocks on coverage",
   !!wiringBannerLine && /`mixin:someMixin`/.test(wiringBannerLine) && /`DealSection::mixin:orderUtil`/.test(wiringBannerLine),
   () => JSON.stringify({ wiringBannerLine, wiringOnly: wiringWithSec.behaviourIndex.wiringOnly }));
-check("handoff BACK: the wiring-only banner is DISTINCT from the sectionOnly one — both name the same key here, so a test that cannot tell them apart is the one way this pin silently stops proving anything",
+check("handoff BACK: the wiring-only banner renders EXACTLY once and is the only advisory naming that key — a section-scope key is silent now, so nothing else can satisfy this pin",
   wiringPlanLines.filter((l) => /name only a wiring card/.test(l)).length === 1
-    && !/address only the SECTION scope/.test(wiringBannerLine),
+    && !/address only the SECTION scope/.test(renderPlan(wiringWithSec, {})),
   () => JSON.stringify(wiringPlanLines.filter((l) => /⚠ \*\*/.test(l)).map((l) => l.slice(0, 90))));
 
 // TWO cards per row. A member whose behaviour lives in another scope — a `mixin:`, or a method that only wires one
@@ -8008,9 +8133,9 @@ const hoBareMember = runMigration({ ...handoffManifest, addRecordMiniPage: { sch
 check("handoff BACK: a BARE `<kind>:<item>` member key that `behaviourEntry` resolves into a scoped scope is NOT reported unmatched",
   !hoBareMember.behaviourIndex.unmatched.includes("mixin:miniOnlyMixin"),
   () => JSON.stringify(hoBareMember.behaviourIndex.unmatched));
-check("handoff BACK: that same bare member key is not mis-bannered as `sectionOnly` either",
-  !hoBareMember.behaviourIndex.sectionOnly.includes("mixin:miniOnlyMixin"),
-  () => JSON.stringify(hoBareMember.behaviourIndex.sectionOnly));
+check("handoff BACK: that same bare member key is not mis-bannered as `wiringOnly` either",
+  !hoBareMember.behaviourIndex.wiringOnly.includes("mixin:miniOnlyMixin"),
+  () => JSON.stringify(hoBareMember.behaviourIndex.wiringOnly));
 
 // A TYPED page is a scope of the surface too (step 5.1: "every record page including typed variants"), so its rows
 // must ride the handoff — and a scoped key that matched inside a typed fold must not be reported as unmatched.

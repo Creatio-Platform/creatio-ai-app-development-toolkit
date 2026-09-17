@@ -150,9 +150,12 @@ check("--stubs totals carry `members`, and the shortcut needs BOTH counts explic
 // The root-only GUARD itself is asserted behaviourally in run-mapper.mjs (a nested fold given a `section` bundle
 // emits no section scope). This pin only keeps the construction in its own function: inlined back into
 // `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
-check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /function sectionStubScopes\(manifest, opts, sectionEff\)/.test(mgSrc)
-    && /if \(opts\.scopeSchema \|\| !sectionEff\) return \[\];/.test(mgSrc)
+check("--stubs section scope: the root-only guard and the 0-or-1 shape survive the ChangeSet being SHARED — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
+  // The guard sits on the shared ChangeSet, and the digest is 0 or 1 scope off the back of it.
+  /function sectionChangeSetOf\(manifest, opts, sectionEff\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionEff\) return null;/.test(mgSrc)
+    && /function sectionStubScopes\(manifest, opts, sectionChangeSet\)/.test(mgSrc)
+    && /if \(!sectionChangeSet\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: an unusable Context result is a failed run, not a surface with nothing to describe — and the guard is a SHAPE check, not a truthiness test",
   // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
@@ -195,6 +198,49 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
     registrySize: LIST_DECISION_KINDS.length,
     missingNamed: ["list-grid-config", "list-section-element"].filter((k) => !LIST_DECISION_KINDS.includes(k)) }));
+// …and the same rule for the ⚠ Confirm worklist. It is RENDERED from `needsDecision`, and a row appended to the
+// rendered list reaches plan.md and no other channel: `confirmWorklistRows`, the one feed for `--checklist`,
+// `--verify` and the build tasks, maps the record alone.
+const designspecSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url)), "utf8");
+const confirmStart = designspecSrc.indexOf("function renderConfirmWorklist(cs) {");
+const confirmBody = confirmStart < 0 ? "" : designspecSrc.slice(confirmStart, designspecSrc.indexOf("\n}", confirmStart));
+check("designspec.mjs: the ⚠ Confirm worklist is rendered from `needsDecision` alone — nothing is appended to it, so a row cannot reach plan.md while reaching no build task",
+  confirmBody.length > 0 && !/\bconfirm\.push\(/.test(confirmBody) && /foldedConfirmRows\(kept\)/.test(confirmBody),
+  () => ({ appended: confirmBody.split("\n").filter((l) => /\.push\(/.test(l)).map((l) => l.trim().slice(0, 90)),
+    derivesFromRecord: /foldedConfirmRows\(kept\)/.test(confirmBody), bodyFound: confirmBody.length > 0 }));
+// …and the same rule one level up, for a whole ChangeSet FIELD: one the plan renders and no checklist builder
+// reads sends none of its content to a task. A field read by ONE side only is exempt only with a stated reason.
+const CHECKLIST_BUILDERS = ["checklistGroups", "buildPageRows", "buildLayoutGroupRows", "buildCoverageRows",
+  "buildCardActionRows", "buildListItems", "buildDashboardRows", "confirmWorklistRows", "qualityGateRows",
+  "tableElementRows", "standardFeatureRows", "handlerStubRows", "memberWorklistRows", "sectionLogicGroups"];
+// `headerLayout` decides the header TEMPLATE RECOMMENDATION banner and gates nothing; the `layout-type` decision
+// carries the question into the worklist. `profileCards` publishes a `profile-card` decision per card, so each one
+// already has a row — through the record, not through this field.
+const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards",
+  // Triggers the quick-filter BUILD NOTE — advice on building rows that are themselves gated (`Quick filter — …`).
+  "quickFilterConfigCompletedByBuilder"]);
+const fieldsOfReturn = (startsAt) => {
+  const at = mapperSrc.indexOf(startsAt);
+  const m = at < 0 ? null : /\n  return \{([\s\S]*?)\n  \};/.exec(mapperSrc.slice(at));
+  return m ? [...m[1].matchAll(/[\s{,]([a-zA-Z][a-zA-Z0-9]*)\s*[,:}]/g)].map((x) => x[1]) : [];
+};
+// BOTH ChangeSets the plan renders: the record page's, and the list page's (read as `lcs.` there).
+const changeSetFields = [...new Set([
+  ...fieldsOfReturn("const baseFieldOverrides"),
+  ...fieldsOfReturn("export function buildListChangeSet("),
+])];
+const NL = String.fromCharCode(10);
+const checklistSrc = CHECKLIST_BUILDERS.map((n) => {
+  const at = designspecSrc.indexOf("function " + n + "(");
+  return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
+}).join(NL);
+// `?.` counts as a read: the list ChangeSet is optional at most call sites, so every read of it is chained.
+const readsField = (src, f) => new RegExp("\\b(?:cs|lcs|changeSet|listChangeSet)\\??\\." + f + "\\b").test(src);
+const planOnlyFields = changeSetFields.filter((f) =>
+  readsField(designspecSrc, f) && !readsField(checklistSrc, f) && !PLAN_ONLY_CHANGESET_FIELDS.has(f));
+check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a checklist builder — a field only the plan reads reaches no build task",
+  changeSetFields.length > 20 && planOnlyFields.length === 0,
+  () => ({ planOnlyFields, exempt: [...PLAN_ONLY_CHANGESET_FIELDS], fieldsFound: changeSetFields.length }));
 
 /* ================================================================================================
    Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level

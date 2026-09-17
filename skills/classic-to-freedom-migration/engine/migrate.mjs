@@ -48,13 +48,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView } from "./mapper.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView,
+  SECTION_VIEW_METHODS } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
   TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
@@ -494,14 +495,36 @@ function memberDigestOf(changeSet, scopeSchema) {
 // Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
 // so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
 // `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
-function sectionStubScopes(manifest, opts, sectionEff) {
-  if (opts.scopeSchema || !sectionEff) return [];
-  const changeSet = mapToFreedom(sectionEff, {
+// The section scope's label, used by the step-5.1 digest AND by the fold that applies the answers back. One
+// source: two fallbacks that disagree make the handoff ask for `<label>::<method>` and the apply pass resolve a
+// different spelling, so the answer comes back matched and lands on nothing.
+const sectionScopeLabel = (manifest) => manifest.planMeta?.sectionSchema || "Section";
+// What the list page takes from the section body: its imperative MEMBERS only, and its methods marked where the
+// list analyzer already read them. `mapToFreedom` maps a RECORD page, so its view-shaped decisions (containers,
+// field controls, field labels) describe regions a list page does not have — `mapSectionView` owns those facts.
+function sectionCodeForList(sectionChangeSet) {
+  if (!sectionChangeSet) return null;
+  return {
+    // COPY every stub, not only the marked ones: the list fold applies cards onto what it is handed, and a
+    // half-copied array leaves the digest's own objects carrying some of them and not others.
+    handlerStubs: (sectionChangeSet.handlerStubs || []).map((h) =>
+      (SECTION_VIEW_METHODS.has(h.sourceMethod) ? { ...h, listMapped: true } : { ...h })),
+    needsDecision: (sectionChangeSet.needsDecision || []).filter((d) => MEMBER_WORKLIST_KINDS.has(d.kind)),
+  };
+}
+function sectionChangeSetOf(manifest, opts, sectionEff) {
+  if (opts.scopeSchema || !sectionEff) return null;
+  return mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},
   });
-  const schema = manifest.planMeta?.sectionSchema || "Section";
-  return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+// ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
+// page's own method / imperative-member rows. Discarding it leaves a section's methods in the handoff and in no row.
+function sectionStubScopes(manifest, opts, sectionChangeSet) {
+  if (!sectionChangeSet) return [];
+  const schema = sectionScopeLabel(manifest);
+  return [stubScope("section", schema, sectionChangeSet, sectionChangeSet.standardMethodsFiltered)];
 }
 
 // THE SECTION VIEW (ENG-94714). The *Section chain folded over its OWN parent-template seed — the same
@@ -730,7 +753,7 @@ function scopeDigestKeys(scopes) {
     // Both spellings, mirroring the stub leg above: `applyBehaviourIndex` resolves a member through
     // `behaviourEntry` with a scoped-first-then-bare fallback, so a bare `<kind>:<item>` index key is
     // genuinely applied to a scoped row. Indexing only `m.key` (the scoped form in any scoped scope)
-    // would make `unmatchedIndexKeys` / `sectionOnlyIndexKeys` report such a key as matching nothing
+    // would make `unmatchedIndexKeys` report such a key as matching nothing
     // while the row itself shows the card applied.
     for (const m of s.members) { seen.add(m.key); seen.add(`${m.kind}:${m.item}`); }
   }
@@ -742,17 +765,6 @@ function unmatchedIndexKeys(index, stubIndex) {
   const seen = scopeDigestKeys(stubIndex);
   return keys.filter((k) => !seen.has(k));
 }
-// Index keys addressing ONLY the section scope. They are matched (not `unmatched`) — but applyBehaviourIndex
-// folds cards into PAGE rows only, so a section-only answer produces no plan artifact: no worklist row cites
-// its card. Surfaced as a separate advisory list so "matched" cannot read as "rendered in the plan".
-function sectionOnlyIndexKeys(index, stubIndex) {
-  const keys = Object.keys(plainObject(index));
-  if (!keys.length) return [];
-  const pageKeys = scopeDigestKeys(stubIndex.filter((s) => s.role !== "section"));
-  const sectionKeys = scopeDigestKeys(stubIndex.filter((s) => s.role === "section"));
-  return keys.filter((k) => sectionKeys.has(k) && !pageKeys.has(k));
-}
-
 // Rows whose body PROVABLY lives in another schema, described by a wiring card alone (`card`, no `bodyCard`).
 // Only the mechanically provable kinds are flagged: a `mixin:` member (one row, one external body, and the
 // analysis contract cards every mixin body) and an `externalRef` method (assigned from exactly one other module).
@@ -2328,7 +2340,6 @@ function readSchemaBody(e, baseDir) {
 function assignRootIndexKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
   const root = !scopeSchema;
   behaviourIndex.unmatched = root ? unmatchedIndexKeys(behaviourIndexInput, stubIndex) : [];
-  behaviourIndex.sectionOnly = root ? sectionOnlyIndexKeys(behaviourIndexInput, stubIndex) : [];
   behaviourIndex.wiringOnly = root ? wiringOnlyKeys(behaviourIndexInput, stubIndex) : [];
 }
 // THE run's entity: the manifest's own value when it named a real one, else the entity the merged schema chain
@@ -2380,7 +2391,8 @@ export function runMigration(manifest, opts = {}) {
   const sectionEff = foldSectionView(sectionSchemas, sectionSeed);
   // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
   // guard, the never-null schema label, and why it is a function rather than inline here.
-  const sectionScopes = sectionStubScopes(manifest, opts, sectionEff);
+  const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
@@ -2465,7 +2477,11 @@ export function runMigration(manifest, opts = {}) {
   // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
   // states is a page built on the wrong table.
   const resolvedEntity = resolveRunEntity(manifest, eff);
-  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
+  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section,
+    entityColumns: manifest.entityColumns, sectionCode: sectionCodeForList(sectionChangeSet) });
+  // The same fold for the list page's rows, scoped to the section schema so a `<Section>::<method>` key resolves
+  // against them. The return is dropped: the run's coverage accounting stays the page's.
+  if (listChangeSet) applyBehaviourIndex(listChangeSet, behaviourIndexInput, sectionScopeLabel(manifest));
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
