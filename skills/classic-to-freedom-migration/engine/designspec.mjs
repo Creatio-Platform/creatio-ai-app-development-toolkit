@@ -21,7 +21,7 @@ import { featureVerifyType, featureVerifyExtraTypes, analogsOf,
   // ENG-94756: the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
   // attachments component is inert without, and the two resolvers that say which plan row is covered by that item.
   // Both constants are NAMES this file renders; neither is a property value.
-  STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
+  STANDARD_COMPONENTS_GUIDANCE_ID, ATTACHMENTS_DATA_SOURCE, FEATURE_ATTACHMENTS, featureGuidanceId, widgetGuidanceId } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
   .replace(/^\$/, "")                        // drop the binding `$` sigil (display, not a value)
@@ -2172,9 +2172,9 @@ function tableElementRows(cs) {
 // `pageKey` defaults the same way `pageKeyOf` does, so the published evidence id can never come out as
 // `undefined#datasource:…` — an id no caller could reproduce to file its record under.
 function companionRows(feature, pageKey = "main") {
-  if (feature !== "Attachments") return [];
+  if (feature !== FEATURE_ATTACHMENTS) return [];
   return [evidenceRow(`${pageKey}#datasource:${ATTACHMENTS_DATA_SOURCE}`,
-    `Companion data source \`${ATTACHMENTS_DATA_SOURCE}\` — the \`${featureVerifyType("Attachments")}\` on this page reads its records from it and lists NOTHING without it; ${GUIDANCE_POINTER}`)];
+    `Companion data source \`${ATTACHMENTS_DATA_SOURCE}\` — the \`${featureVerifyType(FEATURE_ATTACHMENTS)}\` on this page reads its records from it and lists NOTHING without it; ${GUIDANCE_POINTER}`)];
 }
 // One gated row per standard feature, plus a second one for the two-part features. Own fn for the same reason.
 function standardFeatureRows(cs, pageKey = "main") {

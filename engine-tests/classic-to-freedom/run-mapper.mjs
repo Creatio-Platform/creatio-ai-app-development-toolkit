@@ -10865,6 +10865,194 @@ check("ENG-94756 regression: the route is APPENDED to each cell's own dispositio
   () => ({ attachments: faLayoutRow("Attachments"), feed: faLayoutRow("Feed (ESN)"),
     expectedRows: faRowRecs.filter((r) => /expected/.test(r.label)).map((r) => r.label) }));
 
+// ---- PR #182 REVIEW (Minor): the guided feature NAME has exactly ONE spelling in engine source ----------------
+// `meta.feature` is a JOIN KEY. Three places used to spell it independently — the mapping row that declares the
+// feature, `GUIDED_FEATURES` that decides which features are routed, and `companionRows` that decides which page
+// owes the `AttachmentListDS` evidence row — and a rename to one and not the others fails SILENTLY in the worst
+// direction: the row simply stops being emitted, which reads exactly like a page that never owed it. The fix is
+// `FEATURE_ATTACHMENTS` / `FEATURE_FEED` in mapping-table.mjs, imported by every consumer. THE CONSTANT IS NOT
+// THE GUARD, though — nothing stops the next edit typing the literal next to it, which is the same divergence
+// with an extra import. This scan is the guard: across every engine source, each name may appear as a quoted
+// literal ONLY on its own `export const` line.
+//
+// CODE lines only. A comment or a prose string may say the name as English — that is documentation, and a guard
+// that went red on it would be answered by deleting prose, which is worse than the defect. What cannot happen is
+// a second `feature: <name>` / `new Set([<name>…])` / `!== <name>` in executable position.
+//
+// The names are SPELLED OUT here rather than imported, for the reason `FA_GUIDANCE_ID` is: a test that imported
+// the engine's own constant would follow a rename straight past the break and assert that "whatever the engine
+// calls it" has one spelling — true after any rename, and true of a divergence too, since the test would then be
+// reading only one of the two sides.
+const FA_GUIDED_NAMES = ["Attachments", "Feed"];
+const faIsComment = (line) => line.startsWith("//") || line.startsWith("*") || line.startsWith("/*");
+const faIsNameDecl = (line, n) => new RegExp(`^export const FEATURE_[A-Z_]+ = ${JSON.stringify(n)};$`).test(line);
+// Every CODE line that spells the name as a quoted literal and is not its declaration. Carries line numbers so a
+// red run names the file and the line instead of leaving the reader to grep for it.
+const faExtraSpellings = (text, n) => text.split(/\r?\n/)
+  .map((raw, i) => ({ line: raw.trim(), no: i + 1 }))
+  .filter(({ line }) => line.includes(JSON.stringify(n)) && !faIsComment(line) && !faIsNameDecl(line, n));
+const faDeclCount = (text, n) => text.split(/\r?\n/).filter((raw) => faIsNameDecl(raw.trim(), n)).length;
+check("ENG-94756 (PR #182 review): each guided feature name is declared ONCE in engine source and spelled nowhere else in code — the join key that the mapping row, the routing set and the companion-row gate share cannot diverge by a rename to one of them",
+  () => FA_GUIDED_NAMES.every((n) =>
+    faEngineSources.reduce((sum, s) => sum + faDeclCount(s.text, n), 0) === 1
+    && faEngineSources.every((s) => faExtraSpellings(s.text, n).length === 0)),
+  () => ({ perName: Object.fromEntries(FA_GUIDED_NAMES.map((n) => [n, {
+    declarations: faEngineSources.flatMap((s) => (faDeclCount(s.text, n) ? [s.file] : [])),
+    extraSpellings: faEngineSources.flatMap((s) => faExtraSpellings(s.text, n).map((h) => `${s.file}:${h.no}  ${h.line}`)) }])) }));
+
+// The scan is only worth having if it fires. These are the shapes the divergence actually arrived in before the
+// constant (a row declaration, a hand-kept set, a bare equality gate), plus the converse: the declaration itself
+// and the same name written in prose stay green, or the guard would be answerable by deleting documentation.
+const FA_SCAN_PROBES = {
+  "a second row declaration": 'feature("OtherDetailV2", { feature: "Attachments", uiShape: "component" }),',
+  "a hand-kept routing set": 'const OTHER_GUIDED = new Set(["Attachments", "Feed"]);',
+  "a bare equality gate": 'if (feature !== "Attachments") return [];',
+};
+const FA_SCAN_GREEN = {
+  "the declaration itself": 'export const FEATURE_ATTACHMENTS = "Attachments";',
+  "the name in a line comment": '// `meta.feature` is "Attachments" for both rows that produce it',
+  "the name opening a prose string": '  notes: "Attachments is a COMPOSITE, not one element",',
+};
+check("ENG-94756 (PR #182 review, negative control): the one-spelling scan BITES — it catches a second row declaration, a hand-kept routing set and a bare equality gate, and stays green on the declaration itself and on the name written in prose",
+  () => Object.values(FA_SCAN_PROBES).every((src) => faExtraSpellings(src, "Attachments").length === 1)
+    && Object.values(FA_SCAN_GREEN).every((src) => faExtraSpellings(src, "Attachments").length === 0),
+  () => ({ caught: Object.fromEntries(Object.entries(FA_SCAN_PROBES).map(([k, v]) => [k, faExtraSpellings(v, "Attachments").length])),
+    green: Object.fromEntries(Object.entries(FA_SCAN_GREEN).map(([k, v]) => [k, faExtraSpellings(v, "Attachments").length])) }));
+
+// WHAT A DIVERGENCE WOULD HAVE COST, executable rather than argued. Rename the feature on ONE side and the page
+// loses BOTH deliverables — the gated `crt.FileList` row and the `AttachmentListDS` evidence row — and nothing
+// throws, nothing counts short, nothing renders a ⚠. The run just stops asking for them. That silence is why the
+// reviewer's "Minor" is a latent defect rather than a style note, and why the fix is a constant plus the scan
+// above rather than a comment saying "keep these in sync".
+const faDivergedRes = { entity: FA_ENTITY, signals: {},
+  changeSet: { ...faCs, standardFeatures: faCs.standardFeatures.map((s) => (s.feature === "Attachments" ? { ...s, feature: "Attachment" } : s)) } };
+const faDivergedRows = checklistGroups(faDivergedRes, faOpts).flatMap((g) => g.rows);
+check("ENG-94756 (PR #182 review): a one-sided rename of the feature name SILENTLY drops both Attachments deliverables — no gated `crt.FileList` row, no `AttachmentListDS` evidence row, no error and no warning — which is the failure the shared constant and the scan above exist to make impossible",
+  () => faRowRecs.some((r) => /^Attachments \(`crt\.FileList`\)/.test(r.label))
+    && faRowRecs.some((r) => r.vk?.id === "main#datasource:AttachmentListDS")
+    && !faDivergedRows.some((r) => /crt\.FileList/.test(r.label))
+    && !faDivergedRows.some((r) => r.label.includes("AttachmentListDS")),
+  () => ({ intact: faRowRecs.filter((r) => /Attachment/i.test(r.label)).map((r) => r.label.slice(0, 90)),
+    diverged: faDivergedRows.filter((r) => /Attachment/i.test(r.label)).map((r) => r.label.slice(0, 90)) }));
+
+// ---- PR #182 REVIEW (Minor, first review): the `isList` carve-out can never swallow a guided feature ----------
+// `rowsForFeatures` resolves the route as `isList ? null : featureGuidanceId(...)`, so a guided feature that ever
+// arrived list-shaped would render with no route — the first review flagged this as plausible but unconfirmed. It
+// is decidable from the table: `uiShape` is declared on the ROW and `mapper.mjs` carries the row's value through
+// (`uiShape: r.meta.uiShape || r.uiShape || "list"`), so the only way a guided feature becomes list-shaped is a
+// table edit. Pinned here, both halves — every row that produces a guided feature declares `component` on BOTH its
+// levels, and the carve-out is nonetheless real (genuinely list-shaped features exist and carry no route), so this
+// is an invariant about the guided rows rather than a claim that the branch is dead.
+const faGuidedRows = MAPPING_ROWS.filter((r) => FA_GUIDED_NAMES.includes(r.meta?.feature));
+const faListShapedRows = MAPPING_ROWS.filter((r) => r.meta?.feature && r.meta.uiShape === "list");
+check("ENG-94756 (PR #182 review, first review Minor): EVERY mapping row that produces a guided feature is `component`-shaped on both its levels, so the `isList` carve-out in `rowsForFeatures` can never strip the route from Feed or Attachments — and the carve-out is still real, because list-shaped features exist and carry no route",
+  () => faGuidedRows.length >= 3
+    && faGuidedRows.every((r) => r.meta.uiShape === "component" && r.uiShape === "component")
+    && faListShapedRows.length > 0
+    && faListShapedRows.every((r) => !FA_GUIDED_NAMES.includes(r.meta.feature)),
+  () => ({ guided: faGuidedRows.map((r) => ({ match: r.match, uiShape: r.uiShape, metaUiShape: r.meta.uiShape, feature: r.meta.feature })),
+    listShaped: faListShapedRows.map((r) => r.meta.feature) }));
+// …and the same fact on the PRODUCTION path: the fixture's Attachments record, emitted by the real mapper, is
+// `component`, while a list-shaped standard feature on its own page renders with no route at all. The table
+// invariant above says that cannot change; this says the code reading it agrees today.
+const faListFeatCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "Y",
+  details: { A: { schemaName: "ActivityDetailV2", entitySchemaName: "Activity", detailColumn: "Y", masterColumn: "Id" } },
+  diff: [
+    di({ name: "ActTab", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.ActCap" }),
+    di({ name: "A", parentName: "ActTab", propertyName: "items", itemType: 2 })] })]));
+const faListFeatPlan = renderPlan({ entity: "Y", changeSet: faListFeatCs, signals: {} }, faOpts);
+check("ENG-94756 (PR #182 review): on the production path the Attachments record really is `component`-shaped and routed, while a list-shaped standard feature (Activities) renders with NO route — the carve-out excludes exactly what it was written to exclude",
+  () => faCs.standardFeatures.find((s) => s.feature === "Attachments")?.uiShape === "component"
+    && faLayoutRow("Attachments").includes(FA_CALL)
+    && faListFeatCs.standardFeatures.some((s) => s.feature === "Activities" && s.uiShape === "list")
+    && !faListFeatPlan.includes(FA_CALL),
+  () => ({ attachments: faCs.standardFeatures.find((s) => s.feature === "Attachments"),
+    listFeatures: faListFeatCs.standardFeatures.map((s) => ({ feature: s.feature, uiShape: s.uiShape })),
+    routedLines: faListFeatPlan.split("\n").filter((l) => l.includes(FA_CALL)).slice(0, 3) }));
+
+// ---- AC-4 / R8: THE BASIC TEMPLATE, pinned by a fixture instead of by inference ------------------------------
+// Both reviews asked for this and it is the substantive request. R8 was approved as "basic-template migrations
+// behave exactly as before", the route is appended with no branch on template family, and no fixture pinned the
+// basic-template path either way. So here it is, through the REAL mapper, asserting explicitly what the route does
+// there — and the answer is that the route IS emitted on the basic template, deliberately.
+//
+// WHY THAT IS RIGHT AND NOT A REGRESSION. On `PageWithTabsFreedomTemplate` the components are MERGED onto
+// containers the template already ships, and a merge still owes the property set: the template supplies the
+// container, not the configuration. The guidance item covers the merge case and the insert case alike — that is
+// what it is for. Measured rather than argued: the end-to-end run of 2026-09-17 migrated `UsrToMigrate2App_FormPage`
+// on THIS template, and it was the route that sent the builder to fetch the guidance article (twice) and produce a
+// working Feed, working Attachments and a `crt.TagSelect` bound to the object's own tag source. Gating the route on
+// template family would have broken that run. So R8's "exactly as before" is NOT what this branch ships; the PR
+// body says so in those words rather than letting the requirement and the behaviour disagree quietly.
+//
+// WHAT THE ENGINE COULD EVEN BRANCH ON, for completeness: nothing. `rowsForFeatures(cs.standardFeatures, …)` and
+// `rowsForWidgets(cs.widgets, …)` are handed no `opts`, so `planMeta.formTemplate` is not in scope where the route
+// is resolved, and `meta.templateProvided` is a flat per-row flag carrying no per-template verdict. A template-aware
+// route would need a measured template-capability table this branch does not have — a different ticket.
+const FA_BASIC_TEMPLATE = "PageWithTabsFreedomTemplate";
+const FA_TOPAREA_TEMPLATE = "PageWithTopAreaAndTabsFreedomTemplate";
+const faBasicOpts = { planMeta: { formTemplate: FA_BASIC_TEMPLATE } };
+const faBasicPlan = renderPlan(faResult, faBasicOpts);
+const faBasicRowRecs = checklistGroups(faResult, faBasicOpts).flatMap((g) => g.rows);
+const faBasicLayoutRow = (what) => faBasicPlan.split("\n").find((l) => l.startsWith("|") && l.includes(`| ${what} |`)) || "";
+check("ENG-94756 AC-4/R8 (PR #182 review, raised by BOTH reviews): on the BASIC form template the guidance route IS emitted for Feed and Attachments and the companion `AttachmentListDS` row is gated exactly as on any other template — the basic-template path is now pinned by a fixture through the real mapper instead of inferred",
+  () => faBasicLayoutRow("Attachments").includes(FA_CALL)
+    && faBasicLayoutRow("Feed (ESN)").includes(FA_CALL)
+    && faBasicRowRecs.some((r) => /^Attachments \(`crt\.FileList`\)/.test(r.label) && r.label.includes(FA_CALL))
+    && faBasicRowRecs.some((r) => r.vk?.id === "main#datasource:AttachmentListDS" && r.vk?.type === "evidence"),
+  () => ({ template: FA_BASIC_TEMPLATE, attachments: faBasicLayoutRow("Attachments"), feed: faBasicLayoutRow("Feed (ESN)"),
+    gatedRows: faBasicRowRecs.filter((r) => /Attachment|Feed/i.test(r.label)).map((r) => ({ label: r.label.slice(0, 120), vk: r.vk || null })) }));
+// The strongest form of "the template family changes nothing else either": render the SAME mapper result under the
+// basic template and under the top-area one, and the two documents differ in the TEMPLATE NAME and in nothing at
+// all besides. Substituting one name for the other makes them byte-identical — every route, every disposition,
+// every gated row. An edit that made the route (or anything else in the plan) template-dependent goes red here,
+// and the failure payload names the first line that did it.
+check("ENG-94756 AC-4/R8 (PR #182 review): the plan rendered on the BASIC template and on the top-area template differ ONLY in the template name — substituting one for the other makes the two documents byte-identical, so nothing in this plan, route included, varies by template family",
+  () => faBasicPlan.split(FA_BASIC_TEMPLATE).join(FA_TOPAREA_TEMPLATE) === faPlan
+    && faBasicPlan.includes(FA_BASIC_TEMPLATE) && faPlan.includes(FA_TOPAREA_TEMPLATE)
+    && faBasicRowRecs.map((r) => r.label).join("\n").split(FA_BASIC_TEMPLATE).join(FA_TOPAREA_TEMPLATE)
+      === faRowRecs.map((r) => r.label).join("\n"),
+  () => { const a = faBasicPlan.split(FA_BASIC_TEMPLATE).join(FA_TOPAREA_TEMPLATE).split("\n"); const b = faPlan.split("\n");
+    return { firstDivergence: a.map((l, i) => (l === b[i] ? null : { line: i + 1, basic: l, topArea: b[i] })).filter(Boolean).slice(0, 4),
+      lineCounts: { basic: a.length, topArea: b.length } }; });
+
+// ---- PR #182 REVIEW (Minor, first review): the companion row's id really is PER PAGE ---------------------------
+// `companionRows(feature, pageKey)` builds `<pageKey>#datasource:AttachmentListDS`, and the first review noted the
+// threading was only ever exercised with the default `"main"`. Two pages carrying Attachments must file two
+// DISTINCT evidence ids, or one page's record would close the other page's row — the exact silent merge
+// `pageKeyOf` exists to prevent. Asserted on the id, because the id IS the key `--verify` looks the record up
+// under: T1b already pins that an unfiled id leaves the page incomplete, so distinct ids are what independent
+// gating reduces to.
+const faChildRowRecs = checklistGroups(faResult, { ...faOpts, pageKey: "childpage" }).flatMap((g) => g.rows);
+const faDsIds = [...faRowRecs, ...faChildRowRecs]
+  .filter((r) => r.vk?.type === "evidence" && String(r.vk.id).includes("datasource:")).map((r) => r.vk.id);
+check("ENG-94756 (PR #182 review, first review Minor): a second page carrying Attachments files its companion data source under its OWN page key — `main#datasource:…` and `childpage#datasource:…` are two distinct evidence ids, so one page's filed record can never close the other page's row",
+  () => faDsIds.length === 2 && new Set(faDsIds).size === 2
+    && faDsIds.includes("main#datasource:AttachmentListDS")
+    && faDsIds.includes("childpage#datasource:AttachmentListDS")
+    && faChildRowRecs.some((r) => r.vk?.id === "childpage#datasource:AttachmentListDS" && r.label.includes(FA_GUIDANCE_ID)),
+  () => ({ ids: faDsIds,
+    childRows: faChildRowRecs.filter((r) => /Attachment/i.test(r.label)).map((r) => ({ label: r.label.slice(0, 100), vk: r.vk || null })) }));
+
+// ---- PR #182 REVIEW (Minor): the cross-repo contract has a written design record ------------------------------
+// The guidance-item id is an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`: CAADT
+// holds the id, that repo owns the values. Both reviews noted the contract lived only in code comments. This
+// repository records design rationale as a NAMED DECISION DOCUMENT in `docs/` — `docs/telemetry-transport-decision.md`
+// is the precedent; there is no `docs/adr/` convention here and inventing one would be a second home for the same
+// kind of note. The doc is PINNED by this check rather than merely written: a decision record nothing checks is a
+// file that drifts from the constant it describes on the first rename. What cannot be checked offline is the
+// upstream half (does the id resolve in clio-knowledge today) — see the doc's own "What this does not prove".
+const FA_DECISION_DOC = path.join(DIR, "..", "..", "docs", "guidance-item-contract-decision.md");
+const faDecisionText = fs.existsSync(FA_DECISION_DOC) ? fs.readFileSync(FA_DECISION_DOC, "utf8") : "";
+check("ENG-94756 (PR #182 review): the CAADT ↔ clio-knowledge guidance-item contract has a design record in `docs/` following this repo's decision-document convention — naming the id, the owning repo, the file that carries it and which side owns the VALUES, so the contract is legible without reading the engine",
+  () => faDecisionText.includes(FA_GUIDANCE_ID)
+    && /clio-knowledge/.test(faDecisionText) && /bundle-source\.json/.test(faDecisionText)
+    && /requirements\.itemIds/.test(faDecisionText)
+    && faDecisionText.includes("AttachmentListDS")
+    && /^\*\*Status:\*\* accepted/m.test(faDecisionText),
+  () => ({ exists: faDecisionText.length > 0, path: FA_DECISION_DOC, bytes: faDecisionText.length,
+    head: faDecisionText.split("\n").slice(0, 6) }));
+
 // ---- TAGS: the control is free, the DATA is the question, and one wrong premise stays withdrawn ----------------
 // Tags is in this ticket's title and it is a DIFFERENT shape of defect from Feed/Attachments: the Freedom form
 // templates ship the control and this migration neither builds nor configures it, so there is nothing to insert

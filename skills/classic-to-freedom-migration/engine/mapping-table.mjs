@@ -110,6 +110,20 @@ export const SOURCE = {
 // the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
 export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
 
+// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE (ENG-94756, PR #182 review) ---------------------------------
+// `meta.feature` is a JOIN KEY, not a caption: the rows below declare it, `GUIDED_FEATURES` decides from it which
+// components are routed to the guidance item, and `companionRows` in designspec.mjs decides from it which page
+// owes the `AttachmentListDS` evidence row. That was three independent spellings of one string, and the failure
+// mode is SILENT in the worst direction — rename the row and not the gate and the page simply stops being told it
+// owes a data source, which reads exactly like a page that never needed one. Nothing goes red; the gate quietly
+// gets weaker. So the name is declared here and imported by every consumer, and `run-mapper.mjs` scans engine
+// source to prove no fourth spelling reappears: the constant alone does not stop one being typed next to it.
+//
+// Declared ABOVE `MAPPING_ROWS` because a module-level `const` is in the temporal dead zone until its own line
+// runs, and the rows are BUILT at module-evaluation time — a declaration below them would throw on import.
+export const FEATURE_ATTACHMENTS = "Attachments";
+export const FEATURE_FEED = "Feed";
+
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
 function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
@@ -288,7 +302,7 @@ const FEATURE_ROWS = [
   // file list itself with neither `columns` nor an `items` binding, passed `--verify`, and threw
   // `TypeError: ... is not iterable` out of the platform's column preprocessor the first time the page opened —
   // it reads the element's `columns` before anything else runs. Naming the parts is the difference.
-  feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
+  feature("FileDetailV2", { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
     uiShape: "component", templateProvided: true,
     notes: "Attachments is a COMPOSITE, not one element: crt.ExpansionPanel -> crt.GridContainer -> crt.FileList in the body, plus a toolbar (upload / refresh / search) in `tools`. The file list itself needs FOUR things and three of them are not the element: (1) `columns` — an array, each column an `id` GUID, a `code`, a `caption` and a `dataValueType`; the platform iterates this before rendering and THROWS when it is absent, so a file list without it breaks the whole page, not just itself; (2) `items` bound to a collection attribute (`items: '$<name>'`); (3) that attribute declared with `isCollection: true` and one nested attribute per column; (4) the element's own entity data source over the attachment entity, scope `viewElement`, keyed `<name>DS`. `masterRecordColumnValue` / `recordColumnName` alone wire nothing." }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
@@ -324,7 +338,7 @@ const FEATURE_ROWS = [
     // ONE row, two consumers: `meta.feature` is what the standard-feature gate reads, `meta.widgets` is what the
     // widget builder reads. Feed was in BOTH catalogs before (a FEATURE_TYPE entry and a WIDGET_BY_CONTAINER entry)
     // — the clearest case of the duplication this table exists to end.
-    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
+    meta: { feature: FEATURE_FEED, freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
       widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }] } }),
 ];
 
@@ -336,7 +350,7 @@ const FEATURE_ENTITY_ROWS = [
   row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.FileList" },
-    meta: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+    meta: { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
   row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.CommunicationOptions" },
@@ -530,6 +544,23 @@ export function featureVerifyExtraTypes(featureName) {
    template ships neither and the component is built outright) alike, so the builder needs it either way — whether
    the plan tells it the template provides the component or tells it to add one.
 
+   AND IT IS OWED ON THE BASIC TEMPLATE TOO, against the wording of the ticket's fourth acceptance criterion
+   ("when a basic template is used, existing migration behavior is not affected"). A basic-template plan DOES
+   change: it gains the route. Measured, not reasoned - the end-to-end run of 2026-09-17 migrated
+   `UsrToMigrate2App_FormPage` on `PageWithTabsFreedomTemplate`, the basic template, and the route is what sent the
+   builder to fetch the guidance article before it produced a working Feed, working Attachments and a correctly
+   bound tag control. On that template the components are MERGED onto containers the template already ships, and a
+   merge still owes the property set: the template supplies the container, never the configuration. Gating the
+   route on template family would have broken that run. Two checks in `run-mapper.mjs` pin it - the route IS
+   present on the basic template, and the basic-template plan is byte-identical to the top-area one once the
+   template NAME is substituted, so nothing else varies by family either. The rationale and the AC reconciliation
+   are written down in `docs/guidance-item-contract-decision.md` rather than left in a review thread.
+
+   It could not honestly branch in any case: `rowsForFeatures` and `rowsForWidgets` are handed no `opts`, so
+   `planMeta.formTemplate` is not in scope where the route is resolved, and `meta.templateProvided` is a flat
+   per-row flag carrying no per-template verdict. A template-aware route needs a measured capability table this
+   branch does not have.
+
    The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`.
    Renaming it there without renaming it here produces a plan that points at nothing, which is why the engine tests
    spell the literal out rather than importing this constant. Only RUNTIME consumption needs the clio release that
@@ -546,7 +577,7 @@ export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
 // The features that item covers, by the same `meta.feature` name the rows above carry. A feature absent from this
 // set gets no route: Approvals and Communication options have their own recipes elsewhere, and pointing them at an
 // item that says nothing about them would be a false instruction.
-const GUIDED_FEATURES = new Set(["Attachments", "Feed"]);
+const GUIDED_FEATURES = new Set([FEATURE_ATTACHMENTS, FEATURE_FEED]);
 export function featureGuidanceId(featureName) {
   return GUIDED_FEATURES.has(featureName) ? STANDARD_COMPONENTS_GUIDANCE_ID : null;
 }
