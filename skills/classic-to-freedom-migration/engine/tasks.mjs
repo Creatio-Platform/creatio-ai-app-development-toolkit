@@ -1064,7 +1064,7 @@ function attentionLines(set) {
     out.push(`- \`${it.task.file}\` row ${it.n} — recorded \`n-a\` on a row the plan did NOT mark N/A:`
       + ` ${it.row.label} (reason given: ${it.row.outcomeReason}). Nothing was built for it; confirm the boundary.`);
   }
-  for (const it of notBuiltRows(set.tasks)) {
+  for (const it of notBuiltOpenItems(set.tasks)) {
     let why;
     if (it.row?.naNoReason) why = "recorded `n-a` with NO reason — a row closed without building it needs one, so it counts as not built";
     else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — a decision settles it, not a re-run; route it once that decision exists"}`;
@@ -1155,10 +1155,15 @@ function latestPerDeliverable(items) {
   return [...best.values()].map((x) => x.it);
 }
 
+// THE ONE LIST OF WHAT IS STILL NOT BUILT, shared by everything that routes or reports it. A row a round has
+// SETTLED is on the stand and is neither routed again nor named again — its own Outcome cell keeps reading
+// `not-built` by design, so a surface reading `notBuiltRows` raw prints a deliverable that is finished, and a
+// list a reader learns to distrust is worse than no list.
+export const notBuiltOpenItems = (tasks) =>
+  latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
+
 export function notBuiltOpenRows(tasks) {
-  // A ROW A ROUND HAS ALREADY SETTLED IS NOT ROUTED AGAIN: it is on the stand, and a new round's `open` mark
-  // would overrule the closure that settled it.
-  const items = latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
+  const items = notBuiltOpenItems(tasks);
   const pages = {};
   for (const it of items) {
     const key = it.task.pageKey;
@@ -1184,7 +1189,11 @@ export function notBuiltOpenRows(tasks) {
 const mergePages = ({ residual = {}, verified = {} }) => {
   const out = {};
   for (const [k, v] of [...Object.entries(residual), ...Object.entries(verified)]) {
-    if (!out[k]) out[k] = { ...v, openRows: [] };
+    // FIELD-WISE, not first-leg-wins. `notBuiltOpenRows` builds an entry carrying `openRows` alone, so seeding
+    // from whichever leg came first dropped a verify page's own tallies as soon as the same page also had a
+    // residual row. Nothing downstream reads them today; a page entry that means different things depending on
+    // which leg saw it first is a trap for whatever does.
+    out[k] = { ...out[k], ...v, openRows: out[k]?.openRows || [] };
     const seen = new Set(out[k].openRows.map((r) => coverKey(r.deliverable)));
     for (const row of v.openRows || []) {
       if (seen.has(coverKey(row.deliverable))) continue;
@@ -1242,13 +1251,20 @@ function roundCoverage(t) {
   const closes = whole
     ? () => CLOSED.has(t.status)
     : (k) => credits && settled.has(k) && !unsettled.has(k);
+  const round = t.repairRound || 1;
+  // A ROW THE CAP HAS EXHAUSTED IS NOT OPEN WORK. The last round ran and did not settle it, and `buildRepairTasks`
+  // PARKS the (page, kind) rather than writing a fourth — so nothing is scheduled against that row ever again.
+  // Said as its OWN state rather than by staying silent: silence leaves an earlier round's `open` standing, and
+  // `open` reads as scheduled work and clears the gate over a deliverable nobody built. Same end state as a
+  // `blocked` round, which is excluded for the same reason; parking is otherwise only a line on stdout.
+  const exhausted = round >= REPAIR_ROUND_CAP && ROUND_ATTEMPTED.has(t.status);
   // `covers` is the authoritative list: a row deleted from the body is not a row that was built.
   const states = new Map();
   for (const c of t.covers || []) {
     const k = `${t.pageKey} ${c}`;
-    states.set(k, closes(k) ? "closed" : "open");
+    states.set(k, closes(k) ? "closed" : (exhausted ? "parked" : "open"));
   }
-  return { round: t.repairRound || 1, states };
+  return { round, states };
 }
 
 function repairCoverage(tasks) {
@@ -1266,7 +1282,12 @@ function repairCoverage(tasks) {
     if (!round) continue;
     for (const [key, state] of round.states) say(key, round.round, state);
   }
-  return (key) => latest.get(key)?.state || null;
+  // `parked` reads as NO residual: the row is not scheduled anywhere, so every surface that asks "is this routed"
+  // gets the same answer it gets for a row nothing ever routed — the gate fails and the user is told.
+  return (key) => {
+    const state = latest.get(key)?.state;
+    return !state || state === "parked" ? null : state;
+  };
 }
 
 function resolvePartials(set) {
@@ -1302,9 +1323,9 @@ function whyNotBuilt(cause) {
 }
 
 function notBuiltLines(tasks) {
-  // Deduped on the same rule the routing uses, so the count the user reads is a count of DELIVERABLES and the
-  // file named beside each one is the round that last held it.
-  const items = latestPerDeliverable(notBuiltRows(tasks));
+  // The same list the routing works from, so the count the user reads is a count of DELIVERABLES still open and
+  // the file named beside each one is the round that last held it.
+  const items = notBuiltOpenItems(tasks);
   if (!items.length) return [];
   const L = [`⚠ NOT BUILT — ${items.length} deliverable(s) across ${new Set(items.map((x) => x.task.id)).size} task(s):`];
   for (const it of items) {
@@ -1722,20 +1743,27 @@ const causeText = (cause) => CAUSE_TEXT[cause] || cause;
 // per run: a cause fixed in round 1 and back in round 3 has been attempted twice, which is the number the cap is
 // about. A capped cause is PARKED, not silently re-emitted — three sub-agents have failed at it and a fourth is
 // not the answer; it is a decision for the user.
+// TWO KEYS, because the cap and the one-round-at-a-time rule are not the same question. HOW MANY attempts a page
+// has had at a KIND of row is what the cap counts, so `unverified:fields` and `not-built:fields` share it — the
+// why moves between rounds while the kind holds. WHETHER A ROUND IS STILL OPEN is about that CAUSE's own round,
+// and sharing the key there holds a newly recorded cause behind an unrelated round: no task is written for it, so
+// its rows stay unrouted, the gate keeps naming them and the remedy it prints writes nothing.
 function repairRounds(existing) {
-  const rounds = new Map();
+  const rounds = new Map(), openRounds = new Map();
   for (const e of existing) {
     if (e.meta?.kind !== REPAIR_KIND) continue;
-    const key = capKey(e.meta.pageKey, e.meta.cause);
     const n = Number(e.meta.repairRound) || 1;
-    const prev = rounds.get(key);
     // COMPUTED, not read off the front matter: a round is closed by its `Outcome` cells, so a file whose agent
     // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
     const status = computeStatus({ origin: TASK_ORIGIN_ENGINE, kind: REPAIR_KIND, rows: rowsFromTable(e.table) },
       e.meta.status || S_TODO, e.outcomes);
-    if (!prev || n >= prev.round) rounds.set(key, { round: n, status });
+    for (const [map, key] of [[rounds, capKey(e.meta.pageKey, e.meta.cause)],
+      [openRounds, `${e.meta.pageKey} ${e.meta.cause || ""}`]]) {
+      const prev = map.get(key);
+      if (!prev || n >= prev.round) map.set(key, { round: n, status });
+    }
   }
-  return rounds;
+  return { rounds, openRounds };
 }
 // A ROUND IS AN ATTEMPT, NOT A VERIFY RUN. Re-verifying an unchanged page must not open a new round: the rows are
 // still the work of the round already sitting in the folder, and counting verify runs would burn the cap without a
@@ -1750,16 +1778,18 @@ const ROUND_ATTEMPTED = new Set([S_DONE, S_NA, S_PARTIAL]);
 // carries the rows that run left open, with the text the reader saw rather than a paraphrase of it.
 // What this cause gets from THIS verify run: the next round, or a reason it gets nothing. A round already open is
 // still somebody's work, and a cause that has had its rounds is a decision for a person.
-function nextRound(prior) {
-  if (prior && !ROUND_ATTEMPTED.has(prior.status)) return { hold: "pending", round: prior.round, status: prior.status };
-  const round = (prior?.round || 0) + 1;
+// `cap` is what this page has spent on this KIND of row; `own` is this CAUSE's own last round. Only `own` can
+// hold a cause pending — its rows are the work of a round that is still somebody's.
+function nextRound(cap, own) {
+  if (own && !ROUND_ATTEMPTED.has(own.status)) return { hold: "pending", round: own.round, status: own.status };
+  const round = (cap?.round || 0) + 1;
   return round > REPAIR_ROUND_CAP ? { hold: "parked", round } : { hold: null, round };
 }
 
 export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
   const B = budgetOf(opts);
   const identity = pageIdentities(result);
-  const rounds = repairRounds(existing);
+  const { rounds, openRounds } = repairRounds(existing);
   const tasks = [];
   const parked = [];
   const pending = [];
@@ -1773,7 +1803,7 @@ export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing =
       byCause.get(cause).push(row);
     }
     for (const [cause, rows] of byCause) {
-      const next = nextRound(rounds.get(capKey(pageKey, cause)));
+      const next = nextRound(rounds.get(capKey(pageKey, cause)), openRounds.get(`${pageKey} ${cause}`));
       if (next.hold === "pending") {
         pending.push({ pageKey, cause, rows: rows.length, round: next.round, status: next.status });
         continue;

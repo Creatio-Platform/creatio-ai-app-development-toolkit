@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, NOT_BUILT_CAUSES, assertedBoundaryRows,
+import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
@@ -2538,6 +2538,19 @@ console.log("\n===== `partial` on the index, the progress block and the gates ==
         && !/not re-dispatched/.test(prog);
     }, () => renderProgress(second, dir));
 
+  check("a `partial` task with NO `agentNonce` is named by the nonce audit exactly as a `done` one is — it is a task that stopped claiming work was done by somebody, and a closed state the audit skips is the cheapest way past the one-sub-agent contract",
+    // Scoped to the audit LINE: every task file is also listed in the index table above, so a whole-document
+    // search passes whether the audit named it or not.
+    () => {
+      const line = readIndex(dir).split("\n").find((l) => /with NO `agentNonce`/.test(l)) || "";
+      return line.includes(target.file);
+    }, () => readIndex(dir).split("\n").filter((l) => /agentNonce/.test(l)));
+
+  const todoCount = (set, d) => Number(/todo (\d+)/.exec(renderProgress(set, d))?.[1]);
+  check("a `partial` task leaves the OPEN set — it is settled, so it stops being counted as `todo` and its weight leaves the remaining-minutes forecast. Counted as open it quotes a queue deeper and a run longer than they are",
+    () => todoCount(second, dir) === todoCount(first, dir) - 1,
+    () => ({ beforePartial: todoCount(first, dir), afterPartial: todoCount(second, dir) }));
+
   check("`partial` RELEASES the tasks that depend on it — it holds up calling the run complete, not the queue. A state that halted dependents is exactly the state agents avoided by writing `done`",
     // Built on its OWN folder around `Page build`: the `Quality gates` task this block otherwise uses is a leaf,
     // so a release asserted over it asserts nothing. The source is dispatched and signed so the only thing that
@@ -2588,7 +2601,9 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
     const cells = line.split(/(?<!\\)\|/);
     if (cells.length < 7 || !/^\s*\d+\s*$/.test(cells[1])) return line;
     seen++;
-    cells[5] = seen === 1 ? " not-built — blocked " : " built ";
+    // TWO rows on ONE page — the shape the incident had. One unbuilt row can be named by a list that cannot
+    // count, and a gate that reports one deliverable while two are open is the failure being replaced.
+    cells[5] = seen <= 2 ? " not-built — blocked " : " built ";
     return cells.join("|");
   }).join("\n");
   fs.writeFileSync(vf, text);
@@ -2597,9 +2612,10 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
   check("CLI: a folder holding an unbuilt deliverable exits 2 — the run cannot report success over work its own agent recorded as not done",
     run.status === 2, () => ({ status: run.status, stderr: run.stderr.slice(0, 400) }));
 
-  check("CLI: the failure names the DELIVERABLE, its task and its cause on stderr, and says what the cause means — this is the text that replaces a summary composed from memory, which is where the two filters were lost",
-    () => /⛔ NOT BUILT — 1 deliverable\(s\)/.test(run.stderr) && run.stderr.includes(victim.file)
-      && /row 1 —/.test(run.stderr) && /blocked: the stand or a service was unreachable/.test(run.stderr),
+  check("CLI: the failure names EVERY unbuilt deliverable, its task and its cause on stderr, and says what the cause means — this is the text that replaces a summary composed from memory, which is where the two filters were lost",
+    () => /⛔ NOT BUILT — 2 deliverable\(s\)/.test(run.stderr) && run.stderr.includes(victim.file)
+      && /row 1 —/.test(run.stderr) && /row 2 —/.test(run.stderr)
+      && /blocked: the stand or a service was unreachable/.test(run.stderr),
     () => run.stderr.slice(-900));
 
   // The command it names has to be one a run with pages still unbuilt can take: `--verify` needs a `--built`
@@ -3083,6 +3099,68 @@ check("a deliverable is routed ONCE however many files record it — a `partial`
     syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
     const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
     return { rows: r2.rows.length, covers: r2.covers }; });
+
+check("a row a round has SETTLED stops being named as NOT BUILT — its own Outcome cell reads `not-built` for good, so the progress block and the index Attention kept printing a deliverable that is on the stand while the gate had correctly stopped counting it; two surfaces disagreeing about one row is how a reader learns to skip the list",
+  () => {
+    const { d, tgt } = partialFolder("notbuilt-settled", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS);
+    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const residuals = backAt(set, tgt.id).rows.map((r) => r.residual);
+    const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
+    // Before either round runs, BOTH rows are open and the line has to count two of them on one task — a list
+    // that only ever renders `1` cannot say it lost one.
+    const { d: d2 } = partialFolder("notbuilt-settled-both", [1, 2]);
+    const both = renderProgress(syncTaskDir(d2, RUN, OPTS), d2);
+    return residuals.includes("closed") && residuals.includes("open")
+      && /⚠ NOT BUILT — 2 deliverable\(s\) across 1 task\(s\)/.test(both)
+      && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
+      && idxLines.length === 1;
+  }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2]);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { progress: renderProgress(s, d).split("\n").filter((l) => /NOT BUILT/.test(l)),
+      attention: renderTaskIndex(s).split("\n").filter((l) => /\*\*not built\*\*/.test(l)) }; });
+
+check("a row the cap has EXHAUSTED fails the gate instead of passing as scheduled work — the last round ran and did not build it, `buildRepairTasks` parks the (page, kind) and writes no fourth, so reading it as an open round exits 0 over a deliverable nobody built and nothing will ever schedule",
+  () => {
+    const { d, tgt } = partialFolder("cap-exhausted");
+    for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+      const res = syncRepairDir(d, RUN, {}, OPTS);
+      if (!res.written.length) break;
+      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+    }
+    const set = syncRepairDir(d, RUN, {}, OPTS).set;
+    const items = notBuiltOpenItems(set.tasks);
+    return backAt(set, tgt.id).status === "partial"
+      && backAt(set, tgt.id).rows.every((r) => r.residual === null || r.residual === undefined)
+      && items.length === 1 && items.every((it) => !it.residual);
+  }, () => { const { d, tgt } = partialFolder("cap-exhausted-d");
+    for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
+      const res = syncRepairDir(d, RUN, {}, OPTS);
+      if (!res.written.length) break;
+      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+    }
+    const s = syncRepairDir(d, RUN, {}, OPTS).set;
+    return { parent: backAt(s, tgt.id).status, residuals: backAt(s, tgt.id).rows.map((r) => r.residual),
+      unrouted: notBuiltOpenItems(s.tasks).filter((it) => !it.residual).length }; });
+
+check("a newly recorded cause gets its OWN round rather than waiting behind another cause's open one — the cap counts the KIND, but an `unverified:fields` round still open must not hold a `not-built:fields` row unroutable while the gate names it and tells the user to run `--route`, which would write nothing",
+  () => {
+    const openOther = [{ file: "task-repair-round1-main-unverified-fields-x.md", notes: "", malformed: null,
+      meta: { id: "rx", status: "todo", origin: "engine", pageKey: "main", kind: "repair",
+        cause: "unverified:fields", repairRound: "1", covers: "aaaa" } }];
+    const pages = { main: { openRows: [{ deliverable: "Fields — 3 fields", outcome: "not-built",
+      status: "not-built — blocked", evidence: "recorded on task-x.md, row 1" }] } };
+    const opened = buildRepairTasks(RUN, pages, OPTS, openOther);
+    // The KIND still caps: three rounds on this page's field rows is three, whatever each was opened for.
+    const capped = [1, 2, 3].map((n) => ({ file: `task-repair-round${n}-main-unverified-fields-${n}.md`, notes: "", malformed: null,
+      meta: { id: `rc${n}`, status: "done", origin: "engine", pageKey: "main", kind: "repair",
+        cause: "unverified:fields", repairRound: String(n), covers: "aaaa" } }));
+    const atCap = buildRepairTasks(RUN, pages, OPTS, capped);
+    return opened.tasks.some((t) => t.cause === "not-built:fields") && !opened.pending.length
+      && !atCap.tasks.length && atCap.parked.some((p) => p.cause === "not-built:fields");
+  }, () => "an open round on one cause must not hold a different cause of the same kind pending");
 
 check("the ⚠ NOT BUILT list names each deliverable ONCE — the verdict was right while the list a human reads carried the same row under the parent file and under every round that had held it",
   () => {

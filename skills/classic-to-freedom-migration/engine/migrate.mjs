@@ -56,7 +56,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltRows } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2811,7 +2811,10 @@ function dispatchFailureText(audit, dir) {
 // reach here — a row already routed to one is somebody's work, not a gate failure.
 // The gate's own list: rows nothing is scheduled to close. `resolvePartials` has already stamped `residual` on
 // every row it could match to a repair task, so this is a filter and not a second opinion.
-const unroutedNotBuilt = (tasks) => notBuiltRows(tasks).filter((it) => !it.residual);
+// OFF THE SHARED LIST, so the gate's failure list names the same deliverables the progress block does, once
+// each. `!it.residual` narrows it further to rows nothing is scheduled against at all — a row with an open
+// round is somebody's work and is reported, not failed on.
+const unroutedNotBuilt = (tasks) => notBuiltOpenItems(tasks).filter((it) => !it.residual);
 
 const REMEDY = {
   "blocked": "the stand or a service was unreachable — a repair round may clear it",
