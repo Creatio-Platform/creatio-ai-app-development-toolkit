@@ -10694,30 +10694,147 @@ check("ENG-94756 T2b: a page whose only component features are Approvals and Com
   () => ({ features: faOtherCs.standardFeatures.map((s) => s.feature),
     lines: faOtherSpec.split("\n").filter((l) => l.includes(FA_GUIDANCE_ID)).slice(0, 4) }));
 
-// ---- R7 GUARD: the value table is ABSENT from CAADT -----------------------------------------------------------
-// The tokens are the property NAMES and measured literals of the canonical value set. Asserting their ABSENCE is
-// what makes this guard the executable form of the architecture decision rather than a comment about it: paste the
-// measured table into the engine to "help the builder" and this goes red, naming each value that was pasted.
-const FA_VALUE_TOKENS = ["feedType", "primaryColumnValue", "cardState", "dataSourceName", "masterRecordColumnValue",
-  "recordColumnName", "viewType", "tileSize", "gallery", "$AttachmentList", "$CardState", "SysFile",
-  "crt.EntityDataSource", "AttachmentListDS_"];
+// ---- R7 GUARD: the canonical VALUES are absent from CAADT — and naming a property is not carrying one ----------
+// R7, as approved, reads: "CAADT contains no literal copy of the property values, only a reference to the guidance
+// item." It governs VALUES. The guard therefore has two lists, and the split between them IS the doctrine:
+//
+//   FA_VALUE_TOKENS — the measured LITERALS of the canonical set: the `viewType` a record-page tab uses, the two
+//     bindings the file list and the feed read, the shared file entity, the data-source TYPE, and the child-
+//     attribute prefix the list's `primaryColumnName` resolves through. Each of these is a value and nothing else,
+//     so its presence anywhere IS the copy. Banned outright, in any spelling, on every surface.
+//
+//   FA_NAME_TOKENS — the canonical property NAMES. A name is NOT banned, because a name is not a value. Property
+//     names are the component catalog's vocabulary: `get-component-info` owns it and this repo already vendors it
+//     under `engine/registry/component-index.json`, which is why naming a property is a ROUTE to the catalog and
+//     never a second copy of it. A sentence such as "`masterRecordColumnValue` / `recordColumnName` alone wire
+//     nothing" assigns neither property and exists precisely to say that they are INSUFFICIENT; a guard that
+//     reddened on it would be enforcing a rule stricter than the requirement it protects.
+//     What IS banned is a name in an ASSIGNMENT — `name: value`, `name = value`, or a `| name | value |` table row.
+//     The name is not the forbidden thing; the name is how the guard DETECTS that a value was written down beside
+//     it. That arm is not decorative cover: three literals of the canonical set are ordinary words this repository
+//     uses for unrelated reasons and can never be scanned for directly, so a paste of the Feed half would otherwise
+//     hide behind them with no distinctive literal left for FA_VALUE_TOKENS to catch. The probes below pin that.
+//
+// This is the SAME doctrine T3c states for the tag cell, not a second one sitting beside it: that cell names
+// `tagInRecordSourceSchemaName`, assigns it nothing, and routes both the value and the default it overrides to the
+// catalog — so it passes by the general rule, and is no longer a special case anyone has to remember.
+//
+// BOTH ARMS RUN OVER BOTH SURFACES, with no per-token carve-out. The previous source arm dropped `dataSourceName`
+// alone, because `mapper.mjs` has spoken that word since ENG-94714 — in the Freedom recipe for a list Actions-button
+// process launch — and a bare mention could not then be told apart from a paste. The narrowing DISSOLVES that
+// premise rather than preserving it: a bare mention is now legal everywhere by rule, so the exception has nothing
+// left to do. The Feed value the old comment wanted pinned is pinned harder, not softer — `dataSourceName: …` now
+// reddens in an engine source too, where before only the rendered output was watched.
+const FA_VALUE_TOKENS = ["gallery", "$AttachmentList", "$CardState", "SysFile", "crt.EntityDataSource",
+  "AttachmentListDS_"];
+const FA_NAME_TOKENS = ["feedType", "primaryColumnValue", "cardState", "dataSourceName", "masterRecordColumnValue",
+  "recordColumnName", "viewType", "tileSize"];
+// The three spellings a copy of the table can arrive in: a JSON/JS pair (`"name": v` / `name: v`), an `=` binding,
+// and a markdown row whose FIRST cell is the bare name and whose next cell is non-empty — the shape the published
+// table itself has, and therefore the shape a copy-paste of it keeps. `ˋ` (U+02CB) is in the quote class because
+// that is the grave the rendered plan substitutes for a backtick inside its own table cells. A name merely quoted
+// inside a sentence matches none of the three.
+const FA_Q = "[\"'`ˋ]?";
+const faAssignRe = (n) => new RegExp(`\\b${n}\\b${FA_Q}\\s*[:=](?!=)|\\|\\s*${FA_Q}${n}${FA_Q}\\s*\\|\\s*\\S`);
+// ONE predicate, shared by both arms and by the paste probes below, so that what the probes prove is what the arms
+// actually run — a probe suite that exercised a second copy of the rule would prove nothing about this guard.
+const faR7Hits = (text) => [...FA_VALUE_TOKENS.filter((t) => text.includes(t)),
+  ...FA_NAME_TOKENS.filter((n) => faAssignRe(n).test(text)).map((n) => `${n}: <assigned>`)];
 check("ENG-94756 R7 GUARD (output): the CAADT-rendered spec carries NOT ONE canonical property value — it names the components, the guidance item and the companion data source, and stops there",
-  () => FA_VALUE_TOKENS.every((t) => !faSpec.includes(t)),
-  () => ({ leaked: FA_VALUE_TOKENS.filter((t) => faSpec.includes(t)),
-    lines: faSpec.split("\n").filter((l) => FA_VALUE_TOKENS.some((t) => l.includes(t))) }));
-// The output guard only sees what THIS fixture renders; R7 is about the REPOSITORY. So the same list is run over
-// every engine source, which is where a copy would actually be typed — and which is the only place a reviewer of a
-// future PR would have to notice it by eye. `dataSourceName` is dropped from this arm ONLY: `mapper.mjs` has spoken
-// that word since ENG-94714, in the Freedom recipe for a list Actions-button process launch, so a hit on it here
-// could not be told apart from a paste. Its absence from the OUTPUT arm above still pins the Feed value.
-const FA_SOURCE_TOKENS = FA_VALUE_TOKENS.filter((t) => t !== "dataSourceName");
+  () => faR7Hits(faSpec).length === 0,
+  () => ({ leaked: faR7Hits(faSpec),
+    lines: faSpec.split("\n").filter((l) => faR7Hits(l).length > 0) }));
+// The output guard only sees what THIS fixture renders; R7 is about the REPOSITORY. So the same predicate is run
+// over every engine source, which is where a copy would actually be typed — and which is the only place a reviewer
+// of a future PR would have to notice it by eye.
 const faEngineSources = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs"))
   .map((f) => ({ file: f, text: fs.readFileSync(path.join(ENGINE_DIR, f), "utf8") }));
 check("ENG-94756 R7 GUARD (source): no engine source file carries the canonical value table either — CAADT holds the guidance item's ID and the names of the deliverables it routes to, and not one of the values behind them",
-  () => faEngineSources.length >= 5
-    && faEngineSources.every((s) => FA_SOURCE_TOKENS.every((t) => !s.text.includes(t))),
+  () => faEngineSources.length >= 5 && faEngineSources.every((s) => faR7Hits(s.text).length === 0),
   () => ({ scanned: faEngineSources.map((s) => s.file),
-    hits: faEngineSources.flatMap((s) => FA_SOURCE_TOKENS.filter((t) => s.text.includes(t)).map((t) => `${s.file}: ${t}`)) }));
+    hits: faEngineSources.flatMap((s) => faR7Hits(s.text).map((t) => `${s.file}: ${t}`)) }));
+
+// ---- R7 GUARD (paste detection): the NARROWED guard still bites -----------------------------------------------
+// Narrowing a guard is only defensible if it still catches the thing it was built to catch, so that is asserted
+// here rather than argued above. The whole point of R7 is that nobody can paste the measured value table into this
+// engine "to help the builder"; these probes ARE that paste, run through the same `faR7Hits` predicate the two
+// arms use.
+//
+// THE PROBES ASSIGN A PLACEHOLDER, NOT THE MEASURED VALUE, deliberately and on two counts. First, a test that
+// transcribed the published table in order to prove that transcriptions get caught would itself be the literal
+// copy R7 forbids, parked in the one file a reviewer would never think to grep. Second, it would prove LESS: the
+// assignment arm fires on the shape, so a placeholder shows the arm catches a paste whatever was pasted, instead
+// of only the one value somebody remembered to encode here. Every literal below is either that placeholder or a
+// token the ban list already obliges this file to carry.
+const FA_PASTE_PLACEHOLDER = "<the measured value — see the guidance item>";
+const faPasteProbes = {
+  // The full table in the two spellings it is published and consumed in. Both arms fire.
+  "value table pasted as JSONC": FA_NAME_TOKENS.map((n) => `    "${n}": "${FA_PASTE_PLACEHOLDER}"`).join(",\n")
+    + `,\n    "entitySchemaName": "SysFile",\n    "type": "crt.EntityDataSource"`,
+  "value table pasted as the published markdown grid":
+    FA_NAME_TOKENS.map((n) => `| \`${n}\` | \`"${FA_PASTE_PLACEHOLDER}"\` | measured |`).join("\n"),
+  // The same table after `migrate.mjs` renders it into a plan cell, where backticks become U+02CB.
+  "value table pasted into a rendered plan cell":
+    FA_NAME_TOKENS.map((n) => `| ˋ${n}ˋ | ˋ"${FA_PASTE_PLACEHOLDER}"ˋ |`).join("\n"),
+  // An `=` binding rather than a JSON pair — the shape a helper written INSIDE the engine would actually take.
+  "value table pasted as JS bindings":
+    FA_NAME_TOKENS.map((n) => `const ${n} = "${FA_PASTE_PLACEHOLDER}";`).join("\n"),
+  // THE PROBE THAT EARNS THE NAME ARM. The Feed half of the table carries no distinctive literal at all — its four
+  // values are ordinary words this repository uses elsewhere — so FA_VALUE_TOKENS cannot see it, and the assignment
+  // arm is the only thing standing between this engine and a pasted Feed value set. Narrow the guard one notch
+  // further (drop FA_NAME_TOKENS) and this probe goes GREEN with the value table sitting in the engine. That is the
+  // hole the name arm exists to close, and this line is what makes closing it non-negotiable for a future author.
+  "Feed half only, carrying no distinctive literal": ["feedType", "primaryColumnValue", "cardState", "dataSourceName"]
+    .map((n) => `  "${n}": "${FA_PASTE_PLACEHOLDER}"`).join(",\n"),
+};
+check("ENG-94756 R7 GUARD (paste detection): a paste of the canonical value set is STILL caught by the narrowed guard — in every spelling it can arrive in, and including the Feed half, which carries no distinctive literal and is seen by the assignment arm alone",
+  () => Object.values(faPasteProbes).every((p) => faR7Hits(p).length > 0),
+  () => ({ undetected: Object.entries(faPasteProbes).filter(([, p]) => faR7Hits(p).length === 0).map(([k]) => k),
+    detected: Object.entries(faPasteProbes).map(([k, p]) => `${k} -> ${faR7Hits(p).join(", ") || "MISSED"}`) }));
+// The other half of the same claim, and the reason the narrowing was made at all: the legitimate forms must stay
+// green, or the guard would have traded one over-reach for another. Each string here is a REAL one — #175's
+// mapping-row note, the tag cell's property mention, ENG-94714's launch recipe in `mapper.mjs` — quoted in the
+// shape the guard actually sees it in, including the rendered-cell spelling.
+const faLegitProbes = {
+  "#175's mapping-row note (two NAMES, used to say they are insufficient)":
+    "`masterRecordColumnValue` / `recordColumnName` alone wire nothing.",
+  "the tag cell's property mention (T3c)":
+    "override `tagInRecordSourceSchemaName` — `get-component-info crt.TagSelect` serves the value and the default",
+  "ENG-94714's list Actions-button launch recipe in `mapper.mjs`":
+    "processRunType ForTheSelectedRecords + dataSourceName PDS; FORM → the form page's OWN Actions button",
+  "the same mapping-row note after the plan renders it into a table cell":
+    "| Tab | Attachments | ˋmasterRecordColumnValueˋ / ˋrecordColumnNameˋ alone wire nothing. |",
+};
+check("ENG-94756 R7 GUARD (paste detection, converse): naming a canonical property WITHOUT assigning it stays green — the mapping-row note, the tag cell and the ENG-94714 launch recipe are routes to the catalog, and R7 governs values",
+  () => Object.values(faLegitProbes).every((p) => faR7Hits(p).length === 0),
+  () => ({ falsePositives: Object.entries(faLegitProbes).filter(([, p]) => faR7Hits(p).length > 0)
+    .map(([k, p]) => `${k} -> ${faR7Hits(p).join(", ")}`) }));
+// THE PIN, and the one assertion here that notices a token being DELETED. Every probe above is COMPOSED FROM the
+// operative lists, which makes them blind in exactly one direction: shrink a list and the probe shrinks with it,
+// so the suite stays green while the guard quietly stops watching — which is precisely how a per-token carve-out
+// like the old `dataSourceName` exception gets reintroduced by accident. So the lists are pinned against a second,
+// independently spelled copy, and each governed token is additionally shown to fire on its own. Re-spelling the
+// six literals here costs R7 nothing: a ban list has to name what it bans, so they are already in this file.
+const FA_PINNED_VALUES = ["gallery", "$AttachmentList", "$CardState", "SysFile", "crt.EntityDataSource",
+  "AttachmentListDS_"];
+const FA_PINNED_NAMES = ["feedType", "primaryColumnValue", "cardState", "dataSourceName", "masterRecordColumnValue",
+  "recordColumnName", "viewType", "tileSize"];
+check("ENG-94756 R7 GUARD (paste detection, pin): the governed lists are EXACTLY the canonical set, and every token in them fires on its own — dropping a literal or a property name is a doctrinal change that goes red here, instead of silently narrowing the guard the probes above are built from",
+  () => FA_VALUE_TOKENS.join("|") === FA_PINNED_VALUES.join("|")
+    && FA_NAME_TOKENS.join("|") === FA_PINNED_NAMES.join("|")
+    && FA_PINNED_VALUES.every((t) => faR7Hits(`  someProp: "${t}"`).length > 0)
+    && FA_PINNED_NAMES.every((n) => faR7Hits(`  "${n}": "${FA_PASTE_PLACEHOLDER}"`).length > 0),
+  () => ({ values: FA_VALUE_TOKENS, pinnedValues: FA_PINNED_VALUES,
+    names: FA_NAME_TOKENS, pinnedNames: FA_PINNED_NAMES,
+    inert: [...FA_PINNED_VALUES.filter((t) => faR7Hits(`  someProp: "${t}"`).length === 0),
+      ...FA_PINNED_NAMES.filter((n) => faR7Hits(`  "${n}": "x"`).length === 0)] }));
+// List hygiene: the two lists must stay disjoint, or a token moved between them would be governed by both rules at
+// once and an arm going red would no longer say which of the two doctrines it was enforcing.
+check("ENG-94756 R7 GUARD: the VALUE list and the NAME list are disjoint and non-empty — every governed token is subject to exactly one of the two rules",
+  () => FA_VALUE_TOKENS.length > 0 && FA_NAME_TOKENS.length > 0
+    && !FA_VALUE_TOKENS.some((v) => FA_NAME_TOKENS.some((n) => v.includes(n))),
+  () => ({ values: FA_VALUE_TOKENS, names: FA_NAME_TOKENS,
+    overlap: FA_NAME_TOKENS.filter((n) => FA_VALUE_TOKENS.some((v) => v.includes(n))) }));
 
 // ---- REGRESSION BOUNDARY: the flat template-provided flags still say what they said ----------------------------
 // This branch decides merge-vs-insert nowhere: `meta.templateProvided` is a flat per-row flag, Feed's Layout cell is
@@ -10816,12 +10933,14 @@ check("ENG-94756 T3b (Tags): the prescribed read is interpolated with the MIGRAT
     anonEntity: faTagNoEntity.entity, anon: faTagCell(faTagNoEntity.designSpec) }));
 
 // ---- TAGS T3c (R7 for the tag cell): a PROPERTY NAME is carried, a VALUE is not --------------------------------
-// R7 keeps the canonical property VALUES out of this repository. `tagInRecordSourceSchemaName` is a property NAME,
-// and property names are the component catalog's vocabulary — `get-component-info` owns it and this repo already
-// vendors it under `engine/registry/component-index.json`, which is why naming one is a route to the catalog and
-// not a second copy of it. The VALUES are what must stay out: the junction schema to set it to (resolved by the
-// read the cell prescribes, and different for every object) and the DEFAULT it overrides, which is a published
-// default free to change and is served beside the property by the same call the cell points at.
+// This is the R7 GUARD above applied to the tag cell, not a licence carved out beside it. The guard bans the
+// canonical VALUES outright and a property NAME only where a value is written next to it; the tag cell names
+// `tagInRecordSourceSchemaName` and assigns it nothing, so it is legal by the general rule and needs no exemption.
+// What this check adds is the part the guard cannot see: the tag cell's own values are OBJECT-SPECIFIC, so they
+// have no fixed literal to put on a ban list. The junction schema to set the property to is resolved per object by
+// the read the cell prescribes, and the DEFAULT the override replaces is a published default free to change. Both
+// are served beside the property by the same `get-component-info` call the cell already points at, so the cell
+// routes them exactly as the Feed and Attachments rows route theirs — one doctrine, three surfaces.
 //
 // The `\b` boundary is what makes this check meaningful rather than accidental, so the assertion states BOTH
 // halves: the property name is present AND the default value is absent. Without the positive half a future author
