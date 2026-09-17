@@ -197,6 +197,22 @@ element the template provides is touched with `operation: "merge"` and carries n
 could never confirm Feed, FileList, ApprovalList or the DCM bar. A payload that is not keyed by page is rejected
 with exit 1, and an id or page key the engine did not publish is silently "not checked" — never invent one.
 
+**A field and a rule are matched on the COLUMN, not on the element name (ENG-98554).** An expected field is
+satisfied when some built element either *is named* that column or *is bound to* it, and a page business rule is
+satisfied when it targets an element bound to the expected column — a rule's `items: ["ContactField"]` resolves to
+`Contact` through that element's own binding. The column behind a binding is read in this order: the entry's
+OPTIONAL `viewModelConfig` (`attributes["PDS_Contact"].modelConfig.path`), which is authoritative because it is the
+page itself stating which column an attribute reads; otherwise the `$` / `PDS_` prefix is stripped. Supplying
+`viewModelConfig` is therefore never required — every payload recorded before it existed still resolves — but it is
+the only way the gate can follow an attribute named nothing like its column.
+
+Why this is not just leniency: a builder following the Freedom conventions names an element for its widget and binds
+it to the column (`ContactField` → `$PDS_Contact`). Two runs of one section did exactly that, built the page
+correctly, and read `0/19 expected fields present` and `2/5 business rule(s) matched` — then each spent a repair
+round renaming elements that had never been wrong. Element-name matching is KEPT as a second leg, so a page whose
+elements are named for their columns still closes; and the shortfall list still names every column that matched
+neither way, so a field bound to the WRONG column is still reported short.
+
 **The LIST page's OWN template is its own machine-checked row (ENG-95470), the same mechanism the form page's
 `Form template` row uses.** `pages["list"]` carries `parentSchemaName` exactly like every other page key, and when
 the plan resolved at least one other list-page deliverable (columns, a quick filter, a command-bar action) a

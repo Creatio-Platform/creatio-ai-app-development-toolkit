@@ -2354,5 +2354,86 @@ check("pageGroup: the SAME group name on two different pages yields the same `ba
     return named.length >= 2 && new Set(named.map((g) => g.title)).size === named.length;
   }, () => GROUPS.filter((g) => g.baseTitle === "Quality gates").map((g) => g.title));
 
+// ===== ENG-98554 — the naming/binding convention is ON THE TASK ROW =====
+// The other half of the same defect. `--verify` matching a built field by its bound column stops the gate being
+// wrong; it does not tell the BUILDER what to write. A sub-agent handed a task file reads that file, not the
+// engine, so the convention it must follow has to be in the deliverable row itself — otherwise the next run names
+// elements `<Something>Field` again and the identity match is once more carried entirely by the fallback.
+//
+// The row-level condition is deliberately GENERIC (one worked `Contact` / `ContactField` example) rather than a
+// per-row column list: the rendered `Closed by` cell must not become a second place the plan's column names live.
+console.log("\n===== the `Closed by` acceptance condition (ENG-98554) =====");
+{
+  const closedByCells = (text) => text.split("\n").filter((l) => /^\| \d+ \| /.test(l)).map((l) => l.split("|").slice(1, -1).map((c) => c.trim()));
+
+  // The row the ticket is about: a `fields` row must state the element-name, the binding, AND the negative form.
+  {
+    const t = { ...SAMPLE, rows: [{ label: "Fields — 19 expected", group: "Form", vk: "fields", na: null }] };
+    const cell = closedByCells(renderTaskFile(t, SET))[0][3];
+    check("ENG-98554 (R1): a `fields` deliverable row states the identity convention IN the `Closed by` cell — the element is NAMED for the column and BOUND to it, with the positive and the NEGATIVE form both spelled out (`Contact`, not `ContactField`)",
+      () => /`--verify` \(`fields`\)/.test(cell) && /\$PDS_Contact/.test(cell)
+        && /`Contact`/.test(cell) && /ContactField/.test(cell) && /\bnot\b/.test(cell),
+      () => cell);
+  }
+
+  // A `rule` row: same convention, plus the bit that is specific to rules — the rule TARGETS the column, which on a
+  // Freedom page means the element that is bound to it (the ENG-98487 rules targeted `RejectReasonField`).
+  {
+    const t = { ...SAMPLE, rows: [{ label: "Business rules × 7", group: "Logic", vk: "rule", na: null }] };
+    const cell = closedByCells(renderTaskFile(t, SET))[0][3];
+    check("ENG-98554 (R1): a `rule` deliverable row states that the rule TARGET is the column-named element — the identity `--verify` matches a rule by",
+      () => /`--verify` \(`rule`\)/.test(cell) && /`Contact`/.test(cell) && /ContactField/.test(cell),
+      () => cell);
+  }
+
+  // `listcolumns` gets the DOCUMENTATION half only — its matcher reads the grid's own `PDS_*` column code and was
+  // never implicated in either failing run, so widening it would enlarge the diff on an unaffected path.
+  {
+    const t = { ...SAMPLE, rows: [{ label: "List columns — 6 expected", group: "List", vk: "listcolumns", na: null }] };
+    const cell = closedByCells(renderTaskFile(t, SET))[0][3];
+    check("ENG-98554 (R1): a `listcolumns` row also carries the convention, so the documentation half is uniform across the three vk types the ticket names",
+      () => /`--verify` \(`listcolumns`\)/.test(cell) && /`Contact`/.test(cell), () => cell);
+  }
+
+  // The rows that are NOT about element identity must be untouched — a convention pasted onto every row is noise,
+  // and noise in a task file is what makes a sub-agent skim it.
+  {
+    const t = { ...SAMPLE, rows: [
+      { label: "Form template", group: "Form", vk: "template", na: null },
+      { label: "a prose row", group: "Form", vk: null, na: null },
+      { label: "out of scope", group: "Pages", vk: null, na: "agreed boundary" },
+    ] };
+    const cells = closedByCells(renderTaskFile(t, SET)).map((c) => c[3]);
+    check("ENG-98554 (R1): a row whose vk is NOT about element identity keeps its plain `Closed by` cell — the convention goes where it applies, not onto every row",
+      () => cells[0] === "`--verify` (`template`)" && cells[1] === "an evidence record + a judge verdict"
+        && cells[2] === "N/A — agreed boundary",
+      () => cells);
+  }
+
+  // RISK1 — THE GUARD ON THIS WHOLE HALF. `rowsDigest` is what tells a `done` task recorded against an older set of
+  // deliverables from a current one. It hashes the SOURCE rows (label + verifier payload); if a RENDERING change
+  // ever reached it, every in-flight `done` task in every live migration folder would read as drifted and be
+  // re-dispatched. These are the digests this fixture produced on the base branch, before the `Closed by` cell
+  // changed — pinned as literals so the drift cannot be silent, and so a future change has to justify itself here.
+  {
+    const BASE_DIGESTS = {
+      "run|Reference cache": "7dc4797c",
+      "main|Scaffolding": "2f1b717a",
+      "child:G1|Page build": "d5619651",
+      "child:G1|Quality gates": "003c7905",
+      "child:C1|Page build": "24a07c06",
+      "child:C1|Quality gates": "2c4e90d7",
+      "main|Page build": "dc40af75",
+      "main|Quality gates": "3c7b982c",
+      "list|Page build": "440c66cc",
+      "list|Quality gates": "8d7e3d11",
+    };
+    const actual = Object.fromEntries(SET.tasks.map((t) => [t.pageKey + "|" + t.group, t.rowsDigest]));
+    check("ENG-98554 (RISK1): every task's `rowsDigest` is UNCHANGED from the base branch — the `Closed by` cell is rendered from the row, and the digest is taken from the SOURCE rows, so documenting the convention cannot mark an in-flight `done` task as drifted and re-dispatch it",
+      () => JSON.stringify(actual) === JSON.stringify(BASE_DIGESTS),
+      () => ({ expected: BASE_DIGESTS, actual }));
+  }
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -11,7 +11,7 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, bindingColumn, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -10907,6 +10907,172 @@ const n2TreeManifest = (titleA, titleB) => ({
     () => deduped.map((s) => `${s.role}/${s.schema}`).join(", "));
   check("dedupeStubScopes: two scopes that share a role and a schema but NOT their rows are kept apart — collapsing them would drop real work from the handoff",
     dedupeStubScopes([scope("child page", "P", ["a"]), scope("child page", "P", ["b"])]).length === 2);
+}
+
+// ===== ENG-98554 — field & rule identity resolved through the BINDING, not the element name =====
+// The defect, in one line: a Classic-to-Freedom build that followed its task file reported `0/19 expected fields
+// present` and `2/5 business rule(s) matched` on a page where all 19 columns and all 5 rule targets WERE present.
+// Two runs of the same section (ENG-98049, ENG-98487) burned repair rounds on it. The cause is that a builder names
+// a Freedom element `<Something>Field` and BINDS it to the column (`ContactField` -> `$PDS_Contact`), while the gate
+// matched the expected COLUMN against the element NAME. Five of the nineteen do not carry the column in the element
+// name at all (`RoleInCompanyField` -> `$PDS_Job`), so no naming heuristic could have closed them — only the binding.
+//
+// The fixture is the payload that run RECORDED, not a shape written to pass (see its README for provenance), so
+// these cases fail on the base branch for exactly the reason the ticket describes.
+{
+  const FIXDIR = path.join(FIX, "eng98487-applicants");
+  const RECORDED = JSON.parse(fs.readFileSync(path.join(FIXDIR, "built-main.json"), "utf8"));
+  const EXPECTED = JSON.parse(fs.readFileSync(path.join(FIXDIR, "expected.json"), "utf8"));
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const built = (entry) => ({ pages: { main: entry } });
+  const fieldsVk = { type: "fields", n: EXPECTED.fields.length, names: EXPECTED.fields };
+  const ruleVk = { type: "rule", n: EXPECTED.rules.length, names: EXPECTED.rules };
+  const MARK_DONE = "✅ Done";
+  const MARK_MISSING = "❌ MISSING";
+
+  // Every `{name, control}` pair on the recorded page — the map the variants below are derived from, and the proof
+  // the fixture really is bound-not-named: read OFF the fixture, never restated here, so a fixture that stopped
+  // being the defect case would fail this assertion instead of quietly making the next four vacuous.
+  const boundPairs = [];
+  (function walk(n) {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!n || typeof n !== "object") return;
+    if (typeof n.name === "string" && typeof n.control === "string") boundPairs.push({ name: n.name, control: n.control });
+    walk(n.items);
+  })(RECORDED.viewConfig);
+  const colOf = (control) => control.replace(/^\$(PDS[._])?/, "");
+
+  check("ENG-98554 fixture: the recorded ENG-98487 payload IS the bound-not-named case — every expected column is reachable through some element binding, and four element names do not contain their own column at all, so an element-name heuristic provably cannot close this page",
+    () => {
+      const cols = new Set(boundPairs.map((p) => colOf(p.control)));
+      const reachable = EXPECTED.fields.every((f) => cols.has(f));
+      const nameBlind = boundPairs.filter((p) => EXPECTED.fields.includes(colOf(p.control)) && !p.name.includes(colOf(p.control)));
+      return EXPECTED.fields.length === 19 && reachable && nameBlind.length === 4;
+    },
+    () => ({ pairs: boundPairs.length, nameBlind: boundPairs.filter((p) => EXPECTED.fields.includes(colOf(p.control)) && !p.name.includes(colOf(p.control))), unreachable: EXPECTED.fields.filter((f) => !boundPairs.some((p) => colOf(p.control) === f)) }));
+
+  check("ENG-98554 fixture: the recorded payload carries NO `viewModelConfig` and its page-scope `PDS` data source carries no `attributes` map — so AC 2 on this artifact is closed by the prefix-strip leg, and the test says which leg fired rather than leaving it implied",
+    () => RECORDED.viewModelConfig === undefined
+      && RECORDED.modelConfig?.dataSources?.PDS?.config?.attributes === undefined,
+    () => ({ keys: Object.keys(RECORDED), pds: RECORDED.modelConfig?.dataSources?.PDS }));
+
+  // T1 (R3) — THE DEFECT. The payload as recorded: 19 fields named `XxxField`, bound `$PDS_Xxx` (and for five of
+  // them `$Xxx`, with no `PDS_` at all). Nothing renamed on the stand — renaming is the explicit Jira out-of-scope.
+  {
+    const [mark, ev, outcome] = resolveVk(fieldsVk, verifyCtx(built(clone(RECORDED)), "main"));
+    check("T1 (R3): --verify on the ENG-98487 RECORDED payload reports 19/19 fields — every expected column is matched through the element it is BOUND to, with no rename applied to the built page",
+      outcome === "ok" && mark === MARK_DONE && /19 of 19/.test(ev), () => ({ mark, ev, outcome }));
+  }
+
+  // T1b (R4) — the rule half of the same defect. Each built rule targets an ELEMENT (`items: ["RejectReasonField"]`),
+  // so the expected column appears nowhere in the rule as a whole token. Two of the five matched on the base branch
+  // only by accident, off a human-written caption ("RejectReason required on…") — which is prose, not evidence.
+  {
+    const [mark, ev, outcome] = resolveRuleVk(ruleVk, verifyCtx(built(clone(RECORDED)), "main"));
+    check("T1b (R4): --verify on the ENG-98487 RECORDED payload reports 5/5 business rules — each rule target ELEMENT resolves to the column it governs, so `InternalRequest`, `Job` and `ExpertiseLevel` (the three that run reported missing) match",
+      outcome === "ok" && mark === MARK_DONE && /5 of 5/.test(ev), () => ({ mark, ev, outcome }));
+  }
+
+  // T2 (R3) — NO REGRESSION. The ENG-98049 post-rename payload: that run's rename sub-agent renamed every element to
+  // its bare column, which is what finally made its verify pass. Element-name matching must SURVIVE as the fallback,
+  // so a page built or repaired that way keeps closing — the widened matcher ADDS a leg, it does not swap one out.
+  {
+    const renamed = clone(RECORDED);
+    (function walk(n) {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!n || typeof n !== "object") return;
+      if (typeof n.name === "string" && typeof n.control === "string") { n.name = colOf(n.control); delete n.control; }
+      walk(n.items);
+    })(renamed.viewConfig);
+    const [mark, ev, outcome] = resolveVk(fieldsVk, verifyCtx(built(renamed), "main"));
+    check("T2 (R3): --verify on the POST-RENAME payload (elements renamed to the bare column, binding removed) still reports 19/19 — element-name matching is preserved as the fallback, so the ENG-98049 repair does not regress",
+      outcome === "ok" && mark === MARK_DONE && /19 of 19/.test(ev), () => ({ mark, ev, outcome }));
+  }
+
+  // T3 (R5) — ANTI-VACUITY, the guard that stops this fix becoming a false green. Widening what counts as identity
+  // is only safe while a WRONG identity still fails. One field is renamed AND re-bound to a column the plan never
+  // asked for: the expected column must go unmatched and be NAMED in the shortfall.
+  {
+    const wrong = clone(RECORDED);
+    (function walk(n) {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!n || typeof n !== "object") return;
+      if (n.name === "ContactField") { n.name = "SomeOtherField"; n.control = "$PDS_NotAnExpectedColumn"; }
+      walk(n.items);
+    })(wrong.viewConfig);
+    const [mark, ev, outcome] = resolveVk(fieldsVk, verifyCtx(built(wrong), "main"));
+    check("T3 (R5): a field bound to a column the plan did not ask for is NOT counted and the expected column is NAMED in the shortfall — the widened matcher cannot close a row vacuously, and the shortfall stays unverified rather than a hard MISSING (the deliberate policy this ticket does not change)",
+      outcome === "unverified" && mark !== MARK_MISSING && /18\/19/.test(ev) && /Contact/.test(ev),
+      () => ({ mark, ev, outcome }));
+  }
+
+  // T3b (R5) — the same guard for rules. Resolving a rule target through the element map widens its token set, so a
+  // rule that no longer governs the expected column must be proven unable to satisfy it.
+  {
+    const wrong = clone(RECORDED);
+    const rules = wrong.businessRules.rules || wrong.businessRules;
+    for (let i = 0; i < rules.length; i++) {
+      const s = JSON.stringify(rules[i]);
+      if (!s.includes("ExpertiseLevelField")) continue;
+      // Re-aim it at an element governing a DIFFERENT column, and drop the caption that happens to name the column.
+      rules[i] = JSON.parse(s.split("ExpertiseLevelField").join("OfficeField"));
+      rules[i].caption = "a caption that names no column";
+    }
+    const [mark, ev, outcome] = resolveRuleVk(ruleVk, verifyCtx(built(wrong), "main"));
+    check("T3b (R5): a rule re-aimed at an element that governs a DIFFERENT column stops satisfying its expected target — `ExpertiseLevel` is reported missing rather than closed by a rule that no longer governs it",
+      outcome === "unverified" && /4\/5/.test(ev) && /ExpertiseLevel/.test(ev), () => ({ mark, ev, outcome }));
+  }
+
+  // T5 — the uncheckable branch is NOT widened away. A page whose components carry neither an element name nor a
+  // resolvable binding is still NO evidence (unverified, and it says so), not a silent 0/N that reads as a measurement.
+  {
+    const nameless = { viewConfig: { items: [{ type: "crt.Input" }, { type: "crt.ComboBox" }] } };
+    const [mark, ev, outcome] = resolveVk(fieldsVk, verifyCtx(built(nameless), "main"));
+    check("T5 (R3): a built page whose components carry NEITHER an element name NOR a resolvable binding is still `identity NOT checked` — the extra leg adds evidence, it does not turn absent evidence into a measurement",
+      outcome === "unverified" && mark !== MARK_MISSING && /identity NOT checked/.test(ev), () => ({ mark, ev, outcome }));
+  }
+
+  // T6 (R3) — the AUTHORITATIVE leg, which the recorded payload cannot exercise because it carries no model. A
+  // payload that DOES supply `viewModelConfig` resolves through it, and it OUTRANKS the prefix strip: here the
+  // attribute is `$PDS_Contact` but the model maps it to `PDS.PrimaryContact`, so a strip-only matcher would answer
+  // `Contact` and this asserts the resolver answers `PrimaryContact` instead.
+  {
+    const modelled = { viewConfig: { items: [{ name: "AField", type: "crt.ComboBox", control: "$PDS_Contact" }] },
+      viewModelConfig: { attributes: { PDS_Contact: { modelConfig: { path: "PDS.PrimaryContact" } } } } };
+    const vk1 = { type: "fields", n: 1, names: ["PrimaryContact"] };
+    const [m1, e1, o1] = resolveVk(vk1, verifyCtx(built(modelled), "main"));
+    check("T6 (R3): `viewModelConfig` OUTRANKS the prefix strip — an attribute mapped to a column the strip would not produce resolves to the mapped column",
+      o1 === "ok" && m1 === MARK_DONE, () => ({ m1, e1, o1 }));
+    const vk2 = { type: "fields", n: 1, names: ["Contact"] };
+    const [, e2, o2] = resolveVk(vk2, verifyCtx(built(modelled), "main"));
+    check("T6 (R3): and the strip does NOT also fire behind it — the column the model does not name is reported missing, so the two legs are a precedence and not a union of guesses",
+      o2 === "unverified" && /0\/1/.test(e2), () => ({ e2, o2 }));
+  }
+}
+
+// ENG-98554 — `bindingColumn` at the unit level. The four cases above prove the GATE on a real payload; these pin
+// the RESOLVER's contract directly, which is the lowest level that can prove each leg and the only place the
+// precedence between them is visible in isolation.
+{
+  const bc = bindingColumn;
+  check("bindingColumn: the prefix-strip leg handles both spellings the platform emits — `$PDS_Contact` and the unprefixed `$Email` that sits beside it on the very same recorded page",
+    () => bc("$PDS_Contact") === "Contact" && bc("$PDS.Contact") === "Contact" && bc("$Email") === "Email",
+    () => [bc("$PDS_Contact"), bc("$PDS.Contact"), bc("$Email")]);
+  check("bindingColumn: `viewModelConfig` OUTRANKS the strip and is read under all three spellings the platform uses for an attribute's path (a bare string, `modelConfig.path`, a plain `path`)",
+    () => bc("$PDS_X", { attributes: { PDS_X: { modelConfig: { path: "PDS.Mapped" } } } }) === "Mapped"
+      && bc("$PDS_X", { attributes: { PDS_X: { path: "PDS.Mapped" } } }) === "Mapped"
+      && bc("$PDS_X", { attributes: { PDS_X: "PDS.Mapped" } }) === "Mapped",
+    () => bc("$PDS_X", { attributes: { PDS_X: { modelConfig: { path: "PDS.Mapped" } } } }));
+  check("bindingColumn: a model that says nothing about THIS attribute falls through to the strip rather than resolving to nothing — a partial `viewModelConfig` must not be worse than none at all",
+    () => bc("$PDS_Contact", { attributes: { PDS_Other: { path: "PDS.Other" } } }) === "Contact");
+  check("bindingColumn: a dotted remainder resolves to the column on THIS entity, not to the far side of the lookup — `Contact.Name` is the `Contact` column read through, which is the identity the plan expects for a linked read-only field",
+    () => bc("$PDS_Contact.Name") === "Contact" && bc("$Contact.Name") === "Contact");
+  check("bindingColumn: anything that is not a `$` binding, or that resolves to nothing usable, returns null so the caller falls back to the element NAME instead of inventing a column",
+    () => [bc("Contact"), bc(""), bc("$"), bc("$ "), bc(null), bc(undefined), bc(42), bc("$PDS_"), bc("$1Bad")]
+      .every((v) => v === null),
+    () => [bc("Contact"), bc("$"), bc("$PDS_"), bc("$1Bad")]);
+  check("bindingColumn: an attribute key that collides with an Object prototype member does not resolve off the prototype — `viewModelConfig` is data from a payload, and reading `attributes.constructor` must fall through to the strip",
+    () => bc("$constructor", {}) === "constructor" && bc("$PDS_toString", { attributes: {} }) === "toString");
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);

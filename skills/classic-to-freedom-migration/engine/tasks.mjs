@@ -570,8 +570,26 @@ function renderFrontMatter(task, set) {
   return ["---", ...keys.map((k) => `${k}: ${v[k]}`), "---"];
 }
 
+// ENG-98554 — the vk types whose verifier matches a built element against a COLUMN, and which therefore depend on
+// the builder having named and bound that element a particular way.
+const IDENTITY_VK = new Set(["fields", "rule", "listcolumns"]);
+// The condition those rows are accepted under, stated ON THE ROW. `--verify` now resolves a built field through its
+// binding, so a page that names elements `<Something>Field` passes on its own — but the convention still belongs
+// here, because the task file IS the prompt the building sub-agent reads, and a rule that lives only in the engine
+// is a rule that reaches the builder exactly never. Two runs of the same section (ENG-98049, ENG-98487) named every
+// element `<Something>Field`, left the identity carried entirely by the fallback, and burned a repair round each.
+//
+// GENERIC on purpose — one worked example, never this row's own column list. Two reasons, and both matter:
+//   · the plan's column names are already in the `Deliverable` column, and a second copy in the same table is a
+//     second thing to keep in step;
+//   · `closedByOf` reads the RENDERED row, which carries the vk TYPE and nothing else. Keeping it that way is what
+//     keeps this change clear of `rowsDigest` — the digest hashes the SOURCE rows, and a `done` task must never
+//     read as drifted (and be re-dispatched into a live migration) because the wording of a cell improved.
+const IDENTITY_RULE = "name each element for the COLUMN it shows and bind it to that column: element `Contact`"
+  + " bound to `$PDS_Contact`, **not** `ContactField`; a business rule targets that same column-named element";
+
 function closedByOf(row) {
-  if (row.vk) return "`--verify` (`" + row.vk + "`)";
+  if (row.vk) return "`--verify` (`" + row.vk + "`)" + (IDENTITY_VK.has(row.vk) ? " — " + IDENTITY_RULE : "");
   if (row.na) return "N/A — " + row.na;
   return "an evidence record + a judge verdict";
 }
