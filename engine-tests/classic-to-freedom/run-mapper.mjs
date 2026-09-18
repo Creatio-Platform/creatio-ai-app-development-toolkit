@@ -12303,7 +12303,10 @@ check("ENG-98556: `entitySchemaName` is derived from the PRIMARY data source, an
 check("ENG-98556: the `sectionRegistered` row spells the query as ARGUMENTS — the `SysModule.Id` resolution first, the `SysModule/Id` nav, `filters` not `filter`, the count from the rows, and `find-app` named as the answer that does not count",
   () => { const row = readPlan(lpRun, checklistOpts({})).reads.find((r) => r.reachabilityKey === "sectionRegistered");
     return !!row && /SysModuleInWorkplace/.test(row.what) && /SysModule\/Id/.test(row.what)
-      && /`filters`, NOT `filter`/.test(row.what) && /NOT `find-app`/.test(row.what); },
+      && /`filters`, NOT `filter`/.test(row.what) && /NOT `find-app`/.test(row.what)
+      // A migrated section resolves TWO SysModule rows in different workplaces; the row says which to keep.
+      && /SectionModuleSchemaUId/.test(row.what) && /SectionSchemaViewModule/.test(row.what)
+      && /SectionModuleV2/.test(row.what); },
   () => ({ what: readPlan(lpRun, checklistOpts({})).reads.find((r) => r.reachabilityKey === "sectionRegistered")?.what }));
 
 // ================================================================================================
@@ -12360,6 +12363,90 @@ check("ENG-98556: the `sectionRegistered` row spells the query as ARGUMENTS — 
   check("ENG-98556: …while BOTH files denying it is the agreement it looks like — `false`, a hard MISSING that opens a repair",
     () => bothDeny.problems.length === 0 && bothDeny.built.pages.main === false,
     () => ({ page: bothDeny.built.pages.main, problems: bothDeny.problems }));
+}
+
+// ================================================================================================
+// ENG-98556 follow-up review — the read-path guard, index order, half a denial, and kind drift.
+{
+  // A read may only answer out of `<dir>/reads/`. Both escape shapes: lexical `../` and an absolute path.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_esc_"));
+  const absOutside = path.join(os.tmpdir(), "c2f_abs_outside.json");
+  try {
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "reachability", file: "../../outside.json", reachabilityKey: "up", what: "w" },
+      { kind: "reachability", file: absOutside.split(path.sep).join("/"), reachabilityKey: "abs", what: "w" }] });
+    fs.writeFileSync(path.join(d, "..", "..", "outside.json"), JSON.stringify({ leaked: true }));
+    fs.writeFileSync(absOutside, JSON.stringify({ leaked: true }));
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: an index row naming a file OUTSIDE `reads/` is refused and named, never read — the index is a file from an earlier command, and a read may only answer out of the folder this run owns",
+      () => problems.length === 2 && problems.every((x) => /resolves outside/.test(x.why))
+        && built.reachability.up === undefined && built.reachability.abs === undefined,
+      () => ({ problems, reachability: built.reachability }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); fs.rmSync(absOutside, { force: true }); }
+}
+{
+  // The mis-copy check must not depend on which of a page's two files the index lists first.
+  const mismatch = (reads) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ord_"));
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads });
+    asWrite(d, "reads/01-meta-main.json", AS_META);
+    asWrite(d, "reads/02-bundle-main.json", { ...AS_BUNDLE, name: "UsrOther_FormPage" });
+    const r = assembleBuilt(d);
+    fs.rmSync(d, { recursive: true, force: true });
+    return r;
+  };
+  const METAROW = { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" };
+  const BUNDLEROW = { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" };
+  const metaFirst = mismatch([METAROW, BUNDLEROW]), bundleFirst = mismatch([BUNDLEROW, METAROW]);
+  check("ENG-98556: a `meta.json`/`bundle.json` pair naming two different schemas is caught in EITHER index order — nothing fixes which row comes first, and a guard that only fires one way composes the mis-copied page the other way",
+    () => [metaFirst, bundleFirst].every((r) => r.problems.length === 1
+      && /two different pages/.test(r.problems[0].why) && r.built.pages.main === undefined),
+    () => ({ metaFirst: metaFirst.problems, bundleFirst: bundleFirst.problems,
+      metaFirstPage: metaFirst.built.pages.main, bundleFirstPage: bundleFirst.built.pages.main }));
+}
+{
+  // One `get-page` call answers once, so `false` in one file beside an unwritten sibling is not a denial.
+  const half = (denied, other) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_half_"));
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" }] });
+    asWrite(d, denied, "false");
+    if (other) asWrite(d, other.file, other.body);
+    const r = assembleBuilt(d);
+    fs.rmSync(d, { recursive: true, force: true });
+    return r;
+  };
+  const bundleDenied = half("reads/02-bundle-main.json"), metaDenied = half("reads/01-meta-main.json");
+  check("ENG-98556: a page denied by ONE file while the other was never written is NOT CHECKED, never MISSING — a denial comes from both files, and `false` off a single one sends a repair where a re-read was owed",
+    () => [bundleDenied, metaDenied].every((r) => r.built.pages.main === undefined
+      && r.problems.some((x) => /a denial comes from BOTH files/.test(x.why))),
+    () => ({ bundleDenied: bundleDenied.problems.map((x) => x.why), bundleDeniedPage: bundleDenied.built.pages.main,
+      metaDenied: metaDenied.problems.map((x) => x.why), metaDeniedPage: metaDenied.built.pages.main }));
+  // A sibling carrying real data is the sharper reading of the same key, so it wins.
+  const contradicted = half("reads/01-meta-main.json", { file: "reads/02-bundle-main.json", body: AS_BUNDLE });
+  check("ENG-98556: …while a sibling carrying real data still reads as the copy error it is — the sharper diagnosis wins over `the other file was never written`, which is also true of that key",
+    () => contradicted.problems.length === 1 && /two files disagree/.test(contradicted.problems[0].why)
+      && contradicted.built.pages.main === undefined,
+    () => ({ problems: contradicted.problems.map((x) => x.why) }));
+}
+{
+  // A kind the read plan emits that the composing half has no entry for must be reported, not skipped.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_kind_"));
+  try {
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" },
+      { kind: "profileCards", file: "reads/03-profile-main.json", pageKey: "main", what: "p" }] });
+    asWrite(d, "reads/01-meta-main.json", AS_META);
+    asWrite(d, "reads/02-bundle-main.json", AS_BUNDLE);
+    asWrite(d, "reads/03-profile-main.json", { some: "answer" });
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a read kind the composing half has no branch for is NAMED, not silently skipped — the file is on disk and answered, and dropping it would leave its rows unconfirmed with nothing saying why",
+      () => problems.some((x) => /cannot compose/.test(x.why) && /profileCards/.test(x.what))
+        && built.pages.main.viewConfig !== undefined,
+      () => ({ problems, pages: Object.keys(built.pages) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
 }
 
 // ================================================================================================

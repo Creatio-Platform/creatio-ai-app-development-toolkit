@@ -171,21 +171,63 @@ const READ_LABEL = {
   dashboards: () => "the dashboard migration log",
 };
 
-// A page read answers for a PAGE key, so `false` on either of its files is a denial of that page. The other
-// kinds have no `false` form: their value is whatever the file holds.
+// `false` on one page file is PART of a denial; both files have to say it (see `resolveDenials`). The other
+// kinds have no `false` form.
 const PAGE_KINDS = new Set(["pageMeta", "pageBundle"]);
 
+// One entry per kind, keyed the same as `READ_LABEL`. No default arm: an unmapped kind has no entry and is
+// reported rather than dispatched.
+const COMPOSE = {
+  pageMeta: composePageMeta,
+  pageBundle: composePageBundle,
+  businessRules: (r, j, acc) => { acc.pageOf(r.pageKey).businessRules = j; },
+  reachability: (r, j, acc) => { acc.reachability[r.reachabilityKey] = j; },
+  dashboards: composeDashboards,
+};
+
+// Which of a page's files answered `false`. A set, not a flag: the denial is complete only when both did.
+function noteDenial(acc, r) {
+  let denied = acc.absent.get(r.pageKey);
+  if (!denied) acc.absent.set(r.pageKey, denied = new Set());
+  denied.add(r.kind);
+}
+
 function composeOneRead(dir, r, acc) {
-  const label = READ_LABEL[r.kind];
-  if (!label) return;
+  const compose = COMPOSE[r.kind], label = READ_LABEL[r.kind];
+  // An unknown kind is drift between the read plan and this half. Report it; never return silently.
+  if (!compose || !label) {
+    acc.problems.push({ file: r.file, what: `a \`${r.kind}\` read`,
+      why: "names a read kind this engine cannot compose — the read plan and the half that reads it back"
+        + " disagree. Re-cut the plan with `--reads <dir>` on this engine build" });
+    return;
+  }
   const j = readJson(dir, r.file, acc.problems, label(r));
   if (j === null) return;
-  if (j === false && PAGE_KINDS.has(r.kind)) { acc.absent.add(r.pageKey); return; }
-  if (r.kind === "pageMeta") composePageMeta(r, j, acc);
-  else if (r.kind === "pageBundle") composePageBundle(r, j, acc);
-  else if (r.kind === "businessRules") acc.pageOf(r.pageKey).businessRules = j;
-  else if (r.kind === "reachability") acc.reachability[r.reachabilityKey] = j;
-  else composeDashboards(r, j, acc);
+  if (j === false && PAGE_KINDS.has(r.kind)) { noteDenial(acc, r); return; }
+  compose(r, j, acc);
+}
+
+// A denied page survives the drop sweep, but only when BOTH its page files answered `false`. Two ways they do
+// not, checked in this order because both can be true of one key:
+//   sibling carries that schema's own data -> copy error;
+//   sibling silent                         -> half a read.
+// Both kinds unconditionally, never the count the index happened to carry: a short index must not weaken it.
+function resolveDenials(acc, pages) {
+  for (const [k, denied] of acc.absent) {
+    if (acc.gotBundle.has(k) || acc.gotMeta.has(k)) {
+      acc.problems.push({ file: `${READS_DIR}/…-${k}`, what: `\`${k}\``,
+        why: "its two files disagree — one says the stand has no such schema while the other carries that schema's"
+          + " own data. Re-copy both from the SAME `get-page` call" });
+      delete pages[k];
+    } else if (denied.size !== PAGE_KINDS.size) {
+      const silent = [...PAGE_KINDS].filter((kind) => !denied.has(kind));
+      acc.problems.push({ file: `${READS_DIR}/…-${k}`, what: `\`${k}\``,
+        why: `is denied by its ${[...denied].join(" and ")} file while ${silent.join(" and ")} was never written`
+          + " — a denial comes from BOTH files, because one `get-page` call answers once. Write `false` into both"
+          + " if the stand has no such schema, or re-read the page" });
+      delete pages[k];
+    } else pages[k] = false;
+  }
 }
 
 // THE MIS-COPY CHECK, run AFTER every read: `meta.json` for one schema beside `bundle.json` for another is an
@@ -222,7 +264,7 @@ export function assembleBuilt(dir, expect = null) {
   const pages = {};
   const acc = {
     problems, pages, reachability: {}, dashboards: null,
-    absent: new Set(),   // page keys the stand answered `false` for — genuinely not built, not unread
+    absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
     // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
     // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
     gotBundle: new Set(), gotMeta: new Set(),
@@ -236,20 +278,8 @@ export function assembleBuilt(dir, expect = null) {
   // kills the run before `problems` prints. Drop both to an omitted key (⚠ unverified, exit 2) and let `problems`
   // name the file. SYMMETRIC on purpose: the two files are separate copies out of one `get-page` call.
   for (const [k, e] of Object.entries(pages)) if (e.viewConfig == null || !GUID_RE.test(String(e.schemaUId ?? ""))) delete pages[k];
-  // AFTER the sweep: a denied page is an answer, not a half-read entry, so it survives what drops the others.
-  // Unless its two files DISAGREE — one denying the schema while the other carries that schema's own data. One
-  // `get-page` call cannot answer both ways, so the pair has no legitimate reading: a copy error, named and the
-  // key dropped, rather than letting whichever file was read last decide.
-  for (const k of acc.absent) {
-    if (acc.gotBundle.has(k) || acc.gotMeta.has(k)) {
-      problems.push({ file: `${READS_DIR}/…-${k}`, what: `\`${k}\``,
-        why: "its two files disagree — one says the stand has no such schema while the other carries that schema's"
-          + " own data. Re-copy both from the SAME `get-page` call" });
-      delete pages[k];
-      continue;
-    }
-    pages[k] = false;
-  }
+  // After the sweep: a denial outlives what drops a half-read entry.
+  resolveDenials(acc, pages);
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
   const built = { pages, reachability: acc.reachability };
