@@ -286,7 +286,7 @@ function decisionsSection(open, pageName, repairBuilt) {
       else if (fallback) text = `${cell(fallback)} *(from the row's notes — the agent wrote no \`Decision needed\` line)*`;
       else text = "⚠ the agent recorded `needs-decision` but did not state the question — read the row's notes";
     }
-    L.push(`| ${i + 1} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${text}${laterNote} | ${where(it)} |`);
+    L.push(`| ${i + 1} | ${pageName(it.row.pageKey || it.task.pageKey)} | ${cell(it.row.label)} | ${text}${laterNote} | ${where(it)} |`);
   });
   return L;
 }
@@ -304,7 +304,7 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
       "| # | Page | Plan item | Reason the agent gave | Recorded in |", "| --- | --- | --- | --- | --- |");
     without.forEach((b, i) => {
       const miss = b.refs.missing.length ? ` — ⚠ cites ${b.refs.missing.join(", ")}, not found in decisions.md / the plan's Adjustments` : "";
-      L.push(`| ${i + 1} | ${pageName(b.task.pageKey)} | ${cell(b.row.label)} | ${cell(brief(b.row.outcomeReason, 160))}${miss} | ${where(b)} |`);
+      L.push(`| ${i + 1} | ${pageName(b.row.pageKey || b.task.pageKey)} | ${cell(b.row.label)} | ${cell(brief(b.row.outcomeReason, 160))}${miss} | ${where(b)} |`);
     });
     L.push("");
   }
@@ -314,11 +314,11 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
     let i = 0;
     for (const b of withRef) {
       const d = b.refs.resolved.map((r) => `**${r.ref}** — ${cell(r.title)}`).join("; ");
-      L.push(`| ${++i} | ${pageName(b.task.pageKey)} | ${cell(b.row.label)} | ${d} | ${where(b)} |`);
+      L.push(`| ${++i} | ${pageName(b.row.pageKey || b.task.pageKey)} | ${cell(b.row.label)} | ${d} | ${where(b)} |`);
     }
     for (const it of decidedNotBuilt) {
       const d = it.decidedBy.refs.resolved.map((r) => `**${r.ref}** — ${cell(r.title)}`).join("; ");
-      L.push(`| ${++i} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${enc(it.task.file)}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
+      L.push(`| ${++i} | ${pageName(it.row.pageKey || it.task.pageKey)} | ${cell(it.row.label)} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${enc(it.task.file)}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
     }
   }
   return L;
@@ -441,7 +441,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const gaps = planGaps(result);
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
-  const keyOf = (it) => `${it.task.pageKey} ${labelKey(it.row.label)}`;
+  // ENG-99740 — key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
+  // taskRows' lookup join on (page, label) and state cannot bleed across same-labeled rows on different pages.
+  const keyOf = (it) => `${it.row.pageKey || it.task.pageKey} ${labelKey(it.row.label)}`;
   const withLabels = (items) => { const ks = new Set(items.map(keyOf)); ks.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return ks; };
   const keys = { notBuilt: withLabels(openNotBuilt), decided: withLabels(decidedNotBuilt), unbacked: withLabels(unbackedBoundaries) };
   const perTask = new Map(tasks.map((t) => [t.id, taskRows(t, vidx, keys)]));
