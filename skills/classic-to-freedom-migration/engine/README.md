@@ -155,7 +155,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   a RENAMED field raises drift even though neither the caption nor the count moved.
 - **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
   its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
-  `Quality gates` review is its last task. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  `Quality gates` review is its last task. Base-field overrides sit between the layout that creates the fields and
+  the coverage that counts them: they are changes APPLIED ONTO the template's existing fields, so the fields must
+  exist first and the counts must see the result. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
   (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
   and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as

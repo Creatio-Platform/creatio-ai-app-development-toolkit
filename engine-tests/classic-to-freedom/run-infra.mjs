@@ -241,6 +241,20 @@ const planOnlyFields = changeSetFields.filter((f) =>
 check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a checklist builder — a field only the plan reads reaches no build task",
   changeSetFields.length > 20 && planOnlyFields.length === 0,
   () => ({ planOnlyFields, exempt: [...PLAN_ONLY_CHANGESET_FIELDS], fieldsFound: changeSetFields.length }));
+// Base-field overrides are APPLIED ONTO the template's existing fields, so they build after the fields are laid
+// out and before coverage counts them. Pinned on the phase table itself: the ordering is the whole reason the
+// group has a phase of its own, and nothing else fails if it drifts.
+const tasksSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
+const phaseOfGroup = (title) => {
+  const line = tasksSrc.split(NL).find((l) => l.includes(title) && l.includes("],"));
+  const m = line && /(\d+)\]/.exec(line);
+  return m ? Number(m[1]) : null;
+};
+check("tasks.mjs: `Form — Base-field overrides` builds strictly between the layout that creates the fields and the coverage that counts them",
+  phaseOfGroup("Form — Layout (by tab/region)") < phaseOfGroup("Form — Base-field overrides")
+    && phaseOfGroup("Form — Base-field overrides") < phaseOfGroup("Form — Coverage (verified)"),
+  () => ({ layout: phaseOfGroup("Form — Layout (by tab/region)"), overrides: phaseOfGroup("Form — Base-field overrides"),
+    coverage: phaseOfGroup("Form — Coverage (verified)") }));
 
 /* ================================================================================================
    Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level

@@ -1782,6 +1782,14 @@ check("a `<Section>::<method>` behaviour answer describes the section's OWN row 
   secDescribedRow.includes("Points the help button") && secDescribedRow.includes("A new user opens contextual help")
     && secDescribedRow.includes("sec/C02"),
   () => secDescribedRow || "no section method row rendered");
+// The list fold runs against the SAME index as the page fold, and its return is dropped on purpose. Pin both
+// halves: the section answer reaches the row, and the run's accounting still reports the PAGE's own fold only —
+// capturing the second return would change what `described` means without any consumer asking for it.
+check("the second fold does not alter the run's accounting: the section answer lands on its row while `described` stays the page's",
+  /Points the help button/.test(secDescribedRow)
+    && !(secDescribed.behaviourIndex.described || []).includes("initContextHelp")
+    && !(secDescribed.behaviourIndex.unmatched || []).includes("A1Section::initContextHelp"),
+  () => ({ described: secDescribed.behaviourIndex.described, unmatched: secDescribed.behaviourIndex.unmatched }));
 // …including when `planMeta.sectionSchema` is ABSENT. The digest labels that scope `Section`, so the answers come
 // back keyed `Section::<method>`; a second fallback spelling here resolves nothing while `unmatched` stays empty.
 const secNoSchema = runMigration({ entity: "Applicant", planMeta: { listTemplate: "ListFreedomTemplate" },
@@ -1800,7 +1808,7 @@ check("the section scope label is ONE value: with no `planMeta.sectionSchema` th
 // positioned list ops, and the same document would otherwise carry both the ops and a port-it row.
 const secViewRun = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "A1Section", listTemplate: "ListFreedomTemplate" },
   schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
-  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){var c=this.callParent(arguments);c.Name={path:"Name"};return c;},ownHelper:function(){this.set("X",1);}},diff:[]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",["GridUtilitiesV2"],function(){return{entitySchemaName:"Applicant",methods:{getGridDataColumns:function(){var c=this.callParent(arguments);c.Name={path:"Name"};return c;},ownHelper:function(){this.set("X",1);},onActiveRowChange:function(){this.callParent(arguments);},getSupplierBillingInfo:function(){return this.get("SupplierBillingInfo");}},diff:[]};});' }],
 });
 const secViewRows = checklistGroups(secViewRun, {}).filter((g) => g.baseTitle === "List — Custom methods")
   .flatMap((g) => g.rows).map((r) => r.label);
@@ -1808,6 +1816,14 @@ check("a section method the list analyzer consumes is marked as already mapped, 
   secViewRows.some((l) => /getGridDataColumns/.test(l) && /already mapped into the list page/.test(l))
     && secViewRows.some((l) => /ownHelper/.test(l) && !/already mapped/.test(l)),
   () => secViewRows);
+// The ticket names twelve section behaviours; the fold is name-agnostic, so the traceability to those identifiers
+// is what a test carries. These three had no assertion by name anywhere.
+const secNamed = checklistGroups(secViewRun, {}).flatMap((g) => g.rows.map((r) => [g.baseTitle, r.label]));
+check("the section behaviours named by the ticket each reach a row — the fold is name-agnostic, so the names are pinned here",
+  ["onActiveRowChange", "getSupplierBillingInfo"].every((m) =>
+    secNamed.some(([g, l]) => g === "List — Custom methods" && l.includes("`" + m + "`")))
+    && secNamed.some(([g, l]) => g === "⚠ Other declared logic worklist" && /GridUtilitiesV2/.test(l)),
+  () => secNamed);
 // The section's decisions are its MEMBERS only. `mapToFreedom` maps a record page, so its view-shaped kinds
 // describe regions a list page has not got — and on the degraded key they collide with the form page's own ids.
 const secKinds = [...new Set((secViewRun.listChangeSet?.needsDecision || []).map((d) => d.kind))];
@@ -3539,6 +3555,21 @@ check("formless: the `⚠ verify` Call-legend definition renders when an empty c
   check("ENG-96327 logicOnly: the Base-field overrides section renders normally but is suppressed under logicOnly",
     /#### Base-field overrides/.test(renderDesignSpec(bfoCs, { embedded: true }))
       && !/#### Base-field overrides/.test(renderDesignSpec(bfoCs, { embedded: true, logicOnly: true })));
+}
+// …and the same overrides are a BUILD ROW, not only a plan section: the field is rendered by the plan and read by
+// a checklist builder, which is the parity the field guard in run-infra pins generally.
+{
+  const bfoCs = { entity: "X", changeSet: { baseFieldOverrides: [
+    { field: "Amount", change: "hide it" }, { field: "Owner", change: "move to column 2, row 1" }] } };
+  const g = checklistGroups(bfoCs, {}).filter((x) => x.baseTitle === "Form — Base-field overrides");
+  check("a non-empty `baseFieldOverrides` yields one build row per override, carrying the field and the change",
+    g.length === 1 && g[0].rows.length === 2
+      && /Base field `Amount` — hide it/.test(g[0].rows[0].label)
+      && /Base field `Owner` — move to column 2, row 1/.test(g[0].rows[1].label),
+    () => g.map((x) => [x.pageKey, x.rows.map((r) => r.label)]));
+  check("an EMPTY `baseFieldOverrides` emits no group at all — an empty group would be an unclosable build unit",
+    checklistGroups({ entity: "X", changeSet: { baseFieldOverrides: [] } }, {})
+      .filter((x) => x.baseTitle === "Form — Base-field overrides").length === 0);
 }
 
 // #7c — a child whose detail names a REAL Classic edit page (getEditPageName) gets a MANDATORY-map slot
