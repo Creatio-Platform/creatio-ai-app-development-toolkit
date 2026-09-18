@@ -2195,8 +2195,8 @@ const LAYOUT_WIDGET_TYPE = [[/progress/i, "crt.EntityStageProgressBar"], [/feed|
   [/attach/i, "crt.FileList"], [/approval|visa/i, "crt.ApprovalList"], [/communication/i, "crt.CommunicationOptions"]];
 function layoutWidgetType(w) {
   if (String(w.freedom || "").startsWith("crt.")) return String(w.freedom).split(/\s|\(/)[0] || "";
-  for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return t;
-  return "";   // S3800 — a string in every path; the only consumer (`if (extra.widgetType)`) treats "" as "none"
+  for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return String(t);
+  return "";   // S3800 — a string in every path (the tuple infers `RegExp | string`, so wrap `t`); "" means "none"
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
@@ -3770,6 +3770,23 @@ function tabMatch(container, caption) {
   const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
   return words.every((w) => toks.has(w)) ? 2 : 0;
 }
+// A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
+function judgeRegion(c, where, vk, want) {
+  const short = [];
+  if (vk.fields && c.fields.length < vk.fields) short.push(`${c.fields.length}/${vk.fields} fields`);
+  if (vk.lists && c.lists.length < vk.lists) short.push(`${c.lists.length}/${vk.lists} related lists`);
+  for (const w of vk.widgets || []) if (!c.widgets.includes(w)) short.push(`no ${w}`);
+  if (!short.length) return ["✅ Done", `${where}: ${want.join(" · ") || "present"}`, "ok"];
+  return ["⚠ verify", `${where}: ${short.join(", ")}`, "unverified"];
+}
+// The header region is judged on WIDGETS only (fields/lists live in the body), against the page's flat ops.
+function resolveLayoutHeader(vk, ctx) {
+  const present = new Set(ctx.ops.map((o) => o.type));
+  const missW = (vk.widgets || []).filter((w) => !present.has(w));
+  if (!missW.length) return ["✅ Done", `header: ${(vk.widgets || []).join(" · ") || "present"}`, "ok"];
+  const noList = missW.map((w) => "no " + w).join(", ");
+  return ["⚠ verify", `header: ${noList}`, "unverified"];
+}
 export function resolveLayoutVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "this region of the page");
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the region cannot exist", "missing"];
@@ -3777,21 +3794,8 @@ export function resolveLayoutVk(vk, ctx) {
   if (vk.fields) want.push(`${vk.fields} field${vk.fields === 1 ? "" : "s"}`);
   if (vk.lists) want.push(`${vk.lists} related list${vk.lists === 1 ? "" : "s"}`);
   for (const w of vk.widgets || []) want.push(w);
-  const judge = (c, where) => {
-    const short = [];
-    if (vk.fields && c.fields.length < vk.fields) short.push(`${c.fields.length}/${vk.fields} fields`);
-    if (vk.lists && c.lists.length < vk.lists) short.push(`${c.lists.length}/${vk.lists} related lists`);
-    for (const w of vk.widgets || []) if (!c.widgets.includes(w)) short.push(`no ${w}`);
-    if (!short.length) return ["✅ Done", `${where}: ${want.join(" · ") || "present"}`, "ok"];
-    return ["⚠ verify", `${where}: ${short.join(", ")}`, "unverified"];
-  };
-  if (vk.region === "header") {
-    const present = new Set(ctx.ops.map((o) => o.type));
-    const missW = (vk.widgets || []).filter((w) => !present.has(w));
-    if (!missW.length) return ["✅ Done", `header: ${(vk.widgets || []).join(" · ") || "present"}`, "ok"];
-    const noList = missW.map((w) => "no " + w).join(", ");
-    return ["⚠ verify", `header: ${noList}`, "unverified"];
-  }
+  const judge = (c, where) => judgeRegion(c, where, vk, want);
+  if (vk.region === "header") return resolveLayoutHeader(vk, ctx);
   // A payload with NO containers at all (the legacy flat `ops` shape, or a viewConfig with no container nodes)
   // cannot place anything: measure the region against the page as a whole and say so, rather than fail every
   // region row of a page whose fields and grids are all present.

@@ -69,7 +69,7 @@ function rowNotesBlock(notes, n) {
 }
 // Markdown emphasis and list bullets stripped: the fallback is quoted into a table cell, where `**` fragments
 // and `- ` prefixes read as noise. Code spans are kept (they name the members the decision is about).
-const plainText = (s) => String(s || "").replaceAll("*", "").replaceAll("__", "").replace(/^\s*[-*>]+\s+/gm, "").replace(/\s+/g, " ").trim();
+const plainText = (s) => String(s || "").replaceAll("*", "").replaceAll("__", "").replace(/^[>\s-]+/gm, "").replace(/\s+/g, " ").trim();
 function decisionFallback(notes, n) {
   const block = rowNotesBlock(notes, n);
   const sentences = plainText(block).split(/(?<=[.!?])\s+/);
@@ -82,7 +82,10 @@ function readDecisions(migrationDir) {
   const out = new Map();
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)[\s—–:.-]*([^\s—–:.-].*)$/gm)) out.set(`D${m[1]}`, m[2].trim());
+    for (const dl of text.split(/\r?\n/)) {
+      const dm = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
+      if (dm) out.set(`D${dm[1]}`, dm[2].replace(/^[\s—–:.-]+/, "").trim());
+    }
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
