@@ -3568,6 +3568,20 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
           && rep4.counts.openNotBuilt === 0 && !sec1.includes(shared)
           && !rep4.reasons.some((r) => /recorded NOT BUILT/.test(r)),
         () => ({ counts: rep4.counts, reasons: rep4.reasons, sec1 }));
+
+      // decision B: a code mentioned as an INCIDENTAL comparison ("like D7 …") is NOT a load-bearing citation, so
+      // the boundary stays a question (unbacked) even though decisions.md records D7 — while a real "per D7" does
+      // authorise it. Guards against an accidental/parallel mention flipping a boundary to closed.
+      const boundary = (reason) => ({ id: "bx", file: "bx.md", group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
+        rows: [{ label: "Card action - Export", outcomeKind: "n-a", outcome: "n-a - " + reason, outcomeReason: reason, na: null }] });
+      const repIncidental = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build, like D7 in the Leads section")], planVersion: RUN.planVersion }, dir: d2 });
+      const repCited = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build here, per D7")], planVersion: RUN.planVersion }, dir: d2 });
+      check("ENG-99126 decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
+        () => repIncidental.counts.unbackedBoundaries === 1
+          && repIncidental.reasons.some((r) => /boundary closed by the agent with NO recorded decision/.test(r))
+          && repCited.counts.unbackedBoundaries === 0
+          && !repCited.reasons.some((r) => /NO recorded decision/.test(r)),
+        () => ({ incidental: repIncidental.counts, cited: repCited.counts }));
     }
   }
 

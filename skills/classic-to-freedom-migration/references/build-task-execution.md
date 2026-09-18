@@ -39,6 +39,7 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    **Append it with an in-place edit — never a shell heredoc, never a whole-file write.** A note put through the
    shell breaks on quoting and on command-length limits, and the table above your notes is the engine's: rewriting
    the file drops the `Outcome` cells your status is computed from.
+   **To have the final report count an `n-a` as an APPROVED boundary (not an open question), cite the decision in the reason as a load-bearing reference** — `per D7`, `D7: …`, `D7 (…)`, `D18 user decision: …`, or `Adjustment 2 …` — matching a heading in `decisions.md` (`## D7 — <title>` / `## D7: <title>`) or a numbered item under the plan's `### Adjustments`. A code mentioned only as a comparison (`like D7`, `similar to D7`) does NOT count. The report shows the cited decision's title beside the row, so cite the one that actually authorises THIS row.
 4. **A row you could not build is `not-built`, never a cell left blank and never absorbed into `done`.** Every row
    `built` or `n-a` computes `done`; any row `not-built` — or left unaccounted — computes `partial`. `partial` does
    not hold up the tasks that depend on yours; it holds up calling the RUN finished, and the engine names each

@@ -93,9 +93,19 @@ function readDecisions(migrationDir) {
 }
 // The decision references a reason carries: `D4`, `D18 user decision`, `Adjustment 2`. `resolved` is what the
 // files say those are; `missing` is a reference nothing recorded.
+// A citation is LOAD-BEARING unless it is an incidental comparison/example ("like D3", "similar to D3", "as in
+// D3", "cf D3") — those name a decision to draw a parallel, not to authorise THIS row. Everything else counts, so
+// the real citation forms all stand ("D4 (detail…)", "per D7", "D18 user decision:", "Adjustment 2 evidence…").
+// This stops an accidental mention from closing a boundary; it does NOT verify the decision is ABOUT this row —
+// the report shows the decision's title beside the boundary so a reader catches a wrong-topic citation by eye.
+const INCIDENTAL_BEFORE = /\b(like|similar to|as in|cf\.?|e\.?g\.?|for example|compared? (?:to|with))\s*$/i;
 function decisionRefs(reason, decisions) {
-  const refs = [...String(reason || "").matchAll(/\b(D\d{1,3})\b|\b(Adjustment\s+\d+)\b/gi)]
-    .map((m) => m[1] ? m[1].toUpperCase() : m[2].replace(/\s+/g, " ").replace(/^adjustment/i, "Adjustment"));
+  const text = String(reason || "");
+  const refs = [];
+  for (const m of text.matchAll(/\b(D\d{1,3})\b|\b(Adjustment\s+\d+)\b/gi)) {
+    if (INCIDENTAL_BEFORE.test(text.slice(Math.max(0, m.index - 16), m.index))) continue;
+    refs.push(m[1] ? m[1].toUpperCase() : m[2].replace(/\s+/g, " ").replace(/^adjustment/i, "Adjustment"));
+  }
   const uniq = [...new Set(refs)];
   return { resolved: uniq.filter((r) => decisions.has(r)).map((r) => ({ ref: r, title: decisions.get(r) })),
     missing: uniq.filter((r) => !decisions.has(r)) };
