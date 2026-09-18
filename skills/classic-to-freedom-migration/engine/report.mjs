@@ -379,7 +379,7 @@ function taskTableRow(t, i, rows, pageName) {
   const extra = count((r) => r.state === "extra");
   const nb = rows.filter((r) => r.state === "not-built").map((r) => `${cell(r.label)} *(needs a decision)*`);
   const dec = rows.filter((r) => r.state === "decided").map((r) => `${cell(r.label)} *(by decision)*`);
-  const mark = t.unread ? "⚠ unread" : statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued");
+  const mark = t.unread ? "⚠ unread" : cell(statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued"));
   const extraNote = extra ? ` (+${extra} not in the plan)` : "";
   const handCell = handCellText(hand, extra, extraNote);
   const confirmedCell = machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—";
@@ -402,7 +402,7 @@ const SETTLED_STATES = new Set(["machine", "judge", "na", "decided", "extra"]);
 function openRowHow(r, t, checks) {
   if (r.state === "not-built") return "decision needed — see section 1";
   if (r.state === "boundary") return "confirm the boundary — see section 2";
-  if (r.state === "open" && (!r.outcome || r.outcome === "—")) return `— no outcome recorded yet (task ${statusMark(t.status)})`;
+  if (r.state === "open" && (!r.outcome || r.outcome === "—")) return `— no outcome recorded yet (task ${cell(statusMark(t.status))})`;
   if (r.state === "open") return r.v ? `${r.v.status} — ${cell(brief(r.v.evidence, 140))}` : "⚠ recorded by the agent but not in this run's plan-vs-built table";
   const c = checks.get(r.n);
   return c ? `☐ confirm manually — ${cell(c)}` : `☐ confirm manually — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
@@ -418,7 +418,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   for (const t of needs) {
     const rows = (perTask.get(t.id) || []).filter((r) => !SETTLED_STATES.has(r.state));
     const checks = markers(t.notes, CHECK_MARKER);
-    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${enc(t.file)})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
+    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${enc(t.file)})** — ${pageName(t.pageKey)} · ${cell(statusMark(t.status))}`, "",
       "| # | Plan item | Build agent recorded | What closes it |", "| --- | --- | --- | --- |");
     for (const r of rows) L.push(`| ${r.n} | ${cell(r.label)} | ${cell(r.outcome)} | ${openRowHow(r, t, checks)} |`);
     L.push("");
@@ -429,7 +429,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
-export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null }) {
+export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
   const ledgerRefused = set?.refused ? (set.problems || []).join("; ") || "the task folder could not be read" : null;
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
@@ -453,6 +453,18 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
+  // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
+  // and must not leave plan rows unaccounted while the run reads COMPLETE.
+  const naUnbacked = tasks.filter((t) => t.status === S_NA
+    && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
+  if (naUnbacked.length) reasons.push(`${plural(naUnbacked.length, "task")} closed n/a with no recorded decision (or with rows left unaccounted)`);
+  // The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read from
+  // `result`, the dispatch gate passed in from migrate.mjs — so the report can never read ✅ COMPLETE on a rejected run.
+  if (result?.gate?.blocked) reasons.push("the build gate is BLOCKED — the plan is not approvable");
+  if (result?.structure && !result.structure.complete) reasons.push("the plan STRUCTURE is incomplete — not ready to build");
+  if (result?.coverage && !result.coverage.complete) reasons.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
+  if (result?.listGate?.blocked) reasons.push("the LIST page gate is BLOCKED — the list page is not approvable");
+  if (gates?.dispatchFailed) reasons.push("the DISPATCH gate failed — a task was closed with no dispatch token");
   const complete = reasons.length === 0;
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const verdict = complete
@@ -464,7 +476,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const md = [
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
-    `> Plan \`${set?.planVersion || result?.planVersion || "—"}\` · task folder \`${esc(String(dirLabel || dir || ""))}\`. Written by`
+    `> Plan \`${esc(String(set?.planVersion || result?.planVersion || "—"))}\` · task folder \`${esc(String(dirLabel || dir || ""))}\`. Written by`
       + " `migrate.mjs --verify --built <file> --tasks <dir>` from the task files AND the built pages — present it"
       + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",

@@ -3554,6 +3554,29 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
     () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
+  // ENG-99126 (3rd review RC-9): the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
+  // its rows built, a green machine table, a gate-clean run ⇒ complete:true / ✅ COMPLETE with no gate/dispatch/n-a
+  // reason (the pass path every CLI golden's exit-2 assertion left unproven).
+  const closedSet = { planVersion: RUN.planVersion, tasks: [
+    { id: "c-a", file: "c-a.md", group: "Form build", pageKey: "main", status: "done", notes: "", rows: [{ label: "Form page", outcomeKind: "built", outcome: "built" }] },
+    { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
+  ] };
+  const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
+  check("ENG-99126 renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
+    () => passRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
+    () => ({ complete: passRep.complete, reasons: passRep.reasons }));
+
+  // ENG-99126 (3rd review RC-7): a task closed `n/a` with a plan row left unaccounted (no outcomeKind, not a boundary)
+  // must NOT let the run read COMPLETE — the same self-assertion guard the row-level n-a boundary already carries.
+  const naSet = { planVersion: RUN.planVersion, tasks: [
+    { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "n/a", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
+  ] };
+  const naRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: naSet, dir: tmp("result-report-na") });
+  check("ENG-99126 renderFinalReport (RC-7): a task waved off `n/a` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task n/a to bypass the conjunction gate",
+    () => naRep.complete === false && /⛔ \*\*NOT COMPLETE\*\*/.test(naRep.markdown)
+      && naRep.reasons.some((r) => /closed n\/a with no recorded decision/.test(r)),
+    () => ({ complete: naRep.complete, reasons: naRep.reasons }));
+
   // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that
   // empty task list as "everything closed" — `refused` forces `complete: false` and a verdict reason naming it.

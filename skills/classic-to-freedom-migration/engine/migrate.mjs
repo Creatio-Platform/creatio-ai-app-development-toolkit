@@ -3281,7 +3281,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const set = rep.set || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
-      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair });
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
       output = finalReport.markdown + "\n";
       ledgerIncomplete = !finalReport.complete;
     }

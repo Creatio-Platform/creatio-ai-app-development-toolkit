@@ -42,10 +42,10 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     () => { const r = H("onSaved", null, [], flat); return r[2] === "skip" && /handlers not provided/.test(ev(r)); }, () => H("onSaved", null, [], flat));
 
   // view-model attributes
-  check("ENG-99126 vmattr: a virtual attribute present in viewModelConfig.attributes is ✅; one absent is ⚠ (a port another way is possible); no viewModelConfig ⇒ ⚠ not checkable",
+  check("ENG-99126 vmattr: a virtual attribute present in viewModelConfig.attributes is ✅; one absent (payload present) is ⚠; NO viewModelConfig ⇒ NON-gating confirm-on-stand (skip), symmetric with the handler resolver — an OPTIONAL slot must never hard-gate the run",
     () => st(resolveVk({ type: "vmattr", name: "Department" }, ctx)) === "✅ Done"
       && st(resolveVk({ type: "vmattr", name: "StaffUnit" }, ctx)) === "⚠ verify"
-      && /no `viewModelConfig`/.test(ev(resolveVk({ type: "vmattr", name: "Department" }, flat))),
+      && (() => { const r = resolveVk({ type: "vmattr", name: "Department" }, flat); return r[2] === "skip" && /view-model attributes not provided/.test(r[1]); })(),
     () => [resolveVk({ type: "vmattr", name: "Department" }, ctx), resolveVk({ type: "vmattr", name: "StaffUnit" }, ctx), resolveVk({ type: "vmattr", name: "Department" }, flat)]);
 
   // layout
@@ -139,4 +139,52 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   check("ENG-99126 layout (guard): a header row carrying fields:2 passes when its widgets are present — the header is judged on widgets, not field counts (regression on the blocker)",
     () => st(L({ region: "header", fields: 2, widgets: ["crt.Feed"] })) === "✅ Done",
     () => L({ region: "header", fields: 2, widgets: ["crt.Feed"] }));
+
+  // ===== 3rd-review guards (m-dymytrova + kbondarenko-tech, all validated against this head) =====
+  // RC-2/11 cardnative: `/Tag/i` used to substring-match `StageProgressBar` ("stage" contains "tag"), closing a Tag
+  // control that was never built. Token-boundary matching must reject Stage* and still accept a real TagSelect.
+  {
+    const stageOnly = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [
+      { type: "crt.EntityStageProgressBar", name: "StageProgressBar" }, { type: "crt.Input", name: "StageField", control: "$Stage" }] } } } }, "main");
+    const tagMiss = resolveVk({ type: "cardnative", names: ["Tag"] }, stageOnly);
+    const tagHit = resolveVk({ type: "cardnative", names: ["Tag"] }, ctx);   // ctx carries a real TagSelect
+    check("ENG-99126 cardnative (guard): a `Tag` control does NOT close against `StageProgressBar` / `StageField` (substring 'tag' is not a token) — a real `TagSelect` still closes ✅",
+      () => tagMiss[2] === "unverified" && /missing: Tag/.test(tagMiss[1]) && st(tagHit) === "✅ Done",
+      () => [tagMiss, tagHit]);
+  }
+  // RC-3/14 layout: a region row with nothing machine-measurable (no fields/lists/recognised widgets) must NOT read ✅.
+  check("ENG-99126 layout (guard): a header row with fields:2 and NO recognised widget is non-gating confirm-on-stand (skip), never a false ✅ over an unchecked region",
+    () => { const r = L({ region: "header", fields: 2, widgets: [] }); return r[2] === "skip" && /no recognised widget/.test(ev(r)); },
+    () => L({ region: "header", fields: 2, widgets: [] }));
+  check("ENG-99126 layout (guard): a side/tab region row with no fields, lists or widgets is confirm-on-stand (skip), never ✅ Done",
+    () => L({ region: "side", fields: 0, lists: 0, widgets: [] })[2] === "skip",
+    () => L({ region: "side" }));
+  // RC-4/12 handler: a denylisted platform name (`handle`) must NOT close on Freedom boilerplate `next?.handle(request)`.
+  {
+    const boiler = `[{ request: "crt.SaveRecordRequest", handler: async (request, next) => { return next?.handle(request); } }]`;
+    const bctx = verifyCtx({ pages: { main: page({ handlers: boiler, viewModelConfig: { attributes: {} } }) } }, "main");
+    const r = resolveVk({ type: "handler", method: "handle", parent: null, triggers: [] }, bctx);
+    check("ENG-99126 handler (guard): a Classic method named `handle` is NOT closed by boilerplate `next?.handle(request)` — a denylisted platform name degrades to confirm-on-stand (skip)",
+      () => r[2] === "skip" && /confirm on-stand/.test(r[0]), () => r);
+  }
+  // RC-10 the four new resolvers' D6 tri-state: a page key never supplied is NON-gating (outcome not `missing`); a
+  // page reported `false` is a hard ❌ MISSING. Neither branch was exercised before.
+  {
+    const omitted = verifyCtx({ pages: {} }, "main");
+    const notBuilt = verifyCtx({ pages: { main: false } }, "main");
+    const kinds = [
+      ["handler", { type: "handler", method: "onSaved", triggers: [] }],
+      ["vmattr", { type: "vmattr", name: "Contact" }],
+      ["layout", { type: "layout", region: "side", fields: 1, lists: 0, widgets: [] }],
+      ["cardnative", { type: "cardnative", names: ["Tag"] }],
+    ];
+    check("ENG-99126 resolvers (guard, D6 tri-state): for handler/vmattr/layout/cardnative a page key that was never supplied is NON-gating (outcome ≠ missing), while a page reported `false` is a hard ❌ MISSING",
+      () => kinds.every(([, vk]) => resolveVk(vk, omitted)[2] !== "missing" && resolveVk(vk, notBuilt)[2] === "missing"),
+      () => kinds.map(([n, vk]) => [n, resolveVk(vk, omitted)[2], resolveVk(vk, notBuilt)[2]]));
+  }
+  // RC-10 vmattr third branch: an attribute absent from viewModelConfig.attributes but bound by a `<Name>Field`
+  // element on the page still closes ✅ (the port-another-way path).
+  check("ENG-99126 vmattr (guard): an attribute NOT in viewModelConfig.attributes but bound by a `<Name>Field` element closes ✅",
+    () => { const r = resolveVk({ type: "vmattr", name: "Phone" }, ctx); return st(r) === "✅ Done" && /bound by a field/.test(ev(r)); },
+    () => resolveVk({ type: "vmattr", name: "Phone" }, ctx));
 }

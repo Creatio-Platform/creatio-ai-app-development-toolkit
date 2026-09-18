@@ -3719,6 +3719,11 @@ const codeOnly = (s) => String(s)
   .replace(/`(?:[^`\\]|\\.)*`/g, "``");
 // A method/element name in a DEFINITION or CALL position — not a bare mention. Run over `codeOnly` output.
 const defOrCall = (code, name) => new RegExp(String.raw`(?:function\s+|\.|\b)${reEsc(name)}\s*[(:=]`).test(code);
+// Common platform identifiers that occur as ordinary Freedom handler scaffolding (`next?.handle(request)`,
+// `filters: …`, `{ handle: … }`). A name/def/call match on ANY of these is not evidence of a real Classic-method
+// port, so the handler row degrades to confirm-on-stand rather than reading a false ✅. Distinctive method names
+// (onSaved, setContactInfo, getRequestStatusFilter) are unaffected and still close on a def or a call.
+const HANDLER_NAME_DENY = new Set(["init", "save", "open", "close", "load", "handle", "handler", "request", "next", "value", "items", "filters", "filter", "config", "data", "validate"]);
 // A handler branch on an attribute change: `request.attributeName === "X"` in any quoting / spacing.
 const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\`]${reEsc(attr)}["'\`]|["']attributeName["']\\s*:\\s*["']${reEsc(attr)}["']`).test(src);
 // HANDLERS. A Freedom port rarely keeps the Classic method name (measured: 2 of 10 on a real run — `setContactInfo`
@@ -3732,7 +3737,7 @@ export function resolveHandlerVk(vk, ctx) {
   if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this, or confirm the port on the stand", "skip"];
   const src = ctx.handlersSrc;              // RAW — attrBranchIn needs the string literal
   const code = codeOnly(src);               // comments + string literals blanked — for name/def matching
-  if (defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
+  if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
   if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
   for (const t of vk.triggers || []) {
     if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
@@ -3748,7 +3753,10 @@ export function resolveHandlerVk(vk, ctx) {
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the attribute cannot exist", "missing"];
-  if (!ctx.vmAttrs) return ["⚠ verify", "view-model attributes NOT checkable — this page entry carries no `viewModelConfig`; pass get-page's `bundle.viewModelConfig` verbatim", "unverified"];
+  // A documented-OPTIONAL slot (BUILT_SHAPE / SKILL.md): absent ⇒ NON-gating confirm-on-stand, symmetric with
+  // resolveHandlerVk's `handlersSrc == null` branch. `⚠ unverified` here would gate the run (exit 2) on every plan
+  // with a virtual attribute whose payload predates ENG-98556 — a false hard block, not a false green.
+  if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
   if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
   if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
   return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
@@ -3772,6 +3780,9 @@ function tabMatch(container, caption) {
 }
 // A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
 function judgeRegion(c, where, vk, want) {
+  // Nothing machine-measurable (no fields, lists or recognised widgets) must NOT read ✅ — an empty `short` would
+  // otherwise report an unchecked region as confirmed and feed the COMPLETE verdict.
+  if (!vk.fields && !vk.lists && !(vk.widgets || []).length) return ["☐ confirm on-stand", "this region row carries nothing machine-measurable (no fields, lists or recognised widgets) — confirm the placement on the stand", "skip"];
   const short = [];
   if (vk.fields && c.fields.length < vk.fields) short.push(`${c.fields.length}/${vk.fields} fields`);
   if (vk.lists && c.lists.length < vk.lists) short.push(`${c.lists.length}/${vk.lists} related lists`);
@@ -3781,9 +3792,12 @@ function judgeRegion(c, where, vk, want) {
 }
 // The header region is judged on WIDGETS only (fields/lists live in the body), against the page's flat ops.
 function resolveLayoutHeader(vk, ctx) {
+  // Judged on WIDGETS only; the header's fields/lists are covered by the page-wide Fields / Related-lists rows.
+  // A header row with no recognised widget has nothing to machine-confirm here — say so rather than read ✅.
+  if (!(vk.widgets || []).length) return ["☐ confirm on-stand", "this header row carries no recognised widget to check — its fields are covered by the page-wide Fields row; confirm the header placement on the stand", "skip"];
   const present = new Set(ctx.ops.map((o) => o.type));
   const missW = (vk.widgets || []).filter((w) => !present.has(w));
-  if (!missW.length) return ["✅ Done", `header: ${(vk.widgets || []).join(" · ") || "present"}`, "ok"];
+  if (!missW.length) return ["✅ Done", `header widgets: ${(vk.widgets || []).join(" · ")}`, "ok"];
   const noList = missW.map((w) => "no " + w).join(", ");
   return ["⚠ verify", `header: ${noList}`, "unverified"];
 }
@@ -3830,13 +3844,31 @@ function resolveLayoutTab(vk, ctx, judge) {
   return judge(tab, `in tab \`${esc(tab.name)}\``);
 }
 // The template's native card controls, by the element names it ships them under.
-const CARD_NATIVE_RE = { ViewOptions: /ViewOptions|CardActions|ActionButtons/i, ReloadData: /Reload/i, Tag: /Tag/i };
+// Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
+// (tokens ["tag","select"]) but NOT `StageProgressBar` (["stage","progress","bar"] — "tag" is only a substring of
+// "stage", never a token). `/Tag/i.test("StageField")` used to close a Tag control that was never built.
+const CARD_NATIVE_TOKENS = {
+  ViewOptions: [["view", "options"], ["card", "actions"], ["action", "buttons"]],
+  ReloadData: [["reload"]],
+  Tag: [["tag"]],
+};
+// A contiguous token subsequence match (`["card","actions"]` inside `["card","actions","button"]`).
+function tokenSeqIn(tokens, seq) {
+  for (let i = 0; i + seq.length <= tokens.length; i++) {
+    if (seq.every((s, j) => tokens[i + j] === s)) return true;
+  }
+  return false;
+}
 export function resolveCardNativeVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "the native card actions");
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the card actions cannot exist", "missing"];
-  const names = ctx.ops.map((o) => String(o.name || ""));
+  const builtTokens = ctx.ops.map((o) => tokensOf(o.name));
   const all = vk.names || [];
-  const missing = all.filter((n) => { const re = CARD_NATIVE_RE[n] || new RegExp(reEsc(n), "i"); return !names.some((x) => re.test(x)); });
+  // An unknown native name falls back to its OWN camelCase tokens — boundary-safe, never a raw substring.
+  const missing = all.filter((n) => {
+    const seqs = CARD_NATIVE_TOKENS[n] || [tokensOf(n)];
+    return !builtTokens.some((toks) => seqs.some((seq) => seq.length && tokenSeqIn(toks, seq)));
+  });
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
