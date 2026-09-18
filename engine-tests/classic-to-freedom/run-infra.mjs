@@ -247,8 +247,12 @@ check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a 
 const tasksSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
 const phaseOfGroup = (title) => {
   const line = tasksSrc.split(NL).find((l) => l.includes(title) && l.includes("],"));
-  const m = line && /(\d+)\]/.exec(line);
-  return m ? Number(m[1]) : null;
+  // Sliced, not matched: a `\\d+` followed by a literal that can fail backtracks at every start offset.
+  const at = line ? line.indexOf("],") : -1;
+  if (at < 0) return null;
+  const head = line.slice(0, at);
+  const n = Number(head.slice(head.lastIndexOf(",") + 1).trim());
+  return Number.isInteger(n) ? n : null;
 };
 check("tasks.mjs: `Form — Base-field overrides` builds strictly between the layout that creates the fields and the coverage that counts them",
   phaseOfGroup("Form — Layout (by tab/region)") < phaseOfGroup("Form — Base-field overrides")
