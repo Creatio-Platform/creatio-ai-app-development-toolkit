@@ -12369,20 +12369,28 @@ check("ENG-98556: the `sectionRegistered` row spells the query as ARGUMENTS — 
 // ENG-98556 follow-up review — the read-path guard, index order, half a denial, and kind drift.
 {
   // A read may only answer out of `<dir>/reads/`. Both escape shapes: lexical `../` and an absolute path.
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_esc_"));
-  const absOutside = path.join(os.tmpdir(), "c2f_abs_outside.json");
+  // The migration folder is NESTED inside the temp root so the `../../` decoy lands in that root — a test writes
+  // nothing outside its own tree, and from a bare `mkdtemp` that target is `/` on Linux.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_esc_"));
+  const d = path.join(root, "mig", "folder");
+  const absOutside = path.join(root, "abs-outside.json");
   try {
+    fs.mkdirSync(d, { recursive: true });
     asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
       { kind: "reachability", file: "../../outside.json", reachabilityKey: "up", what: "w" },
       { kind: "reachability", file: absOutside.split(path.sep).join("/"), reachabilityKey: "abs", what: "w" }] });
-    fs.writeFileSync(path.join(d, "..", "..", "outside.json"), JSON.stringify({ leaked: true }));
+    const upTarget = path.resolve(d, "..", "..", "outside.json");
+    fs.writeFileSync(upTarget, JSON.stringify({ leaked: true }));
     fs.writeFileSync(absOutside, JSON.stringify({ leaked: true }));
     const { built, problems } = assembleBuilt(d);
     check("ENG-98556: an index row naming a file OUTSIDE `reads/` is refused and named, never read — the index is a file from an earlier command, and a read may only answer out of the folder this run owns",
       () => problems.length === 2 && problems.every((x) => /resolves outside/.test(x.why))
         && built.reachability.up === undefined && built.reachability.abs === undefined,
       () => ({ problems, reachability: built.reachability }));
-  } finally { fs.rmSync(d, { recursive: true, force: true }); fs.rmSync(absOutside, { force: true }); }
+    check("ENG-98556: …and the decoys that test it stay inside the run's own temp root — a fixture writing above `os.tmpdir()` targets `/` on Linux and fails the suite before it reports anything",
+      () => [upTarget, absOutside].every((f) => f.startsWith(root + path.sep)),
+      () => ({ root, upTarget, absOutside }));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 {
   // The mis-copy check must not depend on which of a page's two files the index lists first.
