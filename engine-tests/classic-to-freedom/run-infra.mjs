@@ -150,9 +150,12 @@ check("--stubs totals carry `members`, and the shortcut needs BOTH counts explic
 // The root-only GUARD itself is asserted behaviourally in run-mapper.mjs (a nested fold given a `section` bundle
 // emits no section scope). This pin only keeps the construction in its own function: inlined back into
 // `runMigration` it pushed that function past the repo's pinned Sonar cognitive complexity 15.
-check("--stubs section scope is built by `sectionStubScopes`, which returns 0 or 1 scope and owns the root-only guard — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
-  /function sectionStubScopes\(manifest, opts, sectionEff\)/.test(mgSrc)
-    && /if \(opts\.scopeSchema \|\| !sectionEff\) return \[\];/.test(mgSrc)
+check("--stubs section scope: the root-only guard and the 0-or-1 shape survive the ChangeSet being SHARED — a nested fold emitting one would inject a mid-array entry into the parent's childStubScopes (`slice(1)`) and break the section-is-LAST contract",
+  // The guard sits on the shared ChangeSet, and the digest is 0 or 1 scope off the back of it.
+  /function sectionChangeSetOf\(manifest, opts, sectionEff\)/.test(mgSrc)
+    && /if \(opts\.scopeSchema \|\| !sectionEff\) return null;/.test(mgSrc)
+    && /function sectionStubScopes\(manifest, opts, sectionChangeSet\)/.test(mgSrc)
+    && /if \(!sectionChangeSet\) return \[\];/.test(mgSrc)
     && /\.\.\.sectionScopes,/.test(mgSrc));
 check("behaviour analysis: an unusable Context result is a failed run, not a surface with nothing to describe — and the guard is a SHAPE check, not a truthiness test",
   // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
@@ -195,6 +198,80 @@ check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` 
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
     registrySize: LIST_DECISION_KINDS.length,
     missingNamed: ["list-grid-config", "list-section-element"].filter((k) => !LIST_DECISION_KINDS.includes(k)) }));
+// …and the same rule for the ⚠ Confirm worklist. It is RENDERED from `needsDecision`, and a row appended to the
+// rendered list reaches plan.md and no other channel: `confirmWorklistRows`, the one feed for `--checklist`,
+// `--verify` and the build tasks, maps the record alone.
+const designspecSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/designspec.mjs", import.meta.url)), "utf8");
+// BOTH producers of a Confirm line, not the renderer alone: a row pushed inside `foldedConfirmRows` reaches
+// plan.md by the same path and would leave a renderer-only pin green.
+const NL = "\n";
+const CONFIRM_PRODUCERS = ["renderConfirmWorklist", "foldedConfirmRows"];
+const bodyOfFn = (name) => {
+  const at = designspecSrc.indexOf("function " + name + "(");
+  return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
+};
+const confirmBodies = CONFIRM_PRODUCERS.map(bodyOfFn);
+const confirmBody = confirmBodies.join(NL);
+check("designspec.mjs: the ⚠ Confirm worklist is rendered from `needsDecision` alone — neither producer appends to it, so a row cannot reach plan.md while reaching no build task",
+  confirmBodies.every((b) => b.length > 0)
+    && !/\b(?:confirm|rows|out)\.push\(\s*[`"']/.test(confirmBody)
+    && /foldedConfirmRows\(kept\)/.test(designspecSrc),
+  () => ({ producersFound: CONFIRM_PRODUCERS.map((n, k) => [n, confirmBodies[k].length]),
+    appended: confirmBody.split(NL).filter((l) => /\.push\(/.test(l)).map((l) => l.trim().slice(0, 90)) }));
+// …and the same rule one level up, for a whole ChangeSet FIELD: one the plan renders and no checklist builder
+// reads sends none of its content to a task. A field read by ONE side only is exempt only with a stated reason.
+const CHECKLIST_BUILDERS = ["checklistGroups", "buildPageRows", "buildLayoutGroupRows", "buildCoverageRows",
+  "buildCardActionRows", "buildListItems", "buildDashboardRows", "confirmWorklistRows", "qualityGateRows",
+  "tableElementRows", "standardFeatureRows", "handlerStubRows", "memberWorklistRows", "sectionLogicGroups"];
+// `headerLayout` decides the header TEMPLATE RECOMMENDATION banner and gates nothing; the `layout-type` decision
+// carries the question into the worklist. `profileCards` publishes a `profile-card` decision per card, so each one
+// already has a row — through the record, not through this field.
+const PLAN_ONLY_CHANGESET_FIELDS = new Set(["headerLayout", "profileCards",
+  // Triggers the quick-filter BUILD NOTE — advice on building rows that are themselves gated (`Quick filter — …`).
+  "quickFilterConfigCompletedByBuilder"]);
+const fieldsOfReturn = (startsAt) => {
+  const at = mapperSrc.indexOf(startsAt);
+  const m = at < 0 ? null : /\n {2}return \{([\s\S]*?)\n {2}\};/.exec(mapperSrc.slice(at));
+  return m ? [...m[1].matchAll(/[\s{,]([a-zA-Z][a-zA-Z0-9]*)\s*[,:}]/g)].map((x) => x[1]) : [];
+};
+// BOTH ChangeSets the plan renders: the record page's, and the list page's (read as `lcs.` there).
+// Each anchor is asserted to RESOLVE below: a rename or a reflow that empties one leg would otherwise shrink the
+// universe silently and report a parity that was never measured.
+const recordPageFields = fieldsOfReturn("const baseFieldOverrides");
+const listFields = fieldsOfReturn("export function buildListChangeSet(");
+const changeSetFields = [...new Set([...recordPageFields, ...listFields])];
+const checklistSrc = CHECKLIST_BUILDERS.map((n) => {
+  const at = designspecSrc.indexOf("function " + n + "(");
+  return at < 0 ? "" : designspecSrc.slice(at, designspecSrc.indexOf(NL + "}", at));
+}).join(NL);
+// `?.` counts as a read: the list ChangeSet is optional at most call sites, so every read of it is chained.
+const readsField = (src, f) => new RegExp(String.raw`\b(?:cs|lcs|changeSet|listChangeSet)\??\.${f}\b`).test(src);
+const planOnlyFields = changeSetFields.filter((f) =>
+  readsField(designspecSrc, f) && !readsField(checklistSrc, f) && !PLAN_ONLY_CHANGESET_FIELDS.has(f));
+check("designspec.mjs: every ChangeSet field the PLAN renders is also read by a checklist builder — a field only the plan reads reaches no build task",
+  recordPageFields.length > 0 && listFields.length > 0 && planOnlyFields.length === 0,
+  () => ({ planOnlyFields, exempt: [...PLAN_ONLY_CHANGESET_FIELDS],
+    recordPage: recordPageFields.length, list: listFields.length }));
+// Base-field overrides are APPLIED ONTO the template's existing fields, so they build after the fields are laid
+// out and before coverage counts them. Pinned on the phase table itself: the ordering is the whole reason the
+// group has a phase of its own, and nothing else fails if it drifts.
+const tasksSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/tasks.mjs", import.meta.url)), "utf8");
+const phaseOfGroup = (title) => {
+  const line = tasksSrc.split(NL).find((l) => l.includes(title) && l.includes("],"));
+  // Sliced, not matched: a `\\d+` followed by a literal that can fail backtracks at every start offset.
+  const at = line ? line.indexOf("],") : -1;
+  if (at < 0) return null;
+  const head = line.slice(0, at);
+  const n = Number(head.slice(head.lastIndexOf(",") + 1).trim());
+  return Number.isInteger(n) ? n : null;
+};
+const PHASES = ["Form — Layout (by tab/region)", "Form — Base-field overrides", "Form — Coverage (verified)",
+  "List — Custom methods", "List — Other declared logic worklist", "Quality gates"].map(phaseOfGroup);
+const [lay, ovr, cov, listM, listL, gates] = PHASES;
+// Integers before comparison: a title that vanishes returns `null`, and `null < 35` compares as `0 < 35`.
+check("tasks.mjs: base-field overrides build between the layout that creates the fields and the coverage that counts them, and the list page's logic builds before its review",
+  PHASES.every(Number.isInteger) && lay < ovr && ovr < cov && listM < listL && listL < gates,
+  () => ({ layout: lay, overrides: ovr, coverage: cov, listMethods: listM, listLogic: listL, gates }));
 
 /* ================================================================================================
    Workflow scripts must PARSE. The host evaluates a `*.workflow.js` as an ASYNC FUNCTION BODY — top-level
