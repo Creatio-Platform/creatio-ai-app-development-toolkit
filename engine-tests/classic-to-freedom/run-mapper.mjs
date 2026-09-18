@@ -12,6 +12,8 @@ import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowFor
 import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
+import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
@@ -11777,6 +11779,748 @@ check("ENG-94756 RETRACTION (negative control): the pattern matches a derived ju
     && !FA_JUNCTION_RE.test("a junction object whose rows link this object's records to tags"),
   () => ({ probes: ["UsrToMigrateInTag", "BaseEntityInTag", "<Entity>InTag", "tagInRecordSourceSchemaName"]
     .map((t) => `${t} -> ${FA_JUNCTION_RE.test(t)}`) }));
+
+// ================================================================================================
+// ENG-98556 — THE READ PLAN. The `--verify` payload was composed by hand, and every failure it paid
+// for was a key that did not get copied: no `modelConfig` (the primary-data-source check never ran),
+// no `reachability` (a placed section reported MISSING), an evidence id whose backtick made a row
+// unmatchable. The engine now says WHICH reads the gate needs and WHERE each raw response goes, so
+// the agent copies bytes instead of composing JSON.
+//
+// The load-bearing invariant is that the read list is DERIVED from the same `checklistGroups` walk
+// `--checklist` and `--verify` use — asserted across several different runs rather than one crafted
+// fixture, because the failure mode being closed is a page the checklist publishes that nobody was
+// told to read, and that only shows up on a run with more than one page key.
+const readPlanRuns = { lpRun, realMini, realMini2, secRun, cli };
+for (const [rpName, rpRun] of Object.entries(readPlanRuns)) {
+  const rpOpts = checklistOpts({});
+  const rpGroups = checklistGroups(rpRun, rpOpts);
+  const rpPublished = [...new Set(rpGroups.flatMap((g) => g.rows.map((r) => r.pageKey || g.pageKey || "main")))];
+  const rpPlan = readPlan(rpRun, rpOpts);
+  // TWO files per page, because that is how `get-page` delivers them: `meta.json` (identity) and `bundle.json`
+  // (the merged view). The MCP tool returns paths rather than a bundle, so "copy the response" would have copied
+  // a list of filenames.
+  const rpMeta = rpPlan.reads.filter((r) => r.kind === "pageMeta").map((r) => r.pageKey);
+  const rpBundle = rpPlan.reads.filter((r) => r.kind === "pageBundle").map((r) => r.pageKey);
+  check(`ENG-98556 (${rpName}): a \`meta.json\` AND a \`bundle.json\` read per PUBLISHED page key — the list is derived from the checklist walk, so a key the checklist gates can never be a key nobody was told to read`,
+    () => rpMeta.length === rpPublished.length && rpBundle.length === rpPublished.length
+      && rpPublished.every((k) => rpMeta.includes(k) && rpBundle.includes(k)),
+    () => ({ published: rpPublished, meta: rpMeta, bundle: rpBundle }));
+  // A rule read is NOT unconditional: a page with no expected rules would otherwise send the agent
+  // after a `BusinessRule_*` set the plan never asked for, and an empty answer to a read nobody needed
+  // is indistinguishable from a read that failed.
+  const rpRuleKeys = [...new Set(rpGroups.flatMap((g) => g.rows.filter((r) => r.vk?.type === "rule")
+    .map((r) => r.pageKey || g.pageKey || "main")))];
+  const rpRuleReads = rpPlan.reads.filter((r) => r.kind === "businessRules").map((r) => r.pageKey);
+  check(`ENG-98556 (${rpName}): a \`businessRules\` read is emitted for exactly the keys carrying a gated rule row, never for the others`,
+    () => rpRuleReads.length === rpRuleKeys.length && rpRuleKeys.every((k) => rpRuleReads.includes(k)),
+    () => ({ ruleKeys: rpRuleKeys, got: rpRuleReads }));
+  // The same `onstand` key rides on several rows (a typed run gates `typedFormsBuilt` once per form),
+  // and one key is one value in `reachability` — so two files for it would be two answers to one check.
+  // A key marked `recordedBy: "builder"` is NOT a read: its value is what the build agent observed when it ran
+  // the converter, and the read-back agent has no write access and nothing to fetch. It is NAMED instead of
+  // dropped — a reader who saw only the read list would take the rows depending on it for rows nobody owes.
+  const rpOnstandRows = rpGroups.flatMap((g) => g.rows.filter((r) => r.vk?.type === "onstand" && r.vk.evidence).map((r) => r.vk));
+  const rpOnstand = [...new Set(rpOnstandRows.filter((v) => v.recordedBy !== "builder").map((v) => v.evidence))];
+  const rpBuilderKeys = [...new Set(rpOnstandRows.filter((v) => v.recordedBy === "builder").map((v) => v.evidence))];
+  const rpReachReads = rpPlan.reads.filter((r) => r.kind === "reachability").map((r) => r.reachabilityKey);
+  check(`ENG-98556 (${rpName}): exactly one \`reachability\` read per distinct on-stand key — deduped, because one key is one value in the payload`,
+    () => rpReachReads.length === new Set(rpReachReads).size && rpReachReads.length === rpOnstand.length
+      && rpOnstand.every((k) => rpReachReads.includes(k)),
+    () => ({ onstand: rpOnstand, reachReads: rpReachReads }));
+  check(`ENG-98556 (${rpName}): a builder-recorded on-stand key gets NO read file and is named as the builder's instead — the read-only read-back agent is never sent after a value the stand cannot answer`,
+    () => rpBuilderKeys.every((k) => !rpReachReads.includes(k))
+      && rpBuilderKeys.every((k) => (rpPlan.builderRecorded || []).some((b) => b.reachabilityKey === k))
+      && (rpPlan.builderRecorded || []).length === rpBuilderKeys.length,
+    () => ({ builderKeys: rpBuilderKeys, builderRecorded: rpPlan.builderRecorded, reachReads: rpReachReads }));
+  check(`ENG-98556 (${rpName}): every read names a DISTINCT file under \`${READS_DIR}/\` — two reads sharing a path would silently overwrite one answer with another`,
+    () => { const files = rpPlan.reads.map((r) => r.file);
+      return files.length === new Set(files).size && files.every((f) => f.startsWith(READS_DIR + "/")); },
+    () => ({ files: rpPlan.reads.map((r) => r.file) }));
+}
+// A page key is a MACHINE identity carrying `:`/`@`/`#`, none of which survive a filesystem intact —
+// hence the slug. The slug is cosmetic: the index maps file→key, so nothing downstream parses a name.
+// ONE slug rule in the migration folder: `slugKey` is the task folder's `slugify`, shared rather than
+// re-derived, so a reader does not learn two naming conventions for one folder.
+check("ENG-98556: `slugKey` is the task folder's slug rule — filesystem-safe for the punctuation a real page key carries, and never empty",
+  () => slugKey("mini:UsrApplicantMini@Via#2") === "mini-usrapplicantmini-via-2"
+    && slugKey("child:Usr Vacancy") === "child-usr-vacancy"
+    && slugKey(":::") === "task",
+  () => ({ a: slugKey("mini:UsrApplicantMini@Via#2"), b: slugKey("child:Usr Vacancy"), c: slugKey(":::") }));
+// The engine cannot name the Freedom SCHEMA — the agent chose it at build time and no plan publishes
+// it — so the description says WHICH page of the plan the key is and lets the agent resolve the rest.
+check("ENG-98556: `pageKeyDescription` names each key kind for a reader who has to find the page on the stand, splitting on the FIRST `:` only",
+  () => pageKeyDescription("main") === "the form page" && pageKeyDescription("list") === "the section's list page"
+    && pageKeyDescription("child:UsrVacancy") === "the child edit page for `UsrVacancy`"
+    && pageKeyDescription("typed:UsrIntern") === "the per-type form page `UsrIntern`"
+    && pageKeyDescription("mini:UsrMini@Via#2") === "the mini page `UsrMini@Via#2`",
+  () => ({ main: pageKeyDescription("main"), child: pageKeyDescription("child:UsrVacancy"),
+    mini: pageKeyDescription("mini:UsrMini@Via#2") }));
+check("ENG-98556: the rendered read plan tells the agent to write the WHOLE response verbatim and names the index the engine reads back — the two halves cannot disagree about a filename",
+  () => { const md = renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig");
+    return /verbatim/.test(md) && /do not compose any JSON yourself/.test(md)
+      && md.includes(`${READS_DIR}/${READS_INDEX_FILE}`) && /Write the response to/.test(md); },
+  () => ({ head: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").slice(0, 300) }));
+{
+  // THE CLI BOUNDARY. `--reads` WRITES a folder, so it carries `--tasks`'s rule: paired with a print or
+  // verify mode one of the two would silently not happen, and a caller reading the exit code would
+  // believe both ran.
+  const rpDir = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_reads_"));
+  try {
+    const rpManifest = JSON.stringify(LP_MANIFEST);
+    const rpCli = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--reads", rpDir],
+      { input: rpManifest, encoding: "utf8" });
+    const rpIdxPath = path.join(rpDir, READS_DIR, READS_INDEX_FILE);
+    const rpIdx = fs.existsSync(rpIdxPath) ? JSON.parse(fs.readFileSync(rpIdxPath, "utf8")) : null;
+    check("ENG-98556 (CLI): `--reads <dir>` writes the index INTO the migration folder and prints the plan — the raw responses and the payload composed from them stay beside the run, never in a temp dir that cannot be re-checked (ENG-98456)",
+      () => !!rpIdx && rpIdx.version === 1 && Array.isArray(rpIdx.reads) && rpIdx.reads.length > 0
+        && rpIdx.reads.every((x) => typeof x.file === "string" && typeof x.what === "string")
+        && /Read plan/.test(rpCli.stdout || ""),
+      () => ({ status: rpCli.status, reads: rpIdx && rpIdx.reads.length, stderr: (rpCli.stderr || "").slice(0, 200) }));
+    const rpClash = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--reads", rpDir, "--verify", "--built", "x.json"],
+      { input: rpManifest, encoding: "utf8" });
+    check("ENG-98556 (CLI): `--reads` paired with `--verify` is a LOUD refusal at exit 1, not a silent precedence win — it plans reads for a gate that has not run yet",
+      () => rpClash.status === 1 && /`--reads` cannot be combined with/.test(rpClash.stderr || ""),
+      () => ({ status: rpClash.status, stderr: (rpClash.stderr || "").slice(0, 250) }));
+  } finally { fs.rmSync(rpDir, { recursive: true, force: true }); }
+}
+
+// ================================================================================================
+// ENG-98556 (second half) — COMPOSING the payload. `--reads` says which files; this reads them back
+// and builds `built.json`. The fixtures below carry the REAL shapes `clio get-page` writes into
+// `.clio-pages/<schema>/`: `meta.json` nests the identity under `page`, `bundle.json` is the merged
+// view. Anything asserted here against an invented shape would prove nothing about a live run.
+const AS_META = { fetchedAt: "2026-09-18T00:00:00Z", page: { schemaName: "UsrX_FormPage",
+  schemaUId: "be76666d-10f9-47e4-a420-80ebc80997f2", packageName: "UsrApp",
+  packageUId: "9bf821e9-691f-4afa-a590-29cba45e0d68", parentSchemaName: "PageWithTabsFreedomTemplate" } };
+const AS_BUNDLE = { name: "UsrX_FormPage", viewConfig: { items: [{ name: "Name", type: "crt.Input" }] },
+  viewModelConfig: { attributes: { Name: {} } }, handlers: [],
+  modelConfig: { primaryDataSourceName: "PDS", dataSources: { PDS: { type: "crt.EntityDataSource",
+    config: { entitySchemaName: "UsrX" } } } } };
+const asWrite = (dir, rel, obj) => {
+  fs.mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
+  fs.writeFileSync(path.join(dir, rel), typeof obj === "string" ? obj : JSON.stringify(obj));
+};
+// One folder, written the way a read-back agent would: the index the engine wrote, plus the files it named.
+const asFolder = (over = {}) => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_asm_"));
+  asWrite(d, "reads/index.json", { version: 1, planVersion: over.planVersion || "plan-aaaa1111", reads: [
+    { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+    { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" },
+    { kind: "businessRules", file: "reads/03-rules-main.json", pageKey: "main", what: "r" },
+    { kind: "reachability", file: "reads/04-reachability-sectionRegistered.json", reachabilityKey: "sectionRegistered", what: "s" },
+  ] });
+  if (over.meta !== null) asWrite(d, "reads/01-meta-main.json", over.meta || AS_META);
+  // `over.bundle === null` means "never written" (an unread file); `false` means the literal JSON `false` —
+  // the stand was asked and said there is no such schema. Two different answers, two different fixtures. A denied
+  // page denies in BOTH its files: the same `get-page` call answered once, so a fixture writing `false` into one
+  // slot beside real data in the other is the CONTRADICTION case, which has its own test.
+  if (over.bundle === false) { asWrite(d, "reads/01-meta-main.json", "false"); asWrite(d, "reads/02-bundle-main.json", "false"); }
+  else if (over.bundle !== null) asWrite(d, "reads/02-bundle-main.json", over.bundle || AS_BUNDLE);
+  if (over.rules !== null) asWrite(d, "reads/03-rules-main.json", over.rules || { count: 2, rules: [{ name: "R1" }, { name: "R2" }] });
+  if (over.reach !== null) asWrite(d, "reads/04-reachability-sectionRegistered.json", over.reach || { workplaces: 1, names: ["Applicants"] });
+  return d;
+};
+{
+  const d = asFolder();
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: the payload is COMPOSED from the two files `get-page` writes — identity out of `meta.json`, the merged view out of `bundle.json`, nothing retyped",
+      () => problems.length === 0 && built.pages.main.schemaUId === AS_META.page.schemaUId
+        && built.pages.main.packageName === "UsrApp" && built.pages.main.packageUId === AS_META.page.packageUId
+        && built.pages.main.parentSchemaName === "PageWithTabsFreedomTemplate"
+        && built.pages.main.schemaName === "UsrX_FormPage"
+        && JSON.stringify(built.pages.main.viewConfig) === JSON.stringify(AS_BUNDLE.viewConfig),
+      () => ({ problems, page: built && Object.keys(built.pages.main || {}) }));
+    // The three fields ENG-99126 added to the contract: optional, verbatim, and copied whenever the bundle has
+    // them — a gate cannot check what the payload never mentioned.
+    check("ENG-98556: `modelConfig`, `handlers` and `viewModelConfig` ride along verbatim — the payload that lacked `modelConfig` is why the primary-data-source check never ran on the run it was written for (ENG-98456)",
+      () => built.pages.main.modelConfig?.primaryDataSourceName === "PDS"
+        && Array.isArray(built.pages.main.handlers)
+        && built.pages.main.viewModelConfig?.attributes?.Name !== undefined,
+      () => ({ keys: Object.keys(built.pages.main) }));
+    check("ENG-98556: `businessRules` and `reachability` land under their own keys, the value exactly as the file holds it",
+      () => built.pages.main.businessRules?.count === 2
+        && built.reachability.sectionRegistered?.workplaces === 1,
+      () => ({ rules: built.pages.main.businessRules, reach: built.reachability }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// `entitySchemaName` is in NEITHER file's top level — `modelConfig` names the primary source and that source's
+// config names the entity. Derived, because "read two levels down and retype it" is the transcription this
+// ticket removes; `null` when the bundle genuinely does not say, never a guess.
+check("ENG-98556: `entitySchemaName` is derived from the PRIMARY data source, and is null when the bundle does not name one",
+  () => entityOfBundle(AS_BUNDLE) === "UsrX"
+    && entityOfBundle({ modelConfig: { primaryDataSourceName: "PDS", dataSources: {} } }) === null
+    && entityOfBundle({ modelConfig: { dataSources: { PDS: { config: { entitySchemaName: "Y" } } } } }) === null
+    && entityOfBundle({}) === null,
+  () => ({ real: entityOfBundle(AS_BUNDLE) }));
+{
+  // THE UNREAD FILE. Not `false` — that asserts the page is genuinely absent, a verdict about the STAND that a
+  // failed read has not earned. Not a fabricated entry — that passes a check nobody ran. The key is omitted
+  // (⚠ unverified, exit 2) and the file is named, so a re-read is distinguishable from a repair.
+  const d = asFolder({ bundle: null });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a page whose bundle was never written is an OMITTED key plus a named problem — never `false` (which would assert the stand is short) and never a half-entry (which the payload guard would reject as malformed at exit 1)",
+      () => built.pages.main === undefined && problems.length === 1
+        && problems[0].file === "reads/02-bundle-main.json" && /not written/.test(problems[0].why),
+      () => ({ pages: Object.keys(built.pages), problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  const d = asFolder({ reach: null, rules: null });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: an unread rules / reachability file leaves its key out and names the file — the page still verifies on everything that WAS read",
+      () => built.pages.main.viewConfig !== undefined && built.pages.main.businessRules === undefined
+        && built.reachability.sectionRegistered === undefined && problems.length === 2,
+      () => ({ problems, page: Object.keys(built.pages.main || {}) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  const d = asFolder({ meta: "{ not json" });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a file that is not JSON is a named problem, not a thrown stack — a half-copied response must be diagnosable from the message alone",
+      () => problems.length === 1 && /not readable as JSON/.test(problems[0].why) && built !== null,
+      () => ({ problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // A `meta.json` for one schema beside a `bundle.json` for another is the one failure the two-file split
+  // introduces, and every existing guard passes it: the UId is unique, the package is consistent, `viewConfig` is
+  // present. It is caught because both files name their own schema.
+  const d = asFolder({ bundle: { ...AS_BUNDLE, name: "UsrOther_FormPage" } });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a bundle copied from a DIFFERENT page than its metadata is caught and the key dropped — identity and merged view belonging to two pages is a payload every other guard would pass",
+      () => problems.length === 1 && /two different pages/.test(problems[0].why)
+        && built.pages.main === undefined,
+      () => ({ problems, pages: Object.keys(built.pages) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // `meta.json` nests under `page`; a caller who copied only that block is accepted, because the difference is
+  // one level of nesting and refusing it would be a rule about typing rather than about content.
+  const d = asFolder({ meta: AS_META.page });
+  try {
+    const { built } = assembleBuilt(d);
+    check("ENG-98556: the identity block is read whether the file is the whole `meta.json` or just its `page` object",
+      () => built.pages.main.schemaUId === AS_META.page.schemaUId,
+      () => ({ page: built.pages.main }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // `evidence` / `judge` are NOT stand reads — no page body and no stand row holds them — so they are files
+  // beside the read plan, keyed by the ids the engine publishes. Merged here so a COMPOSED payload is not
+  // strictly worse than a hand-built one: without them every evidence-gated row reads ⚠ whatever the run filed.
+  const d = asFolder();
+  try {
+    asWrite(d, "evidence.json", { "main#quality-gates": { referencePage: "Contacts_FormPage", components: ["crt.Input"] } });
+    asWrite(d, "judge.json", { "main#quality-gates": { convincing: true } });
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: `evidence.json` / `judge.json` beside the read plan are merged into the payload — they are not stand reads, and a composed run that dropped them would report every evidence row unconfirmed on a run that filed them",
+      () => problems.length === 0 && built.evidence["main#quality-gates"].referencePage === "Contacts_FormPage"
+        && built.judge["main#quality-gates"].convincing === true,
+      () => ({ problems, evidence: built.evidence, judge: built.judge }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  const d = asFolder();
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: both are OPTIONAL — absent is not an unread file, because a run with no evidence-gated row files neither, and every such row already says in its own words that no record was filed",
+      () => problems.length === 0 && built.evidence === undefined && built.judge === undefined,
+      () => ({ problems, keys: Object.keys(built) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_asm_none_"));
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: with no read plan in the folder there is no payload at all — the caller is told to run `--reads` first, not handed an empty one that would verify as a build that shipped nothing",
+      () => built === null && problems.length === 1 && /index\.json/.test(problems[0].file),
+      () => ({ built, problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // THE CLI BOUNDARY for the composing half.
+  const d = asFolder();
+  try {
+    const manifest = JSON.stringify(LP_MANIFEST);
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: manifest, encoding: "utf8" });
+    const bf = path.join(d, "built.json");
+    // The TABLE goes to `verify.md` in the same folder (the `--from` default), so stdout carries the
+    // wrote-to-file note rather than the table — the same shape every other `--out` run has.
+    check("ENG-98556 (CLI): `--verify --from <dir>` composes the payload, writes it and the table BESIDE the run and gates on them — never a temp dir, which is how one run's `built.json` and verify table stopped being re-checkable (ENG-98456)",
+      () => fs.existsSync(bf) && JSON.parse(fs.readFileSync(bf, "utf8")).pages.main.viewConfig !== undefined
+        && /Plan-vs-Done/.test(fs.readFileSync(path.join(d, "verify.md"), "utf8"))
+        && /composed the verify payload/.test(r.stdout || ""),
+      () => ({ status: r.status, wrote: fs.existsSync(bf), stderr: (r.stderr || "").slice(0, 200) }));
+    const both = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d, "--built", "x.json"],
+      { input: manifest, encoding: "utf8" });
+    check("ENG-98556 (CLI): `--from` and `--built` together are refused at exit 1 — two sources for one payload, and silently preferring either would make the table a report on a file the caller did not think it ran against",
+      () => both.status === 1 && /two sources for ONE payload/.test(both.stderr || ""),
+      () => ({ status: both.status, stderr: (both.stderr || "").slice(0, 200) }));
+    const alone = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--from", d],
+      { input: manifest, encoding: "utf8" });
+    check("ENG-98556 (CLI): `--from` without `--verify` is refused — it composes the payload one gate reads, and on its own it would write a file nothing checks",
+      () => alone.status === 1 && /only means something with `--verify`/.test(alone.stderr || ""),
+      () => ({ status: alone.status, stderr: (alone.stderr || "").slice(0, 200) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // The read leg of exit 2, stated apart from the build legs: a row open because nobody could READ the page is a
+  // re-read, not a repair, and the table cannot tell them apart (an omitted key reads ⚠ like any other).
+  const d = asFolder({ bundle: null });
+  try {
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
+    check("ENG-98556 (CLI): an unread file fails the run at exit 2 and says on stderr that the rows are NOT CHECKED rather than missing — a re-read, not a repair",
+      () => r.status === 2 && /COULD NOT READ/.test(r.stderr || "")
+        && /NOT CHECKED \(not "missing"/.test(r.stderr || "")
+        && /02-bundle-main\.json/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: (r.stderr || "").slice(0, 400) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+// ================================================================================================
+// ENG-98556 review round — the paths the first cut left open.
+{
+  // THE SYMMETRIC DROP. `meta.json` and `bundle.json` are two separate copies out of ONE `get-page` call, so
+  // either can be the one that goes missing. A lost bundle already dropped the key; a lost meta did not — the
+  // entry kept `viewConfig` (and picked `schemaName` off the bundle) and reached the payload guard with no
+  // `schemaUId`, which REJECTS it at exit 1 as a malformed payload. That is a verdict about the caller's JSON,
+  // for something that is not the caller's JSON and not malformed — and `fail()` exits before `problems` prints,
+  // so the one diagnostic that knew the answer never reached anyone.
+  const d = asFolder({ meta: null });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a page whose METADATA was never written drops out exactly as one whose bundle did — no `schemaUId` is an unread file, not a malformed payload, and the guard would have failed the whole run at exit 1",
+      () => built.pages.main === undefined && problems.length === 1
+        && problems[0].file === "reads/01-meta-main.json",
+      () => ({ pages: Object.keys(built.pages), problems }));
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
+    check("ENG-98556 (CLI): …and the run exits 2 naming the file, not exit 1 naming `schemaUId` — the caller is told to re-read, which is the thing that actually happened",
+      () => r.status === 2 && /COULD NOT READ/.test(r.stderr || "")
+        && /01-meta-main\.json/.test(r.stderr || "") && !/no valid `schemaUId`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: (r.stderr || "").slice(0, 300) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // THE STALE INDEX. The index is a file from an EARLIER command, and TWO different things go wrong with it.
+  // The VERSION answers the likely cause in one line — the plan moved, so re-cut it rather than re-running a
+  // dozen reads. The FILE SET answers what the version cannot: `computePlanVersion` hashes the whole manifest, so
+  // one stamp means one read list by construction, and a set that still differs was hand-edited or written by a
+  // different engine build. Under a matching stamp a per-read diff would find nothing this does not.
+  const d = asFolder();
+  try {
+    const files = (ks) => ({ planVersion: "plan-aaaa1111", reads: ks.map((f) => ({ file: f })) });
+    const ALL = ["reads/01-meta-main.json", "reads/02-bundle-main.json", "reads/03-rules-main.json",
+      "reads/04-reachability-sectionRegistered.json"];
+    check("ENG-98556: an index that matches the plan's read list under the same stamp is clean — the common case must be silent or the check is noise",
+      () => assembleBuilt(d, files(ALL)).problems.length === 0,
+      () => ({ problems: assembleBuilt(d, files(ALL)).problems }));
+    // A read the plan wants that the index does not carry: nothing is opened for it, so not even a "not written"
+    // problem fires — the rows would report unconfirmed with nobody having tried.
+    const added = assembleBuilt(d, files([...ALL, "reads/05-bundle-list.json"])).problems;
+    check("ENG-98556: a read this plan asks for that the index does not carry is named — without it nothing is opened, nothing is recorded, and a built page reports unconfirmed",
+      () => added.length === 1 && /nothing covers/.test(added[0].why) && /05-bundle-list/.test(added[0].why),
+      () => ({ problems: added }));
+    const dropped = assembleBuilt(d, files(ALL.slice(0, 2))).problems;
+    check("ENG-98556: an index carrying a read this plan does not ask for is named too — it was hand-edited or written by a different engine build, and either way it is not this plan's",
+      () => dropped.length === 1 && /which this plan does not ask for/.test(dropped[0].why),
+      () => ({ problems: dropped }));
+    check("ENG-98556: …and both directions are ONE line about the index, not one per file — the index either matches this plan or it does not",
+      () => assembleBuilt(d, files(["reads/09-a.json", "reads/10-b.json"])).problems.length === 1,
+      () => ({ problems: assembleBuilt(d, files(["reads/09-a.json", "reads/10-b.json"])).problems }));
+    const moved = assembleBuilt(d, { planVersion: "plan-deadbeef", reads: [] });
+    check("ENG-98556: a read plan cut against a DIFFERENT plan version is refused the way `--split` refuses a stale cut — and the version line is what points at re-cutting the plan rather than re-running every read",
+      () => moved.problems.some((p) => /was cut against plan/.test(p.why)),
+      () => ({ problems: moved.problems }));
+    const replay = assembleBuilt(d);
+    check("ENG-98556: with no expected plan (an offline replay) the index is taken at its word — a recorded folder has no manifest to diff against and must still verify",
+      () => replay.problems.length === 0,
+      () => ({ problems: replay.problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // THE EVIDENCE IDS. The one part of the payload keyed by a string a person would otherwise read off rendered
+  // Markdown and retype — which is ENG-98049 exactly: a backtick inside an id made a filed record unmatchable.
+  // The engine derives the ids, so it writes them as keys and the filer only ever supplies values.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_skel_"));
+  try {
+    const plan = readPlan(lpRun, checklistOpts({}));
+    const wrote = writeEvidenceSkeletons(d, plan);
+    const ev = JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8"));
+    const ju = JSON.parse(fs.readFileSync(path.join(d, "judge.json"), "utf8"));
+    check("ENG-98556: `--reads` writes `evidence.json` / `judge.json` with EVERY published id already a key — the filer supplies values and never types an id",
+      () => wrote.length === 2 && plan.evidenceIds.length > 0
+        && plan.evidenceIds.every((id) => id in ev && id in ju),
+      () => ({ wrote, ids: plan.evidenceIds.length, keys: Object.keys(ev).length }));
+    // The AC's own case: an id carrying a backtick and non-Latin text. Written by the engine, byte for byte, so
+    // there is nothing to escape and nothing to get wrong.
+    const gnarly = plan.evidenceIds.filter((id) => /[`·]|[^\x00-\x7f]/.test(id));
+    check("ENG-98556: an id carrying a backtick or non-Latin text is written VERBATIM as a key — the failure was retyping it, and nothing retypes it now",
+      () => gnarly.every((id) => Object.prototype.hasOwnProperty.call(ev, id)),
+      () => ({ gnarly }));
+    // These hold the run's own answers. Regenerating one would delete them.
+    fs.writeFileSync(path.join(d, "evidence.json"), JSON.stringify({ mine: 1 }));
+    writeEvidenceSkeletons(d, plan);
+    check("ENG-98556: an existing `evidence.json` is never overwritten — it holds the run's own answers, and a second `--reads` must not delete them",
+      () => JSON.parse(fs.readFileSync(path.join(d, "evidence.json"), "utf8")).mine === 1,
+      () => ({ back: fs.readFileSync(path.join(d, "evidence.json"), "utf8").slice(0, 60) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// The engine fixes WHICH read happens; the row has to fix HOW, or it leaves the known-wrong how available — and
+// `find-app` is blind to a section over a borrowed entity, which cost ENG-98487 a repair round proving a stale
+// alarm.
+{
+  // AC 3, both halves. The table that judges the payload has to land BESIDE the payload — Contract rule 1 makes
+  // that file the only sanctioned report, and a run whose two halves live in different places is re-checkable in
+  // halves. And a second run over an unchanged folder must produce the same bytes, or "re-checkable" means
+  // nothing.
+  const d = asFolder();
+  try {
+    const run = () => spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
+    run();
+    const first = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+    const firstBuilt = fs.readFileSync(path.join(d, "built.json"), "utf8");
+    run();
+    check("ENG-98556 (AC3): `verify.md` lands in the migration folder beside `built.json` with no `--out` — the payload and the table that judges it are re-checkable together or not at all (ENG-98456 lost both to a temp dir)",
+      () => fs.existsSync(path.join(d, "verify.md")) && /Plan-vs-Done/.test(first),
+      () => ({ files: fs.readdirSync(d) }));
+    check("ENG-98556 (AC3): a second run over an UNCHANGED folder overwrites both and the bytes are identical — a table that drifted on its own could not be diffed against the next run",
+      () => fs.readFileSync(path.join(d, "verify.md"), "utf8") === first
+        && fs.readFileSync(path.join(d, "built.json"), "utf8") === firstBuilt,
+      () => ({ sameTable: fs.readFileSync(path.join(d, "verify.md"), "utf8") === first,
+        samePayload: fs.readFileSync(path.join(d, "built.json"), "utf8") === firstBuilt }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // The cause of an unread row has to survive in the ARTIFACT. The table is the only sanctioned report, so a ⚠
+  // whose cause lives only on stderr is indistinguishable, to the person holding the file, from a page nobody
+  // built. A banner rather than per-row text: the row wording belongs to the resolvers, and what `--verify`
+  // checks is out of this ticket's scope.
+  const d = asFolder({ bundle: null });
+  try {
+    spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
+    const md = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+    check("ENG-98556 (AC3): the verify artifact ITSELF says which reads could not be opened — a ⚠ whose cause is only on stderr is, to the reader holding the file, the same as a page nobody built",
+      () => /could not be opened/.test(md) && /NOT CHECKED/.test(md) && /02-bundle-main\.json/.test(md),
+      () => ({ head: md.slice(0, 400) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // AC 2's own fixture: `modelConfig` always rides along, so the check that fires on a page with no primary data
+  // source actually runs. That page HANGS THE BROWSER — `$Id` is undefined — and a payload that omitted
+  // `modelConfig` let it through silently on the very run the check was written for.
+  const noPds = { ...AS_BUNDLE, modelConfig: { dataSources: { PDS: { config: { entitySchemaName: "UsrX" } } } } };
+  const d = asFolder({ bundle: noPds });
+  try {
+    const { built } = assembleBuilt(d);
+    check("ENG-98556 (AC2): a bundle with NO `primaryDataSourceName` still contributes its `modelConfig` — that is the only way the gate can see a page that hangs the browser, and the payload that dropped it is why the check never ran",
+      () => built.pages.main.modelConfig !== undefined
+        && built.pages.main.modelConfig.primaryDataSourceName === undefined
+        && built.pages.main.entitySchemaName === undefined,
+      () => ({ page: built.pages.main && Object.keys(built.pages.main) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+// ================================================================================================
+// ENG-98556 implementation review — the two payload halves `--from` could not produce.
+{
+  // DASHBOARDS. `built.dashboards` is a LIST transcribed from `DashboardMigrationLog` — a stand TABLE the
+  // migration process writes, which no page read can see. Nothing in the first cut produced it, so on any section
+  // with dashboards `--verify --from` exited 2 forever and the only escape was hand-editing `built.json` and
+  // replaying with `--built` — the hand-authoring this whole ticket removes.
+  const dashRun = runMigration({ ...LP_MANIFEST,
+    planMeta: { ...LP_MANIFEST.planMeta, dashboards: [{ id: "d1", caption: "Pipeline" }, { id: "d2", caption: "Aging" }] },
+  }, { baseDir: FIX });
+  const dashPlan = readPlan(dashRun, checklistOpts({}));
+  const dashReads = dashPlan.reads.filter((r) => r.kind === "dashboards");
+  const dashExpected = checklistGroups(dashRun, checklistOpts({}))
+    .flatMap((g) => g.rows).some((r) => r.vk?.type === "dashboards" && (r.vk.expect || []).length);
+  check("ENG-98556: a plan that moves dashboards emits a `dashboards` read — ONE per run, because the log is a stand table no page read can reach and the gate has no other source",
+    () => !dashExpected || (dashReads.length === 1 && /DashboardMigrationLog/.test(dashReads[0].what)),
+    () => ({ expected: dashExpected, reads: dashReads }));
+  check("ENG-98556: a plan that moves NO dashboard emits no such read — the rows resolve on their own, and a read for an empty expectation is a file somebody has to answer with nothing",
+    () => readPlan(lpRun, checklistOpts({})).reads.filter((r) => r.kind === "dashboards").length === 0,
+    () => ({ reads: readPlan(lpRun, checklistOpts({})).reads.map((r) => r.kind) }));
+}
+{
+  const d = asFolder();
+  try {
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" },
+      { kind: "dashboards", file: "reads/03-dashboards-migration-log.json", what: "d" },
+    ] });
+    asWrite(d, "reads/03-dashboards-migration-log.json",
+      [{ id: "d1", status: "Success", schemaName: "UsrPipeline", package: "UsrApp" }]);
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: the dashboard log composes into `built.dashboards` verbatim — statuses go in as they came, so the list can be diffed against the log by eye",
+      () => problems.length === 0 && Array.isArray(built.dashboards)
+        && built.dashboards[0].status === "Success" && built.dashboards[0].id === "d1",
+      () => ({ problems, dashboards: built.dashboards }));
+    // One boolean for the whole run is what lets eleven of twelve close the row while the twelfth is never
+    // mentioned — so a non-list is refused rather than coerced into one.
+    asWrite(d, "reads/03-dashboards-migration-log.json", { status: "Success" });
+    const bad = assembleBuilt(d);
+    check("ENG-98556: a dashboard log that is not a LIST is a named problem, never coerced — the gate matches one entry per dashboard, and a single value cannot answer for the set",
+      () => bad.problems.length === 1 && /is not a LIST/.test(bad.problems[0].why)
+        && bad.built.dashboards === undefined,
+      () => ({ problems: bad.problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // "THE STAND SAYS NO SUCH SCHEMA" is a different answer from "I could not read it", and the payload has a
+  // spelling for it: `false`, a hard ❌ MISSING that opens a repair. Without it a page that was never built and a
+  // page nobody managed to read were the same unwritten file, and the repair path was unreachable through `--from`.
+  const d = asFolder({ bundle: false });
+  try {
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a literal `false` in a page's slot composes to the payload's `false` entry — the stand was asked and answered no, which is a repair, not a re-read",
+      () => built.pages.main === false && problems.length === 0,
+      () => ({ page: built.pages.main, problems }));
+    const r = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--from", d],
+      { input: JSON.stringify(LP_MANIFEST), encoding: "utf8" });
+    // The ❌ is the point: an unread page renders ⚠ and tells the reader to re-read, while this one tells them to
+    // build. (The folder's index is a fixture and does not match this manifest's full read list, so the run also
+    // carries an unrelated stale-index problem — the assertion is about the page's MARK, not the run's verdict.)
+    check("ENG-98556 (CLI): …and it reaches the gate as a hard ❌ MISSING rather than an unread row — a page that was never built must not read as one nobody looked at",
+      () => { const md = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+        return /❌ MISSING/.test(md) && /get-page returned/.test(md) && r.status === 2; },
+      () => ({ status: r.status, marks: (fs.readFileSync(path.join(d, "verify.md"), "utf8").match(/❌ MISSING/g) || []).length }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// The row that names the question and leaves the query to the reader leaves the known-wrong answer available.
+// PROCESS_HOWTO sets the standard elsewhere: the filter form, the nav, the fields, and the trap.
+check("ENG-98556: the `sectionRegistered` row spells the query as ARGUMENTS — the `SysModule.Id` resolution first, the `SysModule/Id` nav, `filters` not `filter`, the count from the rows, and `find-app` named as the answer that does not count",
+  () => { const row = readPlan(lpRun, checklistOpts({})).reads.find((r) => r.reachabilityKey === "sectionRegistered");
+    return !!row && /SysModuleInWorkplace/.test(row.what) && /SysModule\/Id/.test(row.what)
+      && /`filters`, NOT `filter`/.test(row.what) && /NOT `find-app`/.test(row.what)
+      // A migrated section resolves TWO SysModule rows in different workplaces; the row says which to keep.
+      && /SectionModuleSchemaUId/.test(row.what) && /SectionSchemaViewModule/.test(row.what)
+      && /SectionModuleV2/.test(row.what); },
+  () => ({ what: readPlan(lpRun, checklistOpts({})).reads.find((r) => r.reachabilityKey === "sectionRegistered")?.what }));
+
+// ================================================================================================
+// ENG-98556 implementation re-review — three ways a file could still say nothing and be believed.
+{
+  // A LITERAL `null` is neither an answer nor an absence, and it is ONE KEYSTROKE from `false`, which IS an
+  // absence. Every branch treats a null as "nothing arrived", so without a problem it slips through as a silently
+  // unchecked row — the single outcome this whole path exists to prevent.
+  const d = asFolder({ meta: null });
+  try {
+    asWrite(d, "reads/01-meta-main.json", "null");
+    asWrite(d, "reads/04-reachability-sectionRegistered.json", "null");
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a file holding the literal `null` is a NAMED problem, not a silent nothing — it is one keystroke from `false`, which means the stand denied the schema, and the two must never read alike",
+      () => problems.length === 2 && problems.every((p) => /neither an answer nor an absence/.test(p.why))
+        && built.pages.main === undefined && built.reachability.sectionRegistered === undefined,
+      () => ({ problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // A MOVED PLAN changes the read list by definition, so the file-set comparison would fire too and blame a hand
+  // edit for what the version line already explained correctly. One cause, one line — which is the whole reason
+  // the stamp is kept rather than derived from the file names.
+  const d = asFolder();
+  try {
+    const moved = assembleBuilt(d, { planVersion: "plan-deadbeef",
+      reads: [{ file: "reads/01-meta-main.json" }, { file: "reads/99-new.json" }] });
+    check("ENG-98556: a moved plan reports the VERSION line and nothing else — the set comparison would fire on the same event and blame a hand edit, which is not what happened",
+      () => moved.problems.length === 1 && /was cut against plan/.test(moved.problems[0].why)
+        && !moved.problems.some((p) => /hand-edited/.test(p.why)),
+      () => ({ problems: moved.problems }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // ONE FILE DENYING THE SCHEMA while the other carries that schema's own data. The same `get-page` call cannot
+  // both return a page and say there is none, so the pair has no legitimate reading: it is a copy error, named
+  // and dropped like the mis-copy it is, rather than letting whichever file was read last decide.
+  const both = (meta, bundle) => {
+    const d = asFolder();
+    asWrite(d, "reads/01-meta-main.json", meta);
+    asWrite(d, "reads/02-bundle-main.json", bundle);
+    const r = assembleBuilt(d);
+    fs.rmSync(d, { recursive: true, force: true });
+    return r;
+  };
+  const META = JSON.stringify(AS_META), BUNDLE = JSON.stringify(AS_BUNDLE);
+  const denyMeta = both("false", BUNDLE), denyBundle = both(META, "false");
+  check("ENG-98556: a page whose two files DISAGREE about whether the stand has the schema is named and dropped, in both directions — one `get-page` call cannot answer both ways, so this is a copy error, not an absence",
+    () => denyMeta.problems.length === 1 && /two files disagree/.test(denyMeta.problems[0].why)
+      && denyMeta.built.pages.main === undefined
+      && denyBundle.problems.length === 1 && denyBundle.built.pages.main === undefined,
+    () => ({ denyMeta: denyMeta.problems, denyBundle: denyBundle.problems }));
+  const bothDeny = both("false", "false");
+  check("ENG-98556: …while BOTH files denying it is the agreement it looks like — `false`, a hard MISSING that opens a repair",
+    () => bothDeny.problems.length === 0 && bothDeny.built.pages.main === false,
+    () => ({ page: bothDeny.built.pages.main, problems: bothDeny.problems }));
+}
+
+// ================================================================================================
+// ENG-98556 follow-up review — the read-path guard, index order, half a denial, and kind drift.
+{
+  // A read may only answer out of `<dir>/reads/`. Both escape shapes: lexical `../` and an absolute path.
+  // The migration folder is NESTED inside the temp root so the `../../` decoy lands in that root — a test writes
+  // nothing outside its own tree, and from a bare `mkdtemp` that target is `/` on Linux.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_esc_"));
+  const d = path.join(root, "mig", "folder");
+  const absOutside = path.join(root, "abs-outside.json");
+  try {
+    fs.mkdirSync(d, { recursive: true });
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "reachability", file: "../../outside.json", reachabilityKey: "up", what: "w" },
+      { kind: "reachability", file: absOutside.split(path.sep).join("/"), reachabilityKey: "abs", what: "w" }] });
+    const upTarget = path.resolve(d, "..", "..", "outside.json");
+    fs.writeFileSync(upTarget, JSON.stringify({ leaked: true }));
+    fs.writeFileSync(absOutside, JSON.stringify({ leaked: true }));
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: an index row naming a file OUTSIDE `reads/` is refused and named, never read — the index is a file from an earlier command, and a read may only answer out of the folder this run owns",
+      () => problems.length === 2 && problems.every((x) => /resolves outside/.test(x.why))
+        && built.reachability.up === undefined && built.reachability.abs === undefined,
+      () => ({ problems, reachability: built.reachability }));
+    check("ENG-98556: …and the decoys that test it stay inside the run's own temp root — a fixture writing above `os.tmpdir()` targets `/` on Linux and fails the suite before it reports anything",
+      () => [upTarget, absOutside].every((f) => f.startsWith(root + path.sep)),
+      () => ({ root, upTarget, absOutside }));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+{
+  // The mis-copy check must not depend on which of a page's two files the index lists first.
+  const mismatch = (reads) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ord_"));
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads });
+    asWrite(d, "reads/01-meta-main.json", AS_META);
+    asWrite(d, "reads/02-bundle-main.json", { ...AS_BUNDLE, name: "UsrOther_FormPage" });
+    const r = assembleBuilt(d);
+    fs.rmSync(d, { recursive: true, force: true });
+    return r;
+  };
+  const METAROW = { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" };
+  const BUNDLEROW = { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" };
+  const metaFirst = mismatch([METAROW, BUNDLEROW]), bundleFirst = mismatch([BUNDLEROW, METAROW]);
+  check("ENG-98556: a `meta.json`/`bundle.json` pair naming two different schemas is caught in EITHER index order — nothing fixes which row comes first, and a guard that only fires one way composes the mis-copied page the other way",
+    () => [metaFirst, bundleFirst].every((r) => r.problems.length === 1
+      && /two different pages/.test(r.problems[0].why) && r.built.pages.main === undefined),
+    () => ({ metaFirst: metaFirst.problems, bundleFirst: bundleFirst.problems,
+      metaFirstPage: metaFirst.built.pages.main, bundleFirstPage: bundleFirst.built.pages.main }));
+}
+{
+  // One `get-page` call answers once, so `false` in one file beside an unwritten sibling is not a denial.
+  const half = (denied, other) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_half_"));
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" }] });
+    asWrite(d, denied, "false");
+    if (other) asWrite(d, other.file, other.body);
+    const r = assembleBuilt(d);
+    fs.rmSync(d, { recursive: true, force: true });
+    return r;
+  };
+  const bundleDenied = half("reads/02-bundle-main.json"), metaDenied = half("reads/01-meta-main.json");
+  check("ENG-98556: a page denied by ONE file while the other was never written is NOT CHECKED, never MISSING — a denial comes from both files, and `false` off a single one sends a repair where a re-read was owed",
+    () => [bundleDenied, metaDenied].every((r) => r.built.pages.main === undefined
+      && r.problems.some((x) => /a denial comes from BOTH files/.test(x.why))),
+    () => ({ bundleDenied: bundleDenied.problems.map((x) => x.why), bundleDeniedPage: bundleDenied.built.pages.main,
+      metaDenied: metaDenied.problems.map((x) => x.why), metaDeniedPage: metaDenied.built.pages.main }));
+  // A sibling carrying real data is the sharper reading of the same key, so it wins.
+  const contradicted = half("reads/01-meta-main.json", { file: "reads/02-bundle-main.json", body: AS_BUNDLE });
+  check("ENG-98556: …while a sibling carrying real data still reads as the copy error it is — the sharper diagnosis wins over `the other file was never written`, which is also true of that key",
+    () => contradicted.problems.length === 1 && /two files disagree/.test(contradicted.problems[0].why)
+      && contradicted.built.pages.main === undefined,
+    () => ({ problems: contradicted.problems.map((x) => x.why) }));
+}
+{
+  // A kind the read plan emits that the composing half has no entry for must be reported, not skipped.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_kind_"));
+  try {
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads: [
+      { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+      { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" },
+      { kind: "profileCards", file: "reads/03-profile-main.json", pageKey: "main", what: "p" }] });
+    asWrite(d, "reads/01-meta-main.json", AS_META);
+    asWrite(d, "reads/02-bundle-main.json", AS_BUNDLE);
+    asWrite(d, "reads/03-profile-main.json", { some: "answer" });
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a read kind the composing half has no branch for is NAMED, not silently skipped — the file is on disk and answered, and dropping it would leave its rows unconfirmed with nothing saying why",
+      () => problems.some((x) => /cannot compose/.test(x.why) && /profileCards/.test(x.what))
+        && built.pages.main.viewConfig !== undefined,
+      () => ({ problems, pages: Object.keys(built.pages) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+
+// ================================================================================================
+// ENG-98556 — THE SEAM, end to end. Every other assembleBuilt test hand-writes its index, so the
+// vocabulary the two modules share is pinned by nothing: rename a read kind in reads.mjs and all of
+// them stay green while `--verify --from` composes an empty payload. This one runs the real
+// `--reads`, fills every file the real index names, and composes from it — then replays the composed
+// payload through `--built` and requires the two tables to be identical.
+{
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_seam_"));
+  const mf = path.join(d, "manifest.json");
+  try {
+    fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
+    const eng = path.join(ENGINE_DIR, "migrate.mjs");
+    const plan = spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
+    // Filled from the index ITSELF, by kind — never from a hand-written list. A kind the engine emits
+    // that this switch does not know leaves its file unwritten, and the `problems` assertion below
+    // fails, which is the point: the two modules cannot drift apart silently.
+    const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
+    index.reads.forEach((r, n) => {
+      const body = {
+        pageMeta: () => ({ page: { schemaName: `Usr${r.pageKey}_Page`, schemaUId: uid(n),
+          packageName: "UsrApp", packageUId: "9bf821e9-691f-4afa-a590-29cba45e0d68",
+          parentSchemaName: "PageWithTabsFreedomTemplate" } }),
+        pageBundle: () => ({ name: `Usr${r.pageKey}_Page`, viewConfig: { items: [{ name: "Name", type: "crt.Input" }] },
+          viewModelConfig: { attributes: {} }, handlers: [],
+          modelConfig: { primaryDataSourceName: "PDS", dataSources: { PDS: { config: { entitySchemaName: "Applicant" } } } } }),
+        businessRules: () => ({ count: 0, rules: [] }),
+        reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
+        dashboards: () => [],
+      }[r.kind];
+      check(`ENG-98556 (seam): the read plan emits no kind the filler does not know — \`${r.kind}\` is one the composing half can answer`,
+        () => typeof body === "function", () => ({ kind: r.kind, file: r.file }));
+      if (body) asWrite(d, r.file, body());
+    });
+    const composed = assembleBuilt(d, readPlan(lpRun, checklistOpts(LP_MANIFEST)));
+    check("ENG-98556 (seam): `--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
+      () => composed.problems.length === 0 && Object.keys(composed.built.pages).length > 0
+        && Object.values(composed.built.pages).every((p) => p.viewConfig !== undefined),
+      () => ({ problems: composed.problems, pages: Object.keys(composed.built.pages) }));
+
+    // AC 6's recorded-payload replay: the composed `built.json` is what `--built` is documented to
+    // take, and the stdout line, the README and SKILL.md all promise the run replays offline from it.
+    const fromRun = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d], { encoding: "utf8" });
+    const composedTable = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+    const replayOut = path.join(d, "replay.md");
+    const replay = spawnSync(process.execPath,
+      [eng, mf, "--verify", "--built", path.join(d, "built.json"), "--out", replayOut], { encoding: "utf8" });
+    check("ENG-98556 (AC6 replay): the payload the engine composed replays through `--verify --built` and reproduces the SAME table — the offline-replay property the stdout note, the README and SKILL.md all promise",
+      () => fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable
+        && replay.status === fromRun.status,
+      () => ({ fromStatus: fromRun.status, replayStatus: replay.status,
+        identical: fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable }));
+    check("ENG-98556 (seam): `--reads` printed the plan it wrote — the agent acts on stdout, so an index written with nothing printed would leave the reads undiscoverable",
+      () => /Read plan/.test(plan.stdout || "") && index.reads.length > 0,
+      () => ({ printed: (plan.stdout || "").slice(0, 120), reads: index.reads.length }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// The rendered plan is the ONLY instruction the read-back sub-agent is handed: SKILL.md and the engine
+// README reach the orchestrator, not it. A `false` answer it is never told about is a page that was
+// genuinely not built looping as ⚠ NOT CHECKED instead of opening a repair.
+check("ENG-98556: the rendered read plan tells the agent how to report a page the stand DENIES — the literal `false`, in BOTH of that page's files, since one `get-page` call cannot answer both ways",
+  () => { const md = renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig");
+    return /DENIES/.test(md) && /`false`/.test(md) && /\bboth\b/i.test(md) && /MISSING/.test(md); },
+  () => ({ tail: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").slice(-600) }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
