@@ -85,6 +85,9 @@ const GROUP_PHASE = new Map([
   ["Card actions", 50],
   ["Form — Logic", 60],
   ["⚠ Imperative members worklist", 70],
+  // The list page's own imperative work: after the page it attaches to is built, before its review.
+  ["List — Custom methods", 86],
+  ["List — Other declared logic worklist", 87],
   ["Child pages", 80],
   ["Quality gates", 99],
 ]);

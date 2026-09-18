@@ -1822,8 +1822,31 @@ const secNamed = checklistGroups(secViewRun, {}).flatMap((g) => g.rows.map((r) =
 check("the section behaviours named by the ticket each reach a row — the fold is name-agnostic, so the names are pinned here",
   ["onActiveRowChange", "getSupplierBillingInfo"].every((m) =>
     secNamed.some(([g, l]) => g === "List — Custom methods" && l.includes("`" + m + "`")))
-    && secNamed.some(([g, l]) => g === "⚠ Other declared logic worklist" && /GridUtilitiesV2/.test(l)),
+    && secNamed.some(([g, l]) => g === "List — Other declared logic worklist" && /GridUtilitiesV2/.test(l)),
   () => secNamed);
+// …and the methods the section analyzer consumes through its own paths: a row that is never emitted and a row
+// that is marked read the same way in the marker alone.
+const secConsumed = runMigration({ entity: "Applicant", planMeta: { sectionSchema: "A1Section", listTemplate: "ListFreedomTemplate" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "HR", body: 'define("A1Section",[],function(){return{entitySchemaName:"Applicant",methods:{getSectionActions:function(){var a=this.callParent(arguments);a.addItem(this.getButtonMenuItem({Caption:"x"}));return a;},initFixedFiltersConfig:function(){this.set("FixedFilterConfig",{});},getAddRecordMiniPage:function(){return "MiniPage";}},diff:[]};});' }],
+});
+const secConsumedRows = checklistGroups(secConsumed, {}).filter((g) => g.baseTitle === "List — Custom methods")
+  .flatMap((g) => g.rows.map((r) => r.label));
+check("every method the section analyzer consumes still reaches a row, each marked as already mapped rather than dropped",
+  ["getSectionActions", "initFixedFiltersConfig", "getAddRecordMiniPage"].every((m) =>
+    secConsumedRows.some((l) => l.includes("`" + m + "`") && /already mapped into the list page/.test(l))),
+  () => secConsumedRows);
+// A folded helper the analyzer already read keeps BOTH notes, and the plan's target cell says the same.
+const secFolded = runMigration({ entity: "A", planMeta: { sectionSchema: "S1" },
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"A",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name"}}]};});' }],
+  section: [{ pkg: "H", body: 'define("S1",[],function(){return{entitySchemaName:"A",methods:{wrapper:function(){return this.getGridDataColumns();},getGridDataColumns:function(){var c=this.callParent(arguments);c.N={path:"N"};return c;}},diff:[]};});' }],
+});
+const foldedRow = checklistGroups(secFolded, {}).filter((g) => g.baseTitle === "List — Custom methods")
+  .flatMap((g) => g.rows.map((r) => r.label)).find((l) => l.includes("getGridDataColumns")) || "";
+check("a folded helper the list analyzer already read keeps BOTH notes — the fold does not cancel the mark",
+  /ported with/.test(foldedRow) && /already mapped into the list page/.test(foldedRow)
+    && /already mapped into the list page/.test(secFolded.designSpec),
+  () => foldedRow || "no getGridDataColumns row");
 // The section's decisions are its MEMBERS only. `mapToFreedom` maps a record page, so its view-shaped kinds
 // describe regions a list page has not got — and on the degraded key they collide with the form page's own ids.
 const secKinds = [...new Set((secViewRun.listChangeSet?.needsDecision || []).map((d) => d.kind))];
@@ -3254,6 +3277,21 @@ check("C2: the lookup-GUID prompt is a needsDecision record, so it reaches the B
 check("C2: the row's `item` is fixed and the rule targets ride in `reason` — an id that moves detaches its status",
   guidDecisions[0]?.item === "business-rule conditions" && /conditions on Contact/.test(guidDecisions[0]?.reason || ""),
   () => guidDecisions[0]);
+// The predicate serialises a whole mapped rule, so any id-shaped value in it could fire. A rule set with no
+// lookup GUID raises nothing.
+const noGuidCs = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"X",businessRules:{Contact:{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:0,attribute:"Contact"},rightExpression:{type:1,value:"plain text"}}]}}},diff:[{operation:"insert",name:"Contact",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Contact"}}]};});' }],
+});
+check("C2 (negative): a rule set carrying no lookup GUID raises no `lookup-value` record",
+  (noGuidCs.changeSet.needsDecision || []).filter((d) => d.kind === "lookup-value").length === 0,
+  () => (noGuidCs.changeSet.needsDecision || []).map((d) => d.kind));
+// The fold bails when no rule resolves a target: the row exists to name them, so one naming none is not emitted.
+const guidNoTarget = runMigration({ entity: "X",
+  schemas: [{ pkg: "P", body: 'define("P",[],function(){return{entitySchemaName:"X",businessRules:{"":{r1:{enabled:true,removed:false,ruleType:0,property:2,logical:0,conditions:[{comparisonType:3,leftExpression:{type:0,attribute:""},rightExpression:{type:1,value:"41e34f4c-bcb4-4f69-b2a8-97d2b750aebb"}}]}}},diff:[]};});' }],
+});
+check("C2 (stated decision): a GUID-carrying rule that resolves NO target raises no row — the row exists to name the targets",
+  (guidNoTarget.changeSet.needsDecision || []).filter((d) => d.kind === "lookup-value").length === 0,
+  () => (guidNoTarget.changeSet.needsDecision || []).filter((d) => d.kind === "lookup-value"));
 // GUARD — every ⚠ Confirm row in a rendered plan is built from the decision record: a row invented at print time
 // is carried by no other channel.
 const confirmKindsOf = (md) => {

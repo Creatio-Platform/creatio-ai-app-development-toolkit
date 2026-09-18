@@ -1465,7 +1465,7 @@ function renderImperativeLogic(cs) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const unfolded = h.listMapped ? LIST_MAPPED_TARGET : targetText(h);
-    const target = parent ? `port with \`${esc(parent)}\`` : unfolded;
+    const target = h.listMapped ? LIST_MAPPED_TARGET : (parent ? `port with \`${esc(parent)}\`` : unfolded);
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -2490,8 +2490,9 @@ function handlerStubRows(cs) {
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   return (cs.handlerStubs || []).map((h) => {
     const parent = foldedUnder.get(h.sourceMethod);
+    // Composed, not exclusive: a folded helper the list analyzer already read is still already read.
     const unfolded = h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "";
-    const note = parent ? ` (ported with \`${esc(parent)}\`)` : unfolded;
+    const note = (parent ? ` (ported with \`${esc(parent)}\`)` : "") + unfolded;
     return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note };
   });
 }
@@ -2503,15 +2504,16 @@ function memberWorklistRows(cs) {
   return (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
     .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` }));
 }
-// The section's imperative work, built by the SAME two row builders as the form page's. The member-worklist title
-// names no scope, so it is reused as-is.
+// The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
+// scope: on a withheld `list` key these ride the form page's key, where one title would be one identity for two
+// different row sets.
 function sectionLogicGroups(listCs, key) {
   const cs = listCs || {};
   const out = [];
   const methods = handlerStubRows(cs);
   if (methods.length) out.push(pageGroup(key, "List — Custom methods", methods));
   const members = memberWorklistRows(cs);
-  if (members.length) out.push(pageGroup(key, "⚠ Other declared logic worklist", members));
+  if (members.length) out.push(pageGroup(key, "List — Other declared logic worklist", members));
   return out;
 }
 function pageGroup(pageKey, title, rows) {
