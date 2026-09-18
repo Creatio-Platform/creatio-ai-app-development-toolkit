@@ -316,6 +316,10 @@ function taskOf(chunk, order) {
   const { artifact, pageKey, label, anchor, identityKey, srcRows, reviewsArtifacts } = chunk;
   const rows = srcRows.map((r) => ({
     label: r.label,
+    // ENG-99740 — the ROW's own page, not the task's. A collapsed whole-run task (pageKey "run") merges several
+    // pages' rows; without the source page the report joins them by label alone and a not-built / boundary state
+    // bleeds across identically-labeled rows on different pages (e.g. `Handler — init` on two pages).
+    pageKey: r.pageKey || pageKey,
     group: r.groupTitle,                   // the plan group this deliverable was read from
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
@@ -370,7 +374,7 @@ function artifactRows(groups, B) {
   return groups
     .map((g, i) => ({ g, i, base: baseTitleOf(g) }))
     .sort((a, b) => (phaseOf(a.base) - phaseOf(b.base)) || (a.i - b.i))
-    .flatMap(({ g, base }) => g.rows.map((r) => ({ ...r, groupTitle: base, weight: rowWeight(r, base, B) })));
+    .flatMap(({ g, base }) => g.rows.map((r) => ({ ...r, groupTitle: base, pageKey: g.pageKey, weight: rowWeight(r, base, B) })));
 }
 
 // THE TASK SET. `planVersion` is the engine's own plan version — the string a `decisions.md` approval names — so a

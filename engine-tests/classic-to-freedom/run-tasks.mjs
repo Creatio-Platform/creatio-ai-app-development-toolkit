@@ -3498,6 +3498,21 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   check("ENG-99126 CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
     () => { const r = cliR(["--verify", "--built", built], MANIFEST); return (r.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(r.stdout || ""); },
     () => cliR(["--verify", "--built", built], MANIFEST).stdout?.slice(0, 200));
+  // ENG-99740 (Alexandr-Kravchuk): the new machine rows run through resolveVk on EVERY --verify, so a plain --verify
+  // (no --tasks) whose payload carries the new optional fields (handlers / viewModelConfig) must still emit the
+  // legacy plan-vs-built table, not the migration result report — the report is the orchestrated close artifact only.
+  {
+    const pvBase = tmp("plain-verify-newfields"); const pvBuilt = path.join(pvBase, "built.json");
+    fs.mkdirSync(pvBase, { recursive: true });
+    fs.writeFileSync(pvBuilt, JSON.stringify({ pages: { main: { viewConfig: { items: [{ type: "crt.Input", name: "AField", control: "$A" }] },
+      packageName: "UsrX", parentSchemaName: "FormPageTemplate", entitySchemaName: MANIFEST.entity,
+      schemaUId: "44444444-4444-4444-8444-444444444444", schemaName: "UsrDemo_FormPage",
+      handlers: "[{ request: 'crt.SaveRecordRequest', handler: (r,n)=>n }]", viewModelConfig: { attributes: { A: {} } } } } }));
+    const pvR = cliR(["--verify", "--built", pvBuilt], MANIFEST);
+    check("ENG-99740 CLI: plain `--verify` (no --tasks) with a payload carrying `handlers`/`viewModelConfig` still prints the legacy plan-vs-built table, never the migration result report",
+      () => (pvR.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(pvR.stdout || ""),
+      () => ({ status: pvR.status, head: (pvR.stdout || "").slice(0, 160), err: (pvR.stderr || "").slice(0, 160) }));
+  }
 
   // ENG-99126 Major B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
   // fallback set carries `refused`, so `renderFinalReport` pushes a verdict reason and the CLI exits 2 naming the
@@ -3576,6 +3591,24 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => naRep.complete === false && /⛔ \*\*NOT COMPLETE\*\*/.test(naRep.markdown)
       && naRep.reasons.some((r) => /closed n\/a with no recorded decision/.test(r)),
     () => ({ complete: naRep.complete, reasons: naRep.reasons }));
+
+  // ENG-99740 (kamil-mikosz-creatio P1): a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
+  // page must not bleed state across identically-labeled rows on different pages — `Handler — init` not-built on
+  // main and built on child:C1. Before the fix the label-only fallback marked BOTH not-built.
+  const collapseSet = { planVersion: RUN.planVersion, tasks: [
+    { id: "whole", file: "whole.md", group: "Whole run", pageKey: "run", status: "partial", notes: "", rows: [
+      { label: "Handler — `init`", pageKey: "main", outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" },
+      { label: "Handler — `init`", pageKey: "child:C1", outcomeKind: "built", outcome: "built", outcomeReason: "" },
+    ] },
+  ] };
+  const vCollapse = { markdown: "", missing: 0, unverified: 0, complete: true, pages: {},
+    rows: [{ n: 1, pageKey: "child:C1", group: "Form — Custom methods", deliverable: "Handler — `init`", status: "✅ Done", evidence: "a handler defines `init`", outcome: "ok", kind: "machine", vkType: "handler", owner: "builder" }] };
+  const repCollapse = renderFinalReport({ result: RUN, verifyRes: vCollapse, set: collapseSet, dir: tmp("result-report-collapse") });
+  const tasksSecC = repCollapse.markdown.slice(repCollapse.markdown.search(/## \d+\. Tasks \(/), repCollapse.markdown.search(/## \d+\. Task details/));
+  const lineW = tasksSecC.split("\n").find((l) => l.includes("](whole.md)")) || "";
+  check("ENG-99740 (collapsed run): a whole-run task's rows keep their OWN page — `Handler — init` not-built on main + built on child:C1 do NOT cross-attribute; the built copy counts Confirmed 1/1 and `needs a decision` appears exactly once (row-page join, no label-only bleed)",
+    () => repCollapse.counts.openNotBuilt === 1 && /\| 1\/1 \|/.test(lineW) && (lineW.match(/needs a decision/g) || []).length === 1,
+    () => ({ openNotBuilt: repCollapse.counts.openNotBuilt, lineW }));
 
   // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that

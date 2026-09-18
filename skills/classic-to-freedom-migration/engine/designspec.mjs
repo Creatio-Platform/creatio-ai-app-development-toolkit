@@ -3127,17 +3127,31 @@ function resolveStructuralVk(vk, ctx) {
 function fieldMatches(o, n) {
   return o.name === n || o.name === `${n}Field` || o.bound === n;
 }
+// MAXIMUM bipartite matching (Kuhn's augmenting paths): assign each expected name to a DISTINCT built op it matches,
+// maximising the number matched. ENG-99740 — greedy first-match-wins could strand a name whose only op was already
+// claimed by another name that had alternatives, reporting a present field as missing (a false red). Returns the set
+// of matched name indices.
+function maxFieldMatch(names, ops) {
+  const opToName = new Array(ops.length).fill(-1);
+  const augment = (ni, seen) => {
+    for (let oi = 0; oi < ops.length; oi++) {
+      if (!seen.has(oi) && fieldMatches(ops[oi], names[ni])) {
+        seen.add(oi);
+        if (opToName[oi] < 0 || augment(opToName[oi], seen)) { opToName[oi] = ni; return true; }
+      }
+    }
+    return false;
+  };
+  const matched = new Set();
+  for (let ni = 0; ni < names.length; ni++) if (augment(ni, new Set())) matched.add(ni);
+  return matched;
+}
 function resolveFieldsByIdentity(vk, names, ops) {
   const identified = ops.filter((o) => o.name || o.bound);
   if (ops.length && !identified.length) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const claimed = new Set();
-  const missing = names.filter((n) => {
-    const i = identified.findIndex((o, idx) => !claimed.has(idx) && fieldMatches(o, n));
-    if (i < 0) return true;
-    claimed.add(i);
-    return false;
-  });
+  const matched = maxFieldMatch(names, identified);
+  const missing = names.filter((_, ni) => !matched.has(ni));
   const b = names.length - missing.length;
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
@@ -3747,7 +3761,9 @@ export function resolveHandlerVk(vk, ctx) {
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
   if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this, or confirm the port on the stand", "skip"];
   const src = ctx.handlersSrc;              // RAW — attrBranchIn needs the string literal
-  const code = codeOnly(src);               // comments + string literals blanked — for name/def matching
+  // comments + string literals blanked — for name/def matching. Memoized on the page ctx (verifyCtxFactory caches
+  // one ctx per page key), so a page's handler rows strip the source once, not once per row.
+  const code = ctx._codeOnly ?? (ctx._codeOnly = codeOnly(src));
   if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
   if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
   const trigHit = handlerTriggerMatch(vk, src, code);
@@ -3854,11 +3870,11 @@ function resolveLayoutTab(vk, ctx, judge) {
 // Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
 // (tokens ["tag","select"]) but NOT `StageProgressBar` (["stage","progress","bar"] — "tag" is only a substring of
 // "stage", never a token). `/Tag/i.test("StageField")` used to close a Tag control that was never built.
-const CARD_NATIVE_TOKENS = {
-  ViewOptions: [["view", "options"], ["card", "actions"], ["action", "buttons"]],
-  ReloadData: [["reload"]],
-  Tag: [["tag"]],
-};
+const CARD_NATIVE_TOKENS = new Map([
+  ["ViewOptions", [["view", "options"], ["card", "actions"], ["action", "buttons"]]],
+  ["ReloadData", [["reload"]]],
+  ["Tag", [["tag"]]],
+]);   // a Map, not an object literal, so a schema-derived name like `constructor` cannot reach Object.prototype
 // A contiguous token subsequence match (`["card","actions"]` inside `["card","actions","button"]`).
 function tokenSeqIn(tokens, seq) {
   for (let i = 0; i + seq.length <= tokens.length; i++) {
@@ -3873,7 +3889,7 @@ export function resolveCardNativeVk(vk, ctx) {
   const all = vk.names || [];
   // An unknown native name falls back to its OWN camelCase tokens — boundary-safe, never a raw substring.
   const missing = all.filter((n) => {
-    const seqs = CARD_NATIVE_TOKENS[n] || [tokensOf(n)];
+    const seqs = CARD_NATIVE_TOKENS.get(n) || [tokensOf(n)];
     return !builtTokens.some((toks) => seqs.some((seq) => seq.length && tokenSeqIn(toks, seq)));
   });
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
@@ -3884,12 +3900,12 @@ export function resolveCardNativeVk(vk, ctx) {
 const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
   [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
   [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
-const VK_BY_TYPE = { handler: resolveHandlerVk, vmattr: resolveVmAttrVk, layout: resolveLayoutVk, cardnative: resolveCardNativeVk };
+const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
   for (const [set, fn] of VK_CATEGORY) if (set.has(vk.type)) return fn(vk, ctx);
-  const direct = VK_BY_TYPE[vk.type];
+  const direct = VK_BY_TYPE.get(vk.type);
   return direct ? direct(vk, ctx) : unknownVk();
 }
 

@@ -187,4 +187,32 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   check("ENG-99126 vmattr (guard): an attribute NOT in viewModelConfig.attributes but bound by a `<Name>Field` element closes ✅",
     () => { const r = resolveVk({ type: "vmattr", name: "Phone" }, ctx); return st(r) === "✅ Done" && /bound by a field/.test(ev(r)); },
     () => resolveVk({ type: "vmattr", name: "Phone" }, ctx));
+
+  // ENG-99740 (Alexandr-Kravchuk): greedy first-match field claiming can strand a name. Expected [Account, Contact]
+  // over an op matching BOTH (name Contact, bound Account) and one matching only Account — greedy in this order
+  // takes the shared op for Account and reports Contact missing; maximum bipartite matching assigns both.
+  {
+    const fctx = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [
+      { type: "crt.Input", name: "Contact", control: "$Account" }, { type: "crt.Input", name: "Account" }] } } } }, "main");
+    const r = resolveVk({ type: "fields", n: 2, names: ["Account", "Contact"] }, fctx);
+    check("ENG-99740 (fields): maximum matching finds a full assignment where greedy first-match would strand a name — [Account, Contact] over one op matching both + one matching only Account resolve 2/2 ✅, no false 'missing'",
+      () => st(r) === "✅ Done" && /2 of 2 expected fields/.test(ev(r)), () => r);
+  }
+  // ENG-99740 (Rita minor): a schema-derived name that collides with an Object.prototype key (`constructor`,
+  // `toString`) must NOT crash --verify — the lookups are Maps now, and the fallbacks are boundary-safe.
+  check("ENG-99740 (guard): cardnative / vk lookups on a prototype-key name (`constructor`, `toString`) do not throw and return a normal result triple",
+    () => {
+      const a = resolveVk({ type: "cardnative", names: ["constructor", "toString"] }, ctx);
+      const b = resolveVk({ type: "constructor" }, ctx);   // unknown vk type that is also a prototype key
+      return Array.isArray(a) && a.length >= 3 && Array.isArray(b) && b.length >= 3;
+    }, () => [resolveVk({ type: "cardnative", names: ["constructor"] }, ctx), resolveVk({ type: "constructor" }, ctx)]);
+  // ENG-99740 (Alexandr minor): reEsc must escape every regex metacharacter — a method name with metacharacters
+  // neither throws nor false-matches a different identifier.
+  {
+    const src = `[{ request: "r", handler: (request, next) => { aXb(); return next; } }]`;
+    const mctx = verifyCtx({ pages: { main: page({ handlers: src, viewModelConfig: { attributes: {} } }) } }, "main");
+    const r = resolveVk({ type: "handler", method: "a.b", parent: null, triggers: [] }, mctx);
+    check("ENG-99740 (guard): a handler method name with regex metacharacters (`a.b`) is escaped — it does NOT falsely match `aXb`, so it stays confirm-on-stand (no throw, no false ✅)",
+      () => r[2] === "skip", () => r);
+  }
 }
