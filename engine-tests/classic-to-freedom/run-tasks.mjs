@@ -1523,6 +1523,15 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
       return JSON.stringify(rowsOf(small)) === JSON.stringify(rowsOf(buildTaskSet(RUN, OPTS)));
     },
     () => ({ small: small.tasks.flatMap((t) => t.rows.length), full: buildTaskSet(RUN, OPTS).tasks.length }));
+  // ENG-99740 (Alexandr-Kravchuk minor): the collapse fix must be exercised through the REAL pipeline, not only a
+  // hand-built set. `buildTaskSet` → `collapseSmallRun` → `chunksOf` → `taskOf` (rows[].pageKey = r.pageKey || pageKey)
+  // over `artifactRows` (pageKey: g.pageKey) must give the whole-run task rows that carry their SOURCE page, not "run".
+  check("ENG-99740 (collapsed run, real pipeline): the whole-run task's rows each carry their source page key (not the task's `run`), spanning ≥2 pages — buildTaskSet/artifactRows/taskOf actually propagate pageKey",
+    () => { const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+      return whole.pageKey === "run" && whole.rows.length > 0
+        && whole.rows.every((r) => r.pageKey && r.pageKey !== "run")
+        && new Set(whole.rows.map((r) => r.pageKey)).size >= 2; },
+    () => (small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE)?.rows || []).map((r) => [r.label, r.pageKey]));
   check("small run: the threshold is the RUN's weight, not its row count — the same plan grown past `TASK_BUDGET.run` keeps the per-artifact cut, and one page is still never written by two tasks that are not chained",
     () => {
       const big = buildTaskSet(RUN5, checklistOpts(MANIFEST5));
@@ -3609,6 +3618,28 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   check("ENG-99740 (collapsed run): a whole-run task's rows keep their OWN page — `Handler — init` not-built on main + built on child:C1 do NOT cross-attribute; the built copy counts Confirmed 1/1 and `needs a decision` appears exactly once (row-page join, no label-only bleed)",
     () => repCollapse.counts.openNotBuilt === 1 && /\| 1\/1 \|/.test(lineW) && (lineW.match(/needs a decision/g) || []).length === 1,
     () => ({ openNotBuilt: repCollapse.counts.openNotBuilt, lineW }));
+  const sec1C = repCollapse.markdown.slice(repCollapse.markdown.indexOf("## 1."), repCollapse.markdown.indexOf("## 2."));
+  const detC = repCollapse.markdown.slice(repCollapse.markdown.search(/## \d+\. Task details/));
+  check("ENG-99740 (collapsed run, sections): section 1's Page column shows the not-built row's OWN page (`Form page`, from its pageKey), and Task details lists the whole task with just the main row's decision — the built child:C1 copy is settled, not listed and not bled",
+    () => /\| Form page \| Handler/.test(sec1C) && !/\| Whole run \| Handler/.test(sec1C)
+      && /## \d+\. Task details/.test(detC) && detC.includes("](whole.md)")
+      && (detC.match(/Handler — /g) || []).length === 1,
+    () => ({ sec1: sec1C, det: detC.slice(0, 500) }));
+  // ENG-99740 (Alexandr minor): readDecisions must accept the D-heading grammar variants an agent may write —
+  // dash, colon, space, dot after the id — so boundaries citing those decisions are backed, not falsely unbacked.
+  {
+    const baseG = tmp("result-report-grammar"); fs.mkdirSync(baseG, { recursive: true });
+    fs.writeFileSync(path.join(baseG, "decisions.md"), "# Decisions\n\n## D7 — dash title\n\n### D8: colon title\n\n#### D9 space title\n\n## D10. dot title\n");
+    const dG = path.join(baseG, "build-tasks");
+    const bnd = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
+      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+    const repG = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bnd("b7", "D7"), bnd("b8", "D8"), bnd("b9", "D9"), bnd("b10", "D10")] }, dir: dG });
+    check("ENG-99740 (readDecisions grammar): D-heading variants `## D7 — …`, `### D8: …`, `#### D9 …`, `## D10. …` all parse, so boundaries citing D7–D10 are backed (0 unbacked) and each renders with its title",
+      () => repG.counts.unbackedBoundaries === 0
+        && /\*\*D7\*\* — dash title/.test(repG.markdown) && /\*\*D8\*\* — colon title/.test(repG.markdown)
+        && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
+      () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
+  }
 
   // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that

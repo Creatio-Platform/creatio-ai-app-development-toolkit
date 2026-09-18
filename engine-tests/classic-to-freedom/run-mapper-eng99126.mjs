@@ -215,4 +215,15 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     check("ENG-99740 (guard): a handler method name with regex metacharacters (`a.b`) is escaped — it does NOT falsely match `aXb`, so it stays confirm-on-stand (no throw, no false ✅)",
       () => r[2] === "skip", () => r);
   }
+  // ENG-99740 (Alexandr minor): codeOnly is memoized on the page ctx (verifyCtxFactory caches one ctx per key).
+  // Two handler rows against the SAME ctx must both resolve on the shared, once-computed stripped source.
+  {
+    const c = verifyCtx({ pages: { main: page({ handlers: HANDLERS, viewModelConfig: { attributes: {} } }) } }, "main");
+    const r1 = resolveVk({ type: "handler", method: "onSaved", parent: null, triggers: [] }, c);
+    const cachedAfterFirst = typeof c._codeOnly === "string";
+    const r2 = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: [{ kind: "attribute-dependency", attribute: "Contact" }] }, c);
+    check("ENG-99740 (memoize): two handler rows against ONE page ctx both resolve ✅, and codeOnly is computed once (ctx._codeOnly cached after the first row) — the per-row recompute is gone, outcomes unchanged",
+      () => st(r1) === "✅ Done" && st(r2) === "✅ Done" && cachedAfterFirst,
+      () => [r1, r2, cachedAfterFirst]);
+  }
 }
