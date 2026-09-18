@@ -434,7 +434,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # destructive clio tool (configuration build + restart), so the route and the hand-off
         # to the user are pinned, not only the tool name.
         content = read_text(MIGRATION_SKILL)
-        step = bullet(content, "9. **Classic dashboards (from step 2).**")
+        step = bullet(content, "**7.7 Classic dashboards (from step 2).**")
         missing = missing_markers(
             step,
             [

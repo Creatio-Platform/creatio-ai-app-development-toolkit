@@ -779,7 +779,7 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
 // this function rather than against the loop that fills the accumulators (Sonar S3776, CC 15). Pure: it reads the
 // accumulators and RETURNS the decisions, so the caller keeps ownership of `needsDecision`.
 function foldFieldSummaries(acc) {
-  const { collisionByContainer, fieldControlCols, secretCols, splitIslands, distinctProfileIslands,
+  const { collisionByContainer, fieldControlCols, secretCols, dupBoundCols, splitIslands, distinctProfileIslands,
     payloadFields, fieldsWithTitle } = acc;
   const out = [];
   const totalCollisions = [...collisionByContainer.values()].reduce((a, c) => a + c.count, 0);
@@ -791,6 +791,15 @@ function foldFieldSummaries(acc) {
   // so it doesn't nag pages with a stray collision or two.
   if (totalCollisions >= 12) out.push({ kind: "layout-density", item: "(page layout)",
     reason: `the classic page packs fields into a dense multi-column (up to 24-col) grid that does NOT map 1:1 onto the Freedom form's narrow (1–2 col) target — ${totalCollisions} fields collided and were auto-relocated as a fallback (rows approximate). TODO before designing: choose the optimal Freedom container/grid settings for THIS page (target column count, grouping into expansion panels / sub-groups, field spans) so the layout transfers correctly. This is a whole-page layout decision, not a field-by-field fix.` });
+  // The same entity column bound by several classic items. Freedom gives each control its own NAME but they
+  // share the attribute, so the value is editable in two places at once and the Layout table lists the column
+  // twice, in two regions, with nothing saying they are one field. Classic did this routinely (a header field
+  // repeated on a tab); Freedom is a narrower page and the repeat is usually not wanted. The engine keeps both —
+  // dropping one silently is worse — and asks.
+  if (dupBoundCols?.length) {
+    out.push({ kind: "duplicate-binding", item: `(${dupBoundCols.length} column(s))`,
+      reason: `${dupBoundCols.join(", ")} — each is bound by MORE THAN ONE classic item, so the Freedom page carries a second control (\`<col>_2\`) on the SAME attribute: one value, two editable places, and two Layout rows in different regions that nothing connects. Both are emitted rather than one dropped silently. DECIDE per column: keep both (the classic page deliberately showed it twice), or keep one and say which region loses it.` });
+  }
   if (fieldControlCols.length) {
     const shown = fieldControlCols.slice(0, 12).join(", ") + (fieldControlCols.length > 12 ? ` … (+${fieldControlCols.length - 12} more)` : "");
     out.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
@@ -843,6 +852,7 @@ function mapFields(ctx, containers) {
   // after the loop. The relocation / control-defaulting / naming behavior is unchanged — only the reporting folds.
   const collisionByContainer = new Map(); // parent -> { count, gridCols, sample: [] }
   const fieldControlCols = [];            // cols with no resolvable control type (defaulted to crt.Input)
+  const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
   // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
@@ -978,6 +988,12 @@ function mapFields(ctx, containers) {
     // col_3 (a NORMAL configurator pattern, resolved at design time — no decision), so none is dropped.
     nameCount[col] = (nameCount[col] || 0) + 1;
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
+    // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
+    // built page shows one value in two places and the plan's Layout table lists the column twice in two
+    // different regions, where nothing connects them. The per-field line this used to emit was folded away and
+    // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
+    // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
+    if (nameCount[col] === 2) dupBoundCols.push(col);
     return { col, meta, missingColumn, nearMissing, c, elName };
   };
   // Convert the classic 24-col grid coords to the TARGET Freedom grid (profile 1-col / tab 2-col / wide header
@@ -1232,7 +1248,7 @@ function mapFields(ctx, containers) {
   };
   emitFromTable();
 
-  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols,
+  needsDecision.push(...foldFieldSummaries({ collisionByContainer, fieldControlCols, secretCols, dupBoundCols,
     splitIslands, distinctProfileIslands, payloadFields, fieldsWithTitle }));
   // headerLayout — the Classic page carries a WIDE, populated Header block (fields in the header, not just the
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
@@ -1903,6 +1919,9 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 
 // Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
 // Mutates the three sinks — keeps the ruleType dispatch (and its nesting) out of mapRules's loop.
+const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// The `lookup-value` row's `item`: fixed, so the evidence id derived from it survives a rule being added.
+const LOOKUP_VALUE_ITEM = "business-rule conditions";
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
@@ -1950,7 +1969,23 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
+  foldLookupValueRules();
   return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved
+  // on-stand before the rule is rebuilt. ONE row per page, and the targets ride in `reason`: `item` is the
+  // evidence id, and an id that moves when a rule is added detaches the status recorded against it.
+  function foldLookupValueRules() {
+    const carries = (r) => LOOKUP_GUID.test(JSON.stringify(r));
+    const targets = [...new Set([
+      ...pageBusinessRules.filter(carries).map((r) => r.element),
+      ...entityBusinessRules.filter(carries).map((r) => r.targetAttribute),
+    ].filter(Boolean))];
+    if (!targets.length) return;
+    needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
+      reason: `the conditions on ${targets.join(", ")} compare against lookup-record GUIDs; resolve each GUID to `
+        + "its display name on-stand before building, so the rule reads correctly" });
+  }
 
   // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete
   // line naming each lookup + its filter column(s). Own fn for Sonar CC 15; closes over entityBusinessRules/needsDecision.
@@ -2221,10 +2256,14 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null, signal: w.signal || null });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null,
+      placement: w.placement || null, templateProvided: w.templateProvided ?? null, signal: w.signal || null });
     let tail;
     if (w.note) tail = ` — ${w.note}`;
-    else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    // `base` says the CLASSIC source was base chrome. It says nothing about the FREEDOM template, and the mapping
+    // row does: a widget whose row declares `templateProvided: false` must never be described as inherited.
+    else if (base && w.templateProvided !== false) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
+    else if (base) tail = " — ⚠ BUILD IT: the Freedom template does not provide this one, whatever the Classic template did";
     else tail = "; confirm the Freedom component";
     needsDecision.push({ kind: "widget", item: w.widget, reason: `${w.widget} → ${w.freedom}${tail}` });
   };
@@ -2700,6 +2739,11 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
     ...(process ? [process] : []),
   ];
 }
+// The section methods the list analyzer READS — their effect is already in the positioned list ops, so a row for
+// one records work that is done, never a second build. Keep in step with what `mapSectionView` and the section
+// analyzer actually consume: a method that stops being read here must stop being marked.
+export const SECTION_VIEW_METHODS = new Set(["getGridDataColumns", "initFixedFiltersConfig", "getSectionActions",
+  "getAddRecordMiniPage"]);
 // ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
 //
 // Everything a section declares in its OWN `diff`, read off the folded section view and handed to
@@ -2967,7 +3011,9 @@ function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }
 }
 // THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
 // that does not exist must not appear as a build deliverable.
-export function buildListChangeSet({ entity, section, entityColumns } = {}) {
+// `sectionCode` is the SECTION schema mapped like a page body. Folded in here so the list page has ONE ChangeSet,
+// the way the form page does: reading `handlerStubs` must not depend on which page kind is in hand.
+export function buildListChangeSet({ entity, section, entityColumns, sectionCode } = {}) {
   if (!section) return null;
   // `"?"` is the schema parser's stub for "the merged chain named no entity" — a name, not an entity. It must not
   // reach an op: `entitySchemaName: "?"` reads as configured and binds the grid's data source to a schema that does
@@ -3002,6 +3048,12 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
     // finished page body: a grid column still needs its GUID `id` (above), and a quick-filter op carries placement
     // facts only — the component's own nested config comes from `crt.QuickFilter`'s documentation.
     quickFilterConfigCompletedByBuilder: filters.length > 0,
-    needsDecision: listNeedsDecision(section, columns, filters, actions, rowActions),
+    // The section's own methods and member rows, folded beside the list page's own decisions. The caller hands
+    // these already marked and filtered — see `sectionCodeForList`.
+    handlerStubs: sectionCode?.handlerStubs || [],
+    needsDecision: [
+      ...listNeedsDecision(section, columns, filters, actions, rowActions),
+      ...(sectionCode?.needsDecision || []),
+    ],
   };
 }

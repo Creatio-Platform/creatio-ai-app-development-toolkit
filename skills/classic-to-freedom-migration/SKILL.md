@@ -21,6 +21,10 @@ These eight rules are non-negotiable. Everything else in this skill serves them.
 7. **Resolve, don't defer — and build the plan, don't simplify it.** Two halves, one rule, because they are the recurring failure: **(a) Every item in the plan's `⚠` worklist is RESOLVED before you build — by running its specific on-stand query and recording the ANSWER, not by guessing "probably N/A" or leaving it "pending". The `⚠` worklist is ALL THREE generated lists: `⚠ Confirm before I build` (open questions needing an on-stand answer) AND `⚠ Custom methods` (one row per Classic method) AND `⚠ Other declared logic` (one row per `mixin` / `message` / `attribute-*` / `module-dep` / `referenced-module` — declared on this page, defined elsewhere). Each row of the latter two is marked *ported* naming the Freedom handler/converter/attribute you built, *dropped* with its reason, or *blocked*. No list is optional and none outranks the others; a method or member left unmarked is the same defect as an unresolved DCM check. A row the engine could not resolve — `Trigger: ⚠ unresolved`, a method assigned from another module, a `message` or `mixin` member reading `⚠ not described` — is answered by the plan-time `classic-ui-expert` run (step 5.1) and marked against **every one** of its card's acceptance criteria — the negative ones ("does NOT fire when…") exercised, not reasoned about — never from the method's name.** A `⚠ ADD only if present` (DCM case → `SysSchema ManagerName='DcmSchemaManager'`; connected processes → `ProcessInModules`; printables → `SysModuleReport`) is a task to *execute*, not a note to defer; a 0-row result proves nothing until you have confirmed the filter is correct; the Classic body lacking a widget/button is **not** evidence the section lacks the case/process. **(b) Build the plan's layout and components EXACTLY as specified** — every profile island (each its own container), every tab/group, and BOTH halves of a two-part component (e.g. Approvals = module *above the island* + list; DCM = progress bar *in `MainContainer`* + Next steps *tab*). Collapsing, merging, or simplifying "for simplicity" is a plan deviation to **propose to the user**, never to apply silently. When unsure whether the plan is right, ask — do not quietly do something smaller.
 8. **UI/UX guidelines are mandatory when you BUILD, not optional.** Whenever you create or edit a Freedom UI page while implementing the approved plan (`create-app`, `create-app-section`, `create-page`, `update-page`, `sync-pages`), you MUST invoke the **`creatio-ui-guidelines`** skill **before** authoring the page body and apply its rules (layout/containers, component choice, `colSpan`/gaps, `caption` vs `title`, island/card settings, lookups, fields, tooltips, accessibility), then run its review checklist **before** treating page work as done. Do not design pages from memory — these rules are easy to miss and skipping them produces the recurring defects (selection-window lookups, layout gaps, single-field islands, Title-case captions, missing tooltips, non-accessible components). This is the same guideline the plan's **Quality gates** checklist row verifies after the build; this rule makes it a **before-build** gate too, so page bodies are authored to it in the first place rather than only reviewed afterward. It binds **whoever builds** — the five tools named above ARE the definition of "build" — and it binds at BOTH points; running only the save-time review is exactly how the gate gets skipped. (This is a **page-design** guideline — distinct from the clio build `get-guidance` contracts you read to write the schema.)
 
+> **Rules 7 and 8 bind whoever writes to the stand.** From step 7 that is a build sub-agent, one per task, so the
+> brief it is handed carries them — `./references/build-task-execution.md` states both, and the orchestrator that
+> dispatched it neither builds around a `⚠` item nor accepts a page that skipped the UI-guidelines gate.
+
 > **This plan is standalone.** A Classic→Freedom migration is a technical UI-transformation, not a business-requirements task — so its plan is the engine-written `plan.md` above (Overview / Main scope / Layout / Business rules / ⚠ Custom methods / ⚠ Other declared logic / ⚠ Confirm), **not** a BA-style Business Plan, and it does **not** go through the orchestrator's Gate P/R (`AGENTS.md` exempts this skill). Present the engine's `plan.md` verbatim (rule 2).
 
 ## Product telemetry — emit the shared stages with `workflow: "classic-to-freedom-migration"`
@@ -40,7 +44,7 @@ Every stage lands on a point the Contract above **already** forces you to stop a
 | `plan_changes_requested` | — | receive a change request, including re-approval of an amended frozen plan |
 | `plan_approved` | — | get explicit approval — before the first Freedom artifact (rule 1) |
 | `build_started` | — | begin creating Freedom artifacts |
-| `work_item_completed` | `variant=page` | finish and verify each page, once per page |
+| `work_item_completed` | `variant=page` | finish and verify each page, once per page — a page is its `Page build` chain plus its `Quality gates` task, so emit when the LAST task carrying that page key closes, never per task |
 | `workflow_completed` / `workflow_failed` | — | reach the end of the run |
 | `changes_requested` | — | the developer asks for further changes AFTER the run completed. Emit before starting that follow-up work |
 | `changes_applied` | — | the follow-up changes are applied and verified |
@@ -184,8 +188,30 @@ Then decide `sectionHost.mode` — and put the decision to the user whenever it 
 | Mode | When | What the build does |
 |---|---|---|
 | `existing-app` | the app's primary package IS the target package and is editable | `create-app-section` into that app |
-| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | `create-app` FIRST — the platform gives the new app its own editable primary package — then register the section there. **The app must exist BEFORE the section is registered:** step 7 creates it first, then registers the section — nothing creates the app for you |
+| `new-app` | the owning app cannot host it (no primary, locked primary, primary ≠ target) and the user wants a menu entry | ONE `create-app` call that carries the entity — see below. It returns the app, its own editable primary package, AND the section over the existing object. Do NOT follow it with `create-app-section` |
 | `pages-only-no-menu` | the user accepts pages reachable by URL / page bindings only | no registration; the checklist row is rendered as a deliberate drop, not a gated deliverable |
+
+**`new-app` is ONE call, and `create-app-section` is not part of it.** `create-app` takes
+`optional-template-data-json`, and that is what binds the app's own section to an object that already
+exists:
+
+```json
+{ "name": "<App name>", "code": "<AppCode>", "template-code": "AppFreedomUI",
+  "with-mobile-pages": false,
+  "optional-template-data-json": "{\"useExistingEntitySchema\": true, \"entitySchemaName\": \"<Entity>\"}" }
+```
+
+Both fields together, or neither: `entitySchemaName` alone is unsupported, and the entity must already
+exist on the stand before the call. With them, Creatio suppresses the new canonical entity it would
+otherwise mint and puts the app's section on yours.
+
+Without them, `create-app` builds its starter section on a NEW entity named after the app — a list
+page, a form page and a detail that migrate nothing — and a following `create-app-section` adds a
+SECOND section beside it. A measured run shipped six pages where three were wanted, two of them named
+identically in the app's page list, and paid an extra ~90-second call for the privilege: `create-app`
+is `AppInstallerService.svc/CreateApp`, the platform's own app generator, while `create-app-section`
+is a raw `DataService/json/SyncReply/InsertQuery` into the section tables. `create-app-section` is for
+a SECOND section in an app that already exists — that is what `existing-app` uses it for.
 
 **Never repair an app's package composition on your own.** Linking a package to an app or flipping
 its primary flag changes which package owns the app's identity and where the Section Wizard writes
@@ -323,6 +349,17 @@ Run it BEFORE the final `--plan --out` and before approval, so the plan the user
 
 **A page on a non-default template is an orphan until it is RE-BOUND to the object** — the scaffolded default keeps opening instead, for the record page, each typed per-type page and each child edit page alike. That re-bind is build work (step 7), gated by the engine's reachability rows (`sectionRegistered`, `typedRouting`, `miniPageWired`, `reuseBindings`); what this step owes it is a named template per page, not the wiring.
 
+**Re-templating the scaffolded form page: the sequence, so nobody improvises it.** Neither `create-app` nor `create-app-section` accepts a template argument — the form page always arrives on `PageWithTabsFreedomTemplate`. When the table above names a different one, the build does this, in this order, inside the ONE task that owns the page:
+
+1. `get-page` the scaffolded form page and keep its body somewhere outside the repo — everything after this is destructive.
+2. `delete-schema` that page.
+3. `create-page` with the SAME schema name, the target `--template`, the target `--package-name` and `--entity-schema-name`. It gets a NEW `schemaUId`; nothing that referenced the old one follows it.
+4. `create-related-page-addon` for the entity, in the target package, pointing the default page at the new `schemaUId`. Then `get-related-page-addon` and confirm `pageSchemaUId` + `isDefault` read back as you set them — the list page opens whatever this record says, and a build that skips it leaves a section whose rows open nothing.
+5. **Give the new page a primary data source before anything binds to it.** A page `create-page` made from a template carries the template's `#PrimaryDataSourceName()#` macro UNEXPANDED, so it has no data source of its own: declare a `crt.EntityDataSource` (scope `page`) over the entity in `modelConfig`, set `primaryDataSourceName` to it, and point every attribute path at it (`PDS.<Column>`, including `Id`). Skipping this is not a validation error — `update-page` accepts the body, and the card then **hangs the browser** with `$Id` undefined. Measured on a live run.
+6. Only now author the layout into the new page.
+
+A re-template that stops after step 3 is the failure this sequence exists to prevent. If the Classic signal is weak — a header with one or two fields, no progress bar — prefer the scaffolded template and place those fields in the side profile: the re-template costs a delete, a re-bind and a page whose id changed, and that is not worth buying a top area for two fields.
+
 For every Classic item choose one target: direct Freedom analog · configurable business rule · handler/converter/validator · backend/service dependency · unsupported/manual decision. Prefer declarative Freedom configuration over custom handlers when equivalent.
 
 **Generate the per-page design spec — do not hand-write it.** For every Rebuild/Delta page, run `node engine/migrate.mjs <manifest> --spec`: it prints the whole spec as Markdown straight from the ChangeSet — one `Layout` table (`Region · Element · Type · Source · Rule · Additional`), a `Business rules` table (business rules/filters/process launch), the `⚠ Custom methods` method worklist, the `⚠ Other declared logic` member worklist and the `⚠ Confirm before I build` worklist, in the format of `./references/page-design-spec.md`. **You generate it and present it verbatim; the build consumes it as its per-page INPUT** (each page's own block, including the nested `### Child page mappings` / `### Typed page mappings` / `### Add mini-page mapping`). Your only additions go in the `⚠ Confirm` list — never into the Layout/Business-rules tables (Contract rule 2). Hand-writing it is the recurring failure — loose prose, no per-field placement, features mislabelled (Activities→"Timeline", Approvals→"Expanded list") the engine had already resolved.
@@ -352,27 +389,191 @@ A batch of lettered items ending in "confirm A2 and A8" is the defect this repla
 >
 > The same rule governs the `⚠ Confirm` cells the engine renders: `plan.md` is presented verbatim, so its text is user-facing too. If you find an internal name in a rendered cell, that is an engine defect to report — do not paper over it by re-explaining the internals in the question.
 
-### 7. Implement The Approved Plan
+### 7. Implement The Approved Plan — Slice It, Then Orchestrate One Task At A Time
 
-**Build preflight (Contract rule 7).** Before you create or edit ANY Freedom artifact: (a) the plan's `⚠ Confirm` list is your worklist — every item is RESOLVED by running its on-stand query and recording the answer (DCM `SysSchema ManagerName='DcmSchemaManager'`, `ProcessInModules`, `SysModuleReport`, `get-component-info`), not deferred as "probably N/A"; (b) you build the plan's layout/components exactly — every island, tab, group, and both halves of a two-part component. Any simplification is a proposal to the user, not a silent change. → the mapping reference's build recipes.
+Step 6 ends with an approved plan. This step does **not** build it here. It cuts the plan into a folder of
+one-task files and then walks that folder, handing **one task at a time** to its own sub-agent.
 
-**Use the `creatio-ui-guidelines` skill while building the page — not only when asked.** Consult it BEFORE and WHILE authoring any Freedom page or part (placing/ordering fields, choosing a component, grid `layoutConfig`/`colSpan`/nesting, container styling, captions/tooltips) and run its review on each page you build. It catches layout defects the migration engine does not model — overlapping ExpansionPanels, lone-field islands, spacing/color/border-radius mismatches, accessibility. Do not wait for the user to ask for a UI review.
+**Why it is not built in this context.** The build is hundreds of steps — the `⚠ Confirm` worklist, a page tree
+built leaf-first, the `creatio-ui-guidelines` gate twice per page, the re-bind, every ported handler — and held
+in one context it had one machine check, at the very end. A session that hit a usage limit lost the progress, and
+"done" was prose written by the same agent that did the work. Sliced, a lost session costs one task.
 
-1. Re-read `README.md`, `roadmap.md`, and the approved `plan.md` plus relevant sources to recover state. Record the approval in `decisions.md`.
-2. Whole-package → migrate one section at a time in the plan's dependency order (entities/data sources → own sections → replacing/extension deltas → backend); finish and validate each before the next; re-check existing Freedom artifacts before each create.
-3. **Migrate recursively — the migration is a page TREE, not one page.** Build each page from its design spec; each `Rebuild (child)` row has its OWN spec under `### Child page mappings` — build it exactly as the parent. Those child mappings are produced at PLAN time (step 4.2), so a `<FILL: recursive sub-migration>` slot must have been resolved *before* approval, never deferred to build. Per Contract rule 4, a child with a real Classic `*Page` is built regardless of size. Build order is **leaf-first**: deepest child pages → their parents' details → the top page's details — a related list's Add/Edit opens the child's own form, so the form must exist first.
-4. Subtask order within a page: package/app/page scaffolding → package placement setup → template creation or existing-page selection → entity/data-source adjustments → layout → business rules → **child edit pages, then the parent's related lists** → details/related lists/standard features → handlers/converters/validators → backend/service → localization/bindings → **section dashboards (LAST — see the dashboards hand-off below)** → switch-over (only if approved).
-   - **Build every native feature UP FRONT as its native component — never build a generic Expanded-list/DataGrid first and "switch" it later.** A Visa = Approvals *because it is an Approval* — and Approvals is **TWO** components (`get-component-info` returns both): the approval **module** as a container **above the profile island** + the approval **list** (`crt.ApprovalList`, brings its own approve/reject actions). Add BOTH — list-only is incomplete. "The child has no edit page / it's view-only" does not reclassify a `standardFeatures` entry into a list. Confirm the components on-stand (`get-component-info`) before building. → the mapping reference's build recipes.
-   - **Card widgets (`card-widget` decisions) are converted by the migrator, never hand-built.** Each `needsDecision` of `kind:"card-widget"` (also listed in `changeSet.cardWidgets[]`) carries `widgetKey`, `recordId`, and a target `region`. **Group the widgets by `recordId`** and make **ONE `ConvertCardWidgetsProcess` call per distinct `recordId`** — via the clio `run-process` MCP tool (the caller must hold the **`CanMigrateDashboard`** right), passing `SysWidgetDashboardId` = `recordId` and `WidgetKeys` = the group's keys as a **comma-separated string**, requesting the `["ConversionResult"]` output parameter. In the returned result, **place** the `freedomElementConfig` of every **`Success`** widget into its `region` (merge its view/viewModel/model diffs **and `localizableStrings`**; placement follows `creatio-ui-guidelines`, and you **build nothing by hand**). `region` is the plan-level **target zone** the widget occupied on the Classic page — a resolved Freedom container (a tab, or `SideAreaProfileContainer` = the side profile), or the top-area sentinel `Header / top` when its host did not resolve; choose the actual parent container from that zone per `creatio-ui-guidelines` — the returned config's own `layoutConfig`/`parentName` is a **stub**, not authoritative. A **`Failed`/`Skipped`** widget, a **whole-call failure** (`success:false` — e.g. access denied, bad record, no widgets), or a requested `widgetKey` **missing from the result** stays **`TODO`/`BLOCKED`** in `worklog.md` with the migrator's message — **never** a hand-built chart/list. Record each widget's evidence flag **`cardWidget:<recordId>:<widgetKey>`** (`true` placed / `false` blocked; keyed by BOTH coordinates so the same `widgetKey` under two records can't collide) in `built.json` so `--verify` gates it. If the migrator or `run-process` is not available on the stand, the whole `card-widget` set stays `TODO`/`BLOCKED`. **Full result-envelope contract + field breakdown → the mapping reference's Card widgets recipe** (`references/classic-to-freedom-mapping.md`) — the single canonical description.
-   - Resolve any `detail-unresolved` (auto-named `SchemaNDetail`) by fetching the detail schema first. For every `detail-editpage` flag, confirm a Freedom form exists for the child entity or migrate it as a follow-on page.
-   - **Nothing is silently skipped:** anything you cannot build now is a loud `TODO`/`BLOCKED` in `worklog.md` with the reason. A page that migrated fields and rules but dropped its details/features (or their edit pages) is NOT done.
-5. Use the safest Clio operation: `create-page` only when the page does not exist; `get-page` before `update-page`; `validate-page` before saving; the business-rule creators for supported rules; `update-client-unit-schema` only for non-page schemas or when raw updates are explicitly needed.
-   - **A `success` from `validate-page`/`update-page` is NOT proof the page works** — clio reports `success` for bodies that fail at runtime. After saving a page, and always before building anything that depends on it (its details, child pages, dependent rules), open it in the browser (or run a runtime render check) and confirm it loads without console/render errors.
-   - **Run the `creatio-ui-guidelines` review on every page you build — this is a DONE-GATE, not optional.** Invoke the skill (via the Skill tool) the moment the page is saved, BEFORE you report it done or build anything on it. It may NOT be marked `PENDING`/"later" and skipped — an unrun gate leaves the page `TODO`/`BLOCKED`, never "done". Its mandatory core is the **style-parity step, done with tools not eyeballed**: open a SHIPPED reference page on the same template, run `get-component-info` on EACH component you added, and diff the concrete props against the native one (`color`/`padding`/`borderRadius`/`gap`, panel `toggleType`, `caption` not raw `title`, `labelPosition`, widget size, column count). A screenshot/metadata glance is not the gate. Record the gate result in `worklog.md` as evidence — **which reference page you diffed against + which components you checked via `get-component-info`** — because that evidence is the step-8 UI-gate row. A page that is technically correct (bindings, data sources) but never run through `creatio-ui-guidelines`, or run only as a surface review, is NOT done — real runs keep deferring the gate and shipping unreviewed "smart-default" layouts, then fixing `toggleType`/`title`/island-style defects only after the user points at them.
-6. Compile only when C# / SQL / runtime-compiled artifacts changed, or Creatio reports a missing runtime schema.
-7. Keep the implementation scoped to the approved plan. New analysis that changes scope/strategy → stop, request re-approval, log it in `decisions.md`.
-8. After each artifact, update its `roadmap.md` status and append a `worklog.md` entry with runtime read-back evidence; refresh the README dashboard.
-9. **Classic dashboards (from step 2).** If `discovery.md` lists any, install the Dashboards Migrator through clio: `clio-run-destructive { "command": "install-dashboards-migrator", "args": { "environment-name": "<ResolvedEnvironment>" } }` — resolve the contract with `get-tool-contract` first, and confirm the environment with the user before calling, because the install runs a configuration build and restarts the instance. The tool waits the instance back and probes the package's own `Ping`, so `success` means installed **and** serving; a refusal names the fix (update clio, or a downgrade the user must decide). A clio that reports the command as unknown is too old — ask the user to update clio rather than looking for another route. Then hand the migration itself to the user: System Designer → **Dashboards migration** → the section (or specific dashboards) → target Freedom UI page = the list page you built → **Migrate**; results land in the **Dashboards migration log** section. Record the installed version (`list-packages`) and the migration outcome in `worklog.md`; the DoD row stays open until both are recorded or `discovery.md` says `none`. A clio too old to carry the verb is the one case that closes it differently: record the gap in `worklog.md`, leave the task `DONE` rather than `VALIDATED`, and carry on — the rest of the migration does not wait on it.
+**7.1 Record the approval, then slice the plan.**
+
+1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints (`**Plan version:**`).
+   Build only against the plan that entry names.
+2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each claiming the plan
+   rows it absorbs. This is a judgement and it is yours: put work that must be done together in one item (a related
+   list and the handler that filters it; a folded handler chain and its helpers; the containers before what goes in
+   them), mark an item `"stopGate": true` when it could legitimately halt the run rather than finish (it is carried into the
+   task's front matter and shown as `⏸ stop-gate` in `index.md`, so the orchestrator sees it before dispatching), and give an
+   item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns into a filename — lower-case
+   letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
+   whole file. Then:
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
+   The engine REFUSES a split that claims a row twice or names a row the plan does not have, and writes nothing at
+   all in that case. A plan row in NO item does not block the folder but is reported by name — the engine will not
+   pick an owner for it, because which item it belongs to is the judgement this file records. Once it resolves, the
+   file is copied into the folder and every later run reads that copy, so a re-slice is a reconciliation and not a
+   second opinion.
+   Skip `--split` entirely and the engine cuts by its own row budget — fine for a plan small enough that the seams
+   do not matter, and measured putting a related list and its filter in different tasks on one that was not.
+3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` (re-run after every status change)
+4. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
+   buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
+   plan changed, and slice then.
+5. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
+   hand-author a task list, a status table or a progress summary of your own beside it.
+
+**A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
+its coverage, its card actions, its rules, its handlers — writes the same thing, so the folder buckets them into
+ONE `Page build` task per page rather than five tasks racing over one page body. Each task publishes `writesTo:`
+(the artifact it writes, empty for a read-only task) and `dependsOn:` (the tasks that must close first). A page
+big enough to outgrow one sitting is cut into several `Page build` tasks that are chained to each other, so they
+are still never two writers at once. The run's first task is the `Reference cache`, and the second is
+`Scaffolding`.
+
+**A run small enough gets ONE build task and ONE review.** Below `TASK_BUDGET.run` the folder holds exactly two
+files: everything that writes the stand (app, package, section, every page) as a single `Whole migration` task, and
+the quality gates as a single read-only review that waits on it. There is no `Reference cache` in such a run — it
+exists to stop several fresh contexts re-fetching the same guidance, and here there is only one builder. A 31-row
+section came out as six tasks and five sub-agents before this, one of them caching material nobody else read.
+
+**7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
+
+1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
+   requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
+   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
+   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
+   clio guidance articles and the design spec, and every other task depends on it — it does NOT cache tool
+   contracts or component docs; each build task reads its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task needs to
+   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
+   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
+   the structure gate instead, so it never reaches a task.)
+
+   **Mark it started BEFORE you dispatch — EVERY task, the review included:**
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
+   That sets the task `in-progress`, opens its clock in `timings.json` and regenerates `index.md` — so the index
+   moves when the work BEGINS, not only when an agent finishes. The clock is in `timings.json`, never in the task
+   file, which is the caller's to edit.
+
+   **This is a GATE, not a warning.** A task recorded `done` that was never started this way FAILS the run: the
+   next `--start` refuses and opens no clock, a plain `--tasks` exits 2, and so does `--verify --tasks`. The
+   message names every such file and the `--start` that re-opens it. Re-open each one (`status: todo`), start it,
+   and hand it to its own sub-agent — the whole set, because `--start` refuses while any of it stands. `n/a` is
+   the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it that: an `n/a` with
+   nothing written there fails too.
+
+   **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
+   `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
+   artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
+   single sub-agent hold both and sign each correctly.
+
+   **`--start` prints a DISPATCH TOKEN. Put it in the sub-agent's prompt.** It is issued to that one task, it is
+   deliberately NOT written into the task file, and the sub-agent copies it into `agentNonce:` before it finishes.
+   A task closed carrying a different token — or none — fails the same gate. Never write it into the file
+   yourself: what the token establishes is that a context you dispatched closed the task, and you cannot attest to
+   that on its behalf.
+
+   The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after every dispatch and every
+   status change, so the user sees which task is running, how long it has been running, what it is expected to
+   take, what is left, and `dispatched N of M`. Do not write a progress summary of your own — the block is
+   rendered from the folder, and a hand-written one drifts from it within two tasks.
+2. **One sub-agent per task, in a fresh context, and the sub-agent marks its own work.** Never run two build
+   sub-agents at once — two tasks may overlap ONLY when their `writesTo` differ and neither lists the other in
+   `dependsOn`, which in practice means a read-only task beside a build. **Sequential is not an exception**: the
+   next task on the same page is a different sub-agent, so finishing one chunk of a page and picking up the next
+   in the same context is the violation this rule names, not a way of keeping the page coherent. Each sub-agent
+   echoes the dispatch token you handed it into `agentNonce:` before it finishes. You hand the token over and the
+   engine checks it; you are the wrong party to prove this rule held, which is why the check is neither yours nor
+   the sub-agent's to make.
+3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
+   the sub-agent reported to you: the file is what survives your own session ending. A task whose sub-agent died
+   without writing stays `todo`/`in-progress` and is re-dispatched.
+4. **Re-run `--tasks` after every task.** It refreshes `index.md` from the files, keeps the deliverable rows in
+   step with the plan, and fills the index's `Attention` section. Read that section — it is where an unrecognised
+   status, a task recorded `done` whose deliverables have since changed, and a task that left the plan surface.
+5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to hold two
+   separate pieces of work, or add one the plan does not model, by writing a new file with `origin: orchestrator`
+   (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. Give it
+   a `writesTo:` naming the artifact it writes (copy the value from the task whose page it touches) so the engine
+   chains it behind the other writers of that page; a corrective task for a decision that changes an already-built
+   page is exactly this case, and without the field it sits in the queue writing a page body with nothing
+   sequencing it. **What you may NOT hand-write is a task that settles another task's `not-built` row.** A repair
+   task is recognised by front matter the engine writes — `kind` / `cause` / `repairRound` / `covers`, whose row
+   keys are hashed labels you cannot type — so one you author settles nothing however it is titled: the `partial`
+   task stays `partial`, the run keeps failing over a row somebody has already rebuilt, and the next verify opens
+   a second round for the same work. Route it instead: `--tasks <dir> --route`, which opens that round mid-run,
+   with none of the `--built` payload `--verify` needs. You may NOT
+   delete or edit an engine task, and a deviation from the plan itself is a proposal to the user, recorded in
+   `decisions.md`, never an edit you make on their behalf.
+6. **Report after every task, and never report completion yourself.** Tell the user which task closed, what the
+   sub-agent recorded, what is still open, and anything under `Attention`. The run's completion report is step 8's
+   `--verify` table — a hand-authored "all done" summary in its place is the same defect this step exists to remove.
+
+**7.3 What each sub-agent is handed.** A fresh context knows nothing, and a workflow cannot go looking for a file,
+so pass all of it explicitly: the **path to its own task file** (it carries the contract, the deliverables, the
+artifact it writes and the tasks it waits on); the migration folder; the environment name; the manifest path and
+the resolved path to `engine/migrate.mjs`; the approved `plan.md`; the `refs/` folder the first task wrote —
+**paths, never pasted bodies**, because inlining the contracts into every build prompt costs more than fetching
+them does; `./references/build-task-execution.md` (its rules and the whole build procedure);
+`./references/classic-to-freedom-mapping.md` for how a construct maps; and for a task carrying imperative rows,
+the step-5.1 behaviour cards with their acceptance criteria — a handler is ported against its card's AC, never
+from its method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they answered
+on the stand is recorded there and is not repeated in its own file.
+
+**7.4 Assembling `--built` is YOURS, and it needs two contexts that did not build.** Step 8's gate reads a payload
+keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`, `judge`.
+No task produces it, and a builder must not assemble its own verdict, so:
+
+- **The read-back**: one sub-agent with stand access but NO write access runs `get-page` for every page key the
+  plan publishes and hands you the payload. It reads the stand, never a task's `## Notes` — the notes say what a
+  builder believes it did, and the point of this read is to find out what is actually there.
+- **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
+  reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
+  `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
+  **GROUNDS TO REJECT — the judge has to be able to say no, or the verdict is a formality.** A record that states
+  any part of its deliverable is blocked, deferred, residual, partial or not built **cannot** be `convincing:
+  true`, whatever else it contains and however complete the rest of the work reads: the record is then evidence
+  that the row is open, which is the one thing the verdict is being asked about. A record that does not name the
+  reference page it diffed against and the components it checked is a surface review and is not convincing
+  either. **The verdict must QUOTE the sentence it endorses** in `why` — a verdict that only asserts the record
+  is convincing cannot be told apart from a rubber stamp, and that is what a rubber stamp looks like from the
+  outside. Rule it `convincing: false` with the admission quoted; the row then stays open and its deliverable is
+  routed like any other unbuilt row rather than closing on a verdict nobody could check.
+
+Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
+
+**7.5 Repair — the rows step 8 left open come back as tasks, not as a loop you run yourself.**
+`node engine/migrate.mjs <manifest> --verify --built built.json --tasks <migration-folder>/build-tasks` prints
+step 8's table AND writes that run's OPEN rows into the same folder as repair tasks. They are handed to
+sub-agents exactly like build tasks — same contract, same one-sub-agent rule, and they declare the page artifact
+they write, so the queue sequences them behind that page's build rather than beside it.
+
+- **Merged by (page, cause).** Sixteen handlers missing from one page is ONE task, not sixteen: a defect with
+  many symptoms is one defect, and sixteen tasks is sixteen sub-agent startups to make one edit each. A merged
+  task that outgrows the budget is cut like any other.
+- **A repair task CLOSES like any other task** — its sub-agent fills the `Outcome` cell of every row and the
+  engine computes the status from those cells. Every row accounted for reads `done` and closes the rows this
+  round covers in the tasks they came from; a round that fixed some of them reads `partial`, and those rows alone
+  go to the next round. A round nobody dispatched closes nothing, whatever its cells say.
+- **A round is an ATTEMPT, not a verify run.** Re-verifying an unchanged page opens no second round — the rows
+  are still the work of the round already in the folder. A new round opens only after the previous one was closed
+  and the rows came back.
+- **Three rounds, then PARKED.** After three attempts at one KIND of row on one page the engine writes no fourth
+  task and says so. The cap counts the kind, not the cause: a row `--verify` could not confirm comes back from
+  the round that failed to fix it recorded as not built, and counting those separately is three more agents.
+  Take it to the user: at that point the plan, the stand or the expectation is wrong, not the build. Do not
+  hand-write a fourth task to get around this.
+- **What is YOURS in repair** is only what no sub-agent can do: proposing a PLAN change (to the user, recorded in
+  `decisions.md`), rolling back, and reporting. The rows themselves are the engine's to schedule.
+
+**7.6 Whole-package scope.** Migrate one section at a time in the plan's dependency order (entities/data sources →
+own sections → replacing/extension deltas → backend). Each section gets its own slice, its own task folder and its
+own step 8 before the next one starts.
+
+**7.7 Classic dashboards (from step 2).** If `discovery.md` lists any, install the Dashboards Migrator through clio: `clio-run-destructive { "command": "install-dashboards-migrator", "args": { "environment-name": "<ResolvedEnvironment>" } }` — resolve the contract with `get-tool-contract` first, and confirm the environment with the user before calling, because the install runs a configuration build and restarts the instance. The tool waits the instance back and probes the package's own `Ping`, so `success` means installed **and** serving; a refusal names the fix (update clio, or a downgrade the user must decide). A clio that reports the command as unknown is too old — ask the user to update clio rather than looking for another route. Then hand the migration itself to the user: System Designer → **Dashboards migration** → the section (or specific dashboards) → target Freedom UI page = the list page you built → **Migrate**; results land in the **Dashboards migration log** section. Record the installed version (`list-packages`) and the migration outcome in `worklog.md`; the DoD row stays open until both are recorded or `discovery.md` says `none`. A clio too old to carry the verb is the one case that closes it differently: record the gap in `worklog.md`, leave the task `DONE` rather than `VALIDATED`, and carry on — the rest of the migration does not wait on it.
 
 **Section dashboards — hand off to the migrator, LAST, and never rebuild them by hand.** When `signals.dashboards` says the section has 7x dashboards, **`MigrateDashboardsProcess`** (`CrtDashboardsMigratorApp`) migrates them; it runs last because it needs the *built* page to write into. Storage model, the target page's ready-made structure, why the binding scan must be package-agnostic, and the scope boundary: `./references/classic-to-freedom-mapping.md` → *Section dashboards*.
 
@@ -403,28 +604,64 @@ A batch of lettered items ending in "confirm A2 and A8" is the defect this repla
 
 Validate narrowest-reliable-first, then broaden: page schema validation → package build → unit tests for helper logic → **render the built page in the browser** (schema validation + a save `success` do NOT catch runtime/render failures) → E2E for user-visible flows. Do this per page before anything depends on it, not just at the end.
 
+**How to do the browser check: `./references/freedom-ui-browser-check.md`.** Read it BEFORE opening a page, not after it misbehaves. Console first, error boundary second, component census last — and **one `Request timed out` from a tab that was answering is the diagnosis, not a reason to retry**: `execute_javascript` runs on the page's main thread, so a blocked page can never answer anything, including `document.title`. A measured run spent 8 of its 18.6 browser minutes re-probing a frozen tab.
+
 Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
+
+**A folder of `done` task files is not a completion report — and neither is the machine table alone.** The task
+statuses are how the step-7 orchestrator schedules work and how a killed session resumes; they are recorded by the
+sub-agents that did the work, so a run closed on them alone would be arithmetic over self-assertion. The `--verify`
+table reads only the built pages, so a run closed on IT alone never sees what a build agent recorded as NOT BUILT
+(a handler that needs a decision, a row closed `n-a` on the agent's own say-so) or which tasks never closed. A
+real run ended exactly there: the table said "2 machine row(s) not confirmed", the ledger held 5 open tasks, 3
+partial and three handlers recorded not built, and the table was what the user was shown.
+
+**On an orchestrated run the final gate is the MIGRATION RESULT REPORT, and the command that writes it is:**
+`node engine/migrate.mjs <manifest> --verify --built <built-file> --tasks <migration-folder>/build-tasks --out <migration-folder>/migration-result.md`.
+With `--tasks` the engine writes ONE report computed from the task ledger AND the built pages, in the language of
+the plan the user approved (a *plan item*, a page named by its Freedom schema) — verdict first (`✅ COMPLETE` /
+`⛔ NOT COMPLETE — <every reason>`), then a summary, then in the order a person acts on them: **1.** plan items
+recorded not built that still need a decision — each with the `Decision needed (row N)` line the build agent wrote,
+**2.** boundaries the agent closed `n-a` — those citing a recorded decision (`D<N>` in `decisions.md`, `Adjustment N`
+in the plan) as information, those citing none as a question, **3.** machine rows the engine could not confirm (only
+when there are any), **4.** the task ledger with HOW each task was verified (machine / evidence + judge / by hand),
+**5.** per-task details of what is still open, with each build agent's `Check on stand (row N)` line. The plan-vs-built
+table is not written as a file — the report carries everything it says. The verdict is the CONJUNCTION: COMPLETE only when every task is
+closed, nothing stands recorded not built without a decision, no boundary was asserted without one, and every
+machine-checked plan item is present. **Present that file verbatim as your final report.** Do not present
+`build-tasks/index.md` or the bare table in its place, and never a summary of your own. Copy `name` from `get-page`
+into each `--built` page entry as `schemaName` — that is how the report names the pages.
+Where the ledger and the built page disagree — a task `done` while the table names a MISSING row, or the reverse —
+the stand is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
+
+The same command runs the dispatch gate over the folder — read-only, no re-slice — so the run cannot close while a
+task stands closed with nobody dispatched for it. While it fails, **no repair task is written**: a repair round
+would schedule more sub-agents on top of work nobody was dispatched for; the report is still written and says so.
+Without `--tasks` the verify run prints the bare plan-vs-built table, checks the built pages only and says so; it
+is not the gate for a run that used a task folder.
 
 **The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --built <built-file>`, and `<built-file>` is a JSON **keyed BY PAGE**. The keys are the page keys the engine itself uses — the same ones `--checklist` groups its rows by: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). Read them off the checklist, never construct one: a key the engine did not publish is silently "not checked", not an error.
 
 ```jsonc
-{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
+{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>", "schemaName": "<page.name — the result report names the page by it>", "handlers": <bundle.handlers — the handler rows are matched against it>, "viewModelConfig": <bundle.viewModelConfig — virtual-attribute rows are matched against its attributes> },
              "child:InternalRequest": false },     // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
   "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"] } },
   "judge":    { "<id from --checklist>": { "convincing": true, "why": "…" } } }
 ```
 
-**`viewConfig` is clio `get-page`'s `bundle.viewConfig` copied VERBATIM — the MERGED page, not `ownBodySummary` and not the page's own body.** An element the TEMPLATE provides is touched with `operation: "merge"` and carries no type, so a check fed the own body reads ❌ MISSING on a correctly built page for Feed, FileList, ApprovalList, ContactCommunication and the DCM bar. The CLI **rejects** a payload that is not keyed by page, or whose entry carries no `viewConfig`, at **exit 1** — that guard is what makes the gate impossible to hand-author. **The mini page is verified like any other page**, from its own `pages["mini:<Schema>"]` entry: present with components ⇒ built · `false` ⇒ MISSING · omitted ⇒ not checked. There is no boolean to assert in its place. **The FIVE reachability deliverables live in no page body** — `typedFormsBuilt`, `typedRouting`, `miniPageWired`, **`reuseBindings`** (the RelatedPage binding for every related list whose child reuses an existing Freedom form — an unbound list opens nothing) and `sectionRegistered` — because they are config records the API's page read cannot see; each is `true` only once confirmed on-stand, `false` when genuinely absent (`❌ MISSING`), and an OMITTED key is `⚠ verify`, so a built-but-unreachable migration cannot pass. **`sectionRegistered` is the exception and takes NO bare `true`:** a workplace registration only ADDS, so a flag cannot tell one binding from two — report the count you read on the stand, `{ "workplaces": <n>, "names": [...] }`, and the row closes at exactly 1. **A section whose plan lists dashboards adds `built.dashboards` — a LIST, not a flag.** The migration is a PROCESS run (`MigrateDashboardsProcess`), so no page read can see it; and one boolean for the whole run is what lets eleven of twelve close the row while the twelfth is never mentioned. Transcribe `DashboardMigrationLog` instead, one entry per dashboard the plan lists: `[{ "id": "<the plan's id>", "status": "Success"|"Skipped"|"Failed"|"Partially migrated", "schemaName": "…", "package": "…", "acceptedByUser": <bool> }]` — the gate matches on `id`, `status` and `package`; `schemaName` rides along for the audit trail. **Statuses go in VERBATIM** — copy them, do not interpret them, so the list can be diffed against the log by eye. `package` is the package the migrated schema landed in; **omit it for a user-level one**. `Skipped` counts as settled (that is what an already-migrated dashboard returns). `acceptedByUser` belongs only on a `Partially migrated` entry and records that the user was shown what is missing and answered — never that nothing was missing. The engine matches this list against the plan's own decisions and names any dashboard that failed, went unreported, or landed somewhere other than the plan said. The `crt.Dashboards` element itself is ordinary page content and is verified from the LIST page's own `pages["list"]` entry — or from `pages["main"]` in a sub-scope or a `pages-only-no-menu` run, where no list page is built. It needs no evidence key, but **supply that entry**: without it the row reads ⚠ "nobody showed me that page", which blocks just as a ❌ does. The engine diffs the built pages against the expected deliverables and returns a Plan-vs-Done table with Status auto-filled per page (✅ found / ❌ MISSING / ⚠ verify) plus a hard verdict — **exit 2 while any deliverable is MISSING or unverified**. Present that VERIFIED table as your final report; the migration is **not complete while it says ⛔ INCOMPLETE** — fix the gaps on-stand and re-verify. (`--checklist` is the same table's pre-build skeleton; the VERIFY run is what closes the task.)
+**Send `bundle.modelConfig` alongside it.** It is optional and nothing rejects a payload without it, but it is the only way the gate can see the failure that costs the most to find by hand: a page created from a template carries `#PrimaryDataSourceName()#` unexpanded (the Interface Designer expands that macro, `create-page` does not, and `--entity-schema-name` only records a dependency), so the page has no primary data source, `update-page` and `validate-page` both accept it, and the card HANGS THE BROWSER. With `modelConfig` in the payload the template row reads ❌ MISSING and says so.
+
+**`viewConfig` is clio `get-page`'s `bundle.viewConfig` copied VERBATIM — the MERGED page, not `ownBodySummary` and not the page's own body.** An element the TEMPLATE provides is touched with `operation: "merge"` and carries no type, so a check fed the own body reads ❌ MISSING on a correctly built page for Feed, FileList, ApprovalList, ContactCommunication and the DCM bar. The CLI **rejects** a payload that is not keyed by page, or whose entry carries no `viewConfig`, at **exit 1** — that guard is what makes the gate impossible to hand-author. **The mini page is verified like any other page**, from its own `pages["mini:<Schema>"]` entry: present with components ⇒ built · `false` ⇒ MISSING · omitted ⇒ not checked. There is no boolean to assert in its place. **The FIVE reachability deliverables live in no page body** — `typedFormsBuilt`, `typedRouting`, `miniPageWired`, **`reuseBindings`** (the RelatedPage binding for every related list whose child reuses an existing Freedom form — an unbound list opens nothing) and `sectionRegistered` — because they are config records the API's page read cannot see; each is `true` only once confirmed on-stand, `false` when genuinely absent (`❌ MISSING`), and an OMITTED key is `⚠ verify`, so a built-but-unreachable migration cannot pass. **`sectionRegistered` is the exception and takes NO bare `true`:** a workplace registration only ADDS, so a flag cannot tell one binding from two — report the count you read on the stand, `{ "workplaces": <n>, "names": [...] }`, and the row closes at exactly 1. **A section whose plan lists dashboards adds `built.dashboards` — a LIST, not a flag.** The migration is a PROCESS run (`MigrateDashboardsProcess`), so no page read can see it; and one boolean for the whole run is what lets eleven of twelve close the row while the twelfth is never mentioned. Transcribe `DashboardMigrationLog` instead, one entry per dashboard the plan lists: `[{ "id": "<the plan's id>", "status": "Success"|"Skipped"|"Failed"|"Partially migrated", "schemaName": "…", "package": "…", "acceptedByUser": <bool> }]` — the gate matches on `id`, `status` and `package`; `schemaName` rides along for the audit trail. **Statuses go in VERBATIM** — copy them, do not interpret them, so the list can be diffed against the log by eye. `package` is the package the migrated schema landed in; **omit it for a user-level one**. `Skipped` counts as settled (that is what an already-migrated dashboard returns). `acceptedByUser` belongs only on a `Partially migrated` entry and records that the user was shown what is missing and answered — never that nothing was missing. The engine matches this list against the plan's own decisions and names any dashboard that failed, went unreported, or landed somewhere other than the plan said. The `crt.Dashboards` element itself is ordinary page content and is verified from the LIST page's own `pages["list"]` entry — or from `pages["main"]` in a sub-scope or a `pages-only-no-menu` run, where no list page is built. It needs no evidence key, but **supply that entry**: without it the row reads ⚠ "nobody showed me that page", which blocks just as a ❌ does. The engine diffs the built pages against the expected deliverables and returns a Plan-vs-Done table with Status auto-filled per page (✅ found / ❌ MISSING / ⚠ verify) plus a hard verdict — **exit 2 while any deliverable is MISSING or unverified**. On an orchestrated run the migration result report (`--tasks` above) carries only the machine rows it could NOT confirm — its own numbered "machine checks the run could not confirm" section — not the full row-level table, and that REPORT is your final report; the full VERIFIED table is a plain `--verify` with no task folder. Either way the migration is **not complete while the verdict says ⛔** — fix the gaps on-stand and re-verify. (`--checklist` is the same table's pre-build skeleton; the VERIFY run is what closes the task.) **Pass `bundle.handlers` and `bundle.viewModelConfig` too** (verbatim, beside `viewConfig`): with them the handler rows, the virtual-attribute rows, the per-tab layout rows and the native card-actions row are machine-checked (a handler is matched by the method name, the caller it was folded under, or a branch on its Classic trigger attribute; a tab by the plan's caption words against the built tab's caption/name). Without them those rows read ⚠ not checkable — never a false ✅. **Field and rule identity:** an expected field `Contact` is satisfied by an element named `Contact`, `ContactField`, or one bound to `$Contact` / `$PDS_Contact_<hash>`; an expected rule target is satisfied by a rule whose `condition`/`actions` govern that column (`RejectReasonField` counts, a `caption` mentioning the column does not). Do not rename built elements to satisfy the gate.
 
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). Nothing in the plan carries a GUID, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists).
 
-**Exit 2 is TWO different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build.
+**Exit 2 is FOUR different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names (`status: todo`), `--start` each, and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
-1. **The `--verify` table is the ONLY sanctioned completion/status report — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.
-2. **`--verify` reads the built page via clio `get-page` (an API call) — it does NOT use the browser.** A broken / SSO-blocked / permission-denied *render* on the stand is therefore **not** a reason to skip the gate: `get-page` still returns the built body over the API. Run `--verify` and report its table even when you cannot visually open the page (the browser render is a separate, optional confirmation, not the gate).
-3. **If you are BLOCKED — a deliverable you cannot finish, or a check you cannot run — your report is STILL the `--verify` ⛔ table** naming the exact unmet rows, never a prose "here's where things stand" checkpoint in its place. "Blocked" and "done" both come from the same machine-verified artifact.
+1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration result report on an orchestrated run (`--verify --built … --tasks …`), the `--verify` table on a run with no task folder — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.
+2. **`--verify` reads the built page via clio `get-page` (an API call) — it does NOT use the browser.** A broken / SSO-blocked / permission-denied *render* on the stand is therefore **not** a reason to skip the gate: `get-page` still returns the built body over the API. Run `--verify` and present the engine's close artifact — the migration result report on an orchestrated run, the `--verify` table on a run with no task folder — even when you cannot visually open the page (the browser render is a separate, optional confirmation, not the gate).
+3. **If you are BLOCKED — a deliverable you cannot finish, or a check you cannot run — your report is STILL that same engine close artifact (the migration result report on an orchestrated run, the `--verify` ⛔ table on a run with no task folder)** naming the exact unmet rows, never a prose "here's where things stand" checkpoint in its place. "Blocked" and "done" both come from the same machine-verified artifact.
 
 **The Plan-vs-Done checklist (skeleton) — the human-readable control table.** The checklist is NOT part of the `--plan` you present for approval (a control table there is premature). AFTER implementing, generate it with `node engine/migrate.mjs <manifest> --checklist` (add `--out <file>` to write it): a **`### ✅ Plan-vs-Done checklist`** the engine derives from the plan — one pre-seeded `☐ pending` row per deliverable — each page **including the mini page**, each tab/region of the form, each detail / standard feature (Approvals, Attachments, Activities, Communication options…), each **handler** (one row each), each business-rule set (folded to a count), each card action (Run process, Print) — and one row per ⚠ Confirm item. Copy it into your final report and `worklog.md` and fill **Status** (`✅ Done` / `⚠ Partial` / `❌ Not done` / `N/A` — with reason) + **Evidence** (schema saved · render checked · on-stand query) for EVERY row. **Never delete a row, and never demote a deliverable into loose prose** — that is exactly how a built mini page and the whole handlers section went missing from the control table (an un-migrated `init`/`onSaved` then hid in prose beneath it). A row left `☐` or not-`Done` needs its reason. Do NOT summarise "all done" in prose — and note the **`--verify` table above is the actual CLOSE report** (same grouped structure, Status auto-filled from the built page + a hard ⛔ verdict); `--checklist` is the pre-build skeleton of that same table. It also seeds **two Quality gates rows** (ENG-95859: "a record was filed" and "an independent judge found it convincing" are different facts, so each gets its own row off the SAME `#quality-gates` id) for the **page-design** guideline — the `creatio-ui-guidelines` skill (how to CREATE/lay out a Freedom page: components, colSpan/gaps, captions, islands, contrast). This is the UI **page-creation** guideline specifically, NOT the clio build `get-guidance` contracts (page-modification / field-contract / related-list …) you read to write the schema — that one is the gate agents skip. Apply it WHILE designing the page, and if you didn't, run it as a review pass and FIX the findings (style parity with the reference page) — fill BOTH rows, not just the one that happens to be easier. Add any further evidence rows without removing generated ones.
 
@@ -436,7 +673,7 @@ Report what passed, what could not run, and what stays risky (missing runtime, p
 
 **Where the evidence goes.** You do not assemble the AC list by hand: with `manifest.behaviourIndex` supplied (step 5.1), the plan's own **Described in** cell already names the card + AC list to walk for each row — walk that list, and treat a row still reading `⚠ not described` as one step 5.1 has not covered yet. The Evidence column carries your per-AC result lines, never the **Described in** citation copied across; a hand-authored summary table in its place is the rule-1 violation.
 
-**What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate, step 7.5).** They are TWO of the pre-seeded rows above (ENG-95859) — not extra rows you add — sharing ONE evidence id: file ONE record in `<built-file>.evidence[<id>]` naming the shipped reference page you diffed against AND the components you checked via `get-component-info` (e.g. `referencePage: "AccountPage"`, `components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and have it reviewed for `judge[<id>]` by a SEPARATE context wherever the host allows a sub-agent — a record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was. The first row closes when that record is complete; the second closes only when the judge entry marks it convincing — a record nobody reviewed leaves the second row open even if the first reads ✅. Either row left `☐`/not-`Done`, or the first marked `Done` with no reference-page + component evidence (a surface review), means **that page is NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
+**What the generated `Quality gates` rows must contain (the `creatio-ui-guidelines` done-gate — `./references/build-task-execution.md`, run inside the build task that touches the page).** They are TWO of the pre-seeded rows above (ENG-95859) — not extra rows you add — sharing ONE evidence id: file ONE record in `<built-file>.evidence[<id>]` naming the shipped reference page you diffed against AND the components you checked via `get-component-info` (e.g. `referencePage: "AccountPage"`, `components: ["crt.ExpansionPanel", "crt.GridContainer"]`), and have it reviewed for `judge[<id>]` by a SEPARATE context wherever the host allows a sub-agent — a record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was. The first row closes when that record is complete; the second closes only when the judge entry marks it convincing — a record nobody reviewed leaves the second row open even if the first reads ✅. Either row left `☐`/not-`Done`, or the first marked `Done` with no reference-page + component evidence (a surface review), means **that page is NOT done** — mark the page's own row `⚠ Partial` and do not report the task complete.
 
 **Two platform residues a run can leave on the stand, and neither is yours to remove silently (ENG-95850 / C1, C2).** Both are defects on the platform side: REPORT them and stop there — deleting records on a customer's stand is the operator's decision. Know they exist, because the Applicant run had to clear both by hand on top of a green build:
 
@@ -447,6 +684,7 @@ Report what passed, what could not run, and what stays risky (missing runtime, p
 Read each only when the step that names it says so:
 
 - `./references/classic-to-freedom-mapping.md` — classification categories, package placement, template/control/data/logic mapping, and the standard-features / widgets / actions table (Approvals, Activities/Emails, DCM, Run process). The single source of truth for *how to map a component*.
+- `./references/build-task-execution.md` — what a step-7 build sub-agent is bound by and the whole per-page build procedure (preflight, the `creatio-ui-guidelines` done-gate, clio safety, recursion, the re-bind). Handed to the sub-agent, not read by the orchestrator.
 - `./references/migration-plan-template.md` — what the generated `--plan` output contains, and the hand-authoring fallback for when Node is unavailable.
 - `./references/page-design-spec.md` — the per-page design-spec format the engine emits with `--spec`.
 - `./references/analysis-summary.md` — the format rules for the plan's user-facing `Overview`/`What it does`/`Main scope` header.
@@ -468,7 +706,7 @@ Real failures from prior runs, kept short so they don't bury the flow above. Eac
 - **UI-guidelines gate deferred or run shallow.** Two failure shapes, both = page NOT done: (1) marking the gate `PENDING` and reporting the page done anyway; (2) running `creatio-ui-guidelines` only as a surface review (screenshot + schema) and skipping the **style-parity-with-the-reference-page** step — so `toggleType`, `title`-instead-of-`caption`, and island card settings get caught only after the user asks about styles on other pages. The gate runs when the page is saved, its core is the tool-based style diff (reference page + `get-component-info` per added component), and its evidence is a mandatory row in the step-8 Plan-vs-Done table. → step 7 / step 8 / the guidelines skill's "Style parity" checklist item.
 - **Means-of-communication downgraded to a grid.** A `ContactCommunication` detail is the native **Communication-options** component (`crt.CommunicationOptions`, the compositeOnly component the "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY name, not a component type), not a plain Expanded-list — if its component/`CrtCustomer360App` package is missing on-stand, RAISE it, don't silently build a grid. → the mapping reference's standard-features table.
 - **Auto-filled companion fields dropped → lone-field island.** An island/group field whose column is NOT on the entity (e.g. `Department`/`Job title` loaded from the selected `Request` by an `on<Lookup>Change`/`set<Lookup>Info` handler) must be built as a **read-only field on a view-model attribute** + the on-change handler — not dropped because it has no real column. Dropping them is what leaves a one-field island. → the mapping reference's build recipes.
-- **Dashboards redrawn by hand or dropped.** A Classic section's dashboards are neither a page to rebuild in Freedom nor a scope gap: they go through the platform's Dashboards Migrator, installed with `install-dashboards-migrator`. → step 2 / step 7.9.
+- **Dashboards redrawn by hand or dropped.** A Classic section's dashboards are neither a page to rebuild in Freedom nor a scope gap: they go through the platform's Dashboards Migrator, installed with `install-dashboards-migrator`. → step 2 / step 7.7.
 - **`success` mistaken for "works".** clio returns `success` for bodies that fail at runtime — render in the browser. → step 7 / step 8.
 - **Browser capability assumed instead of checked.** A run that promises automatic render verification without ever calling `list_connected_browsers` finds out at the END that it had no surface — and the built-in pane is no substitute, because its per-action approval gate survives a bypass-permissions session. Establish the surface BEFORE the first stand write and say so when there is none. A stored preference that later proves unachievable is RE-ASKED, never silently downgraded while still reporting itself as automatic. → step 7 / step 8.
 - **A ⛔ blamed on the user's scope answer.** A blocker that predates the user's first answer is not theirs, and saying it is makes the next decision worse: on one run the ⛔ fired 5 minutes before the first answer, was reported three times as the consequence of a scope choice, and the real cause (a `labelConfig` remove hitting an unmodelled engine key) appeared in ZERO of the run's messages. Read the gate's own reason, name the page and the op verbatim, and check the timestamps before attributing a block to anything the user said. → step 4.2 / the Contract's rule 4.

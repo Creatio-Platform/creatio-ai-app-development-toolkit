@@ -110,6 +110,20 @@ export const SOURCE = {
 // the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
 export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
 
+// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE (ENG-94756, PR #182 review) ---------------------------------
+// `meta.feature` is a JOIN KEY, not a caption: the rows below declare it, `GUIDED_FEATURES` decides from it which
+// components are routed to the guidance item, and `companionRows` in designspec.mjs decides from it which page
+// owes the `AttachmentListDS` evidence row. That was three independent spellings of one string, and the failure
+// mode is SILENT in the worst direction — rename the row and not the gate and the page simply stops being told it
+// owes a data source, which reads exactly like a page that never needed one. Nothing goes red; the gate quietly
+// gets weaker. So the name is declared here and imported by every consumer, and `run-mapper.mjs` scans engine
+// source to prove no fourth spelling reappears: the constant alone does not stop one being typed next to it.
+//
+// Declared ABOVE `MAPPING_ROWS` because a module-level `const` is in the temporal dead zone until its own line
+// runs, and the rows are BUILT at module-evaluation time — a declaration below them would throw on import.
+export const FEATURE_ATTACHMENTS = "Attachments";
+export const FEATURE_FEED = "Feed";
+
 // A row builder, so every row is complete and the optional fields cannot be silently forgotten (a row missing
 // `tier` would otherwise read as tier `undefined` and pass every truthiness test).
 function row({ match, role, tier, ownedBy, target = null, verify = null, uiShape = null, notes = null, meta = null, gate = null }) {
@@ -283,8 +297,14 @@ const FEATURE_ROWS = [
   // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
     componentType: "crt.ApprovalList", uiShape: "component" }),
-  feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
-    uiShape: "component", templateProvided: true }),
+  // The Attachments composite is FOUR parts and a build that lands three of them still answers "the component is
+  // on the page". Measured: a run shipped the ExpansionPanel, the toolbar and the file list's data source, left the
+  // file list itself with neither `columns` nor an `items` binding, passed `--verify`, and threw
+  // `TypeError: ... is not iterable` out of the platform's column preprocessor the first time the page opened —
+  // it reads the element's `columns` before anything else runs. Naming the parts is the difference.
+  feature("FileDetailV2", { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
+    uiShape: "component", templateProvided: true,
+    notes: "Attachments is a COMPOSITE, not one element: crt.ExpansionPanel -> crt.GridContainer -> crt.FileList in the body, plus a toolbar (upload / refresh / search) in `tools`. The file list itself needs FOUR things and three of them are not the element: (1) `columns` — an array, each column an `id` GUID, a `code`, a `caption` and a `dataValueType`; the platform iterates this before rendering and THROWS when it is absent, so a file list without it breaks the whole page, not just itself; (2) `items` bound to a collection attribute (`items: '$<name>'`); (3) that attribute declared with `isCollection: true` and one nested attribute per column; (4) the element's own entity data source over the attachment entity, scope `viewElement`, keyed `<name>DS`. `masterRecordColumnValue` / `recordColumnName` alone wire nothing." }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
   // filtered to the master record, the SAME UI as any other child list. They are NOT the Freedom Timeline
   // (an aggregate chronological feed; a separate classic component mapped by the MODULE_KEY row for Timeline) and
@@ -318,7 +338,7 @@ const FEATURE_ROWS = [
     // ONE row, two consumers: `meta.feature` is what the standard-feature gate reads, `meta.widgets` is what the
     // widget builder reads. Feed was in BOTH catalogs before (a FEATURE_TYPE entry and a WIDGET_BY_CONTAINER entry)
     // — the clearest case of the duplication this table exists to end.
-    meta: { feature: "Feed", freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
+    meta: { feature: FEATURE_FEED, freedom: "Freedom Feed", templateProvided: false, uiShape: "component",
       widgets: [{ widget: "Feed (ESN)", freedom: "Freedom Feed" }] } }),
 ];
 
@@ -330,7 +350,7 @@ const FEATURE_ENTITY_ROWS = [
   row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.FileList" },
-    meta: { feature: "Attachments", freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+    meta: { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
   row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.CommunicationOptions" },
@@ -499,6 +519,79 @@ export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
 }
 
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+   The rows above answer WHICH Freedom component a classic Feed / Attachments becomes and WHETHER a template tends
+   to ship it (`meta.templateProvided`). Neither they nor anything else in this repository answers HOW the component
+   is CONFIGURED — and that is the reported defect: a page migrated onto a non-basic template gets the components
+   and none of the property values the section/app CREATION flow produces, so the Feed queries nothing and the
+   attachments list shows nothing.
+
+   THE SETTINGS ARE PUBLISHED ONCE, AS KNOWLEDGE, NOT HERE. The value set was measured read-only from a page the
+   creation flow built, and lives in clio-knowledge as the guidance item named below, which a builder reads at build
+   time through `get-guidance`; `get-component-info` stays authoritative for the property VOCABULARY. So the plan
+   ROUTES a builder to that item by its stable id and asserts nothing about the values themselves.
+
+   WHY A POINTER AND NOT A COPY (approved requirement R7). A table of values here would be a SECOND source of truth
+   for the same knowledge, free to drift from the one the builder actually reads — the duplication this ticket
+   exists to end. And the engine could not maintain it honestly even if that were wanted: `migrate.mjs` renders the
+   plan OFFLINE, under plain `node`, with no clio and no stand, so it can never check a value it printed. Naming the
+   item costs one string and keeps the run's only claim a true one: here is the component you owe, and here is where
+   its settings are defined. Two engine tests hold the line — one over the rendered plan, one over every engine
+   source file — so the decision cannot decay back into a paste without going red.
+
+   THE ROUTE IS OWED ON BOTH PATHS, which is why nothing here branches on the template. The guidance item covers the
+   MERGE case (the template ships the container and the component is merged onto it) and the INSERT case (the
+   template ships neither and the component is built outright) alike, so the builder needs it either way — whether
+   the plan tells it the template provides the component or tells it to add one.
+
+   AND IT IS OWED ON THE BASIC TEMPLATE TOO, against the wording of the ticket's fourth acceptance criterion
+   ("when a basic template is used, existing migration behavior is not affected"). A basic-template plan DOES
+   change: it gains the route. Measured, not reasoned - the end-to-end run of 2026-09-17 migrated
+   `UsrToMigrate2App_FormPage` on `PageWithTabsFreedomTemplate`, the basic template, and the route is what sent the
+   builder to fetch the guidance article before it produced a working Feed, working Attachments and a correctly
+   bound tag control. On that template the components are MERGED onto containers the template already ships, and a
+   merge still owes the property set: the template supplies the container, never the configuration. Gating the
+   route on template family would have broken that run. Two checks in `run-mapper.mjs` pin it - the route IS
+   present on the basic template, and the basic-template plan is byte-identical to the top-area one once the
+   template NAME is substituted, so nothing else varies by family either. The rationale and the AC reconciliation
+   are written down in `docs/guidance-item-contract-decision.md` rather than left in a review thread.
+
+   It could not honestly branch in any case: `rowsForFeatures` and `rowsForWidgets` are handed no `opts`, so
+   `planMeta.formTemplate` is not in scope where the route is resolved, and `meta.templateProvided` is a flat
+   per-row flag carrying no per-template verdict. A template-aware route needs a measured capability table this
+   branch does not have.
+
+   The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`.
+   Renaming it there without renaming it here produces a plan that points at nothing, which is why the engine tests
+   spell the literal out rather than importing this constant. Only RUNTIME consumption needs the clio release that
+   carries the item; the plan needs the id alone.                                                                  */
+export const STANDARD_COMPONENTS_GUIDANCE_ID = "page-modification-standard-components";
+// The companion artifact an attachments component is inert without: it is what the component reads its records
+// from, so a page carrying the component and not this lists nothing — and a gate that counted only the component
+// would call that page done. The measured creation-flow page declares it in its OWN model configuration even though
+// it MERGED onto a template-shipped container, so it is the page's deliverable whichever path the component took.
+// This is a deliverable NAME, not one of the property values: the plan has to be able to say WHICH artifact is owed
+// and `--verify` has to be able to gate it. Its SHAPE — the entity it binds, its scope, its attribute — stays in
+// the guidance item, with everything else the builder configures.
+export const ATTACHMENTS_DATA_SOURCE = "AttachmentListDS";
+// The features that item covers, by the same `meta.feature` name the rows above carry. A feature absent from this
+// set gets no route: Approvals and Communication options have their own recipes elsewhere, and pointing them at an
+// item that says nothing about them would be a false instruction.
+const GUIDED_FEATURES = new Set([FEATURE_ATTACHMENTS, FEATURE_FEED]);
+export function featureGuidanceId(featureName) {
+  return GUIDED_FEATURES.has(featureName) ? STANDARD_COMPONENTS_GUIDANCE_ID : null;
+}
+// Feed reaches the plan as a WIDGET (keyed by its classic container) while Attachments reaches it as a standard
+// FEATURE — one row, two consumers, as the ESNFeedContainer row's own comment says. So the widget's rendered label
+// is resolved back to the feature name THROUGH THAT ROW rather than by a hand-kept second list: a row that carries
+// both `meta.feature` and `meta.widgets` is exactly the pair, and a rename on either side moves both at once.
+const WIDGET_FEATURE = Object.freeze(Object.fromEntries(MAPPING_ROWS
+  .filter((r) => r.meta?.feature && Array.isArray(r.meta.widgets))
+  .flatMap((r) => r.meta.widgets.map((w) => [w.widget, r.meta.feature]))));
+export function widgetGuidanceId(widgetLabel) {
+  return featureGuidanceId(WIDGET_FEATURE[widgetLabel]);
+}
+
 // The row for a bare itemType VALUE, with NO fallback of any kind — `undefined` means the table has no entry for
 // that member. This is what lets a golden witness the 29-member coverage instead of leaving it to a reader's
 // tally: every convenience accessor above returns something truthy for a member nobody listed.
@@ -509,9 +602,13 @@ export function rowForItemType(itemType) {
 // ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
 // The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
 // the data has one home and the builders did not have to be rewritten around a new shape.
+// Each widget def carries its ROW's `templateProvided` down with it. The design spec used to infer template
+// provision from the CLASSIC side — "this came from the Classic base template" — and print "provided by the
+// Freedom template" for Feed, whose row says `templateProvided: false`. A live run believed the spec, shipped a
+// form page with no Feed, and the gap surfaced at verify: a 21-minute user question and a second sub-agent.
 export function widgetsByMatch(by) {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === by && r.meta?.widgets)
-    .map((r) => [r.match[by], r.meta.widgets]));
+    .map((r) => [r.match[by], r.meta.widgets.map((w) => ({ templateProvided: r.meta.templateProvided ?? null, ...w }))]));
 }
 export function profileCardsByEntity() {
   return Object.fromEntries(MAPPING_ROWS.filter((r) => r.match.by === MATCH.PROFILE_ENTITY)

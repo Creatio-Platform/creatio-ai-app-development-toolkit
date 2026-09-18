@@ -97,6 +97,10 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
     # An MCP TOOL name, not a stage: classic-to-freedom-migration/SKILL.md tells a run to establish
     # its browser surface by calling it before the first stand write, rather than assuming one.
     "list_connected_browsers",
+    # Also an MCP tool name. The migration skill names it where it explains that a `Request timed out`
+    # from this call IS the diagnosis — it runs on the page's main thread, so a page that blocks that
+    # thread can never answer it, and a measured run lost eight minutes re-probing a frozen tab.
+    "execute_javascript",
 }
 
 
