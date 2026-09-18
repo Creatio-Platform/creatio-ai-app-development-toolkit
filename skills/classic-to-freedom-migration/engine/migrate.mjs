@@ -56,7 +56,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, RECONCILE_MODES, readFrozenMode } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2731,7 +2731,11 @@ const SPLIT_FLAG = "--split";
 const START_FLAG = "--start";
 // Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
 const ROUTE_FLAG = "--route";
-const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG]);
+// ENG-99192 — `--reconcile-mode <overlay|classic-layout>`: the build-time reconcile mode, chosen once at the first
+// `--tasks` cut and frozen in the folder (tasks.mjs). It changes HOW build sub-agents place elements, never the
+// plan, so it is a `--tasks`-only value flag and is rejected on `--plan`/`--spec` and on a non-reconcile plan.
+const RECONCILE_MODE_FLAG = "--reconcile-mode";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, RECONCILE_MODE_FLAG]);
 // EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
@@ -3150,6 +3154,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (routeMode && startId) fail(`\`${ROUTE_FLAG}\` and \`${START_FLAG}\` are separate calls — one SCHEDULES the repair work, the other marks the task you are about to dispatch. Route first, then \`${START_FLAG}\` the repair task this mode names.`);
   // The seams are already frozen in the folder a round is opened over, and `--route` does not re-cut it.
   if (routeMode && splitFile) fail(`\`${SPLIT_FLAG}\` says how to CUT a folder; \`${ROUTE_FLAG}\` opens a repair round in one already cut, reading the split frozen inside it. Run them as separate commands.`);
+  // `--reconcile-mode <mode>`: chosen when the plan is CUT into tasks and frozen in the folder. Value-validated and
+  // scope-gated here; a re-slice without it reads the frozen mode back (tasks.mjs resolveFrozenMode).
+  const reconcileModeArg = valueFlagArg(argv, RECONCILE_MODE_FLAG, `${RECONCILE_MODE_FLAG} ${[...RECONCILE_MODES].sort().join("|")}`, fail);
+  if (reconcileModeArg && !tasksMode) fail(`\`${RECONCILE_MODE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it is chosen when the plan is cut into tasks, not on \`--plan\`/\`--spec\`.`);
+  if (reconcileModeArg && (verifyMode || routeMode)) fail(`\`${RECONCILE_MODE_FLAG}\` is set once at the \`${TASKS_FLAG}\` cut and frozen in the folder; \`--verify\` / \`${ROUTE_FLAG}\` read it back from there. Drop it from this call.`);
+  if (reconcileModeArg && !RECONCILE_MODES.has(reconcileModeArg)) fail(`\`${RECONCILE_MODE_FLAG}\` must be one of ${[...RECONCILE_MODES].sort().join(" | ")} — got \`${reconcileModeArg}\`.`);
+  // Like a `--split` planVersion mismatch: the mode is FROZEN at the first cut, so re-passing a different one would
+  // silently change how every task is built. Refuse it; a fresh mode needs a fresh folder.
+  if (reconcileModeArg && tasksMode) {
+    const frozenMode = readFrozenMode(tasksDir);
+    if (frozenMode && frozenMode !== reconcileModeArg) fail(`this folder was cut in \`${frozenMode}\` mode; re-passing \`${RECONCILE_MODE_FLAG} ${reconcileModeArg}\` would change how every task is built. Keep \`${frozenMode}\` (drop the flag — a re-slice reads it back), or start a fresh folder for the other mode.`);
+  }
   if (tasksMode && !verifyMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
@@ -3167,6 +3183,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.schemas) || manifest.schemas.length === 0) {
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
+  // ENG-99192 — the reconcile mode only means something when a Freedom page for this entity already exists (a
+  // reconcile). A rebuild always builds fresh, so the flag on one is a mistake worth naming, not silently ignoring.
+  if (reconcileModeArg && !manifest.planMeta?.freedomExists) fail(`\`${RECONCILE_MODE_FLAG}\` applies only to an existing-Freedom reconcile (planMeta.freedomExists); this plan rebuilds the page from scratch, where there is nothing to reconcile onto.`);
   let result;
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
@@ -3226,7 +3245,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    try { output = runTaskMode(result, tasksDir, { ...checklistOpts(manifest), reconcileMode: reconcileModeArg }, split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {

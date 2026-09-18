@@ -16,7 +16,9 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit,
+  readFrozenMode, freezeMode, resolveFrozenMode, RECONCILE_MODES, RECONCILE_MODE_CLASSIC, RECONCILE_MODE_OVERLAY,
+  RECONCILE_MODE_DEFAULT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -3406,5 +3408,87 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
     return /left OPEN by a `--verify`/.test(text) && !/recorded as NOT BUILT/.test(text);
   }, () => { const dir = tmp("verify-blockquote-d");
     return fs.readFileSync(path.join(dir, syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0].file), "utf8"); });
+/* ================================================================================================
+   ENG-99192 — the build-time RECONCILE MODE (overlay | classic-layout). It is chosen once with
+   `--reconcile-mode` at the `--tasks` cut, frozen in the folder, read back on every re-slice, and
+   stamped into `index.md` + every engine task's front matter so the ONE sub-agent handed a task file
+   knows how to place elements. It changes HOW a build reconciles, never the plan — so `--plan`/`--spec`
+   reject it, and a rebuild (no `planMeta.freedomExists`) rejects it too. A modeless run is byte-for-byte
+   unchanged, which is why every existing golden above still holds.
+   ================================================================================================ */
+{
+  // ---- the freeze/read primitives (mirror readFrozenSplit/freezeSplit) ----
+  const d0 = tmp("mode_freeze");
+  check("ENG-99192: readFrozenMode is null before any freeze", () => readFrozenMode(d0) === null);
+  freezeMode(d0, RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: freezeMode → readFrozenMode round-trips", () => readFrozenMode(d0) === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: an unrecognised frozen value reads back as null (strict about values, like a bad status)",
+    () => { fs.writeFileSync(path.join(d0, ".reconcile-mode"), "bogus\n"); return readFrozenMode(d0) === null; });
+
+  // ---- resolveFrozenMode: flag wins, else frozen, else null; freezes when set ----
+  const d1 = tmp("mode_resolve");
+  check("ENG-99192: resolveFrozenMode returns null and freezes nothing with no flag and no frozen file",
+    () => resolveFrozenMode(d1, {}) === null && readFrozenMode(d1) === null);
+  check("ENG-99192: resolveFrozenMode freezes the flag value and returns it",
+    () => resolveFrozenMode(d1, { reconcileMode: RECONCILE_MODE_CLASSIC }) === RECONCILE_MODE_CLASSIC
+      && readFrozenMode(d1) === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: a re-slice with NO flag reads the frozen mode back (the orchestrator need not re-pass it)",
+    () => resolveFrozenMode(d1, {}) === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: RECONCILE_MODE_DEFAULT is overlay (the implicit, unstamped current behavior)",
+    () => RECONCILE_MODE_DEFAULT === RECONCILE_MODE_OVERLAY);
+
+  // ---- syncTaskDir stamps index + every engine task's front matter, and freezes ----
+  const d2 = tmp("mode_stamp");
+  const setC = syncTaskDir(d2, RUN, { ...checklistOpts(MANIFEST), reconcileMode: RECONCILE_MODE_CLASSIC });
+  check("ENG-99192: the built set carries the resolved mode", () => setC.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: syncTaskDir freezes the mode in the folder", () => readFrozenMode(d2) === RECONCILE_MODE_CLASSIC);
+  const idxC = fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8");
+  check("ENG-99192: index.md names the reconcile mode in its headline", () => /Reconcile mode:\*\*\s*`classic-layout`/.test(idxC), () => idxC.split("\n").slice(0, 4));
+  const engFile = setC.tasks.find((t) => t.origin === "engine").file;
+  const tfC = fs.readFileSync(path.join(d2, engFile), "utf8");
+  check("ENG-99192: an engine task's front matter carries `reconcileMode: classic-layout`",
+    () => /^reconcileMode: classic-layout$/m.test(tfC), () => tfC.split("\n").slice(0, 16));
+  check("ENG-99192: the stamped front matter round-trips through parseTaskFile",
+    () => parseTaskFile(tfC).meta.reconcileMode === RECONCILE_MODE_CLASSIC);
+
+  // ---- a re-slice with NO flag keeps the frozen mode (index + set) ----
+  const setC2 = syncTaskDir(d2, RUN, checklistOpts(MANIFEST));
+  check("ENG-99192: a re-slice with no flag keeps the frozen mode on the set", () => setC2.reconcileMode === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192: and the index still names it after a modeless re-slice",
+    () => /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(d2, TASK_INDEX_FILE), "utf8")));
+
+  // ---- a MODELESS run is byte-for-byte unchanged (backward compat): no line, no front-matter key ----
+  const dN = tmp("mode_none");
+  const setN = syncTaskDir(dN, RUN, checklistOpts(MANIFEST));
+  check("ENG-99192: a modeless run resolves to null on the set (implicit overlay, unstamped)", () => setN.reconcileMode === null);
+  check("ENG-99192: a modeless run freezes NO .reconcile-mode file", () => readFrozenMode(dN) === null);
+  check("ENG-99192: a modeless index has no Reconcile-mode line", () => !/Reconcile mode:/.test(fs.readFileSync(path.join(dN, TASK_INDEX_FILE), "utf8")));
+  check("ENG-99192: a modeless engine task file has no reconcileMode front-matter key",
+    () => !/reconcileMode:/.test(fs.readFileSync(path.join(dN, setN.tasks.find((t) => t.origin === "engine").file), "utf8")));
+
+  // ---- CLI: the flag on a reconcile plan writes the folder, freezes, exits 0; guards on misuse ----
+  const RECON = { ...MANIFEST, planMeta: { ...(MANIFEST.planMeta || {}), freedomExists: true } };
+  const bR = tmp("cli_recon"); const dR = path.join(bR, "bt");
+  const okRun = cliTasks(["--tasks", dR, "--reconcile-mode", "classic-layout"], RECON);
+  check("ENG-99192 CLI: `--tasks --reconcile-mode classic-layout` on a reconcile plan exits 0 and writes the folder",
+    () => okRun.status === 0 && fs.existsSync(path.join(dR, TASK_INDEX_FILE)), () => ({ status: okRun.status, err: okRun.stderr, out: (okRun.stdout || "").slice(0, 300) }));
+  check("ENG-99192 CLI: the folder is frozen in `classic-layout`", () => readFrozenMode(dR) === RECONCILE_MODE_CLASSIC);
+  check("ENG-99192 CLI: a re-slice with no flag keeps the frozen mode (index still names it)",
+    () => { const r = cliTasks(["--tasks", dR], RECON); return r.status === 0 && /Reconcile mode:\*\*\s*`classic-layout`/.test(fs.readFileSync(path.join(dR, TASK_INDEX_FILE), "utf8")); });
+  check("ENG-99192 CLI: re-passing a DIFFERENT mode over a frozen folder is REFUSED (exit 1, names the frozen one)",
+    () => { const r = cliTasks(["--tasks", dR, "--reconcile-mode", "overlay"], RECON); return r.status === 1 && /cut in `classic-layout`/.test(r.stderr || r.stdout || ""); });
+  fs.rmSync(bR, { recursive: true, force: true });
+
+  check("ENG-99192 CLI: an unknown mode value is REFUSED (exit 1, names the allowed set)",
+    () => { const r = cliTasks(["--tasks", tmp("cli_bad"), "--reconcile-mode", "sideways"], RECON);
+      return r.status === 1 && /must be one of/.test(r.stderr || r.stdout || "") && /classic-layout/.test(r.stderr || r.stdout || ""); });
+  check("ENG-99192 CLI: `--reconcile-mode` without `--tasks` is REFUSED (`--spec` — it is a task-cut choice)",
+    () => { const r = cliTasks(["--spec", "--reconcile-mode", "classic-layout"], RECON);
+      return r.status === 1 && /only means something with `--tasks/.test(r.stderr || r.stdout || ""); });
+  check("ENG-99192 CLI: `--reconcile-mode` on a REBUILD (no planMeta.freedomExists) is REFUSED (nothing to reconcile onto)",
+    () => { const r = cliTasks(["--tasks", tmp("cli_rebuild"), "--reconcile-mode", "classic-layout"], MANIFEST);
+      return r.status === 1 && /existing-Freedom reconcile/.test(r.stderr || r.stdout || ""); });
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

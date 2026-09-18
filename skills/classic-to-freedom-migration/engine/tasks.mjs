@@ -586,6 +586,13 @@ function renderFrontMatter(task, set) {
     agentNonce: task.agentNonce || "",
   };
   const keys = [...FRONT_MATTER_KEYS];
+  // ENG-99192 — the build-time reconcile mode, stamped so the ONE sub-agent handed this file self-describes how to
+  // place elements (overlay vs classic-layout). Emitted only for an existing-Freedom reconcile (set.reconcileMode
+  // is null for a rebuild, which always builds fresh), so a rebuild's task files are byte-for-byte unchanged.
+  if (set.reconcileMode) {
+    v.reconcileMode = set.reconcileMode;
+    keys.push("reconcileMode");
+  }
   if (task.kind === REPAIR_KIND) {
     Object.assign(v, { kind: task.kind, cause: task.cause, repairRound: String(task.repairRound),
       covers: (task.covers || []).join(" ") });
@@ -1361,10 +1368,13 @@ export function renderTaskIndex(set) {
   // Named in the headline, not only in a column — the first line is the count a reader takes away.
   const partial = counts.partial ? ` · **⚠ Partial:** ${counts.partial}` : "";
   const entityNote = set.entity ? ` — ${set.entity}` : "";
+  // ENG-99192 — the frozen reconcile mode, named in the headline so the orchestrator carries it into every build
+  // brief. Present only for an existing-Freedom reconcile; a rebuild renders no such line.
+  const modeNote = set.reconcileMode ? ` · **Reconcile mode:** \`${set.reconcileMode}\`` : "";
   const L = [
     `# Migration build tasks${entityNote}`,
     "",
-    `**Plan version:** \`${set.planVersion || "—"}\` · **Tasks:** ${set.tasks.length} · **Done:** ${counts.done} · **Open:** ${counts.open}${partial}${other}`,
+    `**Plan version:** \`${set.planVersion || "—"}\` · **Tasks:** ${set.tasks.length} · **Done:** ${counts.done} · **Open:** ${counts.open}${partial}${other}${modeNote}`,
     "",
     "> DERIVED FILE — regenerated from the task files by `migrate.mjs <manifest> --tasks <dir>`. It carries no fact",
     "> of its own: a task's OWN file records its status, so editing this table changes nothing. Run the mode again",
@@ -1890,16 +1900,20 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   const { tasks, parked, pending } = buildRepairTasks(result, mergePages({ residual, verified: verifyPages }), opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
   fs.mkdirSync(dir, { recursive: true });
+  // ENG-99192 — a repair round is over an already-cut folder, so its reconcile mode is the one frozen there; carry
+  // it into the repair task files and the index the same way syncTaskDir does for the plan tasks.
+  const reconcileMode = readFrozenMode(dir);
   const written = [];
   for (const t of tasks) {
     // An id already on disk is the SAME round of the same cause re-derived from an identical verify run — nothing
     // changed, so re-writing it would only erase whatever a sub-agent has already recorded in it.
     if (onDisk.has(t.file) || existing.some((e) => e.meta?.id === t.id)) continue;
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null }));
+    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null, reconcileMode }));
     written.push(t);
   }
   // The index is derived from the FILES, so re-deriving it now picks the new repair files up with everything else.
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  merged.reconcileMode = reconcileMode;
   // The Dispatched column is folder-derived like the rest of the index: without this every row would render as
   // "not known" and a repair round would quietly erase what the build rounds recorded. It also feeds
   // `resolvePartials`, which only lets a DISPATCHED closure resolve a residual.
@@ -1922,6 +1936,45 @@ export function readFrozenSplit(dir) {
 export function freezeSplit(dir, text) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
+}
+
+// ENG-99192 — the RECONCILE MODE is a build-time choice for an existing-Freedom reconcile, frozen in the folder
+// exactly like the split: chosen once with `--reconcile-mode` at the first `--tasks` run, then read back on every
+// re-slice so the orchestrator does not have to re-pass it. It changes HOW build sub-agents place elements, not the
+// plan — so it never touches `--plan`/`--spec`, only the task files (front matter) and the index header.
+//   overlay        — add the client delta onto the existing Freedom layout; keep base positions/extras (default).
+//   classic-layout — place fields/details at their Classic positions (move base, remove base layout elements not in
+//                    the plan, keep Freedom-only value-add); see references/existing-freedom-reconcile.md.
+export const RECONCILE_MODE_OVERLAY = "overlay";
+export const RECONCILE_MODE_CLASSIC = "classic-layout";
+export const RECONCILE_MODES = new Set([RECONCILE_MODE_OVERLAY, RECONCILE_MODE_CLASSIC]);
+export const RECONCILE_MODE_DEFAULT = RECONCILE_MODE_OVERLAY;
+const RECONCILE_MODE_FILE = ".reconcile-mode";
+
+// The mode frozen in the folder, or null when none was ever set (a legacy folder, or a non-reconcile build). A value
+// the current engine does not recognise is treated as absent rather than trusted — the same "strict about values"
+// rule parseTaskFile follows for a status it cannot read.
+export function readFrozenMode(dir) {
+  const p = path.join(dir, RECONCILE_MODE_FILE);
+  if (!fs.existsSync(p)) return null;
+  const m = fs.readFileSync(p, "utf8").trim();
+  return RECONCILE_MODES.has(m) ? m : null;
+}
+
+export function freezeMode(dir, mode) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, RECONCILE_MODE_FILE), mode + "\n");
+}
+
+// The mode this folder is built in: the one just handed in (`opts.reconcileMode`, from `--reconcile-mode`) wins,
+// else the one frozen in the folder, else none — and none means the implicit `overlay` default (current behavior,
+// unstamped, so a reconcile that never chose a mode keeps its files byte-for-byte). When a mode IS in play it is
+// frozen, so a later re-slice without the flag reads it back. `--reconcile-mode` is validated + scope-gated by the
+// CLI before it ever reaches here, so any value present is already one of RECONCILE_MODES on a reconcile plan.
+export function resolveFrozenMode(dir, opts = {}) {
+  const mode = opts.reconcileMode || readFrozenMode(dir);
+  if (mode) freezeMode(dir, mode);
+  return mode || null;
 }
 
 // The cut this run uses: the one just handed in, else the one frozen in the folder, else none — and none means
@@ -2283,6 +2336,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
   const untouchable = new Set(merged.blocked.map((b) => b.file));
   fs.mkdirSync(dir, { recursive: true });
+  merged.reconcileMode = resolveFrozenMode(dir, opts);
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
   attachDispatch(merged, dir);
