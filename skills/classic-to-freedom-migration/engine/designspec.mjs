@@ -276,6 +276,20 @@ function rowsForCardWidgets(cardWidgets, regionOf) {
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
+// The workplace-registration read, spelled as ARGUMENTS rather than as a description — the standard
+// PROCESS_HOWTO sets: a row that names the question and leaves the query to the reader leaves the known-wrong
+// answer available.
+const WORKPLACE_HOWTO = "Resolve the section's `SysModule.Id` FIRST (nothing else can be filtered without it):"
+  + " `odata-read SysModule` `filters {any:[{field:\"Code\",op:\"contains\",value:\"<Section>\"},{field:\"Caption\",op:\"contains\",value:\"<Section>\"}]}`"
+  + " select `[\"Id\",\"Caption\",\"Code\"]`. Then the bindings: `odata-read SysModuleInWorkplace`"
+  + " `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the"
+  + " `SysModule/Id` nav, never a `SysModuleId` field; the param is `filters`, NOT `filter`) select"
+  + " `[\"Id\",\"SysWorkplaceId\"]` (the KEY column — a lookup’s nav property may not be selectable, the"
+  + " `<Lookup>Id` scalar always is), then name each workplace via `odata-read SysWorkplace`"
+  + " `filters {all:[{field:\"Id\",op:\"eq\",value:<sysWorkplaceId>}]}` select `[\"Name\"]`. Report"
+  + " `{ \"workplaces\": <row count>, \"names\": [...] }` — the COUNT of the rows that came back, not a flag."
+  + " NOT `find-app`: it reports the app's own schemas and is blind to a section registered over a BORROWED"
+  + " entity, which it then reports as absent.";
 const PRINT_HOWTO = "⚠ Migrate ONLY if printables/reports exist for this section. Check on-stand: read `SysModuleReport` filtered by the section's `SysModule` (nav `SysModule/Id eq <id>`) + `ShowInSection eq true` (section Print menu) or `ShowInCard eq true` (record card); each row's `Caption`/`Type`/`SysReportSchemaUId`|`FileName` is the printable. None ⇒ the button is NOT migrated; if some exist, wire them as the Freedom print action.";
 // The Additional-cell note for a Print / Run-process card action: concrete when the on-stand signal is resolved,
 // the how-to fallback otherwise, a short "no section-level menu" on a child page. Own fn for Sonar CC 15.
@@ -2291,8 +2305,12 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
   // The key is scoped by BOTH recordId and widgetKey: the same widgetKey can legitimately recur under different
   // recordId's (the recordId-batching model), so keying by widgetKey alone would collapse two widgets into one gate.
+  // `recordedBy: "builder"` — the ONE on-stand key that is not a stand READ: its value is what the build agent
+  // observed running `ConvertCardWidgetsProcess`, and nothing on the stand answers it afterwards. reads.mjs
+  // partitions on this so the read-only read-back agent is never sent after a value it cannot fetch; the row is
+  // still named, as the builder's to record.
   for (const w of cs.cardWidgets || [])
-    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", recordedBy: "builder", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -2388,7 +2406,12 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (pm.sectionSchema || result.section) {
     pages.push(opts.sectionHostMode === "pages-only-no-menu"
       ? { label: "Navigable section registered — **deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): the pages ship, but the section does not appear in the app menu, so they are reachable only by URL and through the object's page bindings" }
-      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings", miss: "the section is not in the menu — its pages are unreachable" } });
+      : { label: "Navigable section registered in exactly ONE workplace — the Freedom section appears in the app menu (`create-app-section`) and is bound to a single workplace; the pages above are not reachable without it, and a registration only ADDS, so a section \"moved\" between workplaces stays in both until the old binding is removed", vk: { type: "onstand", evidence: "sectionRegistered", expectCount: 1, what: "app-menu section-registration check, counting the workplace bindings",
+        // The QUERY, not just the question. The bindings live in `SysModuleInWorkplace` and that is the only read
+        // that counts them: `find-app` reports the app's own schemas and is blind to a section registered over a
+        // BORROWED entity, which it then reports as absent.
+        query: WORKPLACE_HOWTO,
+        miss: "the section is not in the menu — its pages are unreachable" } });
   }
   return pages;
 }

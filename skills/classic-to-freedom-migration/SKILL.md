@@ -523,13 +523,31 @@ the step-5.1 behaviour cards with their acceptance criteria — a handler is por
 from its method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they answered
 on the stand is recorded there and is not repeated in its own file.
 
-**7.4 Assembling `--built` is YOURS, and it needs two contexts that did not build.** Step 8's gate reads a payload
-keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`, `judge`.
-No task produces it, and a builder must not assemble its own verdict, so:
+**7.4 The reads are the ENGINE's list; the responses are yours to fetch and drop in whole.** Step 8's gate reads a
+payload keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` verbatim), `reachability`, `evidence`,
+`judge`. No task produces it, and a builder must not assemble its own verdict, so:
 
-- **The read-back**: one sub-agent with stand access but NO write access runs `get-page` for every page key the
-  plan publishes and hands you the payload. It reads the stand, never a task's `## Notes` — the notes say what a
-  builder believes it did, and the point of this read is to find out what is actually there.
+- **The read plan first.** Run `node engine/migrate.mjs <manifest> --reads <migration-folder>`. It writes
+  `reads/index.json` and prints one row per read the gate needs: two files per published page key (`meta.json` and
+  `bundle.json` from `.clio-pages/<schema>/`), the rule reads for the pages whose rules are gated, and every
+  on-stand check — each with the exact file it goes into. Derive that list yourself and a page the checklist gates
+  is a page nobody reads, which the gate then reports as "not checked" rather than as a gap.
+- **The read-back**: one sub-agent with stand access but NO write access runs the reads that plan names and copies
+  each file **verbatim** into its slot — whole, never a slice, and no JSON of its own. It reads the stand, never a
+  task's `## Notes` — the notes say what a builder believes it did, and the point of this read is to find out what
+  is actually there. A read it cannot complete is left UNWRITTEN: an empty file or an assumed value passes a check
+  that never ran, while a missing one is reported as unread. **A page the stand DENIES is different from one it
+  could not read** — write the literal `false` into that page's slot and the gate reports it ❌ MISSING (a repair),
+  rather than ⚠ unread (a re-read).
+- **The judge's and the builder's records are FILES, not reads.** `evidence.json` and `judge.json` in the
+  migration folder, keyed by the ids the engine publishes. No page body and no stand row holds them, so they are
+  not in the read plan — but a run that filed evidence and did not put it there reports every evidence row
+  unconfirmed.
+- **Then the engine composes the payload.** `node engine/migrate.mjs <manifest> --verify --from <migration-folder>
+  --tasks <migration-folder>/build-tasks` opens those files, builds `built.json` out of them and runs the gate on
+  it — `--tasks` still does what it always did, so the dispatch gate and the repair round are unaffected. **Do not
+  hand-write that payload**: a key you do not copy is a check that never runs, and the table cannot tell that from
+  a check that passed. `--built <file>` still works and is how you replay a run offline.
 - **The judge**: a THIRD context rules on each `evidence[<id>]` record (the `creatio-ui-guidelines` gate's
   reference page + the components diffed with `get-component-info`, which the building sub-agent filed under
   `## Notes`). A record reviewed by its own author is a weaker verdict, so say in `worklog.md` which it was.
@@ -546,8 +564,8 @@ No task produces it, and a builder must not assemble its own verdict, so:
 Neither is a build task and neither writes to the stand. Run them once every task is closed or parked, then step 8.
 
 **7.5 Repair — the rows step 8 left open come back as tasks, not as a loop you run yourself.**
-`node engine/migrate.mjs <manifest> --verify --built built.json --tasks <migration-folder>/build-tasks` prints
-step 8's table AND writes that run's OPEN rows into the same folder as repair tasks. They are handed to
+`node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`
+prints step 8's table AND writes that run's OPEN rows into the same folder as repair tasks. They are handed to
 sub-agents exactly like build tasks — same contract, same one-sub-agent rule, and they declare the page artifact
 they write, so the queue sequences them behind that page's build rather than beside it.
 
@@ -615,20 +633,24 @@ Where the two disagree — every task `done` while `--verify` still names a MISS
 is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
 
 **On an orchestrated run the final gate carries `--tasks <migration-folder>/build-tasks` too:**
-`node engine/migrate.mjs <manifest> --verify --built <built-file> --tasks <migration-folder>/build-tasks`.
+`node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`.
 That is what runs the dispatch gate over the folder — read-only, no re-slice — so the run cannot close while a
 task stands closed with nobody dispatched for it. While it fails, **no repair task is written**: a repair round
 would schedule more sub-agents on top of work nobody was dispatched for. Without `--tasks` the verify run checks
 the built pages only and says so; it is not the gate for a run that used a task folder.
 
-**The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --built <built-file>`, and `<built-file>` is a JSON **keyed BY PAGE**. The keys are the page keys the engine itself uses — the same ones `--checklist` groups its rows by: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). Read them off the checklist, never construct one: a key the engine did not publish is silently "not checked", not an error.
+**The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --from <migration-folder>` — **you do not write the payload.** Step 7.4's `--reads` named every file; this composes `built.json` out of them, writes it and `verify.md` into that folder, and gates on it.
+
+**`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed (the `built.json` from an earlier run, or a recorded fixture). Use it to re-check a run offline, never to author a payload by hand.
+
+The shape below is what the engine COMPOSES — read it to understand the table, do not fill it in. It is **keyed BY PAGE**, by the page keys the engine itself publishes: `main` · `list` (the section's list page, when the plan gates one) · `child:<Entity>` · `typed:<Schema>` · `mini:<Schema>` (with an `@<Via>`/`@<Schema>`/`#n` suffix where two distinct pages would otherwise share a key). A key the engine did not publish is silently "not checked", not an error — which is why the read plan, not you, decides the list.
 
 ```jsonc
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },     // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
-  "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"] } },
-  "judge":    { "<id from --checklist>": { "convincing": true, "why": "…" } } }
+  "evidence": { "<id>": { "referencePage": "…", "components": ["…"] } },   // merged from evidence.json — the engine wrote every id as a key; you fill VALUES, never keys
+  "judge":    { "<id>": { "convincing": true, "why": "…" } } }              // …and from judge.json, the same way
 ```
 
 **Send `bundle.modelConfig` alongside it.** It is optional and nothing rejects a payload without it, but it is the only way the gate can see the failure that costs the most to find by hand: a page created from a template carries `#PrimaryDataSourceName()#` unexpanded (the Interface Designer expands that macro, `create-page` does not, and `--entity-schema-name` only records a dependency), so the page has no primary data source, `update-page` and `validate-page` both accept it, and the card HANGS THE BROWSER. With `modelConfig` in the payload the template row reads ❌ MISSING and says so.
