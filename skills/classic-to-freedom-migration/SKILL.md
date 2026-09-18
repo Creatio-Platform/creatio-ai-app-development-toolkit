@@ -401,6 +401,18 @@ in one context it had one machine check, at the very end. A session that hit a u
 
 **7.1 Record the approval, then slice the plan.**
 
+**Before you cut — on a RECONCILE, choose the reconcile mode (ENG-99192).** When the plan is an existing-Freedom
+reconcile (`planMeta.freedomExists`), the developer picks the build-time reconcile mode NOW, at the start of
+implementation — NOT at plan time (`--plan`/`--spec` are identical either way): **`overlay`** (add the client's
+customization delta onto the existing Freedom layout, keeping base positions and extras) or **`classic-layout`**
+(re-lay the page so its fields and details sit exactly where they were in Classic — move base fields to their
+Classic positions, remove base layout elements not in the plan, keep Freedom-only value-add). Ask the developer if
+they have not said; recommend `overlay` unless they want the page to look as it did in Classic. Record the choice in
+`decisions.md`, then pass it on the FIRST `--tasks` cut with `--reconcile-mode overlay|classic-layout`. The engine
+freezes it in the folder, reads it back on every re-slice (you need not re-pass it), and stamps `reconcileMode:` on
+every task so the build sub-agents apply it. The flag is rejected on `--plan`/`--spec` and on a rebuild (nothing to
+reconcile onto). Per-mode placement procedure: `./references/existing-freedom-reconcile.md`.
+
 1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints (`**Plan version:**`).
    Build only against the plan that entry names.
 2. **Decide where the seams go, ONCE.** Write `split.json` — the plan cut into work items, each claiming the plan
@@ -411,7 +423,7 @@ in one context it had one machine check, at the very end. A session that hit a u
    item `"writesTo": ""` when it only reads. Each item's `id` is a slug the engine turns into a filename — lower-case
    letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
    whole file. Then:
-   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json` (add `--reconcile-mode overlay|classic-layout` here on a reconcile — see the mode gate above)
    The engine REFUSES a split that claims a row twice or names a row the plan does not have, and writes nothing at
    all in that case. A plan row in NO item does not block the folder but is reported by name — the engine will not
    pick an owner for it, because which item it belongs to is the judgement this file records. Once it resolves, the
