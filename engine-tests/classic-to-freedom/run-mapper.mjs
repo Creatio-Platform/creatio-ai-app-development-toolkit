@@ -11584,5 +11584,25 @@ check("ENG-94756 RETRACTION (negative control): the pattern matches a derived ju
   () => ({ probes: ["UsrToMigrateInTag", "BaseEntityInTag", "<Entity>InTag", "tagInRecordSourceSchemaName"]
     .map((t) => `${t} -> ${FA_JUNCTION_RE.test(t)}`) }));
 
+/* ENG-99192 Step 2 — the Layout table carries the CONVERTED Classic position (values.layoutConfig) + fuller status,
+   so the classic-layout reconcile mode can place each field exactly. Mode-agnostic data: overlay ignores the cell,
+   and it is read-only in the presented plan. */
+{
+  const posCs = runMigration({ entity: "X", entityColumns: { A: { type: "Text" }, B: { type: "Text" }, H: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}},{operation:"insert",name:"B",parentName:"Header",propertyName:"items",values:{bindTo:"B"}},{operation:"insert",name:"H",parentName:"Header",propertyName:"items",values:{bindTo:"H",visible:false}}]};});` }] }, { baseDir: FIX });
+  const s = posCs.designSpec;
+  check("ENG-99192 spec: the Layout header carries Position as the LAST column",
+    () => /\| Region \| Element \| Type \| Source \| Rule \| Additional \| Position \|/.test(s),
+    () => (s.split("\n").find((l) => l.startsWith("| Region")) || "(no header)"));
+  check("ENG-99192 spec: every field row carries a converted-grid Position cell (r_ · c_)",
+    () => { const fr = s.split("\n").filter((l) => /\| PDS\./.test(l)); return fr.length > 0 && fr.every((l) => /\| r\d+ \S c\d+/.test(l)); },
+    () => s.split("\n").filter((l) => /\| PDS\./.test(l)));
+  check("ENG-99192 spec: a client visible:false field shows `hidden` in the Rule cell (status, not just position)",
+    () => s.split("\n").some((l) => /\| PDS\.H \|/.test(l) && /\| hidden \|/.test(l)),
+    () => s.split("\n").filter((l) => /PDS\.H/.test(l)));
+  check("ENG-99192 spec: `required` is NOT emitted as a field-intrinsic rule (it is a business rule, not a viewConfig value)",
+    () => !/\| required \|/.test(s));
+}
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

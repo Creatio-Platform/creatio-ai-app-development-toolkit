@@ -158,15 +158,27 @@ function rowsForFields(fields, regionOf) {
     const col = strip(f.values.control);
     const v = f.values || {};
     const type = esc(v.typeLabel || v.type) + (v.refSchema ? ` (${esc(v.refSchema)})` : "");
-    const rule = v.readOnly ? "read-only" : DASH; // intrinsic state only; business rules live in the Logic table
+    // Intrinsic field state only; business rules (required/visibility conditions) live in the Logic table. ENG-99192
+    // adds `hidden` (a client `visible:false`) beside `read-only` so the `classic-layout` mode reproduces the Classic
+    // status, not just the position. `required` is deliberately absent — it is a rule, never a field-intrinsic value.
+    const rule = [v.readOnly ? "read-only" : null, v.visible === false ? "hidden" : null].filter(Boolean).join(" · ") || DASH;
     // COMPACT per-field marker — the full cross-datasource recipe is printed ONCE under the Layout table (see
     // `linkedFieldsNote`), not repeated verbatim on every linked field (it was ~5× the same paragraph on a page).
     const nearestNote = Array.isArray(v.linkedNearest) && v.linkedNearest.length ? ` · if renamed, nearest: ${v.linkedNearest.map(esc).join(", ")}` : "";
     const linked = v.linkedValue ? "↳ linked (read-only) — bind via the lookup (recipe below)" + nearestNote : null;
     const tip = v.tip?.content ? `tip: ${esc(v.tip.content)}` : null;
     const additional = [linked, tip].filter(Boolean).join(" · ") || DASH;
-    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional] };
+    return { region: regionOf(f.parentName), sort: 0, cells: [esc(dispLabel(f)), type, "PDS." + esc(col), rule, additional], position: posCell(v) };
   });
+}
+// ENG-99192 — the field's CONVERTED Freedom-grid position (`values.layoutConfig`, computed by the mapper from the
+// Classic coordinates: left island = 1 col, tab/group = 2 cols, wide header = 24). The `classic-layout` reconcile
+// mode places each field at exactly this cell, so the spec must SHOW it; `overlay` ignores it. Read-only cell, so
+// it is inert data in the plan the user presents. `r`ow · `c`olumn · `w`idth(colSpan, only when it spans >1).
+function posCell(v) {
+  const lc = v && v.layoutConfig;
+  if (!lc || lc.row == null || lc.column == null) return DASH;
+  return `r${lc.row} · c${lc.column}${lc.colSpan > 1 ? ` · w${lc.colSpan}` : ""}`;
 }
 function rowsForDetails(details, tabRegion) {
   return (details || []).map((d) => {
@@ -998,12 +1010,14 @@ function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
   const out = [
     opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
     "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
+    // ENG-99192 — `Position` = the converted Freedom-grid cell the `classic-layout` mode places the field at
+    // (`overlay` ignores it). Last column so the plan reads unchanged up to it and prefix-matching stays valid.
+    "| Region | Element | Type | Source | Rule | Additional | Position |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const region of order) {
     const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} |`);
+    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} | ${it.position || DASH} |`);
   }
   out.push("");
   if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
