@@ -34,11 +34,11 @@ When a task spans several, read each. **Read a large reference in bounded slices
 
 ## The loop — the passes to build or assess a page
 
-Run these passes in order. Each names what to decide and where its rules live. Every rule the passes touch is stated **once**, in the reference named — this file does not restate them.
+Run these passes in order. Each states a **decision** and points to where its rule lives — it does not restate the rule's specifics (thresholds, tokens, component recipes live once, in the reference named). Open the pointer when you need them.
 
 1. **Scenario & goal.** State the primary users, primary task, secondary tasks, entry points, and completion signal; and whether the page is for create, view, edit, approval, or analytics. Clarify only when the task cannot proceed without it — prefer best-effort recommendations over blocking. Reuse an analogous Creatio pattern before inventing one.
-2. **Structure & islands.** Choose the **page template before `create-page`** (a staged/DCM record needs the progress-bar template — it cannot be swapped later). Lay out header, profile island(s), metrics, related profiles, tabs; keep the left and right columns balanced; group fields into real blocks. → *Page composition*, *Grouping and page flow*, *Choosing the page template*.
-3. **Fields & field-driven companions.** Order fields by fill flow; require the real minimum only; make few-value lookups dropdowns (`simple-lookup`), not selection windows; add helpful tooltips/placeholders, not bare fields. Then place the **obligatory companions**: an amount → analytics on its value; a deadline → a timer; a business-relationship Contact/Account → a read-only profile island. → *Fields*, *Field-driven companions*.
-4. **Actions.** Place buttons in the right container (header vs beside-the-result vs island footer); one primary per context; confirm destructive actions; warn/async on long-running ones. → *Buttons and actions*, *Long-running and destructive actions*.
-5. **Accessibility.** Contrast (≥4.5:1 / ≥3:1), filled accessible names, keyboard reach, color never the only signal — checked on every page, not only in a dedicated audit. → `./references/accessibility-and-colors.md`.
+2. **Structure & islands.** Choose the page template up front; lay out header, profile island(s), metrics, related profiles, tabs; keep the left and right columns balanced; group fields into real blocks. → *Page composition*, *Grouping and page flow*, *Choosing the page template*.
+3. **Fields & field-driven companions.** Order fields by fill flow; require the real minimum; pick the right lookup mode; guide non-obvious fields instead of shipping them bare; then place the companion each field type requires. → *Fields*, *Field-driven companions*.
+4. **Actions.** Decide each action's placement, its primacy, and protection for destructive or long-running ones. → *Buttons and actions*, *Long-running and destructive actions*.
+5. **Accessibility.** Check contrast, filled accessible names, keyboard reach, and that color is never the only signal — on every page, not only in a dedicated audit. → `./references/accessibility-and-colors.md`.
 6. **Run the checklist.** Before calling the work done, run `./references/review-checklists.md` — the **Critical gate first**, then the grouped items. Always include the checklist output in a design or audit.

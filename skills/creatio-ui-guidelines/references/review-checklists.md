@@ -6,7 +6,7 @@ Run the **Critical gate first**. If any gate item fails, the page is not shippab
 
 ## Critical gate — never ship if any of these fails
 
-- [ ] **Rendered page reviewed, not just the schema** — you opened the actual page and walked the user's fill scenario before reconciling with metadata. → page-layout: Choosing the component
+- [ ] **Rendered page reviewed, not just the schema** — you opened the actual page and walked the user's fill scenario before reconciling with metadata. (See *Audit the rendered page, not the schema* below.)
 - [ ] **Page created from the template its composition needs** — a staged/DCM record uses the progress-bar template (decided before `create-page`, not a bar hand-placed into a default form page). → page-layout: Choosing the page template
 - [ ] **Few-value lookups are dropdowns, not selection windows** — small enum-like catalogs (status/type/category/stage/priority) are `simple-lookup: true`. → page-layout: Fields
 - [ ] **Composites are built in full** — every part a `composite='<caption>'` recipe names is built, not only the part you recognized. → page-layout: Choosing the component
@@ -15,7 +15,8 @@ Run the **Critical gate first**. If any gate item fails, the page is not shippab
 - [ ] **No empty layout gaps** — within each container `layoutConfig.row` runs 1..N with no skips and every `column`/`colSpan` is within the container's own column count. → page-layout: Layout coordinates and container nesting
 - [ ] **Left and right columns are balanced** — the left/profile column is filled to at least the end of the content, not a couple of fields beside a long content area. → page-layout: Page composition
 - [ ] **Field-driven companions are present where required** — amount → analytics on its value; deadline → a timer; business-relationship Contact/Account → a read-only profile island. → page-layout: Field-driven companions
-- [ ] **Contrast and accessible names pass** — standard/small text ≥ 4.5:1, large ≥ 3:1; every accessible name/`Title` filled, never empty or a default. → accessibility: Contrast rules
+- [ ] **Contrast passes** — standard/small text ≥ 4.5:1, large text ≥ 3:1. → accessibility: Contrast rules
+- [ ] **Accessible names are filled** — every accessible name / `Title` (icon-only included) has a real, meaningful value, never empty or a default. → accessibility: WCAG principles to apply
 - [ ] **Destructive or irreversible actions are protected** — confirm, undo, or cancel before execution. → page-layout: Long-running and destructive actions
 - [ ] **No silent custom CSS and no global restyle** — native inputs first; custom CSS only after a one-line upgrade-risk warning and confirmation; components keep the base Creatio appearance. → page-layout: Typography
 
@@ -92,7 +93,7 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Abbreviations, units, codes, and formats are explained in tooltip/placeholder/help. → page-layout: Fields
 - [ ] Lookup fields are filtered to relevant values. → page-layout: Fields
 - [ ] Small enum-like lookups (status, type, category, ~<20 rows) are simple lookups → render as dropdowns (`simple-lookup: true`); large/related lookups (Contact, Account, parent) use the selection window. → page-layout: Fields
-- [ ] Date-only business fields are not rendered with a time picker. → page-layout: Fields
+- [ ] Date-only business fields are not rendered with a time picker. → page-layout: Default Freedom UI behaviors
 - [ ] Read-only fields explain why/how/when they are filled (tooltip) and show units/scale (placeholder). → page-layout: Fields
 - [ ] Non-obvious fields have a placeholder (example/format hint) and/or a tooltip (meaning, units, allowed values); the form is not a wall of bare inputs. → page-layout: Fields
 - [ ] Tooltip/placeholder text is authored as localizable resource strings, not inline literals. → page-layout: Fields
@@ -177,6 +178,17 @@ Answer these from the user's perspective before the detailed checks:
 - [ ] Navigation and inline-help placement are consistent across pages (SC 3.2.3, 3.2.6). → accessibility: Page structure
 - [ ] Link text is descriptive in context — no bare "Click here" (SC 2.4.4). → accessibility: Localization, links & status
 - [ ] All elements are localized to every enabled language; no unintended language mix (SC 3.1.1/3.1.2). → accessibility: Localization, links & status
+
+## What this skill can produce
+
+Depending on the request, deliver one of these forms (use the matching template below where one exists):
+
+- a page structure proposal;
+- implementation instructions for a Creatio builder/developer agent;
+- a UI/UX audit with issues, severity, and fix recommendations;
+- an accessibility / WCAG review;
+- a copy / label / error-text rewrite;
+- acceptance criteria / a checklist.
 
 ## Audit output template
 
