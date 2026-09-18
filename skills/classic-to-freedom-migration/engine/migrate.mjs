@@ -57,8 +57,9 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
+import { renderFinalReport } from "./report.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2680,7 +2681,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at the checklist's page keys because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -3082,27 +3083,34 @@ function runRouteMode(result, dir, opts) {
   return lines.join("\n") + "\n";
 }
 
+// Returns `{ note, set, repair }`: the stdout note, the MERGED task set the final report reads (null when the
+// round was refused before it merged anything — the caller then reads the folder read-only), and what the round
+// wrote (null when refused).
 function runRepairMode(result, dir, verifyRes, opts) {
   const refused = repairPreflight(result, dir);
-  if (refused) return refused;
+  if (refused) return { note: refused, set: null, repair: null };
   let res;
   try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
-  catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
+  catch (e) { return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null }; }
   // The frozen split is unreadable, so the folder's task ids cannot be derived — nothing was written, the same
   // refusal a build run makes. Repairing against a split that cannot be parsed would renumber the whole folder.
   if (res.refused) {
-    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
-      + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`;
+    return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
+      + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`, set: null, repair: null };
   }
   // Re-read off the folder this call just wrote: a row that now has a repair round is somebody's open work, not
   // a gate failure. What survives is the residual nothing can be scheduled for — a parked cause.
   const stillOpen = unroutedNotBuilt(res.set.tasks);
   partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
-  return repairRoundLines(res, dir, "verify").join("\n") + "\n";
+  return { note: repairRoundLines(res, dir, "verify").join("\n") + "\n", set: res.set,
+    repair: { written: res.written, pending: res.pending, parked: res.parked } };
 }
 
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
+  if (label === "migration result report") {
+    return `migrate.mjs: wrote ${label} to ${outFile} — its verdict is NOT COMPLETE, and the reasons are its first line: PRESENT IT VERBATIM (sections 1-3 name what needs a decision, what the agent closed as a boundary, and what the machine could not confirm). Do not hand-write a status summary of your own, and do not present \`build-tasks/index.md\` — the report carries the OPEN machine rows and the confirmed counts; a plain --verify with no --tasks prints the full row-level table.\n`;
+  }
   if (verifyMode) {
     return `migrate.mjs: wrote ${label} to ${outFile} — this run is INCOMPLETE, and that is what the table reports: PRESENT IT VERBATIM (it names every ❌ MISSING and ⚠ unverified row). Do not hand-write a status summary of your own, and do not treat the file as an approvable plan — read the ⛔ stderr line(s) below to tell a repairable build gap from a PLAN-level one.\n`;
   }
@@ -3120,6 +3128,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
   const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
   let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
+  let finalReport = null;                     // `--verify --tasks`: the migration result report (ENG-99126)
+  let ledgerIncomplete = false;               // …and whether its verdict is NOT COMPLETE (exit 2 like the other gates)
   let splitText = null;                       // the `--split` file's bytes, frozen into the folder once it resolves
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
@@ -3258,7 +3268,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     verifyRes = renderVerify(result, checklistOpts(manifest), built);
     output = verifyRes.markdown + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
-    if (tasksMode) repairNote = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+    if (tasksMode) {
+      // ENG-99126 — an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
+      // The table's verdict reads only the built pages; the task ledger records what the build agents did NOT
+      // build (needs-decision, blocked, agent-asserted boundaries) and which tasks never closed. Measured: the
+      // table said "2 machine row(s) not confirmed" while the ledger held 5 open tasks, 3 partial and three
+      // handlers recorded not built — and the table was what the user was shown. The report renders BOTH and its
+      // verdict is their conjunction; the report carries the OPEN machine rows and per-page confirmed counts; the full row-level table is a plain --verify (no --tasks), not part of this artifact.
+      const rep = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+      repairNote = rep.note;
+      // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
+      const set = rep.set || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+      // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
+      // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
+      output = finalReport.markdown + "\n";
+      ledgerIncomplete = !finalReport.complete;
+    }
   }
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
@@ -3278,12 +3304,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
-    || !!dispatchGateFailure || !!partialGateFailure;
+    || !!dispatchGateFailure || !!partialGateFailure || ledgerIncomplete;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
+  else if (verifyMode && tasksMode) label = "migration result report";
   else if (verifyMode) label = "verification";
   else if (tasksMode) label = "build tasks";
   if (outFile) {
@@ -3339,6 +3366,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.stderr.write(`migrate.mjs: ⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete: ${verifyRes.missing} MISSING + ${verifyRes.unverified} unconfirmed deliverable(s) across ${pageGaps.length} page(s). ${pageGaps.slice(0, 6).join(" | ")}${overflow}. This is repairable: build the missing pieces / file the on-stand evidence, then re-verify.\n`);
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; fix the plan instead of re-verifying against them.\n`)
+  }
+  // ENG-99126 — the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
+  // while the task folder still holds open work. The dispatch and not-built lines above already name their own
+  // rows; this line fires for what they do not cover (tasks still todo / in-progress / partial) and names the
+  // report as the place to read it, so an orchestrator reading stderr alone cannot mistake a green table for a
+  // finished run.
+  if (finalReport && !finalReport.complete) {
+    const t = finalReport.counts.tasks;
+    const naPart = t.na ? ` / ${t.na} n-a` : "";
+    const blockedPart = t.blocked ? ` / ${t.blocked} blocked` : "";
+    process.stderr.write(`migrate.mjs: ⛔ RUN NOT COMPLETE — ${finalReport.reasons.join(" · ")}. Tasks: ${t.done} done`
+      + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
+      + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");

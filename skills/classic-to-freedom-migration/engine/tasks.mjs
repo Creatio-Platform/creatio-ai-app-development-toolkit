@@ -46,7 +46,7 @@ import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "
 // WHO SETS WHICH. `todo` and `in-progress` are the engine's lifecycle (file created, `--start`). `done` and
 // `partial` are COMPUTED from the Outcome cells and never typed. `blocked` and `n/a` are the agent's own
 // decisions and are never computed over — see `computeStatus`.
-const S_TODO = "todo", S_IN_PROGRESS = "in-progress", S_DONE = "done", S_BLOCKED = "blocked", S_NA = "n/a";
+export const S_TODO = "todo", S_IN_PROGRESS = "in-progress", S_DONE = "done", S_BLOCKED = "blocked", S_NA = "n/a";
 // Distinct from `blocked` because it must not halt dependents.
 export const S_PARTIAL = "partial";
 export const TASK_STATUSES = [S_TODO, S_IN_PROGRESS, S_DONE, S_BLOCKED, S_NA, S_PARTIAL];
@@ -602,6 +602,7 @@ function renderFrontMatter(task, set) {
 function closedByOf(row) {
   if (row.vk) return "`--verify` (`" + row.vk + "`)";
   if (row.na) return "N/A — " + row.na;
+  if (row.info) return "informational — nothing to build or confirm; mark it `built` once its members are accounted for";
   return "an evidence record + a judge verdict";
 }
 
@@ -674,6 +675,21 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
+// THE TWO LINES THE FINAL REPORT READS OFF `## Notes` (ENG-99126). Free prose under the row number is still
+// yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
+// migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
+// question", which is true and unhelpful.
+function markersBlock() {
+  return [
+    "- **Two lines the final report quotes verbatim — write them under `## Notes`, one line each:**",
+    "  - for every `not-built — needs-decision` row: `Decision needed (row N): <the question, and the options a"
+      + " person can choose between — 1-3 sentences>`. Not why you stopped (that goes in the prose) — WHAT is being"
+      + " decided.",
+    "  - for every row `--verify` cannot read off the page (its `Closed by` cell says evidence + judge, or the plan"
+      + " marks it confirm-on-stand): `Check on stand (row N): <what to open → what is expected>`, one line a person"
+      + " can follow without reading the rest of your notes.",
+  ];
+}
 function outcomeBlock(repair = false) {
   if (repair) {
     return [
@@ -739,6 +755,7 @@ export function renderTaskFile(task, set = {}) {
     `- **Build order:** ${task.step ?? task.order} — leaf-first; a child page's form exists before the parent list that opens it`,
     `- **Rows:** ${task.rows.length} (${task.gatedRows} machine-checked by \`--verify\`${naNote})`,
     ...outcomeBlock(task.kind === REPAIR_KIND),
+    ...markersBlock(),
     ...oneAgentBlock(task),
     "",
     ENGINE_BODY_HEADING,
@@ -922,7 +939,7 @@ const STATUS_MARK = new Map([
   [S_PARTIAL, "◐ partial"],
 ]);
 // An unrecognised status is shown as itself and counted as neither done nor open.
-const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
+export const statusMark = (s) => STATUS_MARK.get(s) || `⚠ ${s}`;
 
 // `Step` is the position in the QUEUE, which is not the same fact as a task file's `order` field: an
 // orchestrator-authored file is never rewritten, so the `order` it declared for itself stands even where the queue
@@ -1099,7 +1116,7 @@ function attentionLines(set) {
   return out;
 }
 
-function countStatuses(tasks) {
+export function countStatuses(tasks) {
   const counts = { done: 0, open: 0, partial: 0, other: 0 };
   for (const t of tasks) {
     if (t.unread) counts.other++;
@@ -1912,6 +1929,20 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   resolvePartials(merged);
   fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { written, parked, pending, set: merged };
+}
+
+// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY (ENG-99126). The final report reads the ledger
+// through this — the same merge `syncRepairDir` makes (plan rows carry `na`, so an agent-asserted boundary is
+// tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
+// where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say
+// what the folder holds: a run refused at the gate is exactly the run whose ledger the user most needs to see.
+export function readMergedTaskDir(dir, result, opts = {}) {
+  const fresh = taskSetFor(dir, result, opts);
+  if (fresh.refused) return { ...fresh, tasks: [] };
+  const merged = mergeTaskSet(fresh, readExisting(dir));
+  attachDispatch(merged, dir);
+  resolvePartials(merged);
+  return merged;
 }
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
