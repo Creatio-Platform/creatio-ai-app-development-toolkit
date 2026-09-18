@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
@@ -2288,7 +2288,7 @@ console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round 
   fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
   const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
   check("migrate.mjs --verify --tasks: the ONE legal pairing — `--verify` is still the mode and the folder is where its OPEN ROWS are written, so the migration result report is printed AND the repair round lands",
-    () => run.status === 2 && /^# Migration result/.test(run.stdout || "")
+    () => run.status === 2 && (run.stdout || "").startsWith("# Migration result")
       && /wrote \d+ repair task\(s\) \(round 1\)/.test(run.stdout || "")
       && fs.readdirSync(dir).length > planFiles,
     () => ({ status: run.status, stdout: (run.stdout || "").slice(-800), ls: fs.readdirSync(dir) }));
@@ -3451,7 +3451,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const out = run.stdout || "";
 
   check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
-    () => /^# Migration result/.test(out) && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
+    () => out.startsWith("# Migration result") && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
       && !/Plan-vs-Done — VERIFIED against the built page/.test(out) && !/## Appendix/.test(out)
       && /## \d+\. Task details/.test(out),
     () => out.slice(0, 600));
@@ -3483,7 +3483,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => { const outFile = path.join(base, "report-split.md");
       cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       const rep = fs.readFileSync(outFile, "utf8");
-      return /^# Migration result/.test(rep) && !fs.existsSync(path.join(base, "plan-vs-built.md")) && !/plan-vs-built\.md/.test(rep) && !/## Appendix/.test(rep); },
+      return rep.startsWith("# Migration result") && !fs.existsSync(path.join(base, "plan-vs-built.md")) && !/plan-vs-built\.md/.test(rep) && !/## Appendix/.test(rep); },
     () => fs.readdirSync(base));
   check("ENG-99126 CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
     () => run.status === 2 && /⛔ RUN NOT COMPLETE — .*recorded NOT BUILT/.test(run.stderr || "") && /migration result report/.test(run.stderr || ""),
@@ -3493,11 +3493,42 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const r = cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       return /wrote migration result report to/.test(r.stdout || "") && /PRESENT IT VERBATIM/.test(r.stdout || "")
         && /do not present `build-tasks\/index\.md`/.test(r.stdout || "")
-        && /^# Migration result/.test(fs.readFileSync(outFile, "utf8")); },
+        && fs.readFileSync(outFile, "utf8").startsWith("# Migration result"); },
     () => cliR(["--verify", "--built", built, "--tasks", dir, "--out", path.join(base, "report2.md")], MANIFEST).stdout);
   check("ENG-99126 CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
-    () => { const r = cliR(["--verify", "--built", built], MANIFEST); return /^### ✅ Plan-vs-Done/.test(r.stdout || "") && !/# Migration result/.test(r.stdout || ""); },
+    () => { const r = cliR(["--verify", "--built", built], MANIFEST); return (r.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(r.stdout || ""); },
     () => cliR(["--verify", "--built", built], MANIFEST).stdout?.slice(0, 200));
+
+  // ENG-99126 Major B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
+  // fallback set carries `refused`, so `renderFinalReport` pushes a verdict reason and the CLI exits 2 naming the
+  // folder — the precise false-green (COMPLETE over a ledger that was never read) this PR targets.
+  {
+    const dBad = path.join(tmp("result-report-refused"), "build-tasks");
+    cliR(["--tasks", dBad], MANIFEST);                                    // freeze a valid split first
+    fs.writeFileSync(path.join(dBad, SPLIT_FILE), "not valid JSON {{{");  // then corrupt it
+    const rBad = cliR(["--verify", "--built", built, "--tasks", dBad], MANIFEST);
+    check("ENG-99126 CLI (Major B): a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
+      () => rBad.status === 2 && (rBad.stdout || "").startsWith("# Migration result")
+        && /the task ledger could not be read/.test(rBad.stdout || "") && /⛔ \*\*NOT COMPLETE\*\*/.test(rBad.stdout || "")
+        && /RUN NOT COMPLETE/.test(rBad.stderr || ""),
+      () => ({ status: rBad.status, head: (rBad.stdout || "").slice(0, 400), stderr: (rBad.stderr || "").slice(0, 200) }));
+  }
+
+  // ENG-99126 Major C (2nd review) — the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
+  // ☐ queued, none dispatched) contributes a `☐ queued N` reason that the machine/verify leg CANNOT produce (that
+  // leg emits MISSING / not-confirmed), so exit 2 here is NOT attributable to `verifyIncomplete` alone. The clean
+  // conjunction in isolation — a GREEN machine leg + an open ledger ⇒ ONLY the ledger reason — is the `openRep`
+  // unit below; a fully green `--built` for this 4-page fixture would need ~14 judged evidence records rebuilt by hand.
+  {
+    const dQ = path.join(tmp("result-report-queued"), "build-tasks");
+    cliR(["--tasks", dQ], MANIFEST);   // sync only — every task todo, nothing started
+    const rQ = cliR(["--verify", "--built", built, "--tasks", dQ], MANIFEST);
+    const vQ = (rQ.stdout || "").split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
+    check("ENG-99126 CLI (Major C): a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
+      () => rQ.status === 2 && /☐ queued \d+/.test(vQ) && /RUN NOT COMPLETE/.test(rQ.stderr || "")
+        && /☐ queued \d+/.test(rQ.stderr || "") && / todo of /.test(rQ.stderr || ""),
+      () => ({ status: rQ.status, verdict: vQ, stderr: (rQ.stderr || "").slice(0, 300) }));
+  }
 
   // THE HEADLINE DEFECT, in isolation: a machine table with NOTHING open over a ledger that still holds work. The
   // old verdict read ✅ here. The report's does not, and says why.
@@ -3523,6 +3554,21 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
     () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
+  // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
+  // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that
+  // empty task list as "everything closed" — `refused` forces `complete: false` and a verdict reason naming it.
+  {
+    const dRef = path.join(tmp("refused-unit"), "build-tasks");
+    syncTaskDir(dRef, RUN, OPTS);
+    fs.writeFileSync(path.join(dRef, SPLIT_FILE), "{ broken");
+    const refusedSet = readMergedTaskDir(dRef, RUN, OPTS);
+    const refRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: refusedSet, dir: dRef });
+    check("ENG-99126 renderFinalReport (Major B): a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
+      () => refusedSet.refused === true && refRep.complete === false
+        && refRep.reasons.some((r) => /task ledger could not be read/.test(r))
+        && /⛔ \*\*NOT COMPLETE\*\*/.test(refRep.markdown),
+      () => ({ refused: refusedSet.refused, complete: refRep.complete, reasons: refRep.reasons }));
+  }
   // THE DECISION MARKER: what section 1 quotes. A `needs-decision` row whose task notes carry
   // `Decision needed (row N): …` shows that sentence; a boundary whose reason cites a recorded decision is
   // information, one that cites nothing is a question; a decision the reason cites but nobody recorded is named.
@@ -3582,6 +3628,28 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
           && repCited.counts.unbackedBoundaries === 0
           && !repCited.reasons.some((r) => /NO recorded decision/.test(r)),
         () => ({ incidental: repIncidental.counts, cited: repCited.counts }));
+
+      // ENG-99126 taskRows (Major A, 2nd review) — a not-built plan item on ONE page must not bleed onto a
+      // same-labeled row on ANOTHER page. Two tasks share the deliverable label but live on different pages: one
+      // not-built (main), one built and machine-confirmed (child:C1). The whole-run label fallback used to match by
+      // bare label and mark BOTH rows not-built; taskRows now falls back to the label ONLY for the synthetic `run`
+      // task, so the child's row stays confirmed (Not built "—") and only the main task carries the open question.
+      const shBleed = "Handler — `save`";
+      const bA = { id: "bl-a", file: "bl-a.md", group: "Form build", pageKey: "main", status: "partial", notes: "",
+        rows: [{ label: shBleed, outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" }] };
+      const bC = { id: "bl-c", file: "bl-c.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "",
+        rows: [{ label: shBleed, outcomeKind: "built", outcome: "built", outcomeReason: "" }] };
+      const vBleed = { markdown: "", missing: 0, unverified: 0, complete: true, pages: {},
+        rows: [{ n: 1, pageKey: "child:C1", group: "Form — Custom methods", deliverable: shBleed, status: "✅ Done", evidence: "a handler defines `save`", outcome: "ok", kind: "machine", vkType: "handler", owner: "builder" }] };
+      const repBleed = renderFinalReport({ result: RUN, verifyRes: vBleed, set: { tasks: [bA, bC], planVersion: RUN.planVersion }, dir: d2 });
+      const secTasks = repBleed.markdown.slice(repBleed.markdown.search(/## \d+\. Tasks \(/), repBleed.markdown.search(/## \d+\. Task details/));
+      const lineA = secTasks.split("\n").find((l) => l.includes("](bl-a.md)")) || "";
+      const lineC = secTasks.split("\n").find((l) => l.includes("](bl-c.md)")) || "";
+      check("ENG-99126 taskRows (Major A): a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
+        () => repBleed.counts.openNotBuilt === 1
+          && /save/.test(lineA) && /needs a decision/.test(lineA)
+          && !/needs a decision/.test(lineC) && lineC.trim().endsWith("| — |"),
+        () => ({ openNotBuilt: repBleed.counts.openNotBuilt, lineA, lineC }));
     }
   }
 

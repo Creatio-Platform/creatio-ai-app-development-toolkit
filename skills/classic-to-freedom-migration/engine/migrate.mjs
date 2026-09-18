@@ -3358,9 +3358,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finished run.
   if (finalReport && !finalReport.complete) {
     const t = finalReport.counts.tasks;
+    const naPart = t.na ? ` / ${t.na} n-a` : "";
+    const blockedPart = t.blocked ? ` / ${t.blocked} blocked` : "";
     process.stderr.write(`migrate.mjs: ⛔ RUN NOT COMPLETE — ${finalReport.reasons.join(" · ")}. Tasks: ${t.done} done`
-      + `${t.na ? ` / ${t.na} n-a` : ""} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
-      + `${t.blocked ? ` / ${t.blocked} blocked` : ""} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
+      + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
+      + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
   }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");

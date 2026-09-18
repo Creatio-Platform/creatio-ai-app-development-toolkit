@@ -44,8 +44,8 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 // line; both are read verbatim. The FALLBACK is honest, not clever: the sentence(s) of the row's own notes block
 // that talk about a decision, trimmed — and when there is nothing to find, the report says the agent did not
 // state the question, which is itself the finding.
-export const DECISION_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Decision needed \(row (\d+)\)\s*:?\**\s*(.+?)\s*$/i;
-export const CHECK_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Check on stand \(row (\d+)\)\s*:?\**\s*(.+?)\s*$/i;
+export const DECISION_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Decision needed \(row (\d+)\)\s*:?\**\s*(.+)$/i;
+export const CHECK_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Check on stand \(row (\d+)\)\s*:?\**\s*(.+)$/i;
 function markers(notes, re) {
   const out = new Map();
   for (const line of String(notes || "").split(/\r?\n/)) {
@@ -69,7 +69,7 @@ function rowNotesBlock(notes, n) {
 }
 // Markdown emphasis and list bullets stripped: the fallback is quoted into a table cell, where `**` fragments
 // and `- ` prefixes read as noise. Code spans are kept (they name the members the decision is about).
-const plainText = (s) => String(s || "").replace(/\*\*|__|(?<!\w)\*(?!\s)|(?<!\s)\*(?!\w)/g, "").replace(/^\s*[-*>]\s+/gm, "").replace(/\s+/g, " ").trim();
+const plainText = (s) => String(s || "").replace(/\*+|__/g, "").replace(/^\s*[-*>]\s+/gm, "").replace(/\s+/g, " ").trim();
 function decisionFallback(notes, n) {
   const block = rowNotesBlock(notes, n);
   const sentences = plainText(block).split(/(?<=[.!?])\s+/);
@@ -82,7 +82,7 @@ function readDecisions(migrationDir) {
   const out = new Map();
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)\s*[—–:.\-]?\s*(.+?)\s*$/gm)) out.set(`D${m[1]}`, m[2].trim());
+    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)\s*[—–:.-]?\s*(.+)$/gm)) out.set(`D${m[1]}`, m[2].trim());
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
@@ -150,8 +150,6 @@ function howVerified(vrow) {
   if (vrow.vkType === "evidence") return { how: "judge", ok: vrow.outcome === "ok" };
   return { how: "machine", ok: vrow.outcome === "ok" };
 }
-const HOW_TEXT = { machine: "✅ machine — read off the built page", judge: "✅ evidence filed + judged convincing",
-  hand: "☐ confirm manually", na: "— approved boundary (N/A in the plan)", unknown: "— not in this run's plan-vs-built table" };
 
 // --- the ledger, as the report sees it ------------------------------------------------------------------------
 function planTasks(tasks) {
@@ -206,7 +204,8 @@ function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
   if (openNotBuilt.length) {
     const nd = openNotBuilt.filter((it) => it.cause !== "blocked").length;
     const bl = openNotBuilt.length - nd;
-    R.push(`${plural(openNotBuilt.length, "plan item")} recorded NOT BUILT (${nd} need${nd === 1 ? "s" : ""} a decision${bl ? ` · ${bl} blocked` : ""})`);
+    const blockedNote = bl ? ` · ${bl} blocked` : "";
+    R.push(`${plural(openNotBuilt.length, "plan item")} recorded NOT BUILT (${nd} need${nd === 1 ? "s" : ""} a decision${blockedNote})`);
   }
   if (unbackedBoundaries.length) R.push(`${plural(unbackedBoundaries.length, "boundary", "boundaries")} closed by the agent with NO recorded decision`);
   if (tc.open) R.push(`${plural(tc.open, "task")} not closed (${statusParts(tc).filter((s) => !s.startsWith("✅") && !s.startsWith("— n/a")).join(" · ")})`);
@@ -215,30 +214,32 @@ function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
   return R;
 }
 
+function tallyRow(c, r) {
+  const { how, ok } = howVerified(r);
+  if (how === "na") { c.na++; return; }
+  if (how === "hand") { c.hand++; return; }
+  if (how === "judge") { c.judge++; if (ok) c.judgeOk++; }
+  else { c.machine++; if (ok) c.machineOk++; }
+  if (r.outcome === "missing") c.missing++;
+  else if (r.outcome === "unverified") c.unverified++;
+}
 function rowCounts(rows) {
   const c = { machine: 0, machineOk: 0, judge: 0, judgeOk: 0, hand: 0, na: 0, missing: 0, unverified: 0 };
-  for (const r of rows || []) {
-    const { how, ok } = howVerified(r);
-    if (how === "na") { c.na++; continue; }
-    if (how === "hand") { c.hand++; continue; }
-    if (how === "judge") { c.judge++; if (ok) c.judgeOk++; }
-    else { c.machine++; if (ok) c.machineOk++; }
-    if (r.outcome === "missing") c.missing++;
-    else if (r.outcome === "unverified") c.unverified++;
-  }
+  for (const r of rows || []) tallyRow(c, r);
   return c;
 }
 
 // --- sections -------------------------------------------------------------------------------------------------
 function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }) {
-  const L = ["| | |", "| --- | --- |"];
-  L.push(`| Tasks | ${tc.total} — ${statusParts(tc).join(" · ")} |`);
-  L.push(`| Open questions (plan items recorded NOT BUILT, no decision yet) | ${openNotBuilt.length} |`);
-  if (decidedNotBuilt.length) L.push(`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`);
   const withRef = boundaries.filter((b) => b.refs.resolved.length).length;
-  L.push(`| Boundaries the agent closed | ${boundaries.length}${boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : ""} |`);
-  L.push(`| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`);
-  L.push(`| Plan items to confirm manually | ${handLeft} |`);
+  const boundNote = boundaries.length ? ` — with a recorded decision ${withRef} · without ${boundaries.length - withRef}` : "";
+  const L = ["| | |", "| --- | --- |",
+    `| Tasks | ${tc.total} — ${statusParts(tc).join(" · ")} |`,
+    `| Open questions (plan items recorded NOT BUILT, no decision yet) | ${openNotBuilt.length} |`,
+    ...(decidedNotBuilt.length ? [`| Plan items not built BY DECISION | ${decidedNotBuilt.length} |`] : []),
+    `| Boundaries the agent closed | ${boundaries.length}${boundNote} |`,
+    `| Plan items confirmed (on the built page, or by review) | ${rc.machineOk + rc.judgeOk}/${rc.machine + rc.judge} |`,
+    `| Plan items to confirm manually | ${handLeft} |`];
   if (repair) {
     const parts = [];
     if (repair.written?.length) parts.push(`wrote ${plural(repair.written.length, "repair task")}`);
@@ -249,7 +250,8 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
   return L;
 }
 
-const where = (it) => `[${cell(it.task.group || it.task.id)}](${encodeURI(it.task.file)}), row ${it.n}`;
+const enc = (f) => encodeURI(String(f || "")).replace(/\(/g, "%28").replace(/\)/g, "%29");
+const where = (it) => `[${cell(it.task.group || it.task.id)}](${enc(it.task.file)}), row ${it.n}`;
 
 // A LATER round that recorded the same row `built` and has not closed yet: the question may already be answered
 // on the stand, and the reader should know before deciding anything. Keyed by (page, label).
@@ -277,9 +279,9 @@ function decisionsSection(open, pageName, repairBuilt) {
     else {
       const marker = markers(it.task.notes, DECISION_MARKER).get(it.n);
       const fallback = marker ? "" : decisionFallback(it.task.notes, it.n);
-      text = marker ? cell(marker)
-        : fallback ? `${cell(fallback)} *(from the row's notes — the agent wrote no \`Decision needed\` line)*`
-          : "⚠ the agent recorded `needs-decision` but did not state the question — read the row's notes";
+      if (marker) text = cell(marker);
+      else if (fallback) text = `${cell(fallback)} *(from the row's notes — the agent wrote no \`Decision needed\` line)*`;
+      else text = "⚠ the agent recorded `needs-decision` but did not state the question — read the row's notes";
     }
     L.push(`| ${i + 1} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${text}${laterNote} | ${where(it)} |`);
   });
@@ -313,7 +315,7 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
     }
     for (const it of decidedNotBuilt) {
       const d = it.decidedBy.refs.resolved.map((r) => `**${r.ref}** — ${cell(r.title)}`).join("; ");
-      L.push(`| ${++i} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${encodeURI(it.task.file)}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
+      L.push(`| ${++i} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${enc(it.task.file)}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
     }
   }
   return L;
@@ -338,10 +340,14 @@ function taskRows(t, vidx, keys) {
   return (t.rows || []).map((r, i) => {
     const lk = labelKey(r.label);
     const key = `${r.pageKey || t.pageKey} ${lk}`;
-    const v = vidx.byKey.get(key) || vidx.byKey.get(`${t.pageKey} ${lk}`) || vidx.byLabel.get(lk);
+    // The label-only fallback is ONLY for the synthetic whole-run task (pageKey "run"), whose rows come from several
+    // pages and carry no page of their own. For a normal task the page IS known, so matching by bare label would
+    // bleed a not-built / boundary state from one page onto a same-labeled row on another (init, common field names).
+    const wholeRun = (r.pageKey || t.pageKey) === "run";
+    const v = vidx.byKey.get(key) || (wholeRun ? vidx.byLabel.get(lk) : undefined);
     const hv = howVerified(v);
     let state;
-    const inSet = (set) => set.has(key) || set.has(`${t.pageKey} ${lk}`) || set.hasLabel?.has(lk);
+    const inSet = (set) => set.has(key) || (wholeRun && !!set.hasLabel?.has(lk));
     if (inSet(keys.notBuilt) && r.outcomeKind === "not-built") state = "not-built";
     else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
     else if (r.outcomeKind === "n-a") state = inSet(keys.unbacked) ? "boundary" : "na";
@@ -355,6 +361,28 @@ function taskRows(t, vidx, keys) {
 }
 const num = (secNo, title) => `## ${secNo}. ${title}`;
 
+function handCellText(hand, extra, extraNote) {
+  if (hand) return `${hand}${extraNote}`;
+  return extra ? `(${extra} not in the plan)` : "—";
+}
+function taskTableRow(t, i, rows, pageName) {
+  const count = (pred) => rows.filter(pred).length;
+  // Denominators leave out the rows the agent closed as a boundary / by decision: a Print button the plan said
+  // not to migrate is not a machine row the task failed to confirm.
+  const closedOtherwise = (r) => ["na", "decided", "boundary", "not-built"].includes(r.state);
+  const machine = count((r) => r.hv.how === "machine" && !closedOtherwise(r)), machineOk = count((r) => r.state === "machine");
+  const judge = count((r) => r.hv.how === "judge" && !closedOtherwise(r)), judgeOk = count((r) => r.state === "judge");
+  const hand = count((r) => r.state === "hand");
+  const extra = count((r) => r.state === "extra");
+  const nb = rows.filter((r) => r.state === "not-built").map((r) => `${cell(r.label)} *(needs a decision)*`);
+  const dec = rows.filter((r) => r.state === "decided").map((r) => `${cell(r.label)} *(by decision)*`);
+  const mark = t.unread ? "⚠ unread" : statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued");
+  const extraNote = extra ? ` (+${extra} not in the plan)` : "";
+  const handCell = handCellText(hand, extra, extraNote);
+  const confirmedCell = machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—";
+  const notBuiltCell = [...nb, ...dec].join("<br>") || "—";
+  return `| ${i + 1} | [${cell(t.group || t.title || t.id)}](${enc(t.file)}) | ${pageName(t.pageKey)} | ${mark} | ${confirmedCell} | ${handCell} | ${notBuiltCell} |`;
+}
 function tasksSection(tasks, perTask, pageName, secNo) {
   const L = [num(secNo, `Tasks (${tasks.length})`), "",
     "One row per task file. `Status` is computed from the task's own `Outcome` cells. The two confirmation columns"
@@ -362,22 +390,7 @@ function tasksSection(tasks, perTask, pageName, secNo) {
     + " agent's evidence record was found convincing by a separate reviewer; **To confirm manually** — nobody yet, a person has to open the page.", "",
     "| Step | Task | Page | Status | Confirmed | To confirm manually | Not built |",
     "| --- | --- | --- | --- | --- | --- | --- |"];
-  tasks.forEach((t, i) => {
-    const rows = perTask.get(t.id) || [];
-    const count = (pred) => rows.filter(pred).length;
-    // Denominators leave out the rows the agent closed as a boundary / by decision: a Print button the plan said
-    // not to migrate is not a machine row the task failed to confirm.
-    const closedOtherwise = (r) => ["na", "decided", "boundary", "not-built"].includes(r.state);
-    const machine = count((r) => r.hv.how === "machine" && !closedOtherwise(r)), machineOk = count((r) => r.state === "machine");
-    const judge = count((r) => r.hv.how === "judge" && !closedOtherwise(r)), judgeOk = count((r) => r.state === "judge");
-    const hand = count((r) => r.state === "hand");
-    const extra = count((r) => r.state === "extra");
-    const nb = rows.filter((r) => r.state === "not-built").map((r) => `${cell(r.label)} *(needs a decision)*`);
-    const dec = rows.filter((r) => r.state === "decided").map((r) => `${cell(r.label)} *(by decision)*`);
-    const mark = t.unread ? "⚠ unread" : statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued");
-    const handCell = hand ? `${hand}${extra ? ` (+${extra} not in the plan)` : ""}` : (extra ? `(${extra} not in the plan)` : "—");
-    L.push(`| ${i + 1} | [${cell(t.group || t.title || t.id)}](${encodeURI(t.file)}) | ${pageName(t.pageKey)} | ${mark} | ${machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—"} | ${handCell} | ${[...nb, ...dec].join("<br>") || "—"} |`);
-  });
+  tasks.forEach((t, i) => L.push(taskTableRow(t, i, perTask.get(t.id) || [], pageName)));
   return L;
 }
 
@@ -393,7 +406,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   for (const t of needs) {
     const rows = (perTask.get(t.id) || []).filter((r) => !SETTLED_STATES.has(r.state));
     const checks = markers(t.notes, CHECK_MARKER);
-    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${encodeURI(t.file)})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
+    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${enc(t.file)})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
       "| # | Plan item | Build agent recorded | What closes it |", "| --- | --- | --- | --- |");
     for (const r of rows) {
       let how;
@@ -428,7 +441,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
   const keyOf = (it) => `${it.task.pageKey} ${labelKey(it.row.label)}`;
-  const withLabels = (items) => { const set = new Set(items.map(keyOf)); set.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return set; };
+  const withLabels = (items) => { const ks = new Set(items.map(keyOf)); ks.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return ks; };
   const keys = { notBuilt: withLabels(openNotBuilt), decided: withLabels(decidedNotBuilt), unbacked: withLabels(unbackedBoundaries) };
   const perTask = new Map(tasks.map((t) => [t.id, taskRows(t, vidx, keys)]));
   const repairBuilt = repairBuiltIndex(tasks);

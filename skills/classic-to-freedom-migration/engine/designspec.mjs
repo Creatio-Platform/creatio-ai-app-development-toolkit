@@ -2099,9 +2099,9 @@ function buildLayoutGroupRows(cs, regionOf) {
     if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
     parts.push(...e.items);
     let region = null, caption = null;
-    if (/^Side profile/.test(k)) region = "side";
+    if (k.startsWith("Side profile")) region = "side";
     else if (k === "Header") region = "header";
-    else if (/^Tab · /.test(k)) { region = "tab"; caption = k.replace(/^Tab · /, "").replace(/\s*\(new\)$/, "").trim(); }
+    else if (k.startsWith("Tab · ")) { region = "tab"; caption = k.slice(6).replace(/\s*\(new\)$/, "").trim(); }
     const vk = region ? { type: "layout", region, caption, fields: e.fields, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
     return { label: `${k} — ${parts.join(" · ")}`, ...(vk ? { vk } : {}) };
   });
@@ -2111,9 +2111,9 @@ function buildLayoutGroupRows(cs, regionOf) {
 const LAYOUT_WIDGET_TYPE = [[/progress/i, "crt.EntityStageProgressBar"], [/feed|esn/i, "crt.Feed"], [/next steps/i, "crt.NextSteps"],
   [/attach/i, "crt.FileList"], [/approval|visa/i, "crt.ApprovalList"], [/communication/i, "crt.CommunicationOptions"]];
 function layoutWidgetType(w) {
-  if (/^crt\./.test(String(w.freedom || ""))) return String(w.freedom).split(/\s|\(/)[0];
+  if (String(w.freedom || "").startsWith("crt.")) return String(w.freedom).split(/\s|\(/)[0];
   for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return t;
-  return null;
+  return "";   // S3800 — a string in every path; the only consumer (`if (extra.widgetType)`) treats "" as "none"
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
@@ -2737,7 +2737,7 @@ export function checklistGroups(result, opts = {}) {
   // beside a ✅ for the same fact. One fact, one row: drop the ungated twin whenever the gated one exists.
   if (listRows.some((r) => r.vk?.type === "template")) {
     const pages = groups.find((g) => g.title === "Pages");
-    if (pages) pages.rows = pages.rows.filter((r) => !/^List page → /.test(r.label));
+    if (pages) pages.rows = pages.rows.filter((r) => !r.label.startsWith("List page → "));
   }
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
@@ -3175,9 +3175,10 @@ function builtRuleTokens(built) {
   return rules.map((r) => {
     // A rule with none of the governed keys (an unknown shape) falls back to the whole record, minus its labels —
     // narrowing to nothing would make every such rule match nothing and read as a shortfall the builder cannot fix.
-    const governed = r && typeof r === "object" && GOVERNED_KEYS.some((k) => k in r)
-      ? Object.fromEntries(GOVERNED_KEYS.filter((k) => k in r).map((k) => [k, r[k]]))
-      : (r && typeof r === "object" ? Object.fromEntries(Object.entries(r).filter(([k]) => k !== "caption" && k !== "name")) : r);
+    let governed;
+    if (r && typeof r === "object" && GOVERNED_KEYS.some((k) => k in r)) governed = Object.fromEntries(GOVERNED_KEYS.filter((k) => k in r).map((k) => [k, r[k]]));
+    else if (r && typeof r === "object") governed = Object.fromEntries(Object.entries(r).filter(([k]) => k !== "caption" && k !== "name"));
+    else governed = r;
     const raw = String(JSON.stringify(governed)).match(/[A-Za-z_]\w*/g) || [];
     return new Set(raw.flatMap(columnFormsOf));
   });
@@ -3547,7 +3548,7 @@ const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 
 // ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
 const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const tokenIn = (src, name) => new RegExp(`(?<![\\w$])${reEsc(name)}(?![\\w$])`).test(src);
+const tokenIn = (src, name) => new RegExp(String.raw`(?<![\w$])${reEsc(name)}(?![\w$])`).test(src);
 // Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
 // Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
 const codeOnly = (s) => String(s)
@@ -3557,7 +3558,7 @@ const codeOnly = (s) => String(s)
   .replace(/'(?:[^'\\]|\\.)*'/g, "''")
   .replace(/`(?:[^`\\]|\\.)*`/g, "``");
 // A method/element name in a DEFINITION or CALL position — not a bare mention. Run over `codeOnly` output.
-const defOrCall = (code, name) => new RegExp(`(?:function\\s+|\\.|\\b)${reEsc(name)}\\s*[(:=]`).test(code);
+const defOrCall = (code, name) => new RegExp(String.raw`(?:function\s+|\.|\b)${reEsc(name)}\s*[(:=]`).test(code);
 // A handler branch on an attribute change: `request.attributeName === "X"` in any quoting / spacing.
 const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\`]${reEsc(attr)}["'\`]|["']attributeName["']\\s*:\\s*["']${reEsc(attr)}["']`).test(src);
 // HANDLERS. A Freedom port rarely keeps the Classic method name (measured: 2 of 10 on a real run — `setContactInfo`
@@ -3580,7 +3581,9 @@ export function resolveHandlerVk(vk, ctx) {
       return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
   }
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
-  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${vk.parent ? ` / \`${esc(vk.parent)}\`` : ""}${trig ? ` (nor a branch on its trigger (${trig}))` : ""} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
+  const parentNote = vk.parent ? ` / \`${esc(vk.parent)}\`` : "";
+  const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
+  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -3626,7 +3629,8 @@ export function resolveLayoutVk(vk, ctx) {
     const present = new Set(ctx.ops.map((o) => o.type));
     const missW = (vk.widgets || []).filter((w) => !present.has(w));
     if (!missW.length) return ["✅ Done", `header: ${(vk.widgets || []).join(" · ") || "present"}`, "ok"];
-    return ["⚠ verify", `header: ${missW.map((w) => `no ${w}`).join(", ")}`, "unverified"];
+    const noList = missW.map((w) => "no " + w).join(", ");
+    return ["⚠ verify", `header: ${noList}`, "unverified"];
   }
   // A payload with NO containers at all (the legacy flat `ops` shape, or a viewConfig with no container nodes)
   // cannot place anything: measure the region against the page as a whole and say so, rather than fail every
@@ -3651,7 +3655,8 @@ export function resolveLayoutVk(vk, ctx) {
     .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
     .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
   const tab = cand[0]?.c;
-  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : ""}`, "unverified"];
+  const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
+  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabList}`, "unverified"];
   ctx.claimedContainers.add(tab.name);
   return judge(tab, `in tab \`${esc(tab.name)}\``);
 }
@@ -3666,24 +3671,18 @@ export function resolveCardNativeVk(vk, ctx) {
   if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
   return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
 }
+// S3776 — the dispatch is a table, not a ladder of ifs: a category set → its resolver, then the four single-type
+// resolvers by name. Same order and behaviour, one lookup each. (The sets are disjoint, so order among them is moot.)
+const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
+  [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
+  [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
+const VK_BY_TYPE = { handler: resolveHandlerVk, vmattr: resolveVmAttrVk, layout: resolveLayoutVk, cardnative: resolveCardNativeVk };
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
-  if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
-  if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
-  if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
-  if (VK_RULE.has(vk.type)) return resolveRuleVk(vk, ctx);
-  if (VK_DASHBOARDS.has(vk.type)) return resolveDashboardsVk(vk, ctx);
-  if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
-  if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
-  if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
-  if (VK_CHILDPAGE.has(vk.type)) return resolveChildPageVk(vk, ctx);
-  if (VK_EVIDENCE.has(vk.type)) return resolveEvidenceVk(vk, ctx);
-  if (vk.type === "handler") return resolveHandlerVk(vk, ctx);
-  if (vk.type === "vmattr") return resolveVmAttrVk(vk, ctx);
-  if (vk.type === "layout") return resolveLayoutVk(vk, ctx);
-  if (vk.type === "cardnative") return resolveCardNativeVk(vk, ctx);
-  return unknownVk();
+  for (const [set, fn] of VK_CATEGORY) if (set.has(vk.type)) return fn(vk, ctx);
+  const direct = VK_BY_TYPE[vk.type];
+  return direct ? direct(vk, ctx) : unknownVk();
 }
 
 // --- the `--built` payload, read per page ------------------------------------------------------------------
@@ -3816,7 +3815,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
 const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
 function collectLayout(node, acc) {
-  if (Array.isArray(node)) { for (const n of node) collectLayout(n, acc); return acc; }
+  if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
   if (!node || typeof node !== "object") return acc;
   const t = String(node.type || "");
   if (LAYOUT_FIELD_RE.test(t)) acc.fields.push(node.name);
@@ -3827,9 +3826,9 @@ function collectLayout(node, acc) {
 function pageContainersOf(entry) {
   const e = entryObject(entry);
   const out = [];
-  if (!e || e.viewConfig == null) return out;
+  if (e?.viewConfig == null) return out;
   const walk = (node) => {
-    if (Array.isArray(node)) { for (const n of node) walk(n); return; }
+    if (Array.isArray(node)) { for (const n of node) { walk(n); } return; }
     if (!node || typeof node !== "object") return;
     if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
       out.push({ name: String(node.name), type: String(node.type || ""), caption: String(node.caption ?? ""), ...collectLayout(node.items, { fields: [], lists: [], widgets: [] }) });
@@ -3846,7 +3845,8 @@ export function verifyCtx(root, pageKey) {
   const entry = entryObject(page);
   // `handlers` is get-page's `bundle.handlers` — the page's handler SOURCE, a string (a parsed array is accepted
   // too); `vmAttrs` are `bundle.viewModelConfig.attributes` keys. Both OPTIONAL: absent ⇒ that row is not checkable.
-  const handlersSrc = entry?.handlers == null ? null : (typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers));
+  let handlersSrc = null;
+  if (entry?.handlers != null) handlersSrc = typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers);
   const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
   return {
     pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
@@ -3930,6 +3930,17 @@ function planGapBanner(result) {
   return ["", `> ⛔ **PLAN-level gap — NOT buildable-out-of:** ${gaps.join(" · ")}. This describes the plan/manifest, not your build: the CLI exits 2 for it in EVERY mode, and re-running \`--verify\` can never clear it. Return it to the caller; fix the manifest and re-plan.`];
 }
 
+function resolveRowKinds(r, ctxFor, key) {
+  if (r.na) return naRow(r);
+  if (r.info) return infoRow(r);
+  return resolveVk(r.vk, ctxFor(key));
+}
+function rowKindOf(r, outcome) {
+  if (r.na) return "na";
+  if (r.info) return "info";
+  if (outcome === "skip") return "confirm";
+  return r.vk ? "machine" : "confirm";
+}
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -3948,7 +3959,7 @@ export function renderVerify(result, opts = {}, built = {}) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
       const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome, owner] = r.na ? naRow(r) : (r.info ? infoRow(r) : resolveVk(r.vk, ctxFor(key)));
+      const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
       // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
       // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
       // one text, not a paraphrase of it.
@@ -3959,7 +3970,7 @@ export function renderVerify(result, opts = {}, built = {}) {
         owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
       // `kind` tells the four row kinds apart where `outcome` alone cannot: an approved boundary and a
       // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
-      const kind = r.na ? "na" : (r.info ? "info" : (outcome === "skip" ? "confirm" : (r.vk ? "machine" : "confirm")));
+      const kind = rowKindOf(r, outcome);
       rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
         vkType: r.vk?.type || null, owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);

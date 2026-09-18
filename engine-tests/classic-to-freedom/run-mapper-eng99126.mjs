@@ -83,16 +83,16 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   const g = checklistGroups(m12Run, m12Opts).flatMap((x) => x.rows);
   check("ENG-99126 checklist: every Layout row carries a `layout` vk, every handler row a `handler` vk with the method's triggers, the native card-actions row a `cardnative` vk — none of them is vk-less any more",
     () => g.filter((r) => /^(Side profile|Tab · |Header) — /.test(r.label)).every((r) => r.vk?.type === "layout")
-      && g.filter((r) => /^Handler — /.test(r.label)).every((r) => r.vk?.type === "handler" && Array.isArray(r.vk.triggers))
-      && g.filter((r) => /^Card actions — native/.test(r.label)).every((r) => r.vk?.type === "cardnative"),
+      && g.filter((r) => r.label.startsWith("Handler — ")).every((r) => r.vk?.type === "handler" && Array.isArray(r.vk.triggers))
+      && g.filter((r) => r.label.startsWith("Card actions — native")).every((r) => r.vk?.type === "cardnative"),
     () => g.filter((r) => /^(Side profile|Tab · |Header|Handler|Card actions — native)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
   // A result carrying a module-dep member: its checklist row is informational and renders ℹ noted, NOT confirm.
   // Self-contained (does not depend on the shared fixture producing one), so the info path is actually exercised.
   {
     const depResult = { entity: "X", changeSet: { needsDecision: [{ kind: "module-dep", item: "ConfigurationConstants, BusinessRuleModule" }] } };
-    const depRow = checklistGroups(depResult, {}).flatMap((x) => x.rows).find((r) => /^\[module-dep\]/.test(r.label));
+    const depRow = checklistGroups(depResult, {}).flatMap((x) => x.rows).find((r) => r.label.startsWith("[module-dep]"));
     const v = renderVerify(depResult, {}, { pages: { main: { viewConfig: { items: [] } } } });
-    const vr = v.rows.find((r) => /^\[module-dep\]/.test(r.deliverable));
+    const vr = v.rows.find((r) => r.deliverable.startsWith("[module-dep]"));
     check("ENG-99126 checklist: a [module-dep] row is INFORMATIONAL — the checklist row carries `info` (not a vk), and renderVerify emits it as noted / kind info / outcome skip, never confirm and never against the verdict",
       () => !!depRow && !!depRow.info && !depRow.vk && !!vr && vr.kind === "info" && vr.status === "ℹ noted" && vr.outcome === "skip",
       () => ({ depRow, vr }));
@@ -100,8 +100,8 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   check("ENG-99126 checklist: when the list page publishes its gated `List template →` row, the Pages group no longer carries the ungated `List page →` twin — one fact, one row",
     () => {
       const rows = checklistGroups(lpRun, lpOpts).flatMap((x) => x.rows);
-      const gated = rows.some((r) => r.vk?.type === "template" && /^List template/.test(r.label));
-      return gated && !rows.some((r) => /^List page → /.test(r.label));
+      const gated = rows.some((r) => r.vk?.type === "template" && r.label.startsWith("List template"));
+      return gated && !rows.some((r) => r.label.startsWith("List page → "));
     }, () => checklistGroups(lpRun, lpOpts).flatMap((x) => x.rows).filter((r) => /^List (page|template)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
 
   // ===== review guards (adversarial self-review of the same PR) =====
