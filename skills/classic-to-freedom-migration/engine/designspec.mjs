@@ -720,7 +720,9 @@ function renderListPageBlock(result, section, opts = {}) {
   // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
   // is an open question with an owner, not a note in prose.
   L.push(...dashboardsListNote(result.signals?.dashboards));
-  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
+  // The SECTION schema's methods and imperative members go through the SAME two renderers the form page uses.
+  if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs),
+    ...renderImperativeLogic(lcs), ...renderImperativeMembers(lcs));
   L.push("");
   return L;
 }
@@ -854,7 +856,7 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // The CHECKLIST group is broader than the plan table: it also carries `attribute-dependency`, whose row the plan
 // omits (the handler method carries it there). The checklist proves completeness member by member, and the
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
-const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
+export const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
   // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
@@ -959,7 +961,7 @@ function ancGroupOf(kept, d) {
 
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
 // or the ⚠ Custom methods worklist are not re-listed; cosmetic / shown-in-a-table / builder-only / list-noise kinds
-// are dropped by the denylists above), plus the C2 lookup-GUID prompt. Returns the lines.
+// are dropped by the denylists above). Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -981,12 +983,6 @@ function renderConfirmWorklist(cs) {
     // note (columns included) — drop it; a detail with a real add mechanism keeps its row (guidance has no other home).
     && !(d.kind === "detail-add-mechanism" && d.editableGridOnly));
   const confirm = foldedConfirmRows(kept);
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec shows
-  // "required (conditional)" but the raw GUID is unreadable. The build agent resolves it on-stand, and with no
-  // `--units` channel this prompt is how it reaches the agent — so it stays in the worklist.
-  const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
-    confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
 }
@@ -1468,7 +1464,8 @@ function renderImperativeLogic(cs) {
   for (const { stub: h, depth, parent } of ordered) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
-    const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
+    const unmarked = parent ? `port with \`${esc(parent)}\`` : targetText(h);
+    const target = h.listMapped ? LIST_MAPPED_TARGET : unmarked;
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
@@ -1566,10 +1563,8 @@ function renderMemberLedger(coverage) {
 // sections (which is what happened when it hand-authored the plan). Corrections go in an Adjustments note.
 // The top-of-plan ⛔ banners (correctness gate, structure completeness, planMeta / on-stand-signals gaps). Own fn
 // so renderPlan stays under Sonar CC 15. Returns the lines to push.
-// The three ADVISORY `behaviourIndex` banners (unmatched · wiringOnly · sectionOnly). Own fn for the same reason
-// `renderPlanBanners` itself is one — Sonar CC 15. Two branches independently grew this function past the limit
-// (the sectionOnly banner and the placement blockers below), and neither crossed it alone; splitting the three
-// related advisories out is the natural seam. Returns the lines to push — empty when the index reports nothing.
+// The two ADVISORY `behaviourIndex` banners (unmatched · wiringOnly). Own fn for the same reason
+// `renderPlanBanners` itself is one — Sonar CC 15. Returns the lines to push — empty when the index reports nothing.
 function renderBehaviourIndexBanners(result) {
   const P = [];
   // A step-5.1 answer whose method matches NO worklist row. Advisory, not a block — but never silent: it means the
@@ -1587,13 +1582,6 @@ function renderBehaviourIndexBanners(result) {
     `> ⚠ **${rt.wiringOnly.length} \`manifest.behaviourIndex\` key(s) name only a wiring card for a row whose body lives in another schema:** ` +
     rt.wiringOnly.map((k) => "`" + esc(k) + "`").join(", ") +
     ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
-  // A step-5.1 answer addressing ONLY the section scope. Matched in the digest, but applyBehaviourIndex folds
-  // cards into PAGE rows only, so no worklist row cites it — advisory like its siblings, never silent: without
-  // the banner the merge-index → re-run --plan loop reads as complete while the section answer rendered nowhere.
-  if ((rt.sectionOnly || []).length) P.push(
-    `> ⚠ **${rt.sectionOnly.length} \`manifest.behaviourIndex\` key(s) address only the SECTION scope:** ` +
-    rt.sectionOnly.map((k) => "`" + esc(k) + "`").join(", ") +
-    ". The plan's worklist carries page rows only, so these answers render in no table — carry each behaviour (and its card) into the List-page part of the plan by hand, and verify it at the list-page checkpoint.", "");
   return P;
 }
 // FIDELITY warnings (ENG-95862) — the half of `eff.warnings` that says "the mapping is RIGHT, an effect of the op
@@ -2495,6 +2483,39 @@ export function scopeGroups(groups, pageKey) {
   if (pageKey == null || pageKey === "") return groups;
   return (groups || []).filter((g) => g.pageKey === pageKey);
 }
+// ONE row per handler. A helper the plan folded under a caller says so, or the row reads as a demand for its own
+// Freedom artifact. Shared by every page kind: two renderings of one stub list would disagree about what is built.
+function handlerStubRows(cs) {
+  const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
+    .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
+  return (cs.handlerStubs || []).map((h) => {
+    const parent = foldedUnder.get(h.sourceMethod);
+    // Composed, not exclusive: a folded helper the list analyzer already read is still already read.
+    const unfolded = h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "";
+    const note = (parent ? ` (ported with \`${esc(parent)}\`)` : "") + unfolded;
+    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note };
+  });
+}
+// A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
+// it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
+const LIST_MAPPED_TARGET = "already mapped into the list page's own ops";
+// One row per imperative member, same sharing rule.
+function memberWorklistRows(cs) {
+  return (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
+    .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` }));
+}
+// The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
+// scope: on a withheld `list` key these ride the form page's key, where one title would be one identity for two
+// different row sets.
+function sectionLogicGroups(listCs, key) {
+  const cs = listCs || {};
+  const out = [];
+  const methods = handlerStubRows(cs);
+  if (methods.length) out.push(pageGroup(key, "List — Custom methods", methods));
+  const members = memberWorklistRows(cs);
+  if (members.length) out.push(pageGroup(key, "List — Other declared logic worklist", members));
+  return out;
+}
 function pageGroup(pageKey, title, rows) {
   return {
     title: pageKey === "main" ? title : `${esc(pageKey)} · ${title}`,
@@ -2823,6 +2844,9 @@ export function checklistGroups(result, opts = {}) {
   // `listChangeSet`, and without this guard that node's questions ride onto the SUB-PAGE's key — a per-type form page
   // carrying mandatory list-column questions for a grid it does not have.
   let listConfirmOnMain = isMain ? confirmWorklistRows(pageKey, result.listChangeSet || {}) : [];
+  // The section's methods and imperative members are the LIST page's to port. They ride the SAME key as the rest
+  // of the list deliverables, so a withheld `list` key degrades them onto the form page's rather than dropping them.
+  let sectionLogicKey = pageKey;
   if (opts.sectionHostMode === "pages-only-no-menu" && listRows.length) {
     G("List page (NOT built — `pages-only-no-menu`)", [
       { label: "**Deliberately NOT built** (`placement.sectionHost.mode = pages-only-no-menu`): no section is registered, so no list page is minted. The rows below record what a list page WOULD carry, for the run that adds the menu entry later." },
@@ -2837,12 +2861,17 @@ export function checklistGroups(result, opts = {}) {
     // resolves them before the build round.
     const listConfirm = confirmWorklistRows(LIST_PAGE_KEY, result.listChangeSet || {});
     if (listConfirm.length) groups.push(pageGroup(LIST_PAGE_KEY, "⚠ Confirm worklist", listConfirm));
+    sectionLogicKey = LIST_PAGE_KEY;
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY)));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
+  // Base fields the template already ships that the client schema reconfigured: changes to APPLY onto the
+  // existing field, so they are build rows and not ⚠ Confirm questions. No `vk`, like every other Layout row.
+  G("Form — Base-field overrides", (cs.baseFieldOverrides || [])
+    .map((o) => ({ label: `Base field \`${esc(o.field)}\` — ${esc(o.change)}` })));
   G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf, pageKey));
   // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
   // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
@@ -2864,20 +2893,15 @@ export function checklistGroups(result, opts = {}) {
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
-  const methodItems = [];
-  const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
-    .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
-  for (const h of cs.handlerStubs || []) {
-    const parent = foldedUnder.get(h.sourceMethod);
-    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
-  }
-  G("Form — Custom methods", methodItems);
+  G("Form — Custom methods", handlerStubRows(cs));
   // The section dashboards are the LIST page's deliverables - the element lives on it, the migrated dashboards
   // appear in it - so they gate under the LIST page's key. That is what lets the element row read the page it is
-  // actually about instead of guessing from the form page's ops. Two exceptions take the form page's key, both
-  // for the same reason (there is no list page to gate): a sub-scope, and an approved pages-only-no-menu run.
-  const dashKey = isMain && opts.sectionHostMode !== "pages-only-no-menu" ? "list" : pageKey;
-  const dashRows = buildDashboardRows(result, opts).filter(Boolean);
+  // actually about instead of guessing from the form page's ops. An approved pages-only-no-menu run takes the form
+  // page's key instead, having no list page to gate.
+  // ROOT SCOPE ONLY: `signals` is run-level and every folded sub-page inherits it, so a sub-render that builds
+  // these rows files a duplicate set under its own page key.
+  const dashKey = opts.sectionHostMode !== "pages-only-no-menu" ? LIST_PAGE_KEY : pageKey;
+  const dashRows = isMain ? buildDashboardRows(result, opts).filter(Boolean) : [];
   if (dashRows.length) groups.push(pageGroup(dashKey, "Dashboards", dashRows));
   G("Card actions", buildCardActionRows(cs));
   // ⚠ Other declared logic worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
@@ -2885,12 +2909,11 @@ export function checklistGroups(result, opts = {}) {
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Other declared logic worklist", (cs.needsDecision || [])
-    .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
-    .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
+  G("⚠ Other declared logic worklist", memberWorklistRows(cs));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
   // Each one is an EVIDENCE row (D7): a confirm item is closed by a filed record + a judge verdict, not by prose.
   G("⚠ Confirm worklist", [...confirmWorklistRows(pageKey, cs), ...listConfirmOnMain]);
+  if (isMain) groups.push(...sectionLogicGroups(result.listChangeSet, sectionLogicKey));
   // Child pages that publish NO page key of their own — a cycle (mapped higher on this branch, and gated there),
   // a child verified to have no separate page / to be view-only (no deliverable to gate), or a malformed child
   // bundle (a PLAN-completeness failure the structure gate already blocks on). They keep an identity row so

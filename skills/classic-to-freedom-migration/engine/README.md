@@ -155,7 +155,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   a RENAMED field raises drift even though neither the caption nor the count moved.
 - **The build order is leaf-first with TWO declared exceptions.** Sub-pages precede `main`, a grandchild precedes
   its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
-  `Quality gates` review is its last task. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  `Quality gates` review is its last task. Base-field overrides sit between the layout that creates the fields and
+  the coverage that counts them: they are changes APPLIED ONTO the template's existing fields, so the fields must
+  exist first and the counts must see the result. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
   (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
   and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
@@ -271,9 +273,9 @@ card, typically in the shared core, says what it does (`bodyCard`/`bodyAc`). Bot
 that names only the wiring card reads as described while the guards are missing. Where that omission is
 mechanically provable — a `mixin:` row or an `externalRef` method carrying a wiring card alone — the plan gets a
 ⚠ banner (`behaviourIndex.wiringOnly`). A key that matches no row anywhere becomes a plan banner rather than a
-silent drop. A key addressing only the SECTION scope gets its own ⚠ banner (`behaviourIndex.sectionOnly`): it is
-matched in the digest, but the worklist carries page rows only, so the answer renders in no table and must be
-carried into the List-page part of the plan by hand. This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
+silent drop. A key addressing the SECTION scope raises no banner: the section's methods and imperative members are
+the list page's own rows, so the answer folds onto them and renders like any page-scope one.
+This is why the reference belongs in the manifest and not in the plan's hand-written `Adjustments`
 section: `--plan --out` rewrites the file, so an appended index is lost on every regenerate.
 
 `--out <file>` writes the `--plan`/`--spec` output to a file so the agent presents the file verbatim instead

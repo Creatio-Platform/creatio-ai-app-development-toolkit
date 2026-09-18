@@ -1919,6 +1919,9 @@ function mapUnmappedDrop(eff, accountedFor, configGaps = new Map()) {
 
 // Map ONE classic rule into its Freedom page/entity business rule, or a needsDecision when it can't be mapped.
 // Mutates the three sinks — keeps the ruleType dispatch (and its nesting) out of mapRules's loop.
+const LOOKUP_GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// The `lookup-value` row's `item`: fixed, so the evidence id derived from it survives a rule being added.
+const LOOKUP_VALUE_ITEM = "business-rule conditions";
 function mapOneRule(r, pageBusinessRules, entityBusinessRules, needsDecision) {
   if (r.ruleType === "FILTRATION") {
     const filter = r.filterColumn
@@ -1966,7 +1969,23 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // a per-rule "resolve the target column/comparison/value" punt was both vague and noisy (read as N assumptions).
   // A column-reference filter is a normal Freedom lookup filter — present it as such, grouped per lookup.
   foldIncompleteFilters();
+  foldLookupValueRules();
   return { pageBusinessRules, entityBusinessRules, needsDecision };
+
+  // A condition comparing against a lookup-record GUID reads as an opaque id, so the display name is resolved
+  // on-stand before the rule is rebuilt. ONE row per page, and the targets ride in `reason`: `item` is the
+  // evidence id, and an id that moves when a rule is added detaches the status recorded against it.
+  function foldLookupValueRules() {
+    const carries = (r) => LOOKUP_GUID.test(JSON.stringify(r));
+    const targets = [...new Set([
+      ...pageBusinessRules.filter(carries).map((r) => r.element),
+      ...entityBusinessRules.filter(carries).map((r) => r.targetAttribute),
+    ].filter(Boolean))];
+    if (!targets.length) return;
+    needsDecision.push({ kind: "lookup-value", item: LOOKUP_VALUE_ITEM,
+      reason: `the conditions on ${targets.join(", ")} compare against lookup-record GUIDs; resolve each GUID to `
+        + "its display name on-stand before building, so the rule reads correctly" });
+  }
 
   // FOLD incomplete FILTRATIONs (dynamic / column-reference lookup filters, no static constant) into ONE concrete
   // line naming each lookup + its filter column(s). Own fn for Sonar CC 15; closes over entityBusinessRules/needsDecision.
@@ -2720,6 +2739,11 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
     ...(process ? [process] : []),
   ];
 }
+// The section methods the list analyzer READS — their effect is already in the positioned list ops, so a row for
+// one records work that is done, never a second build. Keep in step with what `mapSectionView` and the section
+// analyzer actually consume: a method that stops being read here must stop being marked.
+export const SECTION_VIEW_METHODS = new Set(["getGridDataColumns", "initFixedFiltersConfig", "getSectionActions",
+  "getAddRecordMiniPage"]);
 // ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
 //
 // Everything a section declares in its OWN `diff`, read off the folded section view and handed to
@@ -2987,7 +3011,9 @@ function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }
 }
 // THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
 // that does not exist must not appear as a build deliverable.
-export function buildListChangeSet({ entity, section, entityColumns } = {}) {
+// `sectionCode` is the SECTION schema mapped like a page body. Folded in here so the list page has ONE ChangeSet,
+// the way the form page does: reading `handlerStubs` must not depend on which page kind is in hand.
+export function buildListChangeSet({ entity, section, entityColumns, sectionCode } = {}) {
   if (!section) return null;
   // `"?"` is the schema parser's stub for "the merged chain named no entity" — a name, not an entity. It must not
   // reach an op: `entitySchemaName: "?"` reads as configured and binds the grid's data source to a schema that does
@@ -3022,6 +3048,12 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
     // finished page body: a grid column still needs its GUID `id` (above), and a quick-filter op carries placement
     // facts only — the component's own nested config comes from `crt.QuickFilter`'s documentation.
     quickFilterConfigCompletedByBuilder: filters.length > 0,
-    needsDecision: listNeedsDecision(section, columns, filters, actions, rowActions),
+    // The section's own methods and member rows, folded beside the list page's own decisions. The caller hands
+    // these already marked and filtered — see `sectionCodeForList`.
+    handlerStubs: sectionCode?.handlerStubs || [],
+    needsDecision: [
+      ...listNeedsDecision(section, columns, filters, actions, rowActions),
+      ...(sectionCode?.needsDecision || []),
+    ],
   };
 }

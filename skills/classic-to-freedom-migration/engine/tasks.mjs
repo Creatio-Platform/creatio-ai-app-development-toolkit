@@ -79,10 +79,15 @@ const GROUP_PHASE = new Map([
   ["⚠ Confirm worklist", 10],
   ["Pages", 20],
   ["Form — Layout (by tab/region)", 30],
+  // Applied ONTO the template's existing fields, so the fields must be laid out first and counted after.
+  ["Form — Base-field overrides", 35],
   ["Form — Coverage (verified)", 40],
   ["Card actions", 50],
   ["Form — Logic", 60],
   ["⚠ Imperative members worklist", 70],
+  // The list page's own imperative work: after the page it attaches to is built, before its review.
+  ["List — Custom methods", 86],
+  ["List — Other declared logic worklist", 87],
   ["Child pages", 80],
   ["Quality gates", 99],
 ]);
