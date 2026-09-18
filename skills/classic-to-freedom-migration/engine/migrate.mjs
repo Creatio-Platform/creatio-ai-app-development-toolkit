@@ -3297,7 +3297,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // plan cut against an earlier draft cannot pass as this one's.
       let res; try { res = assembleBuilt(fromDir, readPlan(result, checklistOpts(manifest))); }
       catch (e) { fail(`cannot compose the payload from '${fromDir}': ${e.message}`); }
-      if (!res.built) fail(`cannot compose the payload from '${fromDir}': ${res.problems.map((x) => `${x.file} — ${x.why}`).join("; ")}.`
+      // Built as a statement rather than nested inside the template below (Sonar S4624).
+      const why = res.problems.map((x) => x.file + " — " + x.why).join("; ");
+      if (!res.built) fail(`cannot compose the payload from '${fromDir}': ${why}.`
         + ` Run \`${READS_FLAG} ${fromDir}\` first, then do the reads it names.`);
       readProblems = res.problems;
       built = res.built;

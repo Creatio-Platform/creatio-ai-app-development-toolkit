@@ -57,28 +57,34 @@ export const slugKey = (key) => slugify(key);
 // sending the read-only read-back agent after it would be sending it after a value it cannot fetch. The keys are
 // still NAMED in the rendered plan, as the builder's to record — dropping them silently would trade one missing
 // key for another.
-export function readPlan(result, opts = {}) {
-  const groups = checklistGroups(result, opts);
+// WHAT THE CHECKLIST WALK YIELDS, in one pass: the published page keys in order, the keys whose rules are gated,
+// the distinct on-stand keys, the evidence ids, and the dashboards the plan moves. Extracted so `readPlan` stays
+// under Sonar's cognitive-complexity budget. Two rows can share one evidence id (the quality-gate pair) and the
+// three `dashboards` rows share ONE expectation set, so both dedupe.
+function walkGroups(groups) {
   const pageKeys = [];
   const ruleKeys = new Set();
   const reach = new Map();
-  // The EVIDENCE IDS, off the same walk: the one part of the payload keyed by a string a person would otherwise
-  // retype, and a backtick or non-Latin caption inside one does not survive being retyped. Two rows can share one
-  // id (the quality-gate pair), so they dedupe.
   const evidenceIds = [];
-  // The dashboards the plan moves, collected across the `dashboards` rows (three rows, ONE expectation set).
   const dashboards = [];
-  for (const g of groups) {
-    for (const r of g.rows) {
-      const key = r.pageKey || g.pageKey || "main";
-      if (!pageKeys.includes(key)) pageKeys.push(key);
-      if (r.vk?.type === "rule") ruleKeys.add(key);
-      if (r.vk?.type === "onstand" && r.vk.evidence && !reach.has(r.vk.evidence)) reach.set(r.vk.evidence, r.vk);
-      if (r.vk?.type === "evidence" && r.vk.id && !evidenceIds.includes(r.vk.id)) evidenceIds.push(r.vk.id);
-      if (r.vk?.type === "dashboards") for (const e of r.vk.expect || [])
-        if (e?.id && !dashboards.some((d) => d.id === e.id)) dashboards.push(e);
-    }
+  const rows = groups.flatMap((g) => g.rows.map((r) => [r, r.pageKey || g.pageKey || "main"]));
+  for (const [r, key] of rows) {
+    if (!pageKeys.includes(key)) pageKeys.push(key);
+    const vk = r.vk;
+    if (!vk) continue;
+    if (vk.type === "rule") ruleKeys.add(key);
+    else if (vk.type === "onstand" && vk.evidence && !reach.has(vk.evidence)) reach.set(vk.evidence, vk);
+    else if (vk.type === "evidence" && vk.id && !evidenceIds.includes(vk.id)) evidenceIds.push(vk.id);
+    else if (vk.type === "dashboards") addDashboards(dashboards, vk);
   }
+  return { pageKeys, ruleKeys, reach, evidenceIds, dashboards };
+}
+const addDashboards = (into, vk) => {
+  for (const e of vk.expect || []) if (e?.id && !into.some((d) => d.id === e.id)) into.push(e);
+};
+
+export function readPlan(result, opts = {}) {
+  const { pageKeys, ruleKeys, reach, evidenceIds, dashboards } = walkGroups(checklistGroups(result, opts));
   const reads = [];
   const builderRecorded = [];
   const add = (kind, slug, extra) => {
@@ -168,7 +174,13 @@ export function renderReadPlan(plan, dir) {
   }
   L.push(`**${plan.reads.length} read(s).** A read you cannot complete is left UNWRITTEN — never an empty file and`
     + " never a value you assumed: the gate reports a missing file as `⚠ could not read`, which is the honest answer,"
-    + " while a guessed one passes a check that never ran.");
+    + " while a guessed one passes a check that never ran.", "",
+  "**A page the stand DENIES is a different answer, and it has its own spelling.** If `get-page` reports there is"
+    + " no such schema, write the literal `false` into **both** of that page's files — the metadata slot AND the"
+    + " bundle slot. That reports the page ❌ MISSING and opens a repair. Leaving them unwritten instead says \"I"
+    + " could not ask\", which is a re-read and never closes; writing `false` into only one of the two is read as a"
+    + " copy error, because one `get-page` call cannot answer both ways.");
+
   // Named, not dropped: these keys gate rows like any other, and a reader who sees only the read list would take
   // the rows that depend on them for rows nobody owes anything on.
   if (plan.evidenceIds?.length) {

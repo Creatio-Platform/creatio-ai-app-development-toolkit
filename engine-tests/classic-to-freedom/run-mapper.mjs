@@ -12162,7 +12162,7 @@ check("ENG-98556: `entitySchemaName` is derived from the PRIMARY data source, an
       () => ({ wrote, ids: plan.evidenceIds.length, keys: Object.keys(ev).length }));
     // The AC's own case: an id carrying a backtick and non-Latin text. Written by the engine, byte for byte, so
     // there is nothing to escape and nothing to get wrong.
-    const gnarly = plan.evidenceIds.filter((id) => /[`·]|[^ -]/.test(id));
+    const gnarly = plan.evidenceIds.filter((id) => /[`·]|[^\x00-\x7f]/.test(id));
     check("ENG-98556: an id carrying a backtick or non-Latin text is written VERBATIM as a key — the failure was retyping it, and nothing retypes it now",
       () => gnarly.every((id) => Object.prototype.hasOwnProperty.call(ev, id)),
       () => ({ gnarly }));
@@ -12361,6 +12361,71 @@ check("ENG-98556: the `sectionRegistered` row spells the query as ARGUMENTS — 
     () => bothDeny.problems.length === 0 && bothDeny.built.pages.main === false,
     () => ({ page: bothDeny.built.pages.main, problems: bothDeny.problems }));
 }
+
+// ================================================================================================
+// ENG-98556 — THE SEAM, end to end. Every other assembleBuilt test hand-writes its index, so the
+// vocabulary the two modules share is pinned by nothing: rename a read kind in reads.mjs and all of
+// them stay green while `--verify --from` composes an empty payload. This one runs the real
+// `--reads`, fills every file the real index names, and composes from it — then replays the composed
+// payload through `--built` and requires the two tables to be identical.
+{
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_seam_"));
+  const mf = path.join(d, "manifest.json");
+  try {
+    fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
+    const eng = path.join(ENGINE_DIR, "migrate.mjs");
+    const plan = spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
+    // Filled from the index ITSELF, by kind — never from a hand-written list. A kind the engine emits
+    // that this switch does not know leaves its file unwritten, and the `problems` assertion below
+    // fails, which is the point: the two modules cannot drift apart silently.
+    const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
+    index.reads.forEach((r, n) => {
+      const body = {
+        pageMeta: () => ({ page: { schemaName: `Usr${r.pageKey}_Page`, schemaUId: uid(n),
+          packageName: "UsrApp", packageUId: "9bf821e9-691f-4afa-a590-29cba45e0d68",
+          parentSchemaName: "PageWithTabsFreedomTemplate" } }),
+        pageBundle: () => ({ name: `Usr${r.pageKey}_Page`, viewConfig: { items: [{ name: "Name", type: "crt.Input" }] },
+          viewModelConfig: { attributes: {} }, handlers: [],
+          modelConfig: { primaryDataSourceName: "PDS", dataSources: { PDS: { config: { entitySchemaName: "Applicant" } } } } }),
+        businessRules: () => ({ count: 0, rules: [] }),
+        reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
+        dashboards: () => [],
+      }[r.kind];
+      check(`ENG-98556 (seam): the read plan emits no kind the filler does not know — \`${r.kind}\` is one the composing half can answer`,
+        () => typeof body === "function", () => ({ kind: r.kind, file: r.file }));
+      if (body) asWrite(d, r.file, body());
+    });
+    const composed = assembleBuilt(d, readPlan(lpRun, checklistOpts(LP_MANIFEST)));
+    check("ENG-98556 (seam): `--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
+      () => composed.problems.length === 0 && Object.keys(composed.built.pages).length > 0
+        && Object.values(composed.built.pages).every((p) => p.viewConfig !== undefined),
+      () => ({ problems: composed.problems, pages: Object.keys(composed.built.pages) }));
+
+    // AC 6's recorded-payload replay: the composed `built.json` is what `--built` is documented to
+    // take, and the stdout line, the README and SKILL.md all promise the run replays offline from it.
+    const fromRun = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d], { encoding: "utf8" });
+    const composedTable = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+    const replayOut = path.join(d, "replay.md");
+    const replay = spawnSync(process.execPath,
+      [eng, mf, "--verify", "--built", path.join(d, "built.json"), "--out", replayOut], { encoding: "utf8" });
+    check("ENG-98556 (AC6 replay): the payload the engine composed replays through `--verify --built` and reproduces the SAME table — the offline-replay property the stdout note, the README and SKILL.md all promise",
+      () => fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable
+        && replay.status === fromRun.status,
+      () => ({ fromStatus: fromRun.status, replayStatus: replay.status,
+        identical: fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable }));
+    check("ENG-98556 (seam): `--reads` printed the plan it wrote — the agent acts on stdout, so an index written with nothing printed would leave the reads undiscoverable",
+      () => /Read plan/.test(plan.stdout || "") && index.reads.length > 0,
+      () => ({ printed: (plan.stdout || "").slice(0, 120), reads: index.reads.length }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// The rendered plan is the ONLY instruction the read-back sub-agent is handed: SKILL.md and the engine
+// README reach the orchestrator, not it. A `false` answer it is never told about is a page that was
+// genuinely not built looping as ⚠ NOT CHECKED instead of opening a repair.
+check("ENG-98556: the rendered read plan tells the agent how to report a page the stand DENIES — the literal `false`, in BOTH of that page's files, since one `get-page` call cannot answer both ways",
+  () => { const md = renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig");
+    return /DENIES/.test(md) && /`false`/.test(md) && /\bboth\b/i.test(md) && /MISSING/.test(md); },
+  () => ({ tail: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").slice(-600) }));
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
