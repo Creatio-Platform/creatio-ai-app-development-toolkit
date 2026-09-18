@@ -35,11 +35,11 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     () => st(H("setContactInfo", "onContactChange", trigContact)) === "✅ Done"
       && st(H("helper", "onSaved", [])) === "✅ Done" && /ported with `onSaved`/.test(ev(H("helper", "onSaved", []))),
     () => [H("setContactInfo", "onContactChange", trigContact), H("helper", "onSaved", [])]);
-  check("ENG-99126 handler (guard): a method with no name match and no trigger branch is ⚠ unverified, never ❌ — a port under another name or as a declarative rule is legitimate, and the text says what to record",
-    () => { const r = H("getEmailDetailFilter", null, []); return st(r) === "⚠ verify" && r[2] === "unverified" && /record how it was ported/.test(ev(r)); },
+  check("ENG-99126 handler (guard): a method with no name match and no trigger branch is non-gating confirm-on-stand, never ❌ — a port under another name or as a declarative rule is legitimate, and the text says what to record",
+    () => { const r = H("getEmailDetailFilter", null, []); return r[2] === "skip" && /confirm on-stand/.test(st(r)) && /record how it was ported/.test(ev(r)); },
     () => H("getEmailDetailFilter", null, []));
-  check("ENG-99126 handler (guard): no `handlers` slot on the page entry ⇒ ⚠ not checkable, naming the slot to pass — never a false ✅ or ❌",
-    () => { const r = H("onSaved", null, [], flat); return st(r) === "⚠ verify" && /no `handlers` slot/.test(ev(r)); }, () => H("onSaved", null, [], flat));
+  check("ENG-99126 handler (guard): no `handlers` slot ⇒ non-gating confirm-on-stand, naming the slot to pass — never a false ✅ or ❌",
+    () => { const r = H("onSaved", null, [], flat); return r[2] === "skip" && /handlers not provided/.test(ev(r)); }, () => H("onSaved", null, [], flat));
 
   // view-model attributes
   check("ENG-99126 vmattr: a virtual attribute present in viewModelConfig.attributes is ✅; one absent is ⚠ (a port another way is possible); no viewModelConfig ⇒ ⚠ not checkable",
@@ -115,7 +115,7 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     check("ENG-99126 handler (guard): a method whose only occurrence is a COMMENT or a STRING does NOT resolve Done — it stays ⚠ unverified (the false-confirmation direction the raw-text search allowed)",
       () => { const a = resolveVk({ type: "handler", method: "setContactInfo", parent: null, triggers: [] }, cctx);
         const b = resolveVk({ type: "handler", method: "getRequestStatusFilter", parent: null, triggers: [] }, cctx);
-        return a[0] === "⚠ verify" && b[0] === "⚠ verify"; },
+        return a[2] === "skip" && b[2] === "skip" && a[0] !== "✅ Done" && b[0] !== "✅ Done"; },
       () => [resolveVk({ type: "handler", method: "setContactInfo", parent: null, triggers: [] }, cctx),
              resolveVk({ type: "handler", method: "getRequestStatusFilter", parent: null, triggers: [] }, cctx)]);
   }

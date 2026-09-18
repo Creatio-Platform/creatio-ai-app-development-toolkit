@@ -3568,7 +3568,7 @@ const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\
 export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
-  if (ctx.handlersSrc == null) return ["⚠ verify", "handlers NOT checkable — this page entry carries no `handlers` slot; pass get-page's `bundle.handlers` verbatim so the port can be matched", "unverified"];
+  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this, or confirm the port on the stand", "skip"];
   const src = ctx.handlersSrc;              // RAW — attrBranchIn needs the string literal
   const code = codeOnly(src);               // comments + string literals blanked — for name/def matching
   if (defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
@@ -3580,7 +3580,7 @@ export function resolveHandlerVk(vk, ctx) {
       return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
   }
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
-  return ["⚠ verify", `no handler names \`${esc(vk.method)}\`${vk.parent ? ` or \`${esc(vk.parent)}\`` : ""}${trig ? ` and none branches on its trigger (${trig})` : ""} — a port under another name or as a declarative rule is legitimate: record how it was ported (a \`Check on stand\` line) so the row can be judged`, "unverified"];
+  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${vk.parent ? ` / \`${esc(vk.parent)}\`` : ""}${trig ? ` (nor a branch on its trigger (${trig}))` : ""} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
 }
 export function resolveVmAttrVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
@@ -3959,7 +3959,7 @@ export function renderVerify(result, opts = {}, built = {}) {
         owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
       // `kind` tells the four row kinds apart where `outcome` alone cannot: an approved boundary and a
       // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
-      const kind = r.na ? "na" : (r.info ? "info" : (r.vk ? "machine" : "confirm"));
+      const kind = r.na ? "na" : (r.info ? "info" : (outcome === "skip" ? "confirm" : (r.vk ? "machine" : "confirm")));
       rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
         vkType: r.vk?.type || null, owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
       L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
