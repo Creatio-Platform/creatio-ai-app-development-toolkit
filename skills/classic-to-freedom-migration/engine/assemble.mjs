@@ -188,7 +188,10 @@ const COMPOSE = {
 // Which of a page's files answered `false`. A set, not a flag: the denial is complete only when both did.
 function noteDenial(acc, r) {
   let denied = acc.absent.get(r.pageKey);
-  if (!denied) acc.absent.set(r.pageKey, denied = new Set());
+  if (!denied) {
+    denied = new Set();
+    acc.absent.set(r.pageKey, denied);
+  }
   denied.add(r.kind);
 }
 
