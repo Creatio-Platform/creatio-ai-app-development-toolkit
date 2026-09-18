@@ -1464,8 +1464,8 @@ function renderImperativeLogic(cs) {
   for (const { stub: h, depth, parent } of ordered) {
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
-    const unfolded = h.listMapped ? LIST_MAPPED_TARGET : targetText(h);
-    const target = h.listMapped ? LIST_MAPPED_TARGET : (parent ? `port with \`${esc(parent)}\`` : unfolded);
+    const unmarked = parent ? `port with \`${esc(parent)}\`` : targetText(h);
+    const target = h.listMapped ? LIST_MAPPED_TARGET : unmarked;
     const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }

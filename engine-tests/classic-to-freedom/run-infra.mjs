@@ -214,7 +214,7 @@ const confirmBodies = CONFIRM_PRODUCERS.map(bodyOfFn);
 const confirmBody = confirmBodies.join(NL);
 check("designspec.mjs: the ⚠ Confirm worklist is rendered from `needsDecision` alone — neither producer appends to it, so a row cannot reach plan.md while reaching no build task",
   confirmBodies.every((b) => b.length > 0)
-    && !/\b(?:confirm|rows|out)\.push\(\s*[`\"']/.test(confirmBody)
+    && !/\b(?:confirm|rows|out)\.push\(\s*[`"']/.test(confirmBody)
     && /foldedConfirmRows\(kept\)/.test(designspecSrc),
   () => ({ producersFound: CONFIRM_PRODUCERS.map((n, k) => [n, confirmBodies[k].length]),
     appended: confirmBody.split(NL).filter((l) => /\.push\(/.test(l)).map((l) => l.trim().slice(0, 90)) }));
