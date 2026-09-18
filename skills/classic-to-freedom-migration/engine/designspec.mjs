@@ -3731,6 +3731,17 @@ const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\
 // method name · the caller it was folded under · a handler BRANCH on the method's Classic trigger (the attribute
 // whose change ran it, the control it was bound to). None of them ⇒ ⚠ unverified, never MISSING: a port under
 // another name is legitimate, and the text says what to record so the row can be judged.
+// A handler recognised by one of the method's Classic TRIGGERS: a branch on the attribute whose change ran it, or
+// a reference to the control it was bound to. Extracted so resolveHandlerVk stays under Sonar's ceiling.
+function handlerTriggerMatch(vk, src, code) {
+  for (const t of vk.triggers || []) {
+    if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
+      return ["✅ Done", `a handler branches on attribute \`${esc(t.attribute)}\` — the Classic trigger of \`${esc(vk.parent || vk.method)}\``, "ok"];
+    if (t.kind === "control" && t.element && defOrCall(code, t.element))
+      return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
+  }
+  return null;
+}
 export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
@@ -3739,12 +3750,8 @@ export function resolveHandlerVk(vk, ctx) {
   const code = codeOnly(src);               // comments + string literals blanked — for name/def matching
   if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
   if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
-  for (const t of vk.triggers || []) {
-    if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
-      return ["✅ Done", `a handler branches on attribute \`${esc(t.attribute)}\` — the Classic trigger of \`${esc(vk.parent || vk.method)}\``, "ok"];
-    if (t.kind === "control" && t.element && defOrCall(code, t.element))
-      return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
-  }
+  const trigHit = handlerTriggerMatch(vk, src, code);
+  if (trigHit) return trigHit;
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
   const parentNote = vk.parent ? ` / \`${esc(vk.parent)}\`` : "";
   const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
