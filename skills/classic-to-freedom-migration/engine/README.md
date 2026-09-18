@@ -308,8 +308,8 @@ sections in the order a person acts on them: summary → **1** plan items record
 split by whether the reason cites a recorded decision (`## D<N> — …` in `decisions.md`, `N. **…**` under the plan's
 Adjustments) → **3** machine rows still open (omitted when none) → **4** the task ledger with per-task Machine /
 Evidence + judge / By hand counts (the reference-cache task is not a plan task and is not listed; dispatch is not
-reported — it stays an engine gate) → **5** per-task details quoting `Check on stand (row N):` lines. With `--out`
-the full table is written beside the report as `plan-vs-built.md`; without it, appended. `renderVerify` publishes
+reported — it stays an engine gate) → **5** per-task details quoting `Check on stand (row N):` lines. The plan-vs-built
+table is not emitted with `--tasks` at all — nothing reads it as a file; the report carries what it says. `renderVerify` publishes
 `rows` (every row with `pageKey`, `kind` `machine|confirm|na`, `vkType`, `status`, `outcome`) for it. Without
 `--tasks` the bare table is printed as before.
 **Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound

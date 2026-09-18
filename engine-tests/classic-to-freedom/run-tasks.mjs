@@ -2287,8 +2287,8 @@ console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round 
   // `false` = the page is genuinely absent, which is a valid payload entry and a hard MISSING on every row.
   fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
   const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
-  check("migrate.mjs --verify --tasks: the ONE legal pairing — `--verify` is still the mode and the folder is where its OPEN ROWS are written, so the table is printed AND the repair round lands",
-    () => run.status === 2 && /Plan-vs-Done — VERIFIED/.test(run.stdout || "")
+  check("migrate.mjs --verify --tasks: the ONE legal pairing — `--verify` is still the mode and the folder is where its OPEN ROWS are written, so the migration result report is printed AND the repair round lands",
+    () => run.status === 2 && /^# Migration result/.test(run.stdout || "")
       && /wrote \d+ repair task\(s\) \(round 1\)/.test(run.stdout || "")
       && fs.readdirSync(dir).length > planFiles,
     () => ({ status: run.status, stdout: (run.stdout || "").slice(-800), ls: fs.readdirSync(dir) }));
@@ -3450,10 +3450,10 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const run = cliR(["--verify", "--built", built, "--tasks", dir], MANIFEST);
   const out = run.stdout || "";
 
-  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT, not the bare plan-vs-built table — it opens with the report heading and the verdict; without `--out` the table is appended after the report",
+  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
     () => /^# Migration result/.test(out) && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
-      && /## Appendix — plan-vs-built, the full machine table/.test(out) && /Plan-vs-Done — VERIFIED against the built page/.test(out)
-      && out.indexOf("**Verdict:**") < out.indexOf("## Appendix"),
+      && !/Plan-vs-Done — VERIFIED against the built page/.test(out) && !/## Appendix/.test(out)
+      && /## \d+\. Task details/.test(out),
     () => out.slice(0, 600));
   check("ENG-99126 CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
     () => { const v = out.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
@@ -3479,12 +3479,11 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       && /\| Plan items confirmed \(on the built page, or by review\) \| \d+\/\d+ \|/.test(out)
       && /\| Plan items to confirm manually \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
-  check("ENG-99126 CLI: with `--out`, the full plan-vs-built table is written to `plan-vs-built.md` beside the report and the report LINKS it instead of carrying it",
+  check("ENG-99126 CLI: with `--out` the report is the ONLY file written — no plan-vs-built.md beside it and no link to one (nothing reads that file, so it is a second artifact to reconcile for nothing)",
     () => { const outFile = path.join(base, "report-split.md");
       cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       const rep = fs.readFileSync(outFile, "utf8");
-      const tbl = path.join(base, "plan-vs-built.md");
-      return fs.existsSync(tbl) && /^### ✅ Plan-vs-Done/.test(fs.readFileSync(tbl, "utf8")) && /\[plan-vs-built\.md\]\(plan-vs-built\.md\)/.test(rep) && !/## Appendix/.test(rep); },
+      return /^# Migration result/.test(rep) && !fs.existsSync(path.join(base, "plan-vs-built.md")) && !/plan-vs-built\.md/.test(rep) && !/## Appendix/.test(rep); },
     () => fs.readdirSync(base));
   check("ENG-99126 CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
     () => run.status === 2 && /⛔ RUN NOT COMPLETE — .*recorded NOT BUILT/.test(run.stderr || "") && /migration result report/.test(run.stderr || ""),
@@ -3518,7 +3517,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       // The task is still queued, so its rows have no outcome yet — the details say THAT, not "check by hand".
       && /\| \d+ \| .+ \| — \| — no outcome recorded yet \(task ☐ todo\) \|/.test(openRep.markdown)
       && !/Reference cache/.test(openRep.markdown) && !/\| Dispatch/.test(openRep.markdown),
-    () => openRep.markdown.slice(openRep.markdown.indexOf("## 4."), openRep.markdown.indexOf("## Appendix")));
+    () => openRep.markdown.slice(openRep.markdown.indexOf("## 4.")));
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
   check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",

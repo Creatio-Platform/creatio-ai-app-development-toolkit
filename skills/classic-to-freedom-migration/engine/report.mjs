@@ -399,8 +399,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
-// `tableFile` names the file the full plan-vs-built table was written to; without one the table is appended.
-export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, tableFile = null }) {
+export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null }) {
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
   const decisions = readDecisions(path.join(dir || ".", ".."));
@@ -428,15 +427,12 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
   let sec = 3;
-  const tableNote = tableFile
-    ? `The full plan-vs-built table (every row with its evidence) is in [${cell(path.basename(tableFile))}](${cell(path.basename(tableFile))}).`
-    : "The full plan-vs-built table (every row with its evidence) is appended below.";
   const md = [
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
     `> Plan \`${set?.planVersion || result?.planVersion || "—"}\` · task folder \`${esc(String(dirLabel || dir || ""))}\`. Written by`
       + " `migrate.mjs --verify --built <file> --tasks <dir>` from the task files AND the built pages — present it"
-      + ` verbatim; it supersedes \`build-tasks/index.md\`. ${tableNote}`,
+      + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",
     ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
@@ -444,7 +440,6 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
-    ...(tableFile ? [] : ["", "## Appendix — plan-vs-built, the full machine table", "", (verifyRes?.markdown || "").replace(/^### /, "#### ")]),
   ].join("\n");
   return { markdown: md, complete, reasons,
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft } };

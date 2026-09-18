@@ -625,8 +625,8 @@ recorded not built that still need a decision — each with the `Decision needed
 **2.** boundaries the agent closed `n-a` — those citing a recorded decision (`D<N>` in `decisions.md`, `Adjustment N`
 in the plan) as information, those citing none as a question, **3.** machine rows the engine could not confirm (only
 when there are any), **4.** the task ledger with HOW each task was verified (machine / evidence + judge / by hand),
-**5.** per-task details of what is left, with each build agent's `Check on stand (row N)` line. The full plan-vs-built
-table is written beside it as `plan-vs-built.md`. The verdict is the CONJUNCTION: COMPLETE only when every task is
+**5.** per-task details of what is still open, with each build agent's `Check on stand (row N)` line. The plan-vs-built
+table is not written as a file — the report carries everything it says. The verdict is the CONJUNCTION: COMPLETE only when every task is
 closed, nothing stands recorded not built without a decision, no boundary was asserted without one, and every
 machine-checked plan item is present. **Present that file verbatim as your final report.** Do not present
 `build-tasks/index.md` or the bare table in its place, and never a summary of your own. Copy `name` from `get-page`
