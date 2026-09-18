@@ -3093,7 +3093,7 @@ function runRepairMode(result, dir, verifyRes, opts) {
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (label === "migration result report") {
-    return `migrate.mjs: wrote ${label} to ${outFile} — its verdict is NOT COMPLETE, and the reasons are its first line: PRESENT IT VERBATIM (sections 1-3 name what needs a decision, what the agent closed as a boundary, and what the machine could not confirm). Do not hand-write a status summary of your own, and do not present \`build-tasks/index.md\` or the plan-vs-built table in its place — both are inside it.\n`;
+    return `migrate.mjs: wrote ${label} to ${outFile} — its verdict is NOT COMPLETE, and the reasons are its first line: PRESENT IT VERBATIM (sections 1-3 name what needs a decision, what the agent closed as a boundary, and what the machine could not confirm). Do not hand-write a status summary of your own, and do not present \`build-tasks/index.md\` — the report carries the OPEN machine rows and the confirmed counts; a plain --verify with no --tasks prints the full row-level table.\n`;
   }
   if (verifyMode) {
     return `migrate.mjs: wrote ${label} to ${outFile} — this run is INCOMPLETE, and that is what the table reports: PRESENT IT VERBATIM (it names every ❌ MISSING and ⚠ unverified row). Do not hand-write a status summary of your own, and do not treat the file as an approvable plan — read the ⛔ stderr line(s) below to tell a repairable build gap from a PLAN-level one.\n`;
@@ -3258,7 +3258,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // build (needs-decision, blocked, agent-asserted boundaries) and which tasks never closed. Measured: the
       // table said "2 machine row(s) not confirmed" while the ledger held 5 open tasks, 3 partial and three
       // handlers recorded not built — and the table was what the user was shown. The report renders BOTH and its
-      // verdict is their conjunction; the machine table is inside it (section 6), so nothing a reader had is lost.
+      // verdict is their conjunction; the report carries the OPEN machine rows and per-page confirmed counts; the full row-level table is a plain --verify (no --tasks), not part of this artifact.
       const rep = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.

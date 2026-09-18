@@ -3548,6 +3548,16 @@ const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 // ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
 const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const tokenIn = (src, name) => new RegExp(`(?<![\\w$])${reEsc(name)}(?![\\w$])`).test(src);
+// Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
+// Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
+const codeOnly = (s) => String(s)
+  .replace(/\/\*[\s\S]*?\*\//g, " ")
+  .replace(/\/\/[^\n]*/g, " ")
+  .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+  .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+  .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+// A method/element name in a DEFINITION or CALL position — not a bare mention. Run over `codeOnly` output.
+const defOrCall = (code, name) => new RegExp(`(?:function\\s+|\\.|\\b)${reEsc(name)}\\s*[(:=]`).test(code);
 // A handler branch on an attribute change: `request.attributeName === "X"` in any quoting / spacing.
 const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\`]${reEsc(attr)}["'\`]|["']attributeName["']\\s*:\\s*["']${reEsc(attr)}["']`).test(src);
 // HANDLERS. A Freedom port rarely keeps the Classic method name (measured: 2 of 10 on a real run — `setContactInfo`
@@ -3559,13 +3569,14 @@ export function resolveHandlerVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
   if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
   if (ctx.handlersSrc == null) return ["⚠ verify", "handlers NOT checkable — this page entry carries no `handlers` slot; pass get-page's `bundle.handlers` verbatim so the port can be matched", "unverified"];
-  const src = ctx.handlersSrc;
-  if (tokenIn(src, vk.method)) return ["✅ Done", `a handler names \`${esc(vk.method)}\``, "ok"];
-  if (vk.parent && tokenIn(src, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler names`, "ok"];
+  const src = ctx.handlersSrc;              // RAW — attrBranchIn needs the string literal
+  const code = codeOnly(src);               // comments + string literals blanked — for name/def matching
+  if (defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
+  if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
   for (const t of vk.triggers || []) {
     if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
       return ["✅ Done", `a handler branches on attribute \`${esc(t.attribute)}\` — the Classic trigger of \`${esc(vk.parent || vk.method)}\``, "ok"];
-    if (t.kind === "control" && t.element && tokenIn(src, t.element))
+    if (t.kind === "control" && t.element && defOrCall(code, t.element))
       return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
   }
   const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
@@ -3582,10 +3593,19 @@ export function resolveVmAttrVk(vk, ctx) {
 // The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
 // "Basic information" is carried by `BasicInformationTabCaption`; words under 3 letters are noise.
 const captionWords = (c) => String(c || "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3).map((w) => w.toLowerCase());
-function tabMatches(container, caption) {
-  const hay = `${container.caption} ${container.name}`.toLowerCase();
+const normId = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+// Split a caption binding / element name into words on camelCase and non-alphanumeric boundaries, lower-cased.
+const tokensOf = (s) => String(s || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => w.toLowerCase());
+// 3 = the caption's words appear CONTIGUOUSLY in the container's caption or name (BasicInformation… for "Basic
+// information"); 2 = every caption word is a token of the container; 0 = no match. Token boundaries, not raw
+// substrings, so "Contact" no longer matches inside "ContactAndAccount" by accident when a better tab exists.
+function tabMatch(container, caption) {
   const words = captionWords(caption);
-  return words.length > 0 && (hay.includes(words.join("")) || words.every((w) => hay.includes(w)));
+  if (!words.length) return 0;
+  const joined = words.join("");
+  if (normId(container.caption).includes(joined) || normId(container.name).includes(joined)) return 3;
+  const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
+  return words.every((w) => toks.has(w)) ? 2 : 0;
 }
 export function resolveLayoutVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, "this region of the page");
@@ -3602,7 +3622,12 @@ export function resolveLayoutVk(vk, ctx) {
     if (!short.length) return ["✅ Done", `${where}: ${want.join(" · ") || "present"}`, "ok"];
     return ["⚠ verify", `${where}: ${short.join(", ")}`, "unverified"];
   };
-  if (vk.region === "header") return judge({ fields: [], lists: [], widgets: ctx.ops.map((o) => o.type).filter(Boolean) }, "on the built page");
+  if (vk.region === "header") {
+    const present = new Set(ctx.ops.map((o) => o.type));
+    const missW = (vk.widgets || []).filter((w) => !present.has(w));
+    if (!missW.length) return ["✅ Done", `header: ${(vk.widgets || []).join(" · ") || "present"}`, "ok"];
+    return ["⚠ verify", `header: ${missW.map((w) => `no ${w}`).join(", ")}`, "unverified"];
+  }
   // A payload with NO containers at all (the legacy flat `ops` shape, or a viewConfig with no container nodes)
   // cannot place anything: measure the region against the page as a whole and say so, rather than fail every
   // region row of a page whose fields and grids are all present.
@@ -3615,10 +3640,19 @@ export function resolveLayoutVk(vk, ctx) {
     if (!side) return ["⚠ verify", "no side-profile container (`Side*` / `*Profile*`) on the built page", "unverified"];
     return judge(side, `in \`${esc(side.name)}\``);
   }
+  if (!captionWords(vk.caption).length) return ["⚠ verify", "this tab row carries no caption to match a built tab by — a plan gap, not a build gap", "unverified"];
   const tabs = ctx.containers.filter((c) => /Tab/.test(c.type) || /Tab/.test(c.name));
   const size = (c) => c.fields.length + c.lists.length + c.widgets.length;
-  const tab = tabs.filter((c) => tabMatches(c, vk.caption)).sort((a, b) => size(b) - size(a))[0];
-  if (!tab) return ["⚠ verify", `no tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : ""}`, "unverified"];
+  const wantCount = (vk.fields || 0) + (vk.lists || 0) + (vk.widgets || []).length;
+  // Claim at most one container per region row (the discipline resolveFieldsByIdentity uses for fields), so two
+  // similarly-captioned tabs cannot both close against one big built tab. Ties: best fit, then higher score.
+  ctx.claimedContainers = ctx.claimedContainers || new Set();
+  const cand = tabs.map((c) => ({ c, score: tabMatch(c, vk.caption) }))
+    .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
+    .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
+  const tab = cand[0]?.c;
+  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : ""}`, "unverified"];
+  ctx.claimedContainers.add(tab.name);
   return judge(tab, `in tab \`${esc(tab.name)}\``);
 }
 // The template's native card controls, by the element names it ships them under.

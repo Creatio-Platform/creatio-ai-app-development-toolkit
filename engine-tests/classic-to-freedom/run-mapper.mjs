@@ -9097,7 +9097,7 @@ check("ENG-99126 renderVerify: `rows` carries every table row with its page, kin
     const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED)));
     const tableRows = v.markdown.split("\n").filter((l) => /^\| \d+ \|/.test(l)).length;
     return Array.isArray(v.rows) && v.rows.length === tableRows && v.rows.every((r, i) => r.n === i + 1 && r.pageKey && r.deliverable && r.status)
-      && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na"].includes(r.kind));
+      && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na", "info"].includes(r.kind));
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
 

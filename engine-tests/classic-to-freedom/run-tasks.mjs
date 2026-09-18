@@ -3492,7 +3492,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => { const outFile = path.join(base, "report.md");
       const r = cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       return /wrote migration result report to/.test(r.stdout || "") && /PRESENT IT VERBATIM/.test(r.stdout || "")
-        && /do not present `build-tasks\/index\.md` or the plan-vs-built table in its place/.test(r.stdout || "")
+        && /do not present `build-tasks\/index\.md`/.test(r.stdout || "")
         && /^# Migration result/.test(fs.readFileSync(outFile, "utf8")); },
     () => cliR(["--verify", "--built", built, "--tasks", dir, "--out", path.join(base, "report2.md")], MANIFEST).stdout);
   check("ENG-99126 CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
@@ -3550,6 +3550,49 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
           && /Without a recorded decision \(1\)/.test(s2) && /cites D99, not found in decisions\.md/.test(s2)
           && rep2.reasons.some((r) => /1 boundary closed by the agent with NO recorded decision/.test(r)); },
       () => ({ reasons: rep2.reasons, s2: rep2.markdown.slice(rep2.markdown.indexOf("## 2."), rep2.markdown.indexOf("## 3.")) }));
+
+    // splitDecided: a not-built row whose SAME (page,label) is closed n-a with a RECORDED decision in ANOTHER
+    // task is reclassified as decided — it leaves section 1 for the informational part of section 2. Hand-built so
+    // the two tasks share a deliverable (the Applicants shape: init not-built in the build task, n-a by D18 in the
+    // repair task). `dir` is d2, whose decisions.md records D7.
+    {
+      const shared = "Handler — `dup`";
+      const A = { id: "bd-a", file: "bd-a.md", group: "Build", pageKey: "main", status: "partial", notes: "",
+        rows: [{ label: shared, outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" }] };
+      const B = { id: "bd-b", file: "bd-b.md", group: "Repair round 1", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
+        rows: [{ label: shared, outcomeKind: "n-a", outcome: "n-a — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
+      const rep4 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [A, B], planVersion: RUN.planVersion }, dir: d2 });
+      const sec1 = rep4.markdown.slice(rep4.markdown.indexOf("## 1."), rep4.markdown.indexOf("## 2."));
+      check("ENG-99126 splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
+        () => /\| Plan items not built BY DECISION \| 1 \|/.test(rep4.markdown) && rep4.counts.decidedNotBuilt === 1
+          && rep4.counts.openNotBuilt === 0 && !sec1.includes(shared)
+          && !rep4.reasons.some((r) => /recorded NOT BUILT/.test(r)),
+        () => ({ counts: rep4.counts, reasons: rep4.reasons, sec1 }));
+    }
+  }
+
+  // AC-4/AC-5: a REAL `--built` payload carrying the three new optional fields (schemaName, handlers,
+  // viewModelConfig) is accepted end to end, and the report names the page by its Freedom schemaName rather than
+  // the engine key — a field-name typo or a validator that rejected the new keys would fail here.
+  {
+    const baseN = tmp("result-report-schemaname");
+    const dN = path.join(baseN, "build-tasks");
+    cliR(["--tasks", dN], MANIFEST);
+    const builtN = path.join(baseN, "built.json");
+    const mainEntity = RUN.entity || "X";
+    fs.writeFileSync(builtN, JSON.stringify({ pages: { main: {
+      viewConfig: { items: [{ type: "crt.Input", name: "AField", control: "$A" }] },
+      packageName: "UsrX", parentSchemaName: "FormPageTemplate", entitySchemaName: mainEntity,
+      schemaUId: "33333333-3333-4333-8333-333333333333", schemaName: "UsrDemo_FormPage",
+      handlers: "[{ request: \"crt.SaveRecordRequest\", handler: async (r, n) => n?.handle(r) }]",
+      viewModelConfig: { attributes: { A: {} } },
+    } } }));
+    const outN = path.join(baseN, "report.md");
+    const runN = cliR(["--verify", "--built", builtN, "--tasks", dN, "--out", outN], MANIFEST);
+    check("ENG-99126 CLI: a --built payload with schemaName/handlers/viewModelConfig is accepted (no exit-1 shape/validator error) and the report names the page by its Freedom schemaName, not the engine key",
+      () => runN.status === 2 && !/cannot read --built|Expected/.test(runN.stderr || "")
+        && /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) && !/\| Form page \|/.test(fs.readFileSync(outN, "utf8")),
+      () => ({ status: runN.status, stderr: (runN.stderr || "").slice(0, 300), hasName: /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) }));
   }
 }
 

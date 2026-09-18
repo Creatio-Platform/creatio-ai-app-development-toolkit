@@ -82,12 +82,12 @@ function readDecisions(migrationDir) {
   const out = new Map();
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)\s*[—–-]\s*(.+?)\s*$/gm)) out.set(`D${m[1]}`, m[2].trim());
+    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)\s*[—–:.\-]?\s*(.+?)\s*$/gm)) out.set(`D${m[1]}`, m[2].trim());
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
-    const tail = plan.slice(plan.search(/^###\s+Adjustments/m));
-    if (tail) for (const m of tail.matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*/gm)) out.set(`Adjustment ${m[1]}`, m[2].trim());
+    const at = plan.search(/^###\s+Adjustments/m);
+    if (at >= 0) for (const m of plan.slice(at).matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*/gm)) out.set(`Adjustment ${m[1]}`, m[2].trim());
   } catch { /* same */ }
   return out;
 }
@@ -95,7 +95,7 @@ function readDecisions(migrationDir) {
 // files say those are; `missing` is a reference nothing recorded.
 function decisionRefs(reason, decisions) {
   const refs = [...String(reason || "").matchAll(/\b(D\d{1,3})\b|\b(Adjustment\s+\d+)\b/gi)]
-    .map((m) => m[1] ? m[1].toUpperCase() : m[2].replace(/\s+/g, " ").replace(/^a/, "A"));
+    .map((m) => m[1] ? m[1].toUpperCase() : m[2].replace(/\s+/g, " ").replace(/^adjustment/i, "Adjustment"));
   const uniq = [...new Set(refs)];
   return { resolved: uniq.filter((r) => decisions.has(r)).map((r) => ({ ref: r, title: decisions.get(r) })),
     missing: uniq.filter((r) => !decisions.has(r)) };
@@ -125,9 +125,13 @@ function pageNamer(built) {
 // filed + an independent judge's verdict), `hand` (nothing can read it — a person opens the page), `na` (a boundary
 // the plan approved). Read off the verify rows, joined to the task rows by (page, label).
 function verifyIndex(verifyRes) {
-  const idx = new Map();
-  for (const r of verifyRes?.rows || []) idx.set(`${r.pageKey} ${labelKey(r.deliverable)}`, r);
-  return idx;
+  const byKey = new Map(), byLabel = new Map();
+  for (const r of verifyRes?.rows || []) {
+    byKey.set(`${r.pageKey} ${labelKey(r.deliverable)}`, r);
+    const lk = labelKey(r.deliverable);
+    if (!byLabel.has(lk)) byLabel.set(lk, r);   // first row of a label wins; whole-run tasks resolve here
+  }
+  return { byKey, byLabel };
 }
 function howVerified(vrow) {
   if (!vrow) return { how: "unknown", ok: false };
@@ -235,7 +239,7 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
   return L;
 }
 
-const where = (it) => `[${cell(it.task.group || it.task.id)}](${it.task.file}), row ${it.n}`;
+const where = (it) => `[${cell(it.task.group || it.task.id)}](${encodeURI(it.task.file)}), row ${it.n}`;
 
 // A LATER round that recorded the same row `built` and has not closed yet: the question may already be answered
 // on the stand, and the reader should know before deciding anything. Keyed by (page, label).
@@ -267,7 +271,7 @@ function decisionsSection(open, pageName, repairBuilt) {
         : fallback ? `${cell(fallback)} *(from the row's notes — the agent wrote no \`Decision needed\` line)*`
           : "⚠ the agent recorded `needs-decision` but did not state the question — read the row's notes";
     }
-    L.push(`| ${i + 1} | ${pageName(it.task.pageKey)} | ${it.row.label} | ${text}${laterNote} | ${where(it)} |`);
+    L.push(`| ${i + 1} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${text}${laterNote} | ${where(it)} |`);
   });
   return L;
 }
@@ -285,7 +289,7 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
       "| # | Page | Plan item | Reason the agent gave | Recorded in |", "| --- | --- | --- | --- | --- |");
     without.forEach((b, i) => {
       const miss = b.refs.missing.length ? ` — ⚠ cites ${b.refs.missing.join(", ")}, not found in decisions.md / the plan's Adjustments` : "";
-      L.push(`| ${i + 1} | ${pageName(b.task.pageKey)} | ${b.row.label} | ${cell(brief(b.row.outcomeReason, 160))}${miss} | ${where(b)} |`);
+      L.push(`| ${i + 1} | ${pageName(b.task.pageKey)} | ${cell(b.row.label)} | ${cell(brief(b.row.outcomeReason, 160))}${miss} | ${where(b)} |`);
     });
     L.push("");
   }
@@ -295,11 +299,11 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
     let i = 0;
     for (const b of withRef) {
       const d = b.refs.resolved.map((r) => `**${r.ref}** — ${cell(r.title)}`).join("; ");
-      L.push(`| ${++i} | ${pageName(b.task.pageKey)} | ${b.row.label} | ${d} | ${where(b)} |`);
+      L.push(`| ${++i} | ${pageName(b.task.pageKey)} | ${cell(b.row.label)} | ${d} | ${where(b)} |`);
     }
     for (const it of decidedNotBuilt) {
       const d = it.decidedBy.refs.resolved.map((r) => `**${r.ref}** — ${cell(r.title)}`).join("; ");
-      L.push(`| ${++i} | ${pageName(it.task.pageKey)} | ${it.row.label} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${it.task.file}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
+      L.push(`| ${++i} | ${pageName(it.task.pageKey)} | ${cell(it.row.label)} | ${d} · *not built by this decision; recorded in [${cell(it.task.group)}](${encodeURI(it.task.file)}) row ${it.n}, which closes when the repair task closes* | ${where(it.decidedBy)} |`);
     }
   }
   return L;
@@ -312,7 +316,7 @@ function openMachineSection(rows, pageName) {
     "Plan-vs-built rows the engine could not close from the built pages. ❌ is a thing to build; ⚠ is a thing to"
     + " confirm or a record to file.", "",
     "| # | Page | Plan item | Status | Evidence (built page) |", "| --- | --- | --- | --- | --- |"];
-  for (const r of open) L.push(`| ${r.n} | ${pageName(r.pageKey)} | ${r.deliverable} | ${r.status} | ${cell(r.evidence)} |`);
+  for (const r of open) L.push(`| ${r.n} | ${pageName(r.pageKey)} | ${cell(r.deliverable)} | ${r.status} | ${cell(r.evidence)} |`);
   return L;
 }
 
@@ -322,13 +326,15 @@ function openMachineSection(rows, pageName) {
 // not-built / decided / boundary / na · open (no outcome yet, or the machine could not confirm it).
 function taskRows(t, vidx, keys) {
   return (t.rows || []).map((r, i) => {
-    const key = `${t.pageKey} ${labelKey(r.label)}`;
-    const v = vidx.get(key);
+    const lk = labelKey(r.label);
+    const key = `${r.pageKey || t.pageKey} ${lk}`;
+    const v = vidx.byKey.get(key) || vidx.byKey.get(`${t.pageKey} ${lk}`) || vidx.byLabel.get(lk);
     const hv = howVerified(v);
     let state;
-    if (keys.notBuilt.has(key) && r.outcomeKind === "not-built") state = "not-built";
-    else if (keys.decided.has(key) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
-    else if (r.outcomeKind === "n-a") state = keys.unbacked.has(key) ? "boundary" : "na";
+    const inSet = (set) => set.has(key) || set.has(`${t.pageKey} ${lk}`) || set.hasLabel?.has(lk);
+    if (inSet(keys.notBuilt) && r.outcomeKind === "not-built") state = "not-built";
+    else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
+    else if (r.outcomeKind === "n-a") state = inSet(keys.unbacked) ? "boundary" : "na";
     else if (r.na || r.info || hv.how === "na") state = "na";
     else if (!r.outcomeKind) state = "open";
     else if (hv.how === "hand") state = "hand";
@@ -354,13 +360,13 @@ function tasksSection(tasks, perTask, pageName, secNo) {
     const closedOtherwise = (r) => ["na", "decided", "boundary", "not-built"].includes(r.state);
     const machine = count((r) => r.hv.how === "machine" && !closedOtherwise(r)), machineOk = count((r) => r.state === "machine");
     const judge = count((r) => r.hv.how === "judge" && !closedOtherwise(r)), judgeOk = count((r) => r.state === "judge");
-    const hand = count((r) => r.state === "hand" || r.state === "open");
+    const hand = count((r) => r.state === "hand");
     const extra = count((r) => r.state === "extra");
-    const nb = rows.filter((r) => r.state === "not-built").map((r) => `${r.label} *(needs a decision)*`);
-    const dec = rows.filter((r) => r.state === "decided").map((r) => `${r.label} *(by decision)*`);
+    const nb = rows.filter((r) => r.state === "not-built").map((r) => `${cell(r.label)} *(needs a decision)*`);
+    const dec = rows.filter((r) => r.state === "decided").map((r) => `${cell(r.label)} *(by decision)*`);
     const mark = t.unread ? "⚠ unread" : statusMark(t.status).replace("in-progress", "in progress").replace("todo", "queued");
     const handCell = hand ? `${hand}${extra ? ` (+${extra} not in the plan)` : ""}` : (extra ? `(${extra} not in the plan)` : "—");
-    L.push(`| ${i + 1} | [${cell(t.group || t.title || t.id)}](${t.file}) | ${pageName(t.pageKey)} | ${mark} | ${machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—"} | ${handCell} | ${[...nb, ...dec].join("<br>") || "—"} |`);
+    L.push(`| ${i + 1} | [${cell(t.group || t.title || t.id)}](${encodeURI(t.file)}) | ${pageName(t.pageKey)} | ${mark} | ${machine + judge ? `${machineOk + judgeOk}/${machine + judge}` : "—"} | ${handCell} | ${[...nb, ...dec].join("<br>") || "—"} |`);
   });
   return L;
 }
@@ -377,7 +383,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   for (const t of needs) {
     const rows = (perTask.get(t.id) || []).filter((r) => !SETTLED_STATES.has(r.state));
     const checks = markers(t.notes, CHECK_MARKER);
-    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${t.file})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
+    L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${encodeURI(t.file)})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
       "| # | Plan item | Build agent recorded | What closes it |", "| --- | --- | --- | --- |");
     for (const r of rows) {
       let how;
@@ -389,7 +395,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
         const c = checks.get(r.n);
         how = c ? `☐ confirm manually — ${cell(c)}` : `☐ confirm manually — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
       }
-      L.push(`| ${r.n} | ${r.label} | ${cell(r.outcome)} | ${how} |`);
+      L.push(`| ${r.n} | ${cell(r.label)} | ${cell(r.outcome)} | ${how} |`);
     }
     L.push("");
   }
@@ -400,6 +406,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null }) {
+  const ledgerRefused = set?.refused ? (set.problems || []).join("; ") || "the task folder could not be read" : null;
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
   const decisions = readDecisions(path.join(dir || ".", ".."));
@@ -411,7 +418,8 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
   const keyOf = (it) => `${it.task.pageKey} ${labelKey(it.row.label)}`;
-  const keys = { notBuilt: new Set(openNotBuilt.map(keyOf)), decided: new Set(decidedNotBuilt.map(keyOf)), unbacked: new Set(unbackedBoundaries.map(keyOf)) };
+  const withLabels = (items) => { const set = new Set(items.map(keyOf)); set.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return set; };
+  const keys = { notBuilt: withLabels(openNotBuilt), decided: withLabels(decidedNotBuilt), unbacked: withLabels(unbackedBoundaries) };
   const perTask = new Map(tasks.map((t) => [t.id, taskRows(t, vidx, keys)]));
   const repairBuilt = repairBuiltIndex(tasks);
   // Left by hand = confirm rows that are neither not-built nor boundaries, counted over the plan-vs-built rows so
@@ -420,6 +428,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const handLeft = (verifyRes?.rows || []).filter((r) => r.kind === "confirm" && !flaggedLabels.has(`${r.pageKey} ${labelKey(r.deliverable)}`)).length;
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
+  if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
   const complete = reasons.length === 0;
   const verdict = complete
     ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : ""}`
