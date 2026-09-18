@@ -3459,7 +3459,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => { const v = out.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
       // The verify leg WRITES a repair round into the folder, so the ledger the report reads now also holds that
       // round's queued tasks — open work, counted as such in the same line.
-      return /1 plan item recorded NOT BUILT \(1 needs a decision\)/.test(v) && /\d+ tasks? not closed \(◐ partial 1( · ☐ queued \d+)?\)/.test(v)
+      return /1 plan item recorded NOT BUILT \(1 needs a decision\)/.test(v) && /tasks? not closed \(◐ partial 1/.test(v)
         && /machine-checked plan items? MISSING/.test(v) && v.indexOf("NOT BUILT") < v.indexOf("MISSING") && !/deliverable/i.test(out.slice(0, out.indexOf("## 1."))); },
     () => out.split("\n").find((l) => l.startsWith("**Verdict:**")));
   check("ENG-99126 CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",

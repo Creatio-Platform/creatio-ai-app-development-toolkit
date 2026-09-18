@@ -2101,7 +2101,7 @@ function buildLayoutGroupRows(cs, regionOf) {
     let region = null, caption = null;
     if (k.startsWith("Side profile")) region = "side";
     else if (k === "Header") region = "header";
-    else if (k.startsWith("Tab · ")) { region = "tab"; caption = k.slice(6).replace(/\s*\(new\)$/, "").trim(); }
+    else if (k.startsWith("Tab · ")) { region = "tab"; caption = k.slice(6).replace(/\(new\)$/, "").trim(); }
     const vk = region ? { type: "layout", region, caption, fields: e.fields, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
     return { label: `${k} — ${parts.join(" · ")}`, ...(vk ? { vk } : {}) };
   });
@@ -2111,7 +2111,7 @@ function buildLayoutGroupRows(cs, regionOf) {
 const LAYOUT_WIDGET_TYPE = [[/progress/i, "crt.EntityStageProgressBar"], [/feed|esn/i, "crt.Feed"], [/next steps/i, "crt.NextSteps"],
   [/attach/i, "crt.FileList"], [/approval|visa/i, "crt.ApprovalList"], [/communication/i, "crt.CommunicationOptions"]];
 function layoutWidgetType(w) {
-  if (String(w.freedom || "").startsWith("crt.")) return String(w.freedom).split(/\s|\(/)[0];
+  if (String(w.freedom || "").startsWith("crt.")) return String(w.freedom).split(/\s|\(/)[0] || "";
   for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return t;
   return "";   // S3800 — a string in every path; the only consumer (`if (extra.widgetType)`) treats "" as "none"
 }
@@ -2681,18 +2681,10 @@ function buildCardActionRows(cs) {
   }
   return rows;
 }
-export function checklistGroups(result, opts = {}) {
-  const cs = result.changeSet || {};
-  const pm = opts.planMeta || {};
-  const typed = result.typedPages || [];
-  const childs = result.childPages || [];
-  const pageKey = pageKeyOf(opts);
-  const isMain = pageKey === "main";
-  rootAssignPageKeys(result, isMain);
-  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
-  const groups = [];
-  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
-  G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
+// The list-page group emission, extracted so checklistGroups stays under Sonar's cognitive-complexity ceiling.
+// Pushes the list-page groups into `groups` (via `G` or directly) and returns the confirm-worklist rows that
+// must ride on the FORM page's key when no gated `list` key is published.
+function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
   const section = result.section || null;
   // The List page group belongs to the LIST page's key, not the form page's: its rows are the list page's own
   // deliverables, so `--verify` gates them under their own page key. Only the main
@@ -2739,6 +2731,22 @@ export function checklistGroups(result, opts = {}) {
     const pages = groups.find((g) => g.title === "Pages");
     if (pages) pages.rows = pages.rows.filter((r) => !r.label.startsWith("List page → "));
   }
+  return listConfirmOnMain;
+}
+
+export function checklistGroups(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const pm = opts.planMeta || {};
+  const typed = result.typedPages || [];
+  const childs = result.childPages || [];
+  const pageKey = pageKeyOf(opts);
+  const isMain = pageKey === "main";
+  rootAssignPageKeys(result, isMain);
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+  const groups = [];
+  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
+  G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
+  const listConfirmOnMain = emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -3547,7 +3555,7 @@ const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan �
 const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 
 // ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
-const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 const tokenIn = (src, name) => new RegExp(String.raw`(?<![\w$])${reEsc(name)}(?![\w$])`).test(src);
 // Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
 // Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
@@ -3644,6 +3652,11 @@ export function resolveLayoutVk(vk, ctx) {
     if (!side) return ["⚠ verify", "no side-profile container (`Side*` / `*Profile*`) on the built page", "unverified"];
     return judge(side, `in \`${esc(side.name)}\``);
   }
+  return resolveLayoutTab(vk, ctx, judge);
+}
+// The tab branch of resolveLayoutVk, extracted so the parent stays under Sonar's cognitive-complexity ceiling.
+// `judge` is the parent's closure (it reads vk.fields/lists/widgets), passed in unchanged.
+function resolveLayoutTab(vk, ctx, judge) {
   if (!captionWords(vk.caption).length) return ["⚠ verify", "this tab row carries no caption to match a built tab by — a plan gap, not a build gap", "unverified"];
   const tabs = ctx.containers.filter((c) => /Tab/.test(c.type) || /Tab/.test(c.name));
   const size = (c) => c.fields.length + c.lists.length + c.widgets.length;
@@ -3941,6 +3954,20 @@ function rowKindOf(r, outcome) {
   if (outcome === "skip") return "confirm";
   return r.vk ? "machine" : "confirm";
 }
+const verifyRowOwner = (o) => (o === "verifier" ? "verifier" : "builder");
+// One verify row: resolve it, tally it, and return the JSON row + the table line — extracted so renderVerify's
+// double loop stays under Sonar's cognitive-complexity ceiling.
+function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
+  const key = r.pageKey || g.pageKey || "main";
+  const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
+  const idPart = r.id ? { id: r.id } : {};
+  // The open-row record carries the SAME cells the reader sees, plus the row number and the evidence id — so a
+  // caller repairing from the JSON and a human reading the table look at one text, not a paraphrase.
+  tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, owner: verifyRowOwner(owner), ...idPart }, owner);
+  const row = { n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome,
+    kind: rowKindOf(r, outcome), vkType: r.vk?.type || null, owner: verifyRowOwner(owner), ...idPart };
+  return { row, tableLine: `| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |` };
+}
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -3958,22 +3985,9 @@ export function renderVerify(result, opts = {}, built = {}) {
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
-      const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
-      // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
-      // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
-      // one text, not a paraphrase of it.
-      const rowNo = ++n;
-      // `owner` rides along on the open row too: a caller repairing from the JSON needs to know which rows are
-      // its own without re-deriving the classification the engine already made.
-      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome,
-        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
-      // `kind` tells the four row kinds apart where `outcome` alone cannot: an approved boundary and a
-      // confirm-on-stand row both resolve `skip`, and only one of them is manual work.
-      const kind = rowKindOf(r, outcome);
-      rows.push({ n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome, kind,
-        vkType: r.vk?.type || null, owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) });
-      L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
+      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
+      rows.push(row);
+      L.push(tableLine);
     }
   }
   const { missing, unverified, builderOpen, pages } = tally;

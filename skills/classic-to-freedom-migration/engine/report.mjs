@@ -44,8 +44,8 @@ const labelKey = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " 
 // line; both are read verbatim. The FALLBACK is honest, not clever: the sentence(s) of the row's own notes block
 // that talk about a decision, trimmed — and when there is nothing to find, the report says the agent did not
 // state the question, which is itself the finding.
-export const DECISION_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Decision needed \(row (\d+)\)\s*:?\**\s*(.+)$/i;
-export const CHECK_MARKER = /^\s*(?:[-*>]\s*)?\**\s*Check on stand \(row (\d+)\)\s*:?\**\s*(.+)$/i;
+export const DECISION_MARKER = /^[\s*>-]*Decision needed \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
+export const CHECK_MARKER = /^[\s*>-]*Check on stand \(row (\d+)\)[\s:*]*([^\s:*].*)$/i;
 function markers(notes, re) {
   const out = new Map();
   for (const line of String(notes || "").split(/\r?\n/)) {
@@ -69,7 +69,7 @@ function rowNotesBlock(notes, n) {
 }
 // Markdown emphasis and list bullets stripped: the fallback is quoted into a table cell, where `**` fragments
 // and `- ` prefixes read as noise. Code spans are kept (they name the members the decision is about).
-const plainText = (s) => String(s || "").replace(/\*+|__/g, "").replace(/^\s*[-*>]\s+/gm, "").replace(/\s+/g, " ").trim();
+const plainText = (s) => String(s || "").replaceAll("*", "").replaceAll("__", "").replace(/^\s*[-*>]+\s+/gm, "").replace(/\s+/g, " ").trim();
 function decisionFallback(notes, n) {
   const block = rowNotesBlock(notes, n);
   const sentences = plainText(block).split(/(?<=[.!?])\s+/);
@@ -82,7 +82,7 @@ function readDecisions(migrationDir) {
   const out = new Map();
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)\s*[—–:.-]?\s*(.+)$/gm)) out.set(`D${m[1]}`, m[2].trim());
+    for (const m of text.matchAll(/^#{1,4}\s+D(\d+)[\s—–:.-]*([^\s—–:.-].*)$/gm)) out.set(`D${m[1]}`, m[2].trim());
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
@@ -250,7 +250,7 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
   return L;
 }
 
-const enc = (f) => encodeURI(String(f || "")).replace(/\(/g, "%28").replace(/\)/g, "%29");
+const enc = (f) => encodeURI(String(f || "")).replaceAll("(", "%28").replaceAll(")", "%29");
 const where = (it) => `[${cell(it.task.group || it.task.id)}](${enc(it.task.file)}), row ${it.n}`;
 
 // A LATER round that recorded the same row `built` and has not closed yet: the question may already be answered
@@ -395,6 +395,15 @@ function tasksSection(tasks, perTask, pageName, secNo) {
 }
 
 const SETTLED_STATES = new Set(["machine", "judge", "na", "decided", "extra"]);
+// One open row's "What closes it" cell — extracted so detailsSection stays under Sonar's cognitive-complexity ceiling.
+function openRowHow(r, t, checks) {
+  if (r.state === "not-built") return "decision needed — see section 1";
+  if (r.state === "boundary") return "confirm the boundary — see section 2";
+  if (r.state === "open" && (!r.outcome || r.outcome === "—")) return `— no outcome recorded yet (task ${statusMark(t.status)})`;
+  if (r.state === "open") return r.v ? `${r.v.status} — ${cell(brief(r.v.evidence, 140))}` : "⚠ recorded by the agent but not in this run's plan-vs-built table";
+  const c = checks.get(r.n);
+  return c ? `☐ confirm manually — ${cell(c)}` : `☐ confirm manually — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
+}
 function detailsSection(tasks, perTask, pageName, secNo) {
   const needs = tasks.filter((t) => (perTask.get(t.id) || []).some((r) => !SETTLED_STATES.has(r.state)));
   const L = [num(secNo, `Task details — what is still open per task (${needs.length})`), ""];
@@ -408,18 +417,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
     const checks = markers(t.notes, CHECK_MARKER);
     L.push(`**${tasks.indexOf(t) + 1}. [${cell(t.group || t.id)}](${enc(t.file)})** — ${pageName(t.pageKey)} · ${statusMark(t.status)}`, "",
       "| # | Plan item | Build agent recorded | What closes it |", "| --- | --- | --- | --- |");
-    for (const r of rows) {
-      let how;
-      if (r.state === "not-built") how = "decision needed — see section 1";
-      else if (r.state === "boundary") how = "confirm the boundary — see section 2";
-      else if (r.state === "open" && (!r.outcome || r.outcome === "—")) how = `— no outcome recorded yet (task ${statusMark(t.status)})`;
-      else if (r.state === "open") how = r.v ? `${r.v.status} — ${cell(brief(r.v.evidence, 140))}` : "⚠ recorded by the agent but not in this run's plan-vs-built table";
-      else {
-        const c = checks.get(r.n);
-        how = c ? `☐ confirm manually — ${cell(c)}` : `☐ confirm manually — no \`Check on stand\` line; the check is in the task's notes (row ${r.n})`;
-      }
-      L.push(`| ${r.n} | ${cell(r.label)} | ${cell(r.outcome)} | ${how} |`);
-    }
+    for (const r of rows) L.push(`| ${r.n} | ${cell(r.label)} | ${cell(r.outcome)} | ${openRowHow(r, t, checks)} |`);
     L.push("");
   }
   return L;
@@ -453,8 +451,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
   const complete = reasons.length === 0;
+  const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const verdict = complete
-    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : ""}`
+    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`
     : `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}`;
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
