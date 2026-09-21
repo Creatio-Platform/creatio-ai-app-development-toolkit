@@ -58,17 +58,29 @@ CONFIG_FILES = (".gitattributes", ".sonarcloud.properties")
 # Markdown under these roots ships as reference material, so every line counts.
 DOC_ROOTS = ("skills", "runbooks", "context", "engine-tests")
 
+# The golden runners state their checks as title strings rather than comments,
+# and a check title carries history just as a comment does, so every line of
+# these files is scanned instead of only its comments.
+RUNNER_DIR = "engine-tests/classic-to-freedom"
+
 # Roots never scanned: build output, vendored code, version control.
 SKIPPED_DIR_PARTS = frozenset({".git", "node_modules", "__pycache__", ".venv", "vendor"})
 
-# Paths whose subject is the history itself. Every entry is asserted to exist.
+# Paths whose subject is the history itself, plus the frozen parity baselines and
+# the Classic fixtures, whose bytes are the comparison and so cannot be edited.
+# Every entry is asserted to exist.
 EXEMPT_PATHS = (
     "RELEASE-NOTES.md",
     "docs/guidance-item-contract-decision.md",
     "docs/telemetry-transport-decision.md",
     ".ai/specs",
     "tests/test_comment_hygiene.py",
+    "engine-tests/classic-to-freedom/baseline",
 )
+
+# Under this root only the Markdown is scanned: the rest is Classic source
+# captured from a stand, which the engine parses byte for byte.
+FIXTURE_ROOT = "engine-tests/classic-to-freedom/fixtures"
 
 
 def is_exempt(rel_path):
@@ -141,12 +153,16 @@ def scanned_files():
             continue
         if is_exempt(relative):
             continue
-        if path.name in CONFIG_FILES:
+        if path.suffix == ".md" and relative.split("/")[0] in DOC_ROOTS:
+            yield path, relative, None
+        elif relative.startswith(FIXTURE_ROOT + "/"):
+            continue
+        elif path.name in CONFIG_FILES:
             yield path, relative, "#"
+        elif path.parent.relative_to(ROOT).as_posix() == RUNNER_DIR and path.suffix == ".mjs":
+            yield path, relative, None
         elif path.suffix in CODE_SUFFIXES:
             yield path, relative, CODE_SUFFIXES[path.suffix]
-        elif path.suffix == ".md" and relative.split("/")[0] in DOC_ROOTS:
-            yield path, relative, None
 
 
 def scan_tree():
