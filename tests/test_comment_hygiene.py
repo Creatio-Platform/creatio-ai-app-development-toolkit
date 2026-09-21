@@ -21,11 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKERS = (
     ("ticket_key", re.compile(r"\bENG-\d+\b", re.IGNORECASE)),
     ("pr_number", re.compile(r"\bPR\s?#\d+|\(#\d{2,}\)")),
+    # A bare "round N" is the engine's own repair round, a domain concept these
+    # files are entitled to name, so only a round qualified as a REVIEW counts.
     (
         "review_round",
         re.compile(
             r"\b\d+(?:st|nd|rd|th)[\s-]?review\b|\bre-?review\b|\breviewer\b"
-            r"|\bround\s+\d+\b",
+            r"|\breview\s+round\s+\d+\b|\bround\s+\d+\s+review\b",
             re.IGNORECASE,
         ),
     ),
@@ -64,9 +66,25 @@ CONFIG_FILES = (".gitattributes", ".sonarcloud.properties")
 DOC_ROOTS = ("skills", "runbooks", "context", "engine-tests")
 
 # The golden runners state their checks as title strings rather than comments,
-# and a check title carries history just as a comment does, so every line of
-# these files is scanned instead of only its comments.
+# and a check title carries history just as a comment does, so these files are
+# scanned for their check titles as well as their comments. Other code lines are
+# left alone: a runner asserts on product output, and a regex literal quoting
+# that output is the assertion itself, not prose about a review.
 RUNNER_DIR = "engine-tests/classic-to-freedom"
+RUNNER = "runner"
+
+# The title a ``check(...)`` call states, on the line the call opens.
+CHECK_TITLE = re.compile(r"""^\s*check\(\s*(?P<quote>["'`])(?P<title>.*)$""")
+
+
+def check_titles(text):
+    """(line number, title) for every check whose call opens on that line."""
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = CHECK_TITLE.match(line)
+        if match:
+            found.append((number, match.group("title")))
+    return found
 
 # Roots never scanned: build output, vendored code, version control.
 SKIPPED_DIR_PARTS = frozenset({".git", "node_modules", "__pycache__", ".venv", "vendor"})
@@ -165,7 +183,7 @@ def scanned_files():
         elif path.name in CONFIG_FILES:
             yield path, relative, "#"
         elif path.parent.relative_to(ROOT).as_posix() == RUNNER_DIR and path.suffix == ".mjs":
-            yield path, relative, None
+            yield path, relative, RUNNER
         elif path.suffix in CODE_SUFFIXES:
             yield path, relative, CODE_SUFFIXES[path.suffix]
 
@@ -180,6 +198,8 @@ def scan_tree():
             continue
         if token is None:
             lines = list(enumerate(text.splitlines(), start=1))
+        elif token == RUNNER:
+            lines = comment_lines(text, "//") + check_titles(text)
         else:
             lines = comment_lines(text, token)
         for number, line in lines:
