@@ -2755,6 +2755,13 @@ const ROUTE_FLAG = "--route";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
+// QUOTING IS PER SHELL, and the printed `--start` command is meant to be pasted into the shell the reader is
+// actually running. `cmd.exe` does not quote with `'` at all and POSIX `sh` keeps `$`, a backtick and `\` alive
+// inside `"`, so one encoder cannot serve both. BOTH branches quote UNCONDITIONALLY: a value with no space can
+// still carry `;`, `&`, `|` or `$`, and a wrapper that only fires on whitespace hands those straight to the shell.
+const shellArg = process.platform === "win32"
+  ? (s) => `"${String(s).replaceAll('"', '""')}"`
+  : (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
 // `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
 // `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
 // belong beside the run.
@@ -2888,6 +2895,10 @@ let partialGateFailure = null;
 // variable, because it is neither a plan gap, nor a short build, nor a broken ledger: it is a decision somebody
 // has to make, and an orchestrator that read a passing exit code here would poll a halted run forever.
 let startableGateFailure = null;
+// ⛔ `--next` REFUSED TO ANSWER — a plan with gaps, or a frozen cut that no longer resolves. Its own variable
+// rather than a reuse of the one above: that one carries the halted-run ANSWER its stderr banner renders, and a
+// refusal has no answer to render. It only has to make the exit code agree with the banner already on stdout.
+let nextRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -2903,6 +2914,14 @@ function startRefusalText(set, startId, dir) {
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
       + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
       + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
+  }
+  // A DECISION THE ENGINE CANNOT MAKE. Refused in the same words the query withholds it in, so the two surfaces
+  // send the reader to the same place: the file's own `## Notes`.
+  if (set.blockedByStatus) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` has status \`${set.blockedByStatus}\`, which is a`
+      + " decision rather than a schedule: it is neither `todo` nor in flight, and no re-dispatch resolves it."
+      + " Read its `## Notes`, fix what they name, set it back to `todo`, then start it.\n";
   }
   // THE QUEUE ORDER AND THE ONE-WRITER RULE, refused at the moment a token would be issued. Both are field
   // comparisons the engine can make, so neither depends on the caller remembering them.
@@ -3051,14 +3070,18 @@ function nextAnswerLines(a, dir, cmdFor) {
   }
   if (a.verdict === NEXT_FINISHED) {
     return [`migrate.mjs: NOTHING STARTABLE in ${dir} — all ${a.total} task(s) have settled. The build is finished:`
-      + ` close the run on the migration result report (\`--verify --tasks ${dir}\`), which is the only sanctioned`
+      + ` close the run on the migration result report (\`--verify --tasks ${shellArg(dir)}\`), which is the only sanctioned`
       + " close artifact — do not hand-write a status summary of your own."];
   }
   if (a.verdict === NEXT_WAITING) {
+    // HELD IS RENDERED HERE TOO. A task needing a decision does not stop needing one because something else is in
+    // flight, and leaving it out of both the list and the count made it invisible on exactly the verdict an
+    // orchestrator polls — while the printed figures failed to add up to `total`.
     return [`migrate.mjs: NOTHING STARTABLE YET in ${dir} — ${a.inFlight.length} task(s) in flight and`
-      + ` ${a.withheld.length} behind them (${a.settled} of ${a.total} settled). This is NOT a failure: let the`
-      + ` running task(s) close, re-run \`--tasks ${dir}\`, then ask again.`,
-    "IN FLIGHT:", ...a.inFlight.map((t) => `   · ${taskLine(t)}`)];
+      + ` ${a.withheld.length + a.held.length} behind them (${a.settled} of ${a.total} settled). This is NOT a`
+      + " failure: let the running task(s) close, then ask again.",
+    "IN FLIGHT:", ...a.inFlight.map((t) => `   · ${taskLine(t)}`),
+    ...(a.held.length ? ["HELD — somebody has to decide:", ...a.held.map(heldLine)] : [])];
   }
   if (a.verdict === NEXT_STUCK) {
     return [`migrate.mjs: ⛔ NOTHING STARTABLE AND NOTHING IN FLIGHT in ${dir} — ${a.held.length + a.withheld.length}`
@@ -3087,10 +3110,13 @@ function nextAnswerLines(a, dir, cmdFor) {
 function runNextMode(result, dir, opts, cmdFor) {
   dispatchGateFailure = null;
   startableGateFailure = null;
+  // A REFUSAL IS NOT AN ANSWER, so it must not exit like one. Both early returns below print NOTHING WRITTEN and
+  // name no task; leaving the gates unset made them exit 0 — the same code a `waiting` or `finished` answer
+  // carries — while every other `--next` non-answer (`stuck`, `ledger`) exits 2.
   const gapRefusal = planGapRefusal(result);
-  if (gapRefusal) return gapRefusal;
+  if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
   const set = syncTaskDir(dir, result, opts);
-  if (set.refused) return splitRefusalText(set);
+  if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set); }
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
@@ -3400,18 +3426,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // by the slicing branch, which would print a wrote-N-tasks note instead of the answer that was asked for.
   else if (tasksMode && nextMode) {
     // NOTHING IN THE ANSWER IS PARSED POSITIONALLY (the workaround this replaces read `index.md` by column, and
-    // the report was later reshaped under it). Each named task carries the command that starts it, quoted so a
-    // path with a space in it is still one argument — which is the normal case on Windows, where the node
+    // the report was later reshaped under it). Each named task carries the command that starts it, with every
+    // element encoded for the shell — a path with a space in it is the normal case on Windows, where the node
     // executable itself lives under `Program Files`.
-    const shellArg = (s) => (/[\s"]/.test(String(s)) ? `"${String(s).replaceAll('"', '\\"')}"` : String(s));
     const manifestArg = fromFile ? arg : "-";
-    const cmdFor = (id) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
-      TASKS_FLAG, shellArg(tasksDir), START_FLAG, id].join(" ");
+    // EVERY element goes through the encoder, the id included: it is front matter the engine did not necessarily
+    // mint, and an unencoded one would be shell text rather than an argument.
+    let printedCommand = false;
+    const cmdFor = (id) => {
+      printedCommand = true;
+      return [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
+        TASKS_FLAG, shellArg(tasksDir), START_FLAG, shellArg(id)].join(" ");
+    };
     try { output = runNextMode(result, tasksDir, checklistOpts(manifest), cmdFor); }
     catch (e) { fail(`cannot read the task folder '${tasksDir}': ${e.message}`); }
     // …and when the manifest came in on stdin there is no path to print, so the command carries `-` and would
     // BLOCK on a terminal if it were pasted as it stands. Said here rather than left for the reader to discover.
-    if (!fromFile && output.includes(START_FLAG)) {
+    // Gated on whether a command was actually PRINTED, not on the rendered text: the ledger verdict's own prose
+    // names `--start` while dispatching nothing, and a note about "each command above" under it describes none.
+    if (!fromFile && printedCommand) {
       output += `migrate.mjs: ℹ this run read the manifest from stdin, so the \`-\` in each command above means`
         + " \"pipe the same manifest in again\" — pasted bare it would wait on a terminal. Pass the manifest as a"
         + " path to get commands that run exactly as printed.\n";
@@ -3524,7 +3557,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
-    || !!startableGateFailure;
+    || !!startableGateFailure || nextRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";

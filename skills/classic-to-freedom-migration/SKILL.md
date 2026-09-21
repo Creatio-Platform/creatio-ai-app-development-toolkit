@@ -457,7 +457,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
    **Its five answers, and what each one asks of you.** *N startable* → dispatch them (they are a set: no two
    write the same artifact, so they may run at once). *Nothing startable yet, work in flight* → wait for the
-   running task(s), re-run `--tasks`, ask again; this exits **0** and is not a failure. *Finished* → every task
+   running task(s), then ask again; this exits **0** and is not a failure (the ask refreshes the folder
+   itself, so a separate `--tasks` run adds nothing). *Finished* → every task
    has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND nothing is running: a task is
    `blocked` or carries a status nobody recognises, and no re-run changes that — read its `## Notes` and decide.
    *Dispatch ledger broken* (exit **2**) → repair the ledger first; `--start` refuses every id until you do.

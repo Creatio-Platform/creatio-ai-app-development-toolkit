@@ -901,6 +901,33 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
       && fifth.tasks.some((t) => t.origin === "orchestrator" && t.file === ORCH_FILE)
       && readIndex(dir).includes(`[${ORCH_FILE}](${ORCH_FILE})`),
     () => ({ unchanged: fs.readFileSync(orchPath, "utf8") === ORCH_BODY, index: readIndex(dir) }));
+  // An adopted `id` is free text from outside the engine, and it is interpolated into the `--start` commands the
+  // CLI prints for a human to paste into a shell. A file whose `id` is not a task id is refused by name, exactly
+  // as a colliding one is — and it never reaches the queue, so nothing carries that text onward.
+  {
+    const badPath = path.join(dir, "orch-bad-id.md");
+    const BAD_ID = "x; rm -rf $HOME";
+    fs.writeFileSync(badPath, `---
+id: ${BAD_ID}
+status: todo
+origin: orchestrator
+pageKey: main
+group: Bad id
+order: 4
+---
+
+## Notes
+
+n/a
+`);
+    const withBad = syncTaskDir(dir, RUN, OPTS);
+    check("syncTaskDir: an adopted file whose `id` is not a task id is REFUSED by name and never enters the queue — the id is interpolated into a command a human pastes into a shell, so its shape is checked where the file is adopted rather than trusted downstream",
+      () => (withBad.blocked || []).some((b) => b.file === "orch-bad-id.md" && /not a task id/.test(b.reason))
+        && !withBad.tasks.some((t) => t.id === BAD_ID),
+      () => ({ blocked: (withBad.blocked || []).map((b) => b.file), ids: withBad.tasks.map((t) => t.id) }));
+    fs.rmSync(badPath, { force: true });
+    syncTaskDir(dir, RUN, OPTS);
+  }
   check("syncTaskDir: an ENGINE task file IS rewritten from the plan — an edit to its deliverable table is replaced, because the rows are the plan's and the plan may have changed",
     () => {
       const ep = path.join(dir, taskAt(fifth, "main", SCAFFOLD_LABEL).file);
@@ -2168,7 +2195,7 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
   const base = tmp("cli");
   const dir = path.join(base, "build-tasks");   // deliberately NOT pre-created: the mode must create it
   const run = cliTasks(["--tasks", dir], MANIFEST);
-  // ENG-99753 — the note no longer tells the caller to pick the next task off the index's `Step` column. That
+  // The note no longer tells the caller to pick the next task off the index's `Step` column. That
   // instruction and the `--next` mode are two answers to one question printed on one stream, and the index is a
   // DERIVED report whose shape has already moved under a caller parsing it.
   check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count, the index to present and the mode that answers WHICH task to start",
@@ -3774,7 +3801,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
 
 
 /* ================================================================================================
-   ENG-99753 — "what is startable NOW", answered by the engine instead of by each orchestrator.
+   "What is startable NOW", answered by the engine instead of by each orchestrator.
    The claim under test is an EQUIVALENCE, not a second scheduler: the same predicate `--start`
    refuses through is the one the query reports, so the two cannot drift. Every check below pairs
    its claim with an anti-vacuity check, because "no two members share an artifact" and "nothing is
@@ -3913,6 +3940,21 @@ console.log("\n===== ENG-99753: the startable set — one predicate, two callers
         if (w.cause === HOLD_OVERLAP) return (res.blockedByOverlap || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
         return !!res.unread;
       }), () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
+    // HELD DIRECTION — the class the equivalence used to skip. A task the query holds for its STATUS must be
+    // refused by `--start` too: a gate that stamped a clock on it would send a sub-agent at work somebody has
+    // already decided to stop, while the query was still printing it as a decision nobody has made.
+    check("T2 (R4, refuse): a task the query HOLDS for its status is refused by `--start` on the same folder — the held class is part of the equivalence, not an exception to it",
+      () => {
+        const copy = tmp("next-held");
+        fs.cpSync(src, copy, { recursive: true });
+        const target = a.startable[0];
+        editFrontMatter(copy, target.id, "status", "blocked");
+        const heldAnswer = answerOf(copy);
+        const res = startTask(copy, target.id, RUN, OPTS, null, AT(40));
+        fs.rmSync(copy, { recursive: true, force: true });
+        return heldAnswer.held.some((h) => h.task.id === target.id && h.cause === HOLD_STATUS)
+          && !res.started && res.blockedByStatus === "blocked";
+      }, () => ({ startable: idsOf(a.startable) }));
     fs.rmSync(src, { recursive: true, force: true });
   }
 
@@ -3940,7 +3982,7 @@ console.log("\n===== ENG-99753: the startable set — one predicate, two callers
   }
 
   // ---- T4 (R6) — a clock is NOT work in flight --------------------------------------------------
-  // The defect this pins was observed, not theorised: a task recorded `blocked` KEEPS its clock (only a settled
+  // The defect this pins: a task recorded `blocked` KEEPS its clock (only a settled
   // task's clock is closed), so a mode that reads the raw clock reports a halted run as `waiting` — at a passing
   // exit code, forever. That is precisely the silent stall this feature exists to remove.
   {
@@ -4010,10 +4052,11 @@ console.log("\n===== ENG-99753: migrate.mjs --tasks <dir> --next (CLI) =====");
   // it to one build task plus one review. That is the right shape for this block: the build is startable, the
   // review waits on it, so both directions of the answer exist at the smallest size the engine produces.
   const base = tmp("cli-next");
-  // A directory with a SPACE in its name, on purpose: the printed command is the deliverable, and a command that
-  // needs the reader to add quotes is one the reader has to parse rather than run.
-  const dir = path.join(base, "build tasks");
-  const manifestPath = path.join(base, "the manifest.json");
+  // A directory and a manifest whose names carry a SPACE and shell metacharacters, on purpose: the printed command
+  // is the deliverable, and a wrapper that fires only on whitespace would hand `&` or `$` straight to the shell —
+  // which is a command-injection surface, not a quoting nit, because this block then runs the string through one.
+  const dir = path.join(base, "build & tasks");
+  const manifestPath = path.join(base, "the $manifest.json");
   fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
   const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
   cliFile("--tasks", dir);
@@ -4038,7 +4081,9 @@ console.log("\n===== ENG-99753: migrate.mjs --tasks <dir> --next (CLI) =====");
   // R5 — the printed command is the deliverable: run it verbatim, through a shell, and it must start that task.
   {
     const cmd = cmdLines(fresh.stdout)[0];
-    const startedId = cmd.split("--start ")[1].trim();
+    // The id goes through the same encoder as every other element — it is front matter, not a value the engine
+    // necessarily minted — so the golden unwraps it rather than assuming it was printed bare.
+    const startedId = cmd.split("--start ")[1].trim().replace(/^["']|["']$/g, "");
     const ran = spawnSync(cmd, { shell: true, encoding: "utf8" });
     check("--next (R5): the command printed beside a task is directly RUNNABLE as printed — quoted paths and all, on a folder and a manifest whose names contain spaces — and it starts exactly that task",
       () => ran.status === 0 && new RegExp(`DISPATCH TOKEN for \`${startedId}\``).test(ran.stdout || "")
@@ -4050,6 +4095,23 @@ console.log("\n===== ENG-99753: migrate.mjs --tasks <dir> --next (CLI) =====");
       () => waiting.status === 0 && /NOTHING STARTABLE YET/.test(waiting.stdout || "") && /IN FLIGHT:/.test(waiting.stdout || ""),
       () => ({ status: waiting.status, stdout: waiting.stdout, stderr: waiting.stderr }));
 
+    // F2 — waiting is not a reason to stop naming a decision. With one task in flight and another recorded
+    // `blocked`, the held task must still be named, and the printed figures must add up to `total`.
+    {
+      const copy = tmp("cli-next-held");
+      fs.cpSync(dir, copy, { recursive: true });
+      const other = readTaskDir(copy).find((t) => t.id !== startedId && t.status === "todo");
+      editFrontMatter(copy, other.id, "status", "blocked");
+      const cliCopy = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", copy, "--next"], { encoding: "utf8" });
+      check("--next (R3): a task held for a DECISION is named on the waiting verdict too — something else being in flight does not make it stop needing one, and leaving it out is the halted task reading as normal waiting, one task smaller",
+        () => /NOTHING STARTABLE YET/.test(cliCopy.stdout || "")
+          && /HELD — somebody has to decide/.test(cliCopy.stdout || "")
+          && cliCopy.stdout.includes(other.id)
+          && / 1 task\(s\) in flight and 1 behind them /.test(cliCopy.stdout || ""),
+        () => ({ status: cliCopy.status, held: other.id, stdout: cliCopy.stdout }));
+      fs.rmSync(copy, { recursive: true, force: true });
+    }
+
     // R6 — the same folder, with that in-flight task recorded `blocked`. Its clock is still open.
     editFrontMatter(dir, startedId, "status", "blocked");
     const stuck = cliFile("--tasks", dir, "--next");
@@ -4060,6 +4122,15 @@ console.log("\n===== ENG-99753: migrate.mjs --tasks <dir> --next (CLI) =====");
     check("--next (R6): the halted answer names the blocked task as a DECISION rather than a schedule, and says why a clock alone is not work in flight",
       () => /HELD — somebody has to decide/.test(stuck.stdout || "") && /KEEPS its clock/.test(stuck.stdout || ""),
       () => stuck.stdout);
+  }
+  // F4 — a refusal prints NOTHING WRITTEN and names no task, so it must not exit like an answer. Every other
+  // `--next` non-answer exits 2; a frozen cut the plan no longer resolves used to exit 0 beside that banner.
+  {
+    fs.writeFileSync(path.join(dir, SPLIT_FILE), JSON.stringify({ planVersion: "nope", items: "not a list" }));
+    const refused = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--next"], { encoding: "utf8" });
+    check("--next (R3): a frozen split the plan no longer resolves is a REFUSAL, not an answer — it prints NOTHING WRITTEN and exits non-zero, like every other --next non-answer",
+      () => refused.status !== 0 && /NOTHING WRITTEN/.test(refused.stdout || ""),
+      () => ({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr }));
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
@@ -4095,6 +4166,15 @@ console.log("\n===== ENG-99753: migrate.mjs --tasks <dir> --next (CLI) =====");
     () => (ledger.stderr || "").includes(victim.file) && !(ledger.stdout || "").includes(victim.file)
       && /on stderr/.test(ledger.stdout || ""),
     () => ({ stdoutHasFile: (ledger.stdout || "").includes(victim.file), stderr: (ledger.stderr || "").slice(0, 400) }));
+  // F5 — the stdin note qualifies PRINTED COMMANDS, so it must follow the commands and not a substring of the
+  // prose. The ledger answer's own text names `--start` while dispatching nothing; a note about "each command
+  // above" under it describes none.
+  {
+    const ledgerStdin = cliTasks(["--tasks", dir, "--next"], MANIFEST);
+    check("--next: the stdin advisory follows the printed COMMANDS, not the word `--start` in the prose — under a verdict that dispatches nothing there are no commands for it to qualify",
+      () => !/read the manifest from stdin/.test(ledgerStdin.stdout || "") && !/STARTABLE NOW/.test(ledgerStdin.stdout || ""),
+      () => ({ status: ledgerStdin.status, stdout: (ledgerStdin.stdout || "").slice(0, 600) }));
+  }
   fs.rmSync(base, { recursive: true, force: true });
 }
 {

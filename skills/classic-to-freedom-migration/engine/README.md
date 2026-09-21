@@ -195,8 +195,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   advertised while it stands).
   ⚠ **Work in flight is a STATUS, never a raw clock.** A task recorded `blocked` KEEPS its clock — only a SETTLED
   task's clock is closed — so a mode that read `timings.json` to decide "something is running" reports a halted
-  run as `waiting`, at a passing exit code, forever. That was measured, not theorised, and it is why `stuck` is a
-  failing verdict.
+  run as `waiting`, at a passing exit code, forever. That is why `stuck` is a failing verdict.
   It REFRESHES the folder exactly as a plain `--tasks` run does — replacing that call, not adding one. A strictly
   read-only answer would be wrong at the commonest moment of all: immediately after a sub-agent closes a task,
   whose clock the refresh is what closes, so the un-refreshed folder reads as a dispatch-ledger failure. For the

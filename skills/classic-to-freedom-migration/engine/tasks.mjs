@@ -1414,6 +1414,12 @@ export function renderTaskIndex(set) {
 // cannot tell WHICH task's record it is holding, and rewriting it would destroy the `## Notes` that record work
 // already done on a stand. Such a file is reported by name and left byte for byte as it is; the task it was
 // holding gets no file this run, which is loud, rather than a silent overwrite. `blocked` collects them.
+// The shape the engine MINTS (`taskId` — a short hex digest) and therefore the only shape it will carry through.
+// An adopted file's `id` is free text from outside the engine, and it is interpolated into the `--start` commands
+// this CLI prints for a human to paste into a shell. Validating it here keeps that string a task id rather than
+// whatever the file chose to declare, independently of how any one caller quotes it.
+const TASK_ID_SHAPE = /^[A-Za-z0-9_-]{1,32}$/;
+
 export function mergeTaskSet(fresh, existing = []) {
   const { usable, blocked } = triageExisting(existing);
   const byId = new Map();
@@ -1424,7 +1430,17 @@ export function mergeTaskSet(fresh, existing = []) {
   // it is not `extra` either — so it used to fall out of the index entirely: no queue row, no `## Attention` line.
   // Worse, when its name equalled the engine task's computed file name, `syncTaskDir` wrote the engine task over
   // it and destroyed its `## Notes`. It is refused instead: named on Attention and never written to.
+  const malformedId = new Set();
   for (const e of usable) {
+    if (!TASK_ID_SHAPE.test(String(e.meta.id))) {
+      malformedId.add(e.file);
+      blocked.push({
+        file: e.file,
+        id: e.meta.id,
+        reason: `its \`id\` \`${e.meta.id}\` is not a task id (letters, digits, \`_\` and \`-\`, at most 32); rename its \`id\` or move it aside`,
+      });
+      continue;
+    }
     if (claimed.has(e.meta.id) && (e.meta.origin === TASK_ORIGIN_ORCHESTRATOR || e.meta.kind === REPAIR_KIND)) {
       blocked.push({
         file: e.file,
@@ -1433,7 +1449,7 @@ export function mergeTaskSet(fresh, existing = []) {
       });
     }
   }
-  const extra = usable.filter((e) => !claimed.has(e.meta.id));
+  const extra = usable.filter((e) => !claimed.has(e.meta.id) && !malformedId.has(e.file));
   // A file the engine does NOT re-author on a plain re-slice: one the orchestrator wrote, and one the engine wrote
   // for a REPAIR round. The repair file is engine-authored but it is not derived from the plan — its rows are what
   // one `--verify` run found open — so re-slicing has no basis to rewrite it and no business retiring it as "not
@@ -2142,6 +2158,14 @@ export function startBlocker(task, tasks, running = {}) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
+  // OPEN, BUT NOT THE ENGINE'S TO SCHEDULE. A status that is neither `todo` nor in flight and has not settled is
+  // an agent's decision (`blocked`) or a value the vocabulary does not know — and no re-dispatch resolves either.
+  // It is held HERE rather than only in the query, because a hold the query reports and the gate accepts is the
+  // one shape that makes the two disagree: the query would name a task as needing a decision while `--start`
+  // stamped a clock on it.
+  if (task.status !== S_TODO && task.status !== S_IN_PROGRESS && !SETTLED.has(task.status)) {
+    return { cause: HOLD_STATUS, tasks: [] };
+  }
   const byId = new Map(tasks.map((x) => [x.id, x]));
   // THE QUEUE ORDER IS ENFORCED, not advised — a task built before its dependency reads answers that do not exist
   // yet: the child form its related list opens, the scaffolding it saves into, the `## Notes` the next chunk of
@@ -2177,6 +2201,11 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
   if (blocker?.cause === HOLD_UNREAD) {
     return { ...merged, started: null, unread: blocker.file };
+  }
+  // A DECISION, NOT A SCHEDULE — refused in the same shape the query withholds it in, so "which task may I
+  // start?" and "may I start this task?" cannot answer differently for the same file.
+  if (blocker?.cause === HOLD_STATUS) {
+    return { ...merged, started: null, blockedByStatus: t.status };
   }
   // ⛔ THE RUN STOPS AT THE NEXT DISPATCH, not at the end. A folder holding a closure nobody was dispatched for
   // gets no new clock: the books are repaired BEFORE another sub-agent is sent out on top of them, so the cost of
@@ -2373,7 +2402,7 @@ export function startableTasks(set, dir) {
   // ⚠ WORK IN FLIGHT IS A STATUS, NEVER A RAW CLOCK. A task recorded `blocked` KEEPS its clock — only a SETTLED
   // task's clock is closed — so a mode that read `timings.json` to decide "something is running" reported a
   // halted run as `waiting`, at a passing exit code, forever. That is the silent stall this whole query exists to
-  // remove, and it was observed rather than theorised.
+  // remove.
   const inFlight = tasks.filter((t) => t.status === S_IN_PROGRESS);
   const candidates = tasks.filter((t) => t.status === S_TODO).sort((a, b) => (a.order || 0) - (b.order || 0));
   // OPEN, BUT NOT THE ENGINE'S TO SCHEDULE: `blocked` is an agent's decision and an unrecognised status is a stop.
