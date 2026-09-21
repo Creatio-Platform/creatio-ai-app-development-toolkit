@@ -703,12 +703,12 @@ check("drift: an UNCHANGED `done` task is NOT flagged — the signal is the chan
   () => taskAt(mergeTaskSet(SET, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]), "main", DRIFT_GROUP).drifted === false,
   () => taskAt(mergeTaskSet(SET, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]), "main", DRIFT_GROUP));
 check("drift: EVERY status the caller recorded is falsified by a row change, not only `done` — `in-progress`, `blocked` and `n/a` were all recorded against the older deliverables too, and the Attention line says which one it was",
-  () => ["in-progress", "blocked", "n/a"].every((s) => {
+  () => ["in-progress", "blocked"].every((s) => {
     const t = driftedOn(s);
     return t.drifted === true
       && renderTaskIndex(mergeTaskSet(SET3, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: s })]))
         .includes(`status \`${s}\` was recorded against an OLDER set of deliverables`);
-  }), () => ["in-progress", "blocked", "n/a"].map((s) => ({ s, drifted: driftedOn(s).drifted })));
+  }), () => ["in-progress", "blocked"].map((s) => ({ s, drifted: driftedOn(s).drifted })));
 check("drift: a task back at `todo` is NOT flagged and ADOPTS the current rows — reopening a task is what clears the held digest, so a re-opened task does not carry a warning about work nobody claims any more",
   () => {
     const t = driftedOn("todo");
@@ -1554,7 +1554,7 @@ check("repair: a round that was ATTEMPTED and came back opens the next one — `
     const asFile = (status) => ({ file: first.file, notes: "", malformed: null,
       meta: { id: first.id, status, origin: "engine", pageKey: "main", kind: "repair",
         cause: first.cause, repairRound: "1" } });
-    const opened = ["done", "n/a"].every((st) =>
+    const opened = ["done", "not-applicable"].every((st) =>
       buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]).tasks.some((t) => t.cause === "missing:handlers"));
     const held = ["todo", "in-progress", "blocked"].every((st) => {
       const r = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]);
@@ -1802,7 +1802,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, `declared: ${s}`));
     };
     // Fixed tokens so the assertions can name them; a real dispatch mints its own.
-    const CLOSED_FOR_TEST = new Set(["done", "n/a"]);
+    const CLOSED_FOR_TEST = new Set(["done", "not-applicable"]);
     const TOK_A = "tok-alpha", TOK_BUILDER = "tok-builder", TOK_REVIEW = "tok-review", TOK_OPEN = "tok-open";
     const setNonce = (d, id, n) => {
       const f = fileOf(d, id);
@@ -1833,7 +1833,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     {
       const d = gateDir();
       const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
-      setStatus(d, id, "n/a");
+      setStatus(d, id, "not-applicable");
       const bare = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
       check("gate: `n/a` with no dispatch record and NOTHING under `## Notes` FAILS — otherwise flipping every remaining task to `n/a` writes off a whole run in one edit, which is cheaper than any other way past the gate",
         () => bare.dispatch.failing.some((t) => t.id === id) && bare.dispatch.naNoReason.some((t) => t.id === id),
@@ -1844,7 +1844,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => set.dispatch.failing.length === 0 && set.dispatch.naUndispatched.some((t) => t.id === id),
         () => ({ failing: set.dispatch.failing.map((t) => t.id), na: set.dispatch.naUndispatched.map((t) => t.id) }));
       check("gate: it is still NAMED on Attention — the one closure that needs no sub-agent is reported rather than silent, so the reason gets read",
-        () => /recorded `n\/a` with no dispatch record/.test(readIndex(d)),
+        () => /recorded `not-applicable` with no dispatch record/.test(readIndex(d)),
         () => readIndex(d).split("## Attention")[1]?.slice(0, 300));
     }
 
@@ -2129,7 +2129,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
           const tasks = readTaskDir(dir);
           const next = tasks.find((t) => t.status === "todo" && t.dependsOn.every((d) => {
             const dep = tasks.find((x) => x.id === d);
-            return !dep || dep.status === "done" || dep.status === "n/a";
+            return !dep || dep.status === "done" || dep.status === "not-applicable";
           }));
           if (!next) return;
           const started = cli(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -2642,9 +2642,9 @@ check("ENG-99748: `not built` as PROSE under `## Notes` computes nothing — the
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done"));
 
 check("ENG-99748: `blocked` and `n/a` are still never computed over on a hand-written task — the two words an agent chooses deliberately keep meaning what they say",
-  () => ["blocked", "n/a"].every((w) =>
+  () => ["blocked"].every((w) =>
     handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status === w),
-  () => ["blocked", "n/a"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
+  () => ["blocked"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
 
 check("ENG-99748: a task still OPEN is left alone — a `not-built` recorded while its sub-agent is still filling cells is not yet a verdict, and routing a round at it would send a second agent at a row somebody is holding",
   () => {
@@ -2689,7 +2689,7 @@ check("declared: the engine WRITES the field into every task file it renders, em
   () => /^declared: *$/m.test(renderTaskFile(SAMPLE, SET)) && /^status: todo$/m.test(renderTaskFile(SAMPLE, SET)),
   () => renderTaskFile(SAMPLE, SET).split("\n").slice(0, 6).join("\n"));
 
-for (const word of ["blocked", "n/a"]) {
+for (const word of ["blocked"]) {
   check(`declared: \`${word}\` is an INPUT to the derivation, not an exception inside it - it stands over cells that would otherwise compute \`done\``,
     () => withDeclared((x) => allBuilt(x), word).status === word,
     () => withDeclared((x) => allBuilt(x), word).status);
@@ -3165,7 +3165,7 @@ check("blank: a task nobody has started is untouched — every `todo` task is al
   () => typedOverBlank("todo").status);
 
 check("blank: a DECLARED halt stands — `declared:` is read before the cells, so a declaration is never computed over",
-  () => ["blocked", "n/a"].every((w) => {
+  () => ["blocked"].every((w) => {
     const d = tmp("blank-decl-" + w.replace("/", ""));
     const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
     editFrontMatter(d, tgt.id, "declared", w);
@@ -3173,8 +3173,8 @@ check("blank: a DECLARED halt stands — `declared:` is read before the cells, s
   }), "a declaration in its own field must stand over an empty column");
 
 check("blank: a declarable word TYPED into `status:` is still read as a declaration — the engine only writes `blocked`/`n/a` there alongside a matching `declared:`, so one that does not match its stamp came from an agent and must keep halting",
-  () => ["blocked", "n/a"].every((w) => typedOverBlank(w).status === w),
-  () => ["blocked", "n/a"].map((w) => `${w}->${typedOverBlank(w).status}`));
+  () => ["blocked"].every((w) => typedOverBlank(w).status === w),
+  () => ["blocked"].map((w) => `${w}->${typedOverBlank(w).status}`));
 
 
 console.log("\n===== one reader: every path derives the same word for one folder =====");
@@ -3268,7 +3268,7 @@ const haltedRepair = (name, word) => {
   return { d, rep, pass1, pass2, file: fs.readFileSync(taskFilePath(d, rep.id), "utf8") };
 };
 
-for (const word of ["blocked", "n/a"]) {
+for (const word of ["blocked"]) {
   check(`halt: \`status: ${word}\` typed on an ADOPTED file survives the pass that honours it — the promotion is written into \`declared:\`, so the re-stamp that removes the evidence cannot drop the halt`,
     () => { const r = haltedRepair("halt-" + word.replace("/", ""), word); return r.pass1 === word && r.pass2 === word; },
     () => { const r = haltedRepair("halt-d-" + word.replace("/", ""), word); return { pass1: r.pass1, pass2: r.pass2 }; });
@@ -3465,7 +3465,7 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       const tasks = readTaskDir(dir);
       const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
         const dep = tasks.find((x) => x.id === d);
-        return !dep || dep.status === "done" || dep.status === "n/a";
+        return !dep || dep.status === "done" || dep.status === "not-applicable";
       }));
       if (!next) break;
       const started = cliT(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -3591,12 +3591,12 @@ check("MID-FLIGHT: once the LAST blank cell is filled the same `not-built` compu
 check("`n-a` WITHOUT a reason counts as `not-built` — a row closed without being built and without a reason is a self-certified skip, and it must not compute `done` the way the task-level `n/a` must carry a reason to skip its dispatch record",
   () => {
     let t = renderTaskFile(SAMPLE, SET);
-    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "not-applicable");
     const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0];
     return m.status === "partial" && notBuiltRows([m]).length === SAMPLE.rows.length;
   }, () => {
     let t = renderTaskFile(SAMPLE, SET);
-    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "not-applicable");
     return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
   });
 
@@ -3609,7 +3609,7 @@ check("`n-a` WITH a reason closes its row, but on a row the plan did not mark N/
     const idx = renderTaskIndex(set);
     return m.status === "done" && !SAMPLE.rows[0].na
       && assertedBoundaryRows([m]).length === 1
-      && /recorded `n-a` on a row the plan did NOT mark N\/A/.test(idx);
+      && /recorded `not-applicable` on a row the plan did NOT mark/.test(idx);
   }, () => {
     let t = setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, "n-a — no Freedom analog, confirmed with the user");
     return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
@@ -4325,7 +4325,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const tasks = readTaskDir(dir);
       const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
         const dep = tasks.find((x) => x.id === d);
-        return !dep || dep.status === "done" || dep.status === "n/a";
+        return !dep || dep.status === "done" || dep.status === "not-applicable";
       }));
       if (!next) break;
       const started = cliR(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -4471,7 +4471,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
   check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
-    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
+    () => doneRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
   // ENG-99126 (3rd review RC-9): the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
   // its rows built, a green machine table, a gate-clean run ⇒ complete:true / ✅ COMPLETE with no gate/dispatch/n-a
@@ -4482,7 +4482,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   ] };
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
   check("ENG-99126 renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
-    () => passRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
+    () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
   // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
@@ -4507,7 +4507,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   // ENG-99126 (3rd review RC-7): a task closed `n/a` with a plan row left unaccounted (no outcomeKind, not a boundary)
   // must NOT let the run read COMPLETE — the same self-assertion guard the row-level n-a boundary already carries.
   const naSet = { planVersion: RUN.planVersion, tasks: [
-    { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "n/a", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
+    { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "not-applicable", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
   ] };
   const naRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: naSet, dir: tmp("result-report-na") });
   check("ENG-99126 renderFinalReport (RC-7): a task waved off `n/a` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task n/a to bypass the conjunction gate",
@@ -4546,7 +4546,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(path.join(baseG, "decisions.md"), "# Decisions\n\n## D7 — dash title\n\n### D8: colon title\n\n#### D9 space title\n\n## D10. dot title\n");
     const dG = path.join(baseG, "build-tasks");
     const bnd = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+      rows: [{ label: `Card action ${id}`, outcomeKind: "not-applicable", outcome: `not-applicable — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repG = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bnd("b7", "D7"), bnd("b8", "D8"), bnd("b9", "D9"), bnd("b10", "D10")] }, dir: dG });
     check("ENG-99740 (readDecisions grammar): D-heading variants `## D7 — …`, `### D8: …`, `#### D9 …`, `## D10. …` all parse, so boundaries citing D7–D10 are backed (0 unbacked) and each renders with its title",
       () => repG.counts.unbackedBoundaries === 0
@@ -4607,7 +4607,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const A = { id: "bd-a", file: "bd-a.md", group: "Build", pageKey: "main", status: "partial", notes: "",
         rows: [{ label: shared, outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" }] };
       const B = { id: "bd-b", file: "bd-b.md", group: "Repair round 1", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-        rows: [{ label: shared, outcomeKind: "n-a", outcome: "n-a — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
+        rows: [{ label: shared, outcomeKind: "not-applicable", outcome: "not-applicable — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
       const rep4 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [A, B], planVersion: RUN.planVersion }, dir: d2 });
       const sec1 = rep4.markdown.slice(rep4.markdown.indexOf("## 1."), rep4.markdown.indexOf("## 2."));
       check("ENG-99126 splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
@@ -4620,7 +4620,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       // the boundary stays a question (unbacked) even though decisions.md records D7 — while a real "per D7" does
       // authorise it. Guards against an accidental/parallel mention flipping a boundary to closed.
       const boundary = (reason) => ({ id: "bx", file: "bx.md", group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-        rows: [{ label: "Card action - Export", outcomeKind: "n-a", outcome: "n-a - " + reason, outcomeReason: reason, na: null }] });
+        rows: [{ label: "Card action - Export", outcomeKind: "not-applicable", outcome: "not-applicable - " + reason, outcomeReason: reason, na: null }] });
       const repIncidental = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build, like D7 in the Leads section")], planVersion: RUN.planVersion }, dir: d2 });
       const repCited = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build here, per D7")], planVersion: RUN.planVersion }, dir: d2 });
       check("ENG-99126 decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
