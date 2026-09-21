@@ -161,7 +161,7 @@ check("behaviour analysis: an unusable Context result is a failed run, not a sur
   // The block moved into `contextFailedReturn` — `run()` sat at the pinned Sonar cognitive complexity 15, the same
   // reason `sectionStubScopes` above is its own function.
   //
-  // PR #147 review — the guard is `isCensusShape`, not `!ctx`. A truthy value that is not a census (`{}`, `[]`, a
+  // the guard is `isCensusShape`, not `!ctx`. A truthy value that is not a census (`{}`, `[]`, a
   // `scopes` of the wrong type) was coerced to an empty scope list by `normalizeScopes` and took the "nothing to
   // describe" exit, reporting `complete: true` over a digest that may be full. What this line still pins cheaply
   // is that the guard tests the SHAPE; the outcome for eight different unusable results, and for a dead Context,
@@ -191,8 +191,8 @@ check("page-design-spec.md: documents EVERY `list-*` decision kind the engine ca
 const mapperSrc = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/mapper.mjs", import.meta.url)), "utf8");
 check("mapper.mjs: every list decision reads its kind from `LIST_DECISION_KIND` — no push site inlines the string, so the exported set cannot fall behind what the engine emits",
   // The count ALONE is not self-sufficient: swapping one kind for another keeps it at 10 and the check stays
-  // green. Naming the kinds a PR adds is what makes the assertion say which set it is pinning;
-  // ENG-94714 added `list-grid-config` and `list-section-element`, so both are named here.
+  // green. Naming the kinds is what makes the assertion say which set it pins, so
+  // `list-grid-config` and `list-section-element` are both named here.
   !new RegExp("kind: " + '"' + "list-").test(mapperSrc) && LIST_DECISION_KINDS.length === 10
     && LIST_DECISION_KINDS.includes("list-grid-config") && LIST_DECISION_KINDS.includes("list-section-element"),
   () => ({ inlined: mapperSrc.split("\n").filter((l) => /kind: "list-/.test(l)).map((l) => l.trim().slice(0, 90)),
@@ -581,7 +581,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   () => `repair block at ${cbaRepairAt}, verdict at ${cbaVerdictAt}`);
 
 
-/* ---- ENG-95543: the reference doc is LINT-CHECKED against the shared mapping table -------------------------
+/* ---- the reference doc is LINT-CHECKED against the shared mapping table -------------------------
  * The ticket asks for the doc's classification rows to be generated from, or lint-checked against, the table.
  * Lint-checked, not generated: the rows carry build recipes, on-stand checks and a "Do NOT" column that no table
  * holds, and generating the file would delete exactly the part a human wrote. What the lint covers is the part
@@ -639,7 +639,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
   // registry really carries is telling the reader to avoid something valid.
   const wrongCounterExamples = [...counterExamples].filter((t) => index.components[t]);
-  check("ENG-95543 doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
+  check("doc lint: a type the doc names as a counter-example (\"NOT `crt.X`\") really is absent from the registry — otherwise the doc warns against a real component",
     counterExamples.size >= 1 && wrongCounterExamples.length === 0,
     () => ({ counterExamples: [...counterExamples], alsoRealComponents: wrongCounterExamples }));
   // Every feature / widget the TABLE carries must be NAMED in the doc's standard-features section. Direction
@@ -654,7 +654,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const bare = (n) => { const t = n.trim(); const i = t.lastIndexOf("("); return (i > 0 && t.endsWith(")") ? t.slice(0, i) : t).trim(); };
   const tableNames = [...new Set(MAPPING_ROWS.flatMap((r) => [r.meta?.feature, ...(r.meta?.widgets || []).map((w) => w.widget)]).filter(Boolean))];
   const undocumented = tableNames.filter((n) => !section.includes(n) && !section.includes(bare(n)));
-  check("ENG-95543 doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
+  check("doc lint: every standard feature / widget the table carries is named in the doc's standard-features section (a row added without documenting it fails here)",
     tableNames.length >= 8 && undocumented.length === 0,
     () => ({ names: tableNames, undocumented }));
   // A CODE-level audit, the counterpart of the doc lint: every `crt.*` COMPONENT type the engine's own modules
@@ -675,22 +675,22 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const engineTypes = [...new Set(engineSrc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || [])]
     .filter((t) => !NON_COMPONENT_SUFFIX.test(t) && !ACCEPTANCE_ONLY.has(t) && !codeCounterExamples.has(t));
   const unknownEngineTypes = engineTypes.filter((t) => !index.components[t]);
-  check("ENG-95543 code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
+  check("code lint: every crt.* component type the engine's modules name exists in the vendored registry index (excluding requests/services/handlers and the crt.Tab acceptance spelling)",
     engineTypes.length >= 15 && unknownEngineTypes.length === 0,
     () => ({ checked: engineTypes.length, unknown: unknownEngineTypes }));
   // The acceptance-only exclusion has to stay HONEST: `crt.Tab` may be excluded because it does not exist, not as
   // a convenient way to hide a type. If the registry ever carries it, the exclusion is wrong.
-  check("ENG-95543 code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
+  check("code lint: a type the engine's notes name as a counter-example is really absent from the registry — the exemption cannot hide a valid component",
     codeCounterExamples.size >= 1 && [...codeCounterExamples].every((t) => !index.components[t]),
     () => [...codeCounterExamples].filter((t) => index.components[t]));
-  check("ENG-95543 code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
+  check("code lint: the `crt.Tab` exclusion is justified — it really is absent from the registry, so excluding it is not a way of hiding a real type",
     !index.components["crt.Tab"],
     () => Object.keys(index.components).filter((t) => t.startsWith("crt.Tab")));
 
   // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
   // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
   // which is how the "change both in the same commit" rule quietly stops being followed.
-  check("ENG-95543 doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
+  check("doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
@@ -789,7 +789,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => ({ calls: advanceCalls.length, withoutRequires: withoutRequires.map((c) => c.slice(0, 120)) }));
 }
 
-/* PR #147 REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
+/* REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
    `installer/install.py` used to recover each workflow's name by lexing the generated JavaScript with a
    hand-written JS sub-lexer in Python - the consumer parsing the producer's output language, while
    `TARGETS` held `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
@@ -824,7 +824,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => manifest.workflows.map((w) => w.name).join(", "));
 }
 
-/* ENG-96483 REVIEW (Major) — THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
+/* THE MODULE'S VERIFICATION CONTRACT HAS ONE SOURCE OF TRUTH, AND THIS PINS IT.
    There were three competing declarations of what verifying this module means — the CI job's enumerated steps,
    `engine/package.json` `scripts.test`, and this directory's README — and only the CI one was enforced, i.e. the
    one a contributor cannot see from inside the module. Someone following the documented path ran roughly half the
@@ -873,16 +873,16 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   };
   const fromPkg = runnersIn(enginePkg.scripts?.test || "");
   const fromCi = runnersIn(jobSrc);
-  check("ENG-96483 review (Major): the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
+  check("the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
     fromCi.length > 0 && fromPkg.length === fromCi.length && fromPkg.every((r, i) => r === fromCi[i]),
     () => ({ scriptsTest: fromPkg, ciSteps: fromCi }));
-  check("ENG-96483 review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
+  check("review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
     ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs", "run-tasks.mjs"]
       .every((r) => fromPkg.includes(r)),
     () => fromPkg);
   // And the README no longer states a claim nothing enforces.
   const readme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
-  check("ENG-96483 review (Major): the README no longer prescribes its own two-runner subset, nor claims it is 'exactly what the CI job runs' — it points at the one declaration instead",
+  check("the README no longer prescribes its own two-runner subset, nor claims it is 'exactly what the CI job runs' — it points at the one declaration instead",
     !/This is exactly what the CI job/.test(readme) && /scripts\.test/.test(readme) && /npm test/.test(readme),
     () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
 }

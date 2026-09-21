@@ -238,7 +238,7 @@ const ALLOWED_FINGERPRINT_DIVERGENCES = {
   ],
 }
 
-// PR #147 review — EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
+// EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
 // `split(from).join(to)` rewrote every occurrence of `from` in the field, not the one the rule describes, so a
 // genuine regression at a second site carrying the same token was normalised in lockstep and passed the gate — and
 // a key-qualification change is precisely what makes a repeated token likely. An entry may declare `count` when it
@@ -318,7 +318,7 @@ function behaviourScenarios() {
     censusNote: "census proven via ExtendParent query",
     refusals: ["could not read DealTyped layer"],
   };
-  // PR #147 review — A DESCRIBE ANSWER WRITES WHERE THE PROMPT TOLD IT TO. `reportPart` was the literal
+  // A DESCRIBE ANSWER WRITES WHERE THE PROMPT TOLD IT TO. `reportPart` was the literal
   // `out/part.md`, which no agent following the prompt would ever return, so the scenarios did not exercise the
   // part-path contract at all — and once `partFile` gained its round and batch suffixes, the core's new
   // returned-versus-asked check fired on every scenario as a log-only warning (4 → 8) that nothing could act on.
@@ -434,7 +434,7 @@ function promptDiff(a, b, pairName, scenario) {
   for (let i = 0; i < n; i++) {
     const pa = a.calls[i]?.prompt, pb = b.calls[i]?.prompt;
     if (pa === pb) continue;
-    // PR #147 review — the extra dispatch is CONSUMED, not skipped in place: `continue` left the two sides
+    // the extra dispatch is CONSUMED, not skipped in place: `continue` left the two sides
     // one index apart for the rest of the loop, and that was inert only because today's retry dispatch happens
     // to be last in its phase. Splicing it out of the shipped side keeps the remaining calls aligned whatever
     // position the extra one takes.

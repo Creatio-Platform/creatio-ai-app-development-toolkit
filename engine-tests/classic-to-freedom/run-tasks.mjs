@@ -3493,52 +3493,52 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const run = cliR(["--verify", "--built", built, "--tasks", dir], MANIFEST);
   const out = run.stdout || "";
 
-  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
+  check("CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
     () => out.startsWith("# Migration result") && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
       && !/Plan-vs-Done — VERIFIED against the built page/.test(out) && !/## Appendix/.test(out)
       && /## \d+\. Task details/.test(out),
     () => out.slice(0, 600));
-  check("ENG-99126 CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
+  check("CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
     () => { const v = out.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
       // The verify leg WRITES a repair round into the folder, so the ledger the report reads now also holds that
       // round's queued tasks — open work, counted as such in the same line.
       return /1 plan item recorded NOT BUILT \(1 needs a decision\)/.test(v) && /tasks? not closed \(◐ partial 1/.test(v)
         && /machine-checked plan items? MISSING/.test(v) && v.indexOf("NOT BUILT") < v.indexOf("MISSING") && !/deliverable/i.test(out.slice(0, out.indexOf("## 1."))); },
     () => out.split("\n").find((l) => l.startsWith("**Verdict:**")));
-  check("ENG-99126 CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",
+  check("CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",
     () => { const s1 = out.slice(out.indexOf("## 1."), out.indexOf("## 2."));
       return /## 1\. Needs a decision \(1\)/.test(s1) && s1.includes(victim.rows[rowN - 1].label)
         && /did not state the question/.test(s1) && s1.includes(`](${victim.file}), row ${rowN}`); },
     () => out.slice(out.indexOf("## 1."), out.indexOf("## 2.")));
-  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
+  check("CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
     () => { const s4 = out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/));
       const line = s4.split("\n").find((l) => l.includes(`](${victim.file})`)) || "";
       return /\| Step \| Task \| Page \| Status \| Confirmed \| To confirm manually \| Not built \|/.test(s4)
         && /◐ partial/.test(line) && line.includes(victim.rows[rowN - 1].label) && /needs a decision/.test(line)
         && !/Dispatch/i.test(s4) && !/Reference cache/.test(s4) && /Form page|Child page|List page|Whole run/.test(line) && !/\| `?(main|run)`? \|/.test(line); },
     () => out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/)).split("\n").slice(0, 8));
-  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, one confirmed count, the manual remainder — and nothing about dispatch",
+  check("CLI: the summary carries the counts a reader takes away — tasks by status, open questions, one confirmed count, the manual remainder — and nothing about dispatch",
     () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ queued \d+)? \|/.test(out) && /\| Open questions \(plan items recorded NOT BUILT, no decision yet\) \| 1 \|/.test(out)
       && /\| Plan items confirmed \(on the built page, or by review\) \| \d+\/\d+ \|/.test(out)
       && /\| Plan items to confirm manually \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
-  check("ENG-99126 CLI: with `--out` the report is the ONLY file written — no plan-vs-built.md beside it and no link to one (nothing reads that file, so it is a second artifact to reconcile for nothing)",
+  check("CLI: with `--out` the report is the ONLY file written — no plan-vs-built.md beside it and no link to one (nothing reads that file, so it is a second artifact to reconcile for nothing)",
     () => { const outFile = path.join(base, "report-split.md");
       cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       const rep = fs.readFileSync(outFile, "utf8");
       return rep.startsWith("# Migration result") && !fs.existsSync(path.join(base, "plan-vs-built.md")) && !/plan-vs-built\.md/.test(rep) && !/## Appendix/.test(rep); },
     () => fs.readdirSync(base));
-  check("ENG-99126 CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
+  check("CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
     () => run.status === 2 && /⛔ RUN NOT COMPLETE — .*recorded NOT BUILT/.test(run.stderr || "") && /migration result report/.test(run.stderr || ""),
     () => ({ status: run.status, stderr: (run.stderr || "").slice(0, 700) }));
-  check("ENG-99126 CLI: `--out` names the artifact a migration result report and tells the caller to present IT — not the index, not the table, not a hand-written summary",
+  check("CLI: `--out` names the artifact a migration result report and tells the caller to present IT — not the index, not the table, not a hand-written summary",
     () => { const outFile = path.join(base, "report.md");
       const r = cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       return /wrote migration result report to/.test(r.stdout || "") && /PRESENT IT VERBATIM/.test(r.stdout || "")
         && /do not present `build-tasks\/index\.md`/.test(r.stdout || "")
         && fs.readFileSync(outFile, "utf8").startsWith("# Migration result"); },
     () => cliR(["--verify", "--built", built, "--tasks", dir, "--out", path.join(base, "report2.md")], MANIFEST).stdout);
-  check("ENG-99126 CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
+  check("CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
     () => { const r = cliR(["--verify", "--built", built], MANIFEST); return (r.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(r.stdout || ""); },
     () => cliR(["--verify", "--built", built], MANIFEST).stdout?.slice(0, 200));
   // ENG-99740 (Alexandr-Kravchuk): the new machine rows run through resolveVk on EVERY --verify, so a plain --verify
@@ -3552,12 +3552,12 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       schemaUId: "44444444-4444-4444-8444-444444444444", schemaName: "UsrDemo_FormPage",
       handlers: "[{ request: 'crt.SaveRecordRequest', handler: (r,n)=>n }]", viewModelConfig: { attributes: { A: {} } } } } }));
     const pvR = cliR(["--verify", "--built", pvBuilt], MANIFEST);
-    check("ENG-99740 CLI: plain `--verify` (no --tasks) with a payload carrying `handlers`/`viewModelConfig` still prints the legacy plan-vs-built table, never the migration result report",
+    check("CLI: plain `--verify` (no --tasks) with a payload carrying `handlers`/`viewModelConfig` still prints the legacy plan-vs-built table, never the migration result report",
       () => (pvR.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(pvR.stdout || ""),
       () => ({ status: pvR.status, head: (pvR.stdout || "").slice(0, 160), err: (pvR.stderr || "").slice(0, 160) }));
   }
 
-  // ENG-99126 Major B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
+  // B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
   // fallback set carries `refused`, so `renderFinalReport` pushes a verdict reason and the CLI exits 2 naming the
   // folder — the precise false-green (COMPLETE over a ledger that was never read) this PR targets.
   {
@@ -3565,14 +3565,14 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dBad], MANIFEST);                                    // freeze a valid split first
     fs.writeFileSync(path.join(dBad, SPLIT_FILE), "not valid JSON {{{");  // then corrupt it
     const rBad = cliR(["--verify", "--built", built, "--tasks", dBad], MANIFEST);
-    check("ENG-99126 CLI (Major B): a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
+    check("CLI (Major B): a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
       () => rBad.status === 2 && (rBad.stdout || "").startsWith("# Migration result")
         && /the task ledger could not be read/.test(rBad.stdout || "") && /⛔ \*\*NOT COMPLETE\*\*/.test(rBad.stdout || "")
         && /RUN NOT COMPLETE/.test(rBad.stderr || ""),
       () => ({ status: rBad.status, head: (rBad.stdout || "").slice(0, 400), stderr: (rBad.stderr || "").slice(0, 200) }));
   }
 
-  // ENG-99126 Major C (2nd review) — the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
+  // C (2nd review) — the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
   // ☐ queued, none dispatched) contributes a `☐ queued N` reason that the machine/verify leg CANNOT produce (that
   // leg emits MISSING / not-confirmed), so exit 2 here is NOT attributable to `verifyIncomplete` alone. The clean
   // conjunction in isolation — a GREEN machine leg + an open ledger ⇒ ONLY the ledger reason — is the `openRep`
@@ -3582,7 +3582,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dQ], MANIFEST);   // sync only — every task todo, nothing started
     const rQ = cliR(["--verify", "--built", built, "--tasks", dQ], MANIFEST);
     const vQ = (rQ.stdout || "").split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
-    check("ENG-99126 CLI (Major C): a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
+    check("CLI (Major C): a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
       () => rQ.status === 2 && /☐ queued \d+/.test(vQ) && /RUN NOT COMPLETE/.test(rQ.stderr || "")
         && /☐ queued \d+/.test(rQ.stderr || "") && / todo of /.test(rQ.stderr || ""),
       () => ({ status: rQ.status, verdict: vQ, stderr: (rQ.stderr || "").slice(0, 300) }));
@@ -3597,11 +3597,11 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   syncTaskDir(dOpen, RUN, OPTS);   // every task `todo`, nothing dispatched
   const openSet = readMergedTaskDir(dOpen, RUN, OPTS);
   const openRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: openSet, dir: dOpen });
-  check("ENG-99126 renderFinalReport: a GREEN machine table over a ledger of queued tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
+  check("renderFinalReport: a GREEN machine table over a ledger of queued tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
     () => openRep.complete === false && openRep.reasons.some((r) => /task(s)? not closed \(☐ queued \d+\)/.test(r))
       && /⛔ \*\*NOT COMPLETE\*\*/.test(openRep.markdown) && !openRep.reasons.some((r) => /MISSING|not confirmed/.test(r)),
     () => openRep.reasons);
-  check("ENG-99126 renderFinalReport: the confirm-on-stand row is counted as 'to confirm manually' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
+  check("renderFinalReport: the confirm-on-stand row is counted as 'to confirm manually' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
     () => /\| Plan items to confirm manually \| 1 \|/.test(openRep.markdown) && /## 4\. Task details/.test(openRep.markdown)
       // The task is still queued, so its rows have no outcome yet — the details say THAT, not "check by hand".
       && /\| \d+ \| .+ \| — \| — no outcome recorded yet \(task ☐ todo\) \|/.test(openRep.markdown)
@@ -3609,7 +3609,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => openRep.markdown.slice(openRep.markdown.indexOf("## 4.")));
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
-  check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
+  check("renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
     () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
   // ENG-99126 (3rd review RC-9): the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
@@ -3620,7 +3620,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
   ] };
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
-  check("ENG-99126 renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
+  check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
     () => passRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
@@ -3630,12 +3630,12 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "n/a", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
   ] };
   const naRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: naSet, dir: tmp("result-report-na") });
-  check("ENG-99126 renderFinalReport (RC-7): a task waved off `n/a` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task n/a to bypass the conjunction gate",
+  check("renderFinalReport (RC-7): a task waved off `n/a` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task n/a to bypass the conjunction gate",
     () => naRep.complete === false && /⛔ \*\*NOT COMPLETE\*\*/.test(naRep.markdown)
       && naRep.reasons.some((r) => /closed n\/a with no recorded decision/.test(r)),
     () => ({ complete: naRep.complete, reasons: naRep.reasons }));
 
-  // ENG-99740 (kamil-mikosz-creatio P1): a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
+  // a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
   // page must not bleed state across identically-labeled rows on different pages — `Handler — init` not-built on
   // main and built on child:C1. Before the fix the label-only fallback marked BOTH not-built.
   const collapseSet = { planVersion: RUN.planVersion, tasks: [
@@ -3675,7 +3675,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
 
-  // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
+  // renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that
   // empty task list as "everything closed" — `refused` forces `complete: false` and a verdict reason naming it.
   {
@@ -3684,7 +3684,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(path.join(dRef, SPLIT_FILE), "{ broken");
     const refusedSet = readMergedTaskDir(dRef, RUN, OPTS);
     const refRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: refusedSet, dir: dRef });
-    check("ENG-99126 renderFinalReport (Major B): a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
+    check("renderFinalReport (Major B): a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
       () => refusedSet.refused === true && refRep.complete === false
         && refRep.reasons.some((r) => /task ledger could not be read/.test(r))
         && /⛔ \*\*NOT COMPLETE\*\*/.test(refRep.markdown),
@@ -3708,10 +3708,10 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(f2, text2);
     const set2 = readMergedTaskDir(d2, RUN, OPTS);
     const rep2 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: set2, dir: d2 });
-    check("ENG-99126 markers: section 1 quotes the `Decision needed (row N)` line verbatim as the decision the person has to make",
+    check("markers: section 1 quotes the `Decision needed (row N)` line verbatim as the decision the person has to make",
       () => /\| 1 \| .* \| keep the Classic allow-list behaviour \(a\) or drop it as inert in Freedom \(b\)\? \| /.test(rep2.markdown),
       () => rep2.markdown.slice(rep2.markdown.indexOf("## 1."), rep2.markdown.indexOf("## 2.")));
-    check("ENG-99126 boundaries: an `n-a` citing a decision that decisions.md records is listed as information with the decision's title; one citing a decision nobody recorded is a question and names the missing reference — and only the latter is a verdict reason",
+    check("boundaries: an `n-a` citing a decision that decisions.md records is listed as information with the decision's title; one citing a decision nobody recorded is a question and names the missing reference — and only the latter is a verdict reason",
       () => { const s2 = rep2.markdown.slice(rep2.markdown.indexOf("## 2."), rep2.markdown.indexOf("## 3."));
         return /Closed by a recorded decision \(1\)/.test(s2) && /\*\*D7\*\* — Print is not migrated/.test(s2)
           && /Without a recorded decision \(1\)/.test(s2) && /cites D99, not found in decisions\.md/.test(s2)
@@ -3730,7 +3730,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
         rows: [{ label: shared, outcomeKind: "n-a", outcome: "n-a — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
       const rep4 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [A, B], planVersion: RUN.planVersion }, dir: d2 });
       const sec1 = rep4.markdown.slice(rep4.markdown.indexOf("## 1."), rep4.markdown.indexOf("## 2."));
-      check("ENG-99126 splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
+      check("splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
         () => /\| Plan items not built BY DECISION \| 1 \|/.test(rep4.markdown) && rep4.counts.decidedNotBuilt === 1
           && rep4.counts.openNotBuilt === 0 && !sec1.includes(shared)
           && !rep4.reasons.some((r) => /recorded NOT BUILT/.test(r)),
@@ -3743,14 +3743,14 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
         rows: [{ label: "Card action - Export", outcomeKind: "n-a", outcome: "n-a - " + reason, outcomeReason: reason, na: null }] });
       const repIncidental = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build, like D7 in the Leads section")], planVersion: RUN.planVersion }, dir: d2 });
       const repCited = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build here, per D7")], planVersion: RUN.planVersion }, dir: d2 });
-      check("ENG-99126 decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
+      check("decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
         () => repIncidental.counts.unbackedBoundaries === 1
           && repIncidental.reasons.some((r) => /boundary closed by the agent with NO recorded decision/.test(r))
           && repCited.counts.unbackedBoundaries === 0
           && !repCited.reasons.some((r) => /NO recorded decision/.test(r)),
         () => ({ incidental: repIncidental.counts, cited: repCited.counts }));
 
-      // ENG-99126 taskRows (Major A, 2nd review) — a not-built plan item on ONE page must not bleed onto a
+      // taskRows (Major A, 2nd review) — a not-built plan item on ONE page must not bleed onto a
       // same-labeled row on ANOTHER page. Two tasks share the deliverable label but live on different pages: one
       // not-built (main), one built and machine-confirmed (child:C1). The whole-run label fallback used to match by
       // bare label and mark BOTH rows not-built; taskRows now falls back to the label ONLY for the synthetic `run`
@@ -3766,7 +3766,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const secTasks = repBleed.markdown.slice(repBleed.markdown.search(/## \d+\. Tasks \(/), repBleed.markdown.search(/## \d+\. Task details/));
       const lineA = secTasks.split("\n").find((l) => l.includes("](bl-a.md)")) || "";
       const lineC = secTasks.split("\n").find((l) => l.includes("](bl-c.md)")) || "";
-      check("ENG-99126 taskRows (Major A): a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
+      check("taskRows (Major A): a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
         () => repBleed.counts.openNotBuilt === 1
           && /save/.test(lineA) && /needs a decision/.test(lineA)
           && !/needs a decision/.test(lineC) && lineC.trim().endsWith("| — |"),
@@ -3792,7 +3792,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     } } }));
     const outN = path.join(baseN, "report.md");
     const runN = cliR(["--verify", "--built", builtN, "--tasks", dN, "--out", outN], MANIFEST);
-    check("ENG-99126 CLI: a --built payload with schemaName/handlers/viewModelConfig is accepted (no exit-1 shape/validator error) and the report names the page by its Freedom schemaName, not the engine key",
+    check("CLI: a --built payload with schemaName/handlers/viewModelConfig is accepted (no exit-1 shape/validator error) and the report names the page by its Freedom schemaName, not the engine key",
       () => runN.status === 2 && !/cannot read --built|Expected/.test(runN.stderr || "")
         && /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) && !/\| Form page \|/.test(fs.readFileSync(outN, "utf8")),
       () => ({ status: runN.status, stderr: (runN.stderr || "").slice(0, 300), hasName: /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) }));

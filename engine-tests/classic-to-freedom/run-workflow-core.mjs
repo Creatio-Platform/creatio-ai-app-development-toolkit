@@ -447,7 +447,7 @@ const happyAnswer = (item) => {
     () => JSON.stringify(result));
 }
 {
-  // PR #147 review — a Context result that is TRUTHY but not a census reached `normalizeScopes`, which coerces
+  // a Context result that is TRUTHY but not a census reached `normalizeScopes`, which coerces
   // anything to an empty scope list via `(rawScopes || [])`, and the run then took the "empty worklist is DONE"
   // exit and reported `skipped: true` with `complete: true` over a digest that may be full. `submit`'s
   // required-key check is a shallow top-level `!== undefined`, so a `scopes` of the wrong TYPE reaches the core.
@@ -483,7 +483,7 @@ const happyAnswer = (item) => {
   check("core: the verdict reads the REPAIRED counts — computed after the repair round, so a run is never reported complete that the repair round had not finished",
     result.coverage.complete === true && result.coverage.described === 4 && logs.some((l) => /coverage after repair/.test(l)),
     () => JSON.stringify({ coverage: result.coverage, logs }));
-  // PR #147 review — the two rounds must not share a part file or a card id namespace. Both rounds order scopes
+  // the two rounds must not share a part file or a card id namespace. Both rounds order scopes
   // by rows descending, so the largest scope leads a batch in each: the repair agent was handed round 1's path
   // and round 1's `C01…` sequence, and one that wrote the file fresh dropped round 1's cards from the deliverable
   // while `coveredKeys` still counted those rows from round 1's index entries. Asserted on the PROMPTS, because
@@ -510,7 +510,7 @@ const happyAnswer = (item) => {
     })(), () => JSON.stringify(asked.find((i) => i.phase === "Merge").inputFiles));
 }
 {
-  // PR #147 review — an agent that writes somewhere OTHER than the path it was handed is NAMED. The core used to
+  // an agent that writes somewhere OTHER than the path it was handed is NAMED. The core used to
   // accept whatever `reportPart` came back, so a part-file collision left no trace in the run at all; this line
   // is what makes a recurrence visible. A warning rather than a rejection on purpose: the returned path is the one
   // Merge folds in, so the cards are still merged and the coverage numbers still describe what the report holds.
@@ -524,7 +524,7 @@ const happyAnswer = (item) => {
     result.coverage.described === 4 && result.coverage.complete === true, () => JSON.stringify(result.coverage));
 }
 {
-  // PR #147 review — a Critique answering with a BARE method key must route into the repair round. ENG-96529
+  // a Critique answering with a BARE method key must route into the repair round. ENG-96529
   // requalified every scope key, so `initMini` no longer exists in `allKeys`; under the old strict
   // `allKeys.has` filter this critique finding was DROPPED and the run still reported `complete: true` over a
   // row the adversarial pass had judged undescribed. The row carries a card, so nothing else would catch it.
@@ -541,7 +541,7 @@ const happyAnswer = (item) => {
     () => JSON.stringify({ ids: asked.map((i) => i.id), describeRounds, coverage: result.coverage }));
 }
 {
-  // PR #147 review, the other half — a bare critique key that COLLIDES across scopes resolves to no single row,
+  // review, the other half — a bare critique key that COLLIDES across scopes resolves to no single row,
   // so it cannot route anywhere. It must be NAMED rather than swallowed by the filter: the two repairs are
   // opposite (re-key the answer vs describe the row), exactly as `ambiguousEntryKeys` already reports for a
   // Describe answer.
@@ -563,7 +563,7 @@ const happyAnswer = (item) => {
     logs.some((l) => /critique key\(s\) match SEVERAL inventory rows/.test(l) && l.includes("initMini"))
       && !asked.some((i) => i.id.startsWith("repair.")),
     () => JSON.stringify({ logs, ids: asked.map((i) => i.id) }));
-  // PR #147 review — ON THE RETURNED OBJECT, not only in the log. The engine re-reads this return as
+  // ON THE RETURNED OBJECT, not only in the log. The engine re-reads this return as
   // `behaviourIndex` and `cli.mjs status` serialises it as the state document, so a signal that lives only on
   // stderr reaches a human tailing the run and nobody else. Same class of claim as `critiqueRan`.
   check("core: the unplaceable critique key is carried on the RESULT, split by reason — a machine consumer reads the returned object, and stderr does not reach it",
@@ -574,7 +574,7 @@ const happyAnswer = (item) => {
     result.coverage.complete === true, () => JSON.stringify(result.coverage));
 }
 {
-  // PR #147 review — the OTHER reason a critique key resolves to nothing: it matches NO inventory row, so it is
+  // the OTHER reason a critique key resolves to nothing: it matches NO inventory row, so it is
   // stale, copied from another surface or invented. Merged with the ambiguous bucket, an operator could not tell
   // a dropped real finding from agent noise, and the remedies are opposite: re-key it versus discard it.
   const unknownCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "neverHeardOfIt" }] };
@@ -588,7 +588,7 @@ const happyAnswer = (item) => {
     () => JSON.stringify({ carried: result.critiqueUnattributable, logs }));
 }
 {
-  // PR #147 review — and the field is ABSENT when there is nothing to report, so every other run's return is
+  // and the field is ABSENT when there is nothing to report, so every other run's return is
   // byte-identical to what it was. That is what keeps the frozen-baseline comparison in
   // `run-workflow-parity.mjs` meaningful instead of costing a declared divergence per scenario for a field that
   // would always be two empty arrays.
@@ -1029,7 +1029,7 @@ const genSrc = readFileSync(GENERATED, "utf8");
   const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
   check("generator: the shipped `.workflow.js` is IN SYNC with the core — an edit to either alone must fail here, not ship as a silent divergence",
     res.status === 0, () => `${res.stdout}${res.stderr}`);
-  // PR #147 review: exit 0 alone does not say the gate DID anything — a run that checked nothing exits 0 too.
+  // exit 0 alone does not say the gate DID anything — a run that checked nothing exits 0 too.
   // Pin the per-target evidence: every configured target must have printed its own ✅ line naming its artifact.
   check("generator: `--check` proves it compared EVERY shipped artifact — one ✅ line per target, naming the file, so an exit 0 from a run that checked nothing cannot read as a pass",
     () => { const ticks = (res.stdout || "").split("\n").filter((l) => /^✅ .+ matches the core$/.test(l));
@@ -1198,7 +1198,7 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli: the stop is RECORDED on the run — `stopped` with the missing capability and the phase that needed it, so the reason survives the process",
       stopState.status === "stopped" && stopState.stop.missing.join(",") === "independentRoles" && /Critique/.test(stopState.stop.where),
       () => JSON.stringify(stopState.stop));
-    // PR #147 review — the OTHER half of the same stop, and the reason this block exists one assertion longer
+    // the OTHER half of the same stop, and the reason this block exists one assertion longer
     // than it did: `status` is the only non-mutating command in the published `start | next | submit | status |
     // resume` surface, and a capability stop is the single condition an operator or a JSON-parsing wrapper runs
     // it for. Routing it through the mutating commands' `process.exit(3)` meant it printed prose to stderr,
@@ -1238,7 +1238,7 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli: the two MUTATING commands refuse a host that cannot honour the run's guarantees — exit 3 with the remedy, so a REFUSED host never looks like a broken CLI on whichever path the operator took",
       [gateNext, gateSubmit].every((r) => r.status === 3 && /subAgents/.test(r.stderr) && /Nothing was executed/.test(r.stderr)),
       () => [gateNext, gateSubmit].map((r) => `${r.status}:${r.stderr.slice(0, 120)}`).join(" || "));
-    // PR #147 review — and `status` meets the SAME gate without inheriting the exit policy: it reports the
+    // and `status` meets the SAME gate without inheriting the exit policy: it reports the
     // stop in its document. Read-only, so exit 0; a script that branches on the exit code of a query verb
     // learns nothing about the run, and one that parses its stdout learns everything.
     check("cli status: the read-only command reports the same stop STRUCTURALLY instead of exiting — the gate is met on every replay path, and only the two mutating paths terminate",
