@@ -234,7 +234,10 @@ function composeOneRead(dir, r, acc) {
   if (r.kind === "pageMeta") acc.metaFile.set(r.pageKey, r.file);
   else if (r.kind === "pageBundle") acc.bundleFile.set(r.pageKey, r.file);
   const j = readJson(dir, r.file, acc.problems, label(r));
-  if (j === null) { if (PAGE_KINDS.has(r.kind)) acc.unread.add(r.pageKey); return; }
+  if (j === null) {
+    if (PAGE_KINDS.has(r.kind)) acc.unread.add(r.pageKey);
+    return;
+  }
   if (j === false && PAGE_KINDS.has(r.kind)) { noteDenial(acc, r); return; }
   compose(r, j, acc);
 }
@@ -293,6 +296,60 @@ function namePageShapeProblem(acc, k, noView, noUid) {
   }
 }
 
+// WHAT THE READ LOOP ACCUMULATES. `pages` and `reachability` have a NULL prototype on purpose: nothing they hold
+// can be inherited from `Object.prototype`, so even a key that slipped past the unsafe-key check could not make an
+// entry look present.
+function newAccumulator(problems) {
+  const pages = Object.create(null);
+  return {
+    problems, pages, reachability: Object.create(null), dashboards: null,
+    absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
+    // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
+    // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
+    gotBundle: new Set(), gotMeta: new Set(),
+    metaName: new Map(), bundleName: new Map(),
+    // The file each half of a page came from, so an entry that arrived unusable is blamed on the right one, and
+    // the keys already named for a read that never arrived, so absence is not reported twice.
+    metaFile: new Map(), bundleFile: new Map(), unread: new Set(),
+    pageOf: (k) => (pages[k] ||= {}),
+  };
+}
+
+// A page whose bundle never arrived carries no `viewConfig`; one whose METADATA never arrived carries no
+// `schemaUId`. The payload guard REJECTS either at exit 1 as a shape error — which is not what happened, and it
+// kills the run before `problems` prints. Drop both to an omitted key (⚠ unverified, exit 2) and let `problems`
+// name the file. SYMMETRIC on purpose: the two files are separate copies out of one `get-page` call.
+//
+// AND SAY WHICH FILE. A file that is missing, unparsable or `null` was named as it was read; one that EXISTS and
+// parses but carries the wrong content was not — `meta.json` copied into both slots, or a truncated response,
+// leaves the entry short of `viewConfig` with nothing recorded, and the key then vanishes as silently as an
+// unread one. That is the outcome the three-answer contract and the banner exist to end.
+function dropUnusableEntries(acc, pages) {
+  for (const [k, e] of Object.entries(pages)) {
+    const noView = e.viewConfig == null;
+    const noUid = !GUID_RE.test(String(e.schemaUId ?? ""));
+    if (!noView && !noUid) continue;
+    if (!acc.unread.has(k) && !acc.absent.has(k)) namePageShapeProblem(acc, k, noView, noUid);
+    delete pages[k];
+  }
+}
+
+// The two halves the stand does not hold, merged from their own files. `recorded` goes UNDER the read values,
+// never over them, and a `null` there is "not recorded yet" — skipped, so the row stays unconfirmed rather than
+// closing on nothing.
+function mergeSideFiles(dir, built, acc, problems) {
+  const recorded = readSideFile(dir, RECORDED_FILE, problems, "the builder-recorded on-stand values");
+  if (recorded && typeof recorded === "object") {
+    for (const [k, v] of Object.entries(recorded)) {
+      if (v !== null && acc.reachability[k] === undefined && !UNSAFE_KEYS.has(k)) acc.reachability[k] = v;
+    }
+  }
+  for (const [key, file] of [["evidence", EVIDENCE_FILE], ["judge", JUDGE_FILE]]) {
+    const j = readSideFile(dir, file, problems, `the ${key} records`);
+    if (j != null) built[key] = j;
+  }
+}
+
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload
 // that quietly stands in for one: the caller decides what an unread file does to the run, and it cannot decide
 // that from a payload alone. `expect` is the read plan for the manifest being verified — pass it and a stale or
@@ -306,57 +363,18 @@ export function assembleBuilt(dir, expect = null) {
     return { built: null, problems };
   }
   problems.push(...staleIndexProblems(index, expect, idxFile));
-  // Null-prototype on purpose: nothing these maps hold can be inherited from `Object.prototype`, so even a key
-  // that slipped past the check above could not make an entry look present.
-  const pages = Object.create(null);
-  const acc = {
-    problems, pages, reachability: Object.create(null), dashboards: null,
-    absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
-    // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
-    // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
-    gotBundle: new Set(), gotMeta: new Set(),
-    metaName: new Map(), bundleName: new Map(),
-    // The file each half of a page came from, so an entry that arrived unusable is blamed on the right one, and
-    // the keys already named for a read that never arrived, so absence is not reported twice.
-    metaFile: new Map(), bundleFile: new Map(), unread: new Set(),
-    pageOf: (k) => (pages[k] ||= {}),
-  };
+  const acc = newAccumulator(problems);
+  const pages = acc.pages;
   for (const r of index.reads) composeOneRead(dir, r, acc);
   for (const k of misCopiedKeys(acc)) delete pages[k];
-  // A page whose bundle never arrived carries no `viewConfig`; one whose METADATA never arrived carries no
-  // `schemaUId`. The payload guard REJECTS either at exit 1 as a shape error — which is not what happened, and it
-  // kills the run before `problems` prints. Drop both to an omitted key (⚠ unverified, exit 2) and let `problems`
-  // name the file. SYMMETRIC on purpose: the two files are separate copies out of one `get-page` call.
-  //
-  // AND SAY WHICH FILE. A file that is missing, unparsable or `null` was named as it was read; one that EXISTS
-  // and parses but carries the wrong content was not — `meta.json` copied into both slots, or a truncated
-  // response, leaves the entry short of `viewConfig` with nothing recorded, and the key then vanishes as silently
-  // as an unread one. That is the outcome the three-answer contract and the banner exist to end.
-  for (const [k, e] of Object.entries(pages)) {
-    const noView = e.viewConfig == null;
-    const noUid = !GUID_RE.test(String(e.schemaUId ?? ""));
-    if (!noView && !noUid) continue;
-    if (!acc.unread.has(k) && !acc.absent.has(k)) namePageShapeProblem(acc, k, noView, noUid);
-    delete pages[k];
-  }
+  dropUnusableEntries(acc, pages);
   // After the sweep: a denial outlives what drops a half-read entry.
   resolveDenials(acc, pages);
-  // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
-  // costs is already visible — every evidence row names the id nothing was filed under.
-  // Merged UNDER the read values, never over them: a file the stand answered wins over one an agent recorded.
-  // A `null` is "not recorded yet" and is skipped, so the row stays unconfirmed rather than closing on nothing.
-  const recorded = readSideFile(dir, RECORDED_FILE, problems, "the builder-recorded on-stand values");
-  if (recorded && typeof recorded === "object") {
-    for (const [k, v] of Object.entries(recorded)) {
-      if (v !== null && acc.reachability[k] === undefined && !UNSAFE_KEYS.has(k)) acc.reachability[k] = v;
-    }
-  }
   const built = { pages, reachability: acc.reachability };
   if (acc.dashboards) built.dashboards = acc.dashboards;
-  for (const [key, file] of [["evidence", EVIDENCE_FILE], ["judge", JUDGE_FILE]]) {
-    const j = readSideFile(dir, file, problems, `the ${key} records`);
-    if (j != null) built[key] = j;
-  }
+  // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
+  // costs is already visible — every evidence row names the id nothing was filed under.
+  mergeSideFiles(dir, built, acc, problems);
   return { built, problems };
 }
 

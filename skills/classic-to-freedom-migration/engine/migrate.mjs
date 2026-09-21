@@ -3116,6 +3116,13 @@ function runRepairMode(result, dir, verifyRes, opts) {
     repair: { written: res.written, pending: res.pending, parked: res.parked } };
 }
 
+// The artifact a `--from` run writes when `--out` names nothing: the migration result report under `--tasks`,
+// the bare plan-vs-built table otherwise. Its own function so the two conditions are not one nested ternary.
+function defaultOutFile(fromDir, tasksMode) {
+  if (!fromDir) return null;
+  return path.join(fromDir, tasksMode ? REPORT_FILE : VERIFY_FILE);
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (label === "migration result report") {
@@ -3180,7 +3187,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // On a `--from` run it DEFAULTS into the migration folder: the payload lands there and the table that judges it
   // has to land beside it, or the run is re-checkable only in halves. An explicit `--out` still wins.
   const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail)
-    || (fromDir ? path.join(fromDir, tasksMode ? REPORT_FILE : VERIFY_FILE) : null);
+    || defaultOutFile(fromDir, tasksMode);
   // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
   // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
   if (splitFile && !tasksMode) fail(`\`${SPLIT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it says where that folder's seams are.`);
