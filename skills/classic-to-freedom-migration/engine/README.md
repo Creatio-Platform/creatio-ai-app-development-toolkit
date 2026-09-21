@@ -60,8 +60,10 @@ slugged and the mapping recorded, and nothing downstream parses a filename. It a
 `reads/index.json`, opens every file the plan named, and builds the payload — identity from `meta.json`, the
 merged view from `bundle.json`, rules and reachability from their own files. `entitySchemaName` is the one DERIVED
 value, read off the primary data source rather than retyped. `evidence.json` / `judge.json` are merged when
-present. The payload is written to `<dir>/built.json` and the table to `<dir>/verify.md`, so the run replays
-offline with `--verify --built <that file>`.
+present, and `recorded.json` carries the on-stand keys the BUILD agent records rather than reads (a card widget
+the converter placed) — a key still `null` there is left unset, so its row stays unconfirmed. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
+`migration-result.md` under `--tasks`, where the report replaces the table. Either way the run replays offline
+with `--verify --built <that file>`.
 
 Three answers a slot can carry, and they never read alike: a **file written** is the answer; an **unwritten** file
 leaves the key out, is named on stderr and in a banner atop `verify.md`, and fails at exit 2 as NOT CHECKED (a

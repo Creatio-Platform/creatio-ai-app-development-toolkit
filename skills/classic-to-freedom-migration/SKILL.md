@@ -539,8 +539,10 @@ payload keyed by page — `pages` (each page's `get-page` `bundle.viewConfig` ve
   that never ran, while a missing one is reported as unread. **A page the stand DENIES is different from one it
   could not read** — write the literal `false` into that page's slot and the gate reports it ❌ MISSING (a repair),
   rather than ⚠ unread (a re-read).
-- **The judge's and the builder's records are FILES, not reads.** `evidence.json` and `judge.json` in the
-  migration folder, keyed by the ids the engine publishes. No page body and no stand row holds them, so they are
+- **The judge's and the builder's records are FILES, not reads.** `evidence.json`, `judge.json` and
+  `recorded.json` in the migration folder, keyed by the ids and on-stand keys the engine publishes —
+  `recorded.json` is for the checks a build agent OBSERVED rather than read back (a card widget the converter
+  placed), which no read can answer; replace each `null` with what it recorded. No page body and no stand row holds them, so they are
   not in the read plan — but a run that filed evidence and did not put it there reports every evidence row
   unconfirmed.
 - **Then the engine composes the payload.** `node engine/migrate.mjs <manifest> --verify --from <migration-folder>

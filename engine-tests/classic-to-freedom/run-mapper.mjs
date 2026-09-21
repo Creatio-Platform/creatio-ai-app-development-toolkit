@@ -12591,5 +12591,166 @@ check("ENG-98556: the rendered read plan tells the agent how to report a page th
     return /DENIES/.test(md) && /`false`/.test(md) && /\bboth\b/i.test(md) && /MISSING/.test(md); },
   () => ({ tail: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").slice(-600) }));
 
+// ================================================================================================
+// ENG-98556 review round 2. Each of these pins a way the composed payload could report a row as
+// checked, or a row as repairable, without anyone having read the page it describes.
+{
+  const UID = "be76666d-10f9-47e4-a420-80ebc80997f2";
+  const GM = { page: { schemaName: "X", schemaUId: UID } };
+  const GB = { name: "X", viewConfig: { items: [] } };
+  const M = { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" };
+  const B = { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" };
+  const mk = (reads, files) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_r2_"));
+    asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", reads });
+    for (const [f, c] of Object.entries(files)) asWrite(d, f, c);
+    return d;
+  };
+  // A file that is MISSING, unparsable or `null` is named as it is read. One that exists and parses but carries
+  // the wrong content was not — and the key then vanished as silently as an unread one, which is the outcome the
+  // three-answer contract exists to end. Most plausible operator error: `meta.json` copied into both slots.
+  {
+    const d = mk([M, B], { "reads/01-meta-main.json": GM, "reads/02-bundle-main.json": GM });
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: a read file that EXISTS and parses but carries the wrong content is NAMED, not dropped in silence — it is reported against the file it came from, not a placeholder",
+      () => problems.length === 1 && /carries no `viewConfig`/.test(problems[0].why)
+        && problems[0].file === "reads/02-bundle-main.json" && built.pages.main === undefined,
+      () => ({ problems }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  // …and the page it could not use must not then be reported twice, once as unread and once as unusable.
+  {
+    const d = mk([M, B], { "reads/01-meta-main.json": GM });
+    const { problems } = assembleBuilt(d);
+    check("ENG-98556: a page whose file was never written is named ONCE — as the unwritten read, not again as the shape its absence leaves behind",
+      () => problems.length === 1 && /not written/.test(problems[0].why),
+      () => ({ problems }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  // The index is a file on disk, which every other guard here already treats as untrusted. `pages[k] ||= {}` with
+  // `k` of `__proto__` hands back `Object.prototype`, and the fields written for that "page" land on every object
+  // in the process — so a page whose bundle was never written stops being dropped and reports as checked.
+  {
+    const d = mk([{ kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "__proto__", what: "m" }, M, B],
+      { "reads/01-meta-main.json": GM, "reads/02-bundle-main.json": GB });
+    const { problems } = assembleBuilt(d);
+    check("ENG-98556: an index naming `__proto__` as a page key is REFUSED — composing it would write onto `Object.prototype`, and every page would inherit a `viewConfig` nobody read",
+      () => problems.some((p) => /no page or on-stand key/.test(p.why)) && ({}).viewConfig === undefined,
+      () => ({ problems, leaked: ({}).viewConfig }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  // Builder-recorded on-stand keys are not reads — nothing on the stand answers them afterwards — but the gate
+  // still wants a value. Without a slot, a plan with card widgets could never reach a passing gate through
+  // `--from`, while the skill forbids hand-writing the payload.
+  {
+    const d = mk([M, B], { "reads/01-meta-main.json": GM, "reads/02-bundle-main.json": GB,
+      "recorded.json": { "cardWidget:abc:KpiChart": true, "miniPageWired": null } });
+    const { built, problems } = assembleBuilt(d);
+    check("ENG-98556: `recorded.json` gives the builder-recorded on-stand keys a slot — a value the build agent recorded reaches `reachability`, and a key still `null` is left unset so its row stays unconfirmed",
+      () => problems.length === 0 && built.reachability["cardWidget:abc:KpiChart"] === true
+        && built.reachability.miniPageWired === undefined,
+      () => ({ problems, reachability: built.reachability }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  // A read value is the stand's answer; a recorded one is an agent's. Where both exist the stand wins.
+  {
+    const d = mk([M, B, { kind: "reachability", file: "reads/03-r.json", reachabilityKey: "sectionRegistered", what: "r" }],
+      { "reads/01-meta-main.json": GM, "reads/02-bundle-main.json": GB,
+        "reads/03-r.json": { workplaces: 1, names: ["Applicants"] },
+        "recorded.json": { sectionRegistered: { workplaces: 9 } } });
+    const { built } = assembleBuilt(d);
+    check("ENG-98556: a READ value outranks a recorded one for the same key — the stand answered, and an agent's note does not overwrite it",
+      () => built.reachability.sectionRegistered.workplaces === 1,
+      () => ({ value: built.reachability.sectionRegistered }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+}
+{
+  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what SKILL.md 7.5 and step 8 tell the
+  // orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
+  // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page
+  // makes those rows untrustworthy, so no round may be written from them.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ft_"));
+  const mf = path.join(d, "manifest.json");
+  try {
+    fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
+    const eng = path.join(ENGINE_DIR, "migrate.mjs");
+    const tasks = path.join(d, "build-tasks");
+    spawnSync(process.execPath, [eng, mf, "--tasks", tasks], { encoding: "utf8" });
+    spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
+    const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
+    // Every file EXCEPT one page bundle, so the run has a genuine read problem to react to.
+    const skip = index.reads.find((r) => r.kind === "pageBundle");
+    index.reads.forEach((r, n) => {
+      if (r === skip) return;
+      const body = {
+        pageMeta: () => ({ page: { schemaName: `Usr${r.pageKey}_Page`, schemaUId: uid(n), packageName: "UsrApp",
+          packageUId: "9bf821e9-691f-4afa-a590-29cba45e0d68", parentSchemaName: "PageWithTabsFreedomTemplate" } }),
+        pageBundle: () => ({ name: `Usr${r.pageKey}_Page`, viewConfig: { items: [] } }),
+        businessRules: () => ({ count: 0, rules: [] }),
+        reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
+        dashboards: () => [],
+      }[r.kind];
+      if (body) asWrite(d, r.file, body());
+    });
+    const before = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
+    const run = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d, "--tasks", tasks], { encoding: "utf8" });
+    const after = fs.existsSync(tasks) ? fs.readdirSync(tasks).length : 0;
+    check("ENG-98556: `--verify --from --tasks` writes NO repair round while a read could not be used — those rows say nobody looked, and dispatching a build agent at them burns a capped round on a page that was never checked",
+      // The SPECIFIC cause, not the generic banner: the dispatch gate refuses a round for its own reasons and
+      // prints the same heading, so matching that alone passes whether or not this guard exists.
+      () => /NO REPAIR TASKS WRITTEN — 1 read\(s\) could not be used/.test(run.stdout || "") && after === before,
+      () => ({ status: run.status, before, after, stdout: (run.stdout || "").slice(0, 200) }));
+    check("ENG-98556: …and it still fails at exit 2 and says on stderr that the rows are NOT CHECKED — a re-read, not a repair",
+      () => run.status === 2 && /NOT CHECKED/.test(run.stderr || ""),
+      () => ({ status: run.status, stderr: (run.stderr || "").slice(0, 200) }));
+    // The report REPLACES the table as the artifact, so a banner prepended to the table alone would be lost on
+    // exactly the command an orchestrated run is told to use.
+    const report = path.join(d, "migration-result.md");
+    check("ENG-98556: the orchestrated run's artifact is the migration result report, in the migration folder, and it CARRIES the unread-file banner — the cause must survive onto the artifact a reader is handed",
+      () => fs.existsSync(report) && /could not be opened/.test(fs.readFileSync(report, "utf8")),
+      () => ({ exists: fs.existsSync(report), files: fs.readdirSync(d) }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+{
+  // `--reads` now CREATES the evidence keys, where before this change a key existed only because somebody filed a
+  // record — so presence no longer carries information. A run where nobody filled anything must still report
+  // every evidence row unconfirmed.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_sk_"));
+  const mf = path.join(d, "manifest.json");
+  try {
+    fs.writeFileSync(mf, JSON.stringify(LP_MANIFEST));
+    const eng = path.join(ENGINE_DIR, "migrate.mjs");
+    spawnSync(process.execPath, [eng, mf, "--reads", d], { encoding: "utf8" });
+    const index = JSON.parse(fs.readFileSync(path.join(d, "reads", "index.json"), "utf8"));
+    const uid = (n) => `be76666d-10f9-47e4-a420-80ebc8099${String(700 + n).slice(-3)}`;
+    index.reads.forEach((r, n) => {
+      const body = {
+        pageMeta: () => ({ page: { schemaName: `Usr${r.pageKey}_Page`, schemaUId: uid(n), packageName: "UsrApp",
+          packageUId: "9bf821e9-691f-4afa-a590-29cba45e0d68", parentSchemaName: "PageWithTabsFreedomTemplate" } }),
+        pageBundle: () => ({ name: `Usr${r.pageKey}_Page`, viewConfig: { items: [] } }),
+        businessRules: () => ({ count: 0, rules: [] }),
+        reachability: () => ({ workplaces: 1, names: ["Applicants"] }),
+        dashboards: () => [],
+      }[r.kind];
+      if (body) asWrite(d, r.file, body());
+    });
+    const run = spawnSync(process.execPath, [eng, mf, "--verify", "--from", d], { encoding: "utf8" });
+    const table = fs.readFileSync(path.join(d, "verify.md"), "utf8");
+    check("ENG-98556: an UNFILLED evidence/judge skeleton closes nothing — the engine writes the keys now, so presence carries no information and every evidence row must still report unconfirmed",
+      () => run.status === 2 && /no complete evidence record under/.test(table),
+      () => ({ status: run.status, rows: (table.match(/no complete evidence record/g) || []).length }));
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+}
+// The third cell of a read row embeds `vk.query`, ~1.6 KB of prose for a reachability read. A pipe or a newline
+// in it silently splits the row, and a read nobody can see is a read nobody performs.
+check("ENG-98556: every rendered read row is ONE table row — four cells, no embedded newline — however long the query text a row carries",
+  () => renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").split("\n")
+    .filter((l) => /^\| /.test(l) && !/^\| ---/.test(l) && !/^\| # \|/.test(l) && !/^\| Key \|/.test(l))
+    .every((l) => l.split("|").length === 6),
+  () => ({ bad: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").split("\n")
+    .filter((l) => /^\| /.test(l) && !/^\| ---/.test(l) && l.split("|").length !== 6).slice(0, 2) }));
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -60,6 +60,7 @@ migrations/<app-or-section-slug>/
     NN-dashboards-migration-log.json # `DashboardMigrationLog` rows, when the plan moves dashboards — one file per run
   evidence.json        # engine-written skeleton (`--reads`): every published evidence id already a key — fill VALUES, never keys
   judge.json           # the same, for the independent verdict on each of those records
+  recorded.json        # engine-written skeleton (`--reads`): the on-stand keys the BUILD agent records rather than reads — replace each `null`
   built.json           # engine-written (`migrate.mjs --verify --from`): the payload COMPOSED from reads/ — never hand-authored
   verify.md            # engine-written (same run): the Plan-vs-Done table that payload was gated on
   build-tasks/         # engine-written (`migrate.mjs --tasks`): the approved plan cut into one-task files
