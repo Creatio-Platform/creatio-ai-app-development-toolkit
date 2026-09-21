@@ -223,7 +223,7 @@ check("the overlap module is NOT carried into cardWidgets[]",
   !(cwOverlap.cardWidgets || []).some(w => w.key === "DualModule"),
   () => JSON.stringify(cwOverlap.cardWidgets));
 
-// ENG-95806 (review d-baranovskyi) — recognition is by the two COORDINATES, not `moduleName`. A module with a
+// Recognition is by the two COORDINATES, not `moduleName`. A module with a
 // non-`CardWidgetModule` name carrying BOTH coordinates is still a card widget (only CardWidgetModule carries both
 // in a real classic body, so keying off the name would be redundant AND would silently mis-scope a variant). Locks
 // the name-independence the reference documents.
@@ -235,7 +235,7 @@ check("recognition is name-independent — a non-CardWidgetModule name with both
   && (cwNamed.cardWidgets || []).some(w => w.key === "NotACardWidgetName" && w.widgetKey === "wk1"),
   () => JSON.stringify(cwNamed.needsDecision.filter(n => n.item === "NotACardWidgetName")));
 
-// ENG-95806 (review d-baranovskyi) — a card widget INHERITED from a base/seed layer (`fromTemplate`) is
+// A card widget INHERITED from a base/seed layer (`fromTemplate`) is
 // base-template chrome and must NOT emit a per-page card-widget decision: the card-widget branch bypasses the
 // base-chrome evidence gate, so the dispatch loop gates on `!fromTemplate` instead. Only a card widget the page's
 // OWN layer declares becomes a decision.
@@ -249,7 +249,7 @@ check("an INHERITED (fromTemplate) card widget emits NO card-widget decision and
 
 /* ---- the DESIGN-SPEC / CHECKLIST PRINTER output for a card widget (rowsForCardWidgets,
    buildLayoutGroupRows, buildCoverageRows + the --verify onstand gate) is asserted on RENDERED output, not just the
-   changeSet. A regression that drops a card widget from the Layout table or the --verify checklist would otherwise
+   changeSet. Dropping a card widget from the Layout table or the --verify checklist would otherwise
    still pass the changeSet-level cases above, defeating the "nothing silently skipped" guarantee (R2). A side-profile
    card widget also locks the friendly-region-label consistency fix (F2): the Layout row, the checklist Layout-by-region
    group AND the Coverage row must all read "Side profile", never the raw "SideAreaProfileContainer". ---- */
@@ -355,7 +355,7 @@ check("F9: the client field still routes into the layout (Header→profile)",
 
 /* ---- F9×F3: a payload field under a SEEDED base tab must NOT spawn a fresh tab insert ---- */
 // The tab type moved `crt.Tab` → `crt.TabContainer`, so a spelling-specific negative here would pass vacuously
-// (it would no longer see a duplicate the mapper DID synthesize). Assert on the NAME instead: the base tab must
+// (it would not see a duplicate the mapper DID synthesize). Assert on the NAME instead: the base tab must
 // carry no synthesized insert of ANY tab spelling.
 const TAB_TYPES = new Set(["crt.TabContainer", "crt.Tab"]);
 const synthesizedTab = (diff, name) => diff.some(o => o.name === name && TAB_TYPES.has(o.values?.type));
@@ -476,9 +476,9 @@ check("C5: a designer auto-named group whose caption RESOLVES (\"Pricing\") → 
 
 /* ---- #4: a CONTROL_GROUP declared via `this.Terrasoft.ViewItemType.*` (the dominant real-body idiom, and the
    bare `terrasoft` define-param form) must resolve to 15 end-to-end, so ensureGroup builds a crt.ExpansionPanel.
-   Before the fix the enum collapsed to null and the group silently degraded to a plain crt.GridContainer. The
+   An unresolved enum collapses to null and degrades the group to a plain crt.GridContainer. The
    existing C5 golden above uses a NUMERIC itemType (via makeOp), so it never exercised the resolver — this one
-   parses a real body so a regression in the `this.Terrasoft`/param transition is caught. ---- */
+   parses a real body so a break in the `this.Terrasoft`/param transition is caught. ---- */
 const symGrpBody = 'define("Client",["terrasoft"],function(Terrasoft){return{entitySchemaName:"X",diff:[' +
   '{operation:"insert",name:"MyTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP,isTab:true}},' +
   '{operation:"insert",name:"Grp1",parentName:"MyTab",propertyName:"items",values:{itemType:this.Terrasoft.ViewItemType.CONTROL_GROUP,caption:"Resources.Strings.GCap"}},' +
@@ -629,10 +629,9 @@ const umCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", refModules:
   di({ name: "SlaGroup", parentName: "Header", propertyName: "items", caption: "getSla" }),           // childless + struct NAME + content → must surface
   di({ name: "RealGroup", parentName: "Header", propertyName: "items", itemType: 7 }),                 // CONTAINER whose whole subtree maps to nothing → surfaces ONCE
   di({ name: "RealGroupLabel", parentName: "RealGroup", propertyName: "items", caption: "x" }),        // its only child, itself unmapped
-  // The retired-heuristic case, restored: `RealGroup` gained an explicit `itemType: 7` in this ticket, which took
-  // the ORIGINAL scenario (struct-shaped NAME + NO itemType + unmapped children) out of the suite. `SlaGroup` above
-  // covers struct-name + no itemType while CHILDLESS; this covers it with a subtree, which is the combination the
-  // removed `SOFT_STRUCT_RX` used to silence.
+  // `SlaGroup` above covers struct-name + no itemType while CHILDLESS; this covers it with a subtree,
+  // which is the combination a struct-shaped-NAME heuristic silences. `RealGroup` carries an explicit
+  // `itemType: 7`, so the name-only scenario is covered here rather than there.
   di({ name: "LegacyGroup", parentName: "Header", propertyName: "items" }),
   di({ name: "LegacyGroupLabel", parentName: "LegacyGroup", propertyName: "items", caption: "y" })] })]));
 check("unmapped-component: a client LABEL/container with no Freedom element is surfaced (LOUD, not silent)",
@@ -646,7 +645,7 @@ check("unmapped-component: a mapped field is NOT flagged as unmapped",
 check("unmapped-component: a CHILDLESS struct-named content item (SlaGroup) IS surfaced — no silent drop on name alone",
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "SlaGroup"));
 // a CONTAINER whose ENTIRE subtree produced no Freedom element surfaces — once, at the subtree root.
-// It previously stayed silent because its NAME ended in `Group`, which is the name-guessing this change removed:
+// Name-guessing would keep it silent because its NAME ends in `Group`, and the engine does not guess:
 // a container holding nothing but unmapped content is real UI, and the reader gets ONE decision for the block
 // (its child is folded in, not listed separately).
 check("unmapped-component: a CONTAINER whose whole subtree maps to nothing surfaces ONCE, at the block root",
@@ -907,8 +906,8 @@ check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not s
   migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
 
 /* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
-   so a corrupt plan can NEVER read as gate-clean (regression guard for parseSchema error-propagation — esp.
-   after the AST switch: a broken body now fails the acorn parse instead of the old vm eval). ---- */
+   so a corrupt plan can NEVER read as gate-clean (this guards parseSchema error-propagation: a broken
+   body fails the acorn parse). ---- */
 const brokenBody = 'define("X", function() { return { entitySchemaName: "X", diff: [ ';
 const brokenRun = runMigration({ schemas: [{ pkg: "Broken", body: brokenBody }] });
 check("migrate.mjs: broken body -> parseErrors > 0 (parse error propagated, not swallowed)", brokenRun.parseErrors.length > 0);
@@ -1238,18 +1237,18 @@ check("design-spec: component feature (Approvals) shown by name; list feature (A
   /\| Approvals \| Approvals \|/.test(spec) && /\| Activities \| Related list \|/.test(spec));
 // Visa=Approvals domain note must ride on the standardFeature AND surface in the Layout row (the
 // standard-feature decision is excluded from ⚠ Confirm) — so the agent doesn't wrongly downgrade it.
-check("Approvals: Visa is DETECTED as the Approvals feature (component); the verbose 'don't downgrade' recipe is no longer duplicated in the plan (it lives in the mapping doc)",
+check("Approvals: Visa is DETECTED as the Approvals feature (component); the verbose 'don't downgrade' recipe is NOT duplicated in the plan (it lives in the mapping doc)",
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
   && !/how Approvals is stored/.test(spec),
   () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals"));
-check("Approvals: the verbose TWO-components/get-component-info/ABOVE-the-island how-to is no longer in the plan note (it lives in the mapping doc); the feature is still detected",
+check("Approvals: the verbose TWO-components/get-component-info/ABOVE-the-island how-to is NOT in the plan note (it lives in the mapping doc); the feature is still detected",
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component")
   && !/get-component-info/.test(dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note || "")
   && !/get-component-info/.test(spec),
   () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Approvals")?.note);
 // #6 — Activities/Emails are FILTERED RELATED LISTS, not a Timeline; the 'NOT a Timeline' note must ride on
 // the standardFeature AND surface in the Layout row (a real agent rebuilt them as a crt.Timeline — wrong).
-check("#6: Activities is DETECTED as a filtered related list (uiShape list); the 'NOT a Timeline' domain note is no longer in the plan (it lives in the mapping doc)",
+check("#6: Activities is DETECTED as a filtered related list (uiShape list); the 'NOT a Timeline' domain note is NOT in the plan (it lives in the mapping doc)",
   dsCs.changeSet.standardFeatures.some(s => s.feature === "Activities" && s.uiShape === "list")
   && !/NOT a Timeline/i.test(spec),
   () => dsCs.changeSet.standardFeatures.find(s => s.feature === "Activities"));
@@ -1349,8 +1348,6 @@ check("list-column evidence from another section is gated, not thrown",
     source: "entity-default", columns: [{ name: "Name" }] }), /belongs to another section/),
   () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
     source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
-// The example used to be `"profile"` — which is a REAL source `get-classic-list-columns` returns, and gating it was
-// defect (the engine rejected the tool's most common answer as malformed and forced a worse re-read).
 // The subject of this check is an UNKNOWN source, so it needs a value the tool genuinely never returns.
 check("an unknown source is gated with the received value named",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
@@ -1359,8 +1356,8 @@ check("an unknown source is gated with the received value named",
     source: "grid-profile", columns: [{ name: "Name" }] }).structure?.issues);
 // --- `source: "profile"` is ACCEPTED, USED, and ASKED ABOUT ONCE. Classic keeps a section's visible
 // columns as saved grid-profile data, so this is the set the list actually renders — and the tool's own contract says
-// a product section usually resolves to it. The engine used to reject it as malformed, so the run re-read with
-// `ignore-profile=true` and got the statically declared set: fewer columns than the list shows.
+// a product section usually resolves to it. Rejecting it as malformed forces a re-read with
+// `ignore-profile=true`, which returns the statically declared set: fewer columns than the list shows.
 const profileRun = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
   source: "profile", columns: [{ name: "Name" }, { name: "JobTitle" }] });
 check("a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
@@ -1604,7 +1601,7 @@ check("the legacy bare-array path renders the narrowed question, not just the in
 // keys off it — pin the checklist shape in a state that could not occur before this PR.
 // The columns row is owned by the `list` key and GATED, naming the columns it expects — both halves pinned here,
 // together with the invariant that a resolved column set yields exactly ONE such row.
-check("ENG-95229/ENG-95218: a resolved-only manifest (no section chain) publishes exactly one `List columns` checklist row, on the `list` page key and GATED",
+check("a resolved-only manifest (no section chain) publishes exactly one `List columns` checklist row, on the `list` page key and GATED",
   () => { const r = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "entity-default", columns: [{ name: "Name" }] });
     const rows = checklistGroups(r, checklistOpts(r)).flatMap((g) => g.rows).filter((x) => x.label.startsWith("List columns"));
@@ -1648,8 +1645,8 @@ check("a rejected read is disclosed, not silently discarded, when the chain pars
     && (rejectedChainWithColumns.section?.listColumnNotes || []).some((n) => /an on-stand list-column read was supplied but could not be used/.test(n))
     && /\*\*List columns:\*\* Name · Stage \(an on-stand list-column read was supplied but could not be used/.test(rejectedChainWithColumns.designSpec),
   () => rejectedChainWithColumns.designSpec.split("\n").filter((l) => /List columns/.test(l)).join(" | "));
-// The third arm of the same guard: with NO chain either, `analyzeSectionChain` used to return null and the plan
-// rendered no List-columns line whatsoever — the rejection erased entirely. A rejected read is evidence, so the
+// The third arm of the same guard: with NO chain either, `analyzeSectionChain` returns null. Without this the plan
+// would render no List-columns line whatsoever, erasing the rejection. A rejected read is evidence, so the
 // line renders and says the read could not be used.
 check("a rejected read with no chain at all still renders a List columns line",
   () => { const r = listColumnGateRun({ success: false, error: "stand unreachable" });
@@ -1725,7 +1722,7 @@ check("`filterAttributes` publishes only THIS ChangeSet's contribution and flags
         && d.reason.includes("silently disabled"))
       && !/⛔ \*\*`filterAttributes`/.test(lpRun.designSpec); },
   () => JSON.stringify(lcs.listViewModelConfigDiff.find((o) => o.values.filterAttributes)));
-check("ENG-95218 / ENG-96327 + ENG-94714: the command-bar set does NOT claim to be complete — ONE `list-command-bar` decision per run (never per action) names the buttons found and says it read BOTH classic surfaces — but the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
+check("the command-bar set does NOT claim to be complete — ONE `list-command-bar` decision per run (never per action) names the buttons found and says it read BOTH classic surfaces — but the human plan shows it as the explicit `- **Command-bar actions:**` bullet, NOT a ⚠ Confirm row",
   () => lcs.commandBarActions.length === 1 && lcs.commandBarActions[0].source === "getSectionActions"
     && lcs.needsDecision.filter((d) => d.kind === "list-command-bar").length === 1
     && /runBulkAssign/.test(lcs.needsDecision.find((d) => d.kind === "list-command-bar").item)
@@ -1733,7 +1730,7 @@ check("ENG-95218 / ENG-96327 + ENG-94714: the command-bar set does NOT claim to 
     && /- \*\*Command-bar actions:\*\* 1 found/.test(lpRun.designSpec)
     && !/\*\*\[list-command-bar\]\*\*/.test(lpRun.designSpec),
   () => ({ actions: lcs.commandBarActions, nd: lcs.needsDecision.filter((d) => d.kind === "list-command-bar") }));
-check("ENG-95218 / ENG-96327 (134fe62): the list page renders POSITIONED tables for filters + command bar; the detailed List-columns table is dropped to the plain `- **List columns:**` line, and the old prose bullets stay gone",
+check("the list page renders POSITIONED tables for filters + command bar; the detailed List-columns table is dropped to the plain `- **List columns:**` line, and it carries no prose bullets",
   () => !/#### List columns \(in order\)/.test(lpRun.designSpec)     // detailed columns table dropped (134fe62)
     && /- \*\*List columns:\*\*/.test(lpRun.designSpec)               // …still carried by the plain line
     && /#### Quick filters/.test(lpRun.designSpec)
@@ -1856,14 +1853,14 @@ const secKinds = [...new Set((secViewRun.listChangeSet?.needsDecision || []).map
 check("only member kinds fold from the section body into the list ChangeSet — a record-page decision never rides in",
   secKinds.every((k) => k.startsWith("list-") || MEMBER_WORKLIST_KINDS.has(k)),
   () => secKinds);
-check("ENG-95218: each list row gets the mechanism its DELIVERABLE allows — columns and filters are MEASURED off the built page (like a form field), while a command-bar action, whose Freedom container is unresolved until ENG-94714, stays an evidence row; closing a body-answerable row on a filed record would let the builder's own claim stand in for the page",
+check("each list row gets the mechanism its DELIVERABLE allows — columns and filters are MEASURED off the built page (like a form field), while a command-bar action, whose Freedom container is unresolved, stays an evidence row; closing a body-answerable row on a filed record would let the builder's own claim stand in for the page",
   () => { const rows = checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.pageKey === "list");
     const ids = rows.filter((r) => r.vk?.type === "evidence").map((r) => r.vk.id);
     const byKind = Object.fromEntries(rows.filter((r) => r.list).map((r) => [r.list.kind + ":" + r.list.item, r.vk.type]));
     // 4 deliverable rows (columns · 2 filters · 1 action) + the per-page `creatio-ui-guidelines` quality gate, which
     // applies to a list page's layout like any other page's — a published key must carry exactly one of those.
     // composition, not a bare count: 4 deliverable rows (columns / 2 filters / 1 action) + 4
-    // ⚠ Confirm items + the page's TWO quality-gate rows (ENG-95859: "design pass ran" and "independently judged"
+    // ⚠ Confirm items + the page's TWO quality-gate rows ("design pass ran" and "independently judged"
     // are different facts, reported as two rows sharing the ONE `list#quality-gates` id below)
     return rows.filter((r) => r.list).length === 4 && rows.filter((r) => r.confirm).length === 4
       && rows.filter((r) => r.vk?.id === "list#quality-gates").length === 2
@@ -2028,7 +2025,7 @@ check("with two same-column filters, ONE built element does NOT close both rows"
 const lpEmptySection = runMigration({ ...LP_MANIFEST, addRecordMiniPage: false,
   section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }],
 }, { baseDir: FIX });
-check("ENG-95470 (defect 3, guard): a plan with NOTHING else resolved for the list page (`lpEmptySection` — no columns/filters/actions) publishes NO list-template row and no gated `list` key, even though `planMeta.listTemplate` is set — a template value alone must never flip an otherwise-ungated list page into an unclosable key (ENG-95218's guarantee)",
+check("guard: a plan with NOTHING else resolved for the list page (`lpEmptySection` — no columns/filters/actions) publishes NO list-template row and no gated `list` key, even though `planMeta.listTemplate` is set — a template value alone must never flip an otherwise-ungated list page into an unclosable key",
   () => { const groups = checklistGroups(lpEmptySection, lpOpts);
     const rows = groups.flatMap((g) => g.rows);
     return !groups.some((g) => g.pageKey === "list")
@@ -2109,7 +2106,7 @@ check("with no row actions declared the surface is INERT — no rows, no table, 
       && !checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).some((r) => r.list?.kind === "rowaction")
       && !l.needsDecision.some((d) => d.kind === "list-row-action"); },
   () => ({ rowActions: lpRun.listChangeSet.rowActions, rows: checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.list?.kind === "rowaction").map((r) => r.label) }));
-// The shape ENG-94714 will produce: one entry per \`DataGridActiveRow…\` item, typically carrying an enablement condition.
+// The shape produced: one entry per \`DataGridActiveRow…\` item, typically carrying an enablement condition.
 const lpRowActionRun = runMigration({ ...LP_MANIFEST,
   section: { schemas: LP_MANIFEST.section, listColumns: { success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "schema-default", columns: [{ name: "Name" }] },
@@ -2135,7 +2132,7 @@ check("a row action emits NO op and says so — every other op here reproduces a
       && /carries no op in this ChangeSet/.test(lpRowActionRun.designSpec)
       && /control and placement NOT resolved here/.test(lpRowActionRun.designSpec); },
   () => lpRowActionRun.designSpec.slice(lpRowActionRun.designSpec.indexOf("#### Row actions"), lpRowActionRun.designSpec.indexOf("#### Row actions") + 700));
-check("ENG-95218 / ENG-96327: each row action is a `list-row-action` decision (its condition→Freedom-state / always-enabled reason on the data) surfaced in the Row-actions TABLE — NOT a ⚠ Confirm row (binary: there is a row action or there is not)",
+check("each row action is a `list-row-action` decision (its condition→Freedom-state / always-enabled reason on the data) surfaced in the Row-actions TABLE — NOT a ⚠ Confirm row (binary: there is a row action or there is not)",
   () => { const nd = lpRowActionRun.listChangeSet.needsDecision.filter((d) => d.kind === "list-row-action");
     const withCond = nd.find((d) => /QualificationProcess/.test(d.item));
     const without = nd.find((d) => /PlainAction/.test(d.item));
@@ -2266,7 +2263,7 @@ check("cycle(mini): a cyclic mini renders its mini spec ('Mini page (quick-add)'
   () => cycMiniRes.plan.split("\n").filter((l) => /mini|cycle|NOT folded/i.test(l)).join(" | "));
 
 /* ---- a REAL captured mini page folds through the mapper, not a hand-written toy body.
-   `ActivityMiniPage [WorkPRMBase]` captured from applicants_workbuild246_0817 (ENG-93926's workenu site): its 5
+   `ActivityMiniPage [WorkPRMBase]` captured from applicants_workbuild246_0817: its 5
    real customer/product override layers (ConferenceRoom/IntegrationV2/SSP/WorkOverride/WorkPRMBase) on a compact
    representative BaseMiniPage seed. The full 96KB platform seed is boilerplate (identical for every classic mini
    page), so the fixture ships a small example seed that defines the containers + the base items the real layers
@@ -2448,7 +2445,7 @@ check("#5/#13 fields: without columnTitles, NO inline label AND no titleText on 
 /* ---- INVARIANT: viewConfigDiff carries NO inline user-visible text ---- */
 // The localization guarantee (AGENTS.md): every caption emitted onto the page is a LOCALIZABLE REFERENCE to a
 // resource key — never the human text itself — and a field never carries an inline `label`. Asserted across the
-// rich Contract changeset (many tabs/groups/fields) so a regression that ships a literal caption/label anywhere
+// rich Contract changeset (many tabs/groups/fields) so shipping a literal caption/label anywhere
 // trips this — plus resources is exposed.
 // TWO reference forms are legal, because the platform accepts a different one per host component:
 //   • `$Resources.Strings.<key>` — groups / expansion panels / details.
@@ -2559,8 +2556,8 @@ check("--plan: verbatim / Adjustments guardrail present (agent must not edit gen
   /present this VERBATIM/i.test(cli.plan) && /Adjustments/.test(cli.plan));
 // This fixture records no child editPage, so its children are `⚠ resolve` (NOT Rebuild) — a real Rebuild (child)
 // row is covered by recCs (#7b) with a folded child. Here we only guard that recursion surfaces childPages AND
-// renders their rows inside Main scope, not a separate section. (Was a false positive: it matched `Rebuild (child)`
-// from the unconditional Call legend, which the conditional legend no longer prints when no such row exists.)
+// renders their rows inside Main scope, not a separate section. (Matching `Rebuild (child)` from the
+// unconditional Call legend is a false positive; the conditional legend does not print it when no such row exists.)
 check("child pages (recursion): custom details → result.childPages + child scope rows inside the Main scope table",
   Array.isArray(cli.childPages) && cli.childPages.length >= 1
   && /opened by detail/.test(cli.plan) && !/### Child pages to migrate/.test(cli.plan));
@@ -2643,7 +2640,7 @@ check("Smell#2 planMeta: Overview + Main-scope are filled from planMeta (placeho
   /\*\*Scope:\*\* single-section ·/.test(pmRun.plan) && /\*\*Environment:\*\* workbuild103 ·/.test(pmRun.plan)
   && /Applicant1Section \(list page\) \| ListPageV3 \|/.test(pmRun.plan) && /Applicant form page \| PageWithTabsFreedomTemplate \|/.test(pmRun.plan)
   && !/<FILL: single-section/.test(pmRun.plan) && !/<FILL: environment/.test(pmRun.plan));
-// the agent no longer supplies `listTemplate`: Freedom has ONE list-page template, so the
+// the agent does not supply `listTemplate`: Freedom has ONE list-page template, so the
 // engine FIXES it to ListPageV3Template. With NO planMeta.listTemplate the Main-scope list-page row shows the
 // hardcoded default — never a `<FILL:>`, never blank, never an agent's guess — and it is NOT a missing planMeta key.
 {
@@ -2687,9 +2684,9 @@ try {
 } finally {
   fs.rmSync(outPath, { force: true });
 }
-// the `--verify --built` done-gate CLI path (exit-2 wiring, --built read/JSON.parse,
-// arg validation) was only exercised via renderVerify() directly; nothing ran it end-to-end through the CLI, so a
-// regression could let a page that MISSED deliverables read as done (exit 0) — the exact miss this feature prevents.
+// The `--verify --built` done-gate CLI path (exit-2 wiring, --built read/JSON.parse,
+// arg validation) is exercised end-to-end through the CLI here, not only via renderVerify(): without that,
+// a page that MISSED deliverables could read as done (exit 0) — the exact miss this feature prevents.
 // spawnSync goldens mirror the --out / GATE-BLOCKED pattern. The SU fixture is gate-clean + structure-complete, so
 // the exit code is driven by VERIFY, not the gate.
 const verifyManifest = JSON.stringify({ entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA, signals: FULL_SIGNALS });
@@ -2705,7 +2702,7 @@ const builtPath = path.join(os.tmpdir(), `c2f_built_${process.pid}.json`);
 try {
   // (c) a built page with the deliverables MISSING (an EMPTY merged `viewConfig`) → verifyIncomplete → the HARD
   // exit-2 done-gate fires end-to-end through the CLI, and the verify markdown carries a ❌ MISSING (a MISSED page
-  // must NOT exit 0). ENG-94975 (contract v2 D6): the payload is now KEYED BY PAGE and each entry carries
+  // must NOT exit 0). Contract v2: the payload is KEYED BY PAGE and each entry carries
   // `get-page`'s `bundle.viewConfig` verbatim. Keep this payload SHAPE-VALID on purpose — it is the suite's only
   // end-to-end proof that a MISSING deliverable drives exit 2, so it must never collapse into the exit-1 shape
   // guard asserted by (c2) below (that would leave the exit-2 done-gate with NO end-to-end coverage at all).
@@ -2714,9 +2711,9 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
-  // (c-D12) ENG-94975 (contract v2 D12) — exit 2 is TWO conditions with OPPOSITE responses, and until this line
-  // existed `--verify` exited 2 in silence, so an executor could not tell "my build is short" (repair on-stand and
-  // re-verify) from "the PLAN is short" (stop, return to the caller — no amount of building clears it). This SU
+  // (c-D12) Contract v2 — exit 2 is TWO conditions with OPPOSITE responses. Exiting 2 in silence would leave
+  // an executor unable to tell "my build is short" (repair on-stand and re-verify) from "the PLAN is short"
+  // (stop, return to the caller — no amount of building clears it). This SU
   // fixture is gate-clean / structure-complete / coverage-complete, so it is the BUILD half in isolation: the
   // build-incomplete line must name the gap, and NO plan-level banner may appear next to it. Asserting the absence
   // matters as much as the presence — a run that shouted both would send the executor into the loop D12 forbids.
@@ -2755,7 +2752,7 @@ try {
 } finally {
   fs.rmSync(builtPath, { force: true });
 }
-// (f) ENG-95901 — THE CLI-BOUNDARY PROOF of the two verdict axes, on a BARE manifest built so that ONLY
+// (f) THE CLI-BOUNDARY PROOF of the two verdict axes, on a BARE manifest built so that ONLY
 // evidence/confirm rows stay open (0 MISSING, 3 unverified: field-control, field-labels, quality-gates — all
 // evidence the builder is contractually forbidden to file itself). The whole-tree `--verify` must still exit 2
 // (`complete: false`, AC7/AC8 — an unconfirmed row still blocks the human-facing "done" verdict) and its stderr
@@ -2790,8 +2787,8 @@ try {
   }
 }
 // detectAddMode text-scans a detail's body over the UNION of its replacing chain, so a
-// large body must NOT trigger catastrophic backtracking (engine.mjs documents a prior ~32s/700KB regex regression
-// fixed with bounded quantifiers). ~700KB of ADVERSARIAL near-matches (many `getAddRecordButtonVisible` heads that
+// large body must NOT trigger catastrophic backtracking (engine.mjs documents why the quantifiers are bounded:
+// an unbounded one costs ~32s on 700KB). ~700KB of ADVERSARIAL near-matches (many `getAddRecordButtonVisible` heads that
 // never reach `return false`, so the bounded [\s\S]{0,80}? window does real work each time) must stay sub-second.
 {
   const unit1 = "getAddRecordButtonVisible: function(){ " + "x".repeat(78) + " ; }\n"; // ~123B, head never reaches `return false`
@@ -2811,10 +2808,10 @@ try {
     bytes > 600 * 1024 && ms < ceiling && (r === null || typeof r === "object"),
     () => ({ bytes, ms, baseMs, ceiling, r }));
   // the wall-clock check reads ~0 ms baseline on Windows and collapses to a fixed ceiling,
-  // so back it with a DETERMINISTIC structural assertion. PR#58 review (Tetiana T-m2): scope it to the ACTUAL
+  // so back it with a DETERMINISTIC structural assertion, scoped to the ACTUAL
   // catastrophic-backtracking surface — NO unbounded `[\s\S]*` / `[\s\S]+` in detectAddMode's regexes — and NOT the
-  // exact `{0,N}` spelling of every run (that coupled the assert to source text and broke on behaviour-preserving
-  // refactors, exactly the kind this PR is full of). This keeps a timing-independent ReDoS guard that a reintroduced
+  // exact `{0,N}` spelling of every run (that would couple the assert to source text and break on
+  // behaviour-preserving refactors). This keeps a timing-independent ReDoS guard that a reintroduced
   // unbounded quantifier still fails, while surviving a rename/extract that keeps the bounded discipline.
   const daSrc = detectAddMode.toString();
   check("Minor4 structural: detectAddMode has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` run (deterministic ReDoS guard, timing-independent, refactor-tolerant)",
@@ -2915,11 +2912,11 @@ check("#verify field-path image: preconditions — CoverImg is a FIELD-path imag
   && !(imgFieldPath.changeSet.images || []).some((im) => im.classic === "CoverImg"),
   () => JSON.stringify(imgFieldPath.changeSet.images || []));
 const fpImgMissing = renderVerify(imgFieldPath, {}, { ops: [{ name: "Other", type: "crt.Input" }] }); // built page has NO crt.ImageInput
-check("#verify field-path image: dropped (no crt.ImageInput built) → ❌ MISSING + NOT complete — field-path image now gated by --verify (PR#58 blocking)",
+check("#verify field-path image: dropped (no crt.ImageInput built) → ❌ MISSING + NOT complete — field-path image is gated by --verify",
   fpImgMissing.missing >= 1 && fpImgMissing.complete === false && /Image field[\s\S]*?❌ MISSING/.test(fpImgMissing.markdown),
   () => ({ missing: fpImgMissing.missing, complete: fpImgMissing.complete, rows: fpImgMissing.markdown.split("\n").filter((l) => /Image|MISSING/.test(l)).join(" | ") }));
 const fpImgOk = renderVerify(imgFieldPath, {}, { ops: [{ name: "CoverImg", type: "crt.ImageInput" }] }); // built
-check("#verify field-path image: WITH crt.ImageInput built → image row ✅ Done (regression guard closing the coverage gap)",
+check("#verify field-path image: WITH crt.ImageInput built → image row ✅ Done",
   fpImgOk.missing === 0 && /Image field[\s\S]*?✅ Done/.test(fpImgOk.markdown),
   () => fpImgOk.markdown.split("\n").filter((l) => /Image/.test(l)).join(" | "));
 // review (PR#58 human review R-m3, on-stand verified: DataValueType 42=Phone number, 44=Web link, "Email"=Email
