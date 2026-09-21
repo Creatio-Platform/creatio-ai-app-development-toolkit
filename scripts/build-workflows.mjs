@@ -30,9 +30,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE = path.join(ROOT, 'skills', '_workflow-core')
 
 // The workflow IDENTITY manifest: the one structured place a consumer reads `{name, script, phases}` from.
-// review (architecture) — the installer used to recover `meta.name` by lexing the generated JavaScript
-// with a hand-written sub-lexer in Python, so the consumer parsed the producer's output language and the producer
-// published nothing structured, while `TARGETS` below held the same data in structured form at emit time. That is
+// The installer must not recover `meta.name` by lexing the generated JavaScript
+// with a hand-written sub-lexer in Python: that has the consumer parse the producer's output language while the producer
+// publishes nothing structured, though `TARGETS` below holds the same data in structured form at emit time. That is
 // what AGENTS.md forbids: a generated artifact is a verification tool, never a source to reverse-engineer format
 // rules from, and CLI/source text is not a substitute for a source that returns the same data as fields. The
 // manifest is generated from `TARGETS` by the same run that writes the scripts and is covered by the same
@@ -45,8 +45,8 @@ const PLACEHOLDER = '/*@INLINE@*/'
 
 // One entry per shipped workflow. `modules` is a DEPENDENCY ORDER, declared
 // rather than derived: a topological sort over `import` lines would be more
-// clever and less auditable, and the list is short enough that a reviewer can
-// check it by eye.
+// clever and less auditable, and the list is short enough to
+// check by eye.
 const TARGETS = [
   {
     name: 'creatio-classic-behaviour-analysis',

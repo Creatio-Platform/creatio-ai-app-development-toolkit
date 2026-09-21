@@ -56,7 +56,7 @@ export function floorPersistentlyRejected(sessionId, lastAttempt) {
 // sends, for the whole session, on every session, until clio is upgraded.
 export const VOCABULARY_UNKNOWN_CODE = 'unknown-event-name';
 
-// A one-time local signal for the case raised in review of PR #96: a clio that rejects
+// A one-time local signal for the case where a clio rejects
 // `workflow_started` on every attempt leaves the session with zero telemetry and, before this, zero
 // indication anything was ever tried, so a maintainer would only learn a whole install's floor was
 // dead from the metrics it never sent. Two things about the line. It carries clio's own rejection code

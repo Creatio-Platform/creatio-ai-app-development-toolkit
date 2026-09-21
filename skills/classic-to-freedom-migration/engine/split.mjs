@@ -11,7 +11,7 @@
 //
 // WHY IT IS FROZEN, AND WHY THE ENGINE STILL OWNS EVERYTHING ELSE. Those same two agents disagreed with each
 // other about granularity — 16 items against 14 — so re-deriving the cut on every run would move a recorded
-// `done` to a task that no longer exists. The cut is therefore made once, at approval, and written down. From
+// `done` to a task that does not exist. The cut is therefore made once, at approval, and written down. From
 // then on the engine owns what a judgement cannot give: that every plan row is placed EXACTLY once, that two
 // items never write one artifact without a chain between them, that an item keeps its identity when the plan
 // changes under it, and that a row appearing later is REPORTED rather than silently dropped.

@@ -178,16 +178,16 @@ function reportSessionUsage(payload, sessionId) {
 		return;
 	}
 	// A reading is already in flight: the emit is handed off, so a Stop arriving before clio answers
-	// would otherwise dispatch a second child over the first one's files. This used to also require
-	// `outstanding.size === size`, which made it decorative — the transcript grows on nearly every
-	// turn, so the sizes almost never matched and overlapping dispatches were the norm. Waiting is
+		// would otherwise dispatch a second child over the first one's files. Also requiring
+		// `outstanding.size === size` would make this decorative — the transcript grows on nearly every
+		// turn, so the sizes almost never match and overlapping dispatches become the norm. Waiting is
 	// safe because the counters are running TOTALS: the next reading carries everything this one
 	// would have, so what is lost is resolution on fast turns, never a number. Once the answer comes
-	// back — refused or otherwise — the reading is no longer in flight and the series continues.
+		// back — refused or otherwise — the reading is not in flight and the series continues.
 	if (inFlight) {
 		return;
 	}
-	// Read once and reused below for the nonce: usageNonce() used to re-read this same marker file a
+	// Read once and reused below for the nonce, rather than having usageNonce() re-read this same marker file a
 	// second time to derive the identical count this check just obtained.
 	const unconfirmedCount = countUnconfirmedUsage(sessionId);
 	if (unconfirmedCount >= USAGE_ATTEMPT_LIMIT) {
@@ -388,7 +388,7 @@ function routingOutput(sessionId) {
 }
 
 // Best-effort, like `noteFloorExhausted`: a bug thrown anywhere in `main()` — before `sessionId` is
-// even known, so this cannot be a per-session claimed diagnostic the way that one is — used to leave
+// even known, so this cannot be a per-session claimed diagnostic the way that one is — would otherwise leave
 // no trace at all. `main()`'s own body already logs nothing on the paths it controls, so without this
 // a persistently broken environment (a Node version this file does not run under, a corrupted state
 // directory the state-dir module's own checks did not anticipate) would look identical to a healthy

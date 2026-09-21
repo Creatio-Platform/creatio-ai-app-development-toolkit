@@ -7,8 +7,8 @@
 // back a validated result; the CORE decides what runs next. Nothing in this file
 // knows about `agent()`, `parallel()` or any other vendor API.
 //
-// WHY A PROTOCOL AND NOT A FUNCTION CALL. The migration workflows used to call
-// `agent()` directly, which made the orchestration executable on exactly one
+// WHY A PROTOCOL AND NOT A FUNCTION CALL. A migration workflow that called
+// `agent()` directly would be executable on exactly one
 // host. Describing the same work as DATA is what lets Claude Code, Codex and a
 // plain CLI run the identical decision sequence — and what lets the suite assert
 // the sequence without an AI runtime at all.

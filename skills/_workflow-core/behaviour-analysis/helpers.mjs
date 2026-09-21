@@ -8,9 +8,9 @@
 // everything" is not evidence, and that is exactly how a real run left the child
 // pages at 0-of-8 described while the plan showed nothing wrong.
 //
-// These functions used to live inside `---8<---` sentinels in the Claude
+// These functions are a real module rather than text inside `---8<---` sentinels in the Claude
 // workflow script, sliced out by the test suite because the script cannot be
-// imported. They are a real module now; the generated Claude script inlines them
+// imported. The generated Claude script inlines them
 // between the same sentinels, so the slice-based checks still see them in the
 // shipped artifact.
 
@@ -133,9 +133,9 @@ export function coveredKeys(rs, allKeys) {
 export const RETRY_ATTEMPTS = 2
 
 // A phase that DIED, retried — and living HERE, as a delegating generator, precisely so the suite can EXECUTE it.
-// This loop used to sit inline at the Critique call site, where the only reachable test was a regex over the
-// workflow's own source: it proved the loop's SHAPE was present and nothing about whether a second attempt ever
-// fires. A condition that silently never allowed one would have passed every check while the retry was a no-op in
+// Keeping this loop inline at the Critique call site would leave the only reachable test a regex over the
+// workflow's own source: that proves the loop's SHAPE is present and nothing about whether a second attempt ever
+// fires. A condition that silently never allowed one would pass every check while the retry was a no-op in
 // production — on the one path whose whole purpose is that a dead pass stops being silent.
 //
 // `makeStep(attempt)` returns the work STEP to yield, so the helper stays host-neutral: it never touches an agent
@@ -219,7 +219,7 @@ export function mergeDeathLine(attempt, error, willRetry) {
 // for.
 // "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
 // `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
-// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
+// that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — would pass the core's bare
 // truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
 // The run then took the "empty worklist is DONE" exit and reported `skipped: true` with `complete: true` over a
 // digest that may be full — the one outcome this workflow exists to make impossible, reached through a malformed
@@ -353,7 +353,7 @@ export function itemId(phase, ...parts) {
 // The index: `packBatches` partitions SCOPES, not labels, and `label` is `schema || role`, so two scopes the
 // Context agent returns under one `schema` are separate batch members carrying one label. With disjoint key sets
 // `keyCollapse` sees no duplicate and passes, and `acceptParts` cannot see it either — both items are ASKED for
-// that path and both return it, so returned-equals-asked holds and no warning fires. Measured by the reviewer at
+// that path and both return it, so returned-equals-asked holds and no warning fires. Measured at
 // `rowsPerAgent: 1` with two `UsrPage` scopes: `describe.1.UsrPage` and `describe.2.UsrPage` both got
 // `customizations-part-UsrPage.md`.
 //

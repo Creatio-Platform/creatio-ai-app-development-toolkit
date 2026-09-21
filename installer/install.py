@@ -509,7 +509,7 @@ def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]
                 f"`node scripts/build-workflows.mjs` in a checkout, or re-run the installer from a "
                 f"current release."
             )
-        # Two scripts claiming one name used to overwrite each other silently while BOTH were
+        # Two scripts claiming one name would overwrite each other silently while BOTH were
         # reported as provisioned, so one skill would run the other's orchestration.
         if name in sources:
             raise RuntimeError(
@@ -997,7 +997,7 @@ def install_codex(repo_root: Path, home: Path) -> None:
     # enable_codex_plugin once the cache exists again: if anything between the two
     # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
     # the run exits non-zero without leaving `enabled = true` pointing at a version
-    # directory that no longer exists.
+    # directory that does not exist.
     config_path = codex_home / "config.toml"
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
     remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
@@ -1296,7 +1296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Installed {PLUGIN_NAME} for: {', '.join(installed)}")
     elif failed:
         # Every detected target failed (e.g. leftover agent home directories
-        # whose CLIs are no longer on PATH). Report non-zero so the wizard
+        # whose CLIs are absent from PATH). Report non-zero so the wizard
         # surfaces the failure instead of a misleading "nothing to do" success.
         print("No coding agents were installed; all detected targets failed.", file=sys.stderr)
     else:

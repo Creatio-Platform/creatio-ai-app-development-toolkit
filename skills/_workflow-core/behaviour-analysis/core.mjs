@@ -94,8 +94,8 @@ function skippedReturn(surface, extra = {}) {
 //
 // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the cards
 // are still merged and the coverage arithmetic still describes what the report contains. Dropping the answer would
-// discard real analysis over a path string, which is the worse failure. What this closes is that the core used to
-// accept whatever path came back, so a part file shared by two items left no trace in the run at all.
+// discard real analysis over a path string, which is the worse failure. What this closes is a core that
+// accepts whatever path comes back, leaving a part file shared by two items with no trace in the run at all.
 function acceptedParts(items, results, askedPart, log) {
   return results.map((r, i) => {
     const want = askedPart.get(items[i]?.id)
@@ -161,7 +161,7 @@ function contextFailureReason(cause, unusable, shape) {
 function contextFailedReturn(contextOutcome, surface, log, returned = null) {
   const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
   // THREE causes, three lines. A rejection, a silent death and a truthy-but-unusable return need different
-  // repairs, and the third one used to be indistinguishable from a surface with nothing on it.
+  // repairs, and without three lines the third is indistinguishable from a surface with nothing on it.
   const unusable = !cause && returned !== null && returned !== undefined
   const shape = Array.isArray(returned) ? 'an array' : `a ${typeof returned}`
   if (cause) {
@@ -215,7 +215,7 @@ function censusShortfallReturn(shortfall, ctx, surface, log) {
 // happen there. Nothing checked it HERE, on the consumer side, and `SCOPE.required` does not list `schema`, so a
 // schema-validating host permits the omission. `censusShortfall` cannot see it either: the collapse changes no
 // scope COUNT, so the run passes the census gate and reports `complete` over a fraction of the surface - the
-// exact failure ENG-96529 defect 2 exists to close. The check is arithmetic, which is the standard this module
+// exact failure a key collapse causes. The check is arithmetic, which is the standard this module
 // sets for itself: rows dispatched must equal rows counted.
 function keyCollapseReturn(collapse, ctx, surface, log) {
   const { totalRows, keyCount, duplicated } = collapse
@@ -279,8 +279,8 @@ export function* run(rawInput, io = {}) {
 
   phase('Context')
   // Through `stepOutcome`, because the driver has TWO ways to report a failed Context and only one of
-  // them used to reach the structured verdict below. A nullish outcome (terminal death) arrives as
-  // `value: null`; a REJECTION is thrown back in here by `sendFor`, and with no catch it propagated
+  // them reaches the structured verdict below on its own. A nullish outcome (terminal death) arrives as
+  // `value: null`; a REJECTION is thrown back in here by `sendFor`, and with no catch it propagates
   // straight out of `run()` as a raw exception — same root cause, two caller-visible results: a
   // documented verdict object, or a stack trace with no coverage numbers at all.
   const contextOutcome = yield* stepOutcome(step({
@@ -349,7 +349,7 @@ export function* run(rawInput, io = {}) {
   const askedPart = new Map()
 
   // an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
-  // The core used to accept whatever path came back, so an agent writing round 1's file from the repair round left
+  // A core that accepted whatever path came back would let an agent writing round 1's file from the repair round leave
   // no trace at all; this line is what makes a recurrence, or any other path drift, visible in the run log.
   //
   // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the
@@ -473,12 +473,12 @@ export function* run(rawInput, io = {}) {
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
   // analysis contract forbids.
   // resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
-  // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. ENG-96529 made `normalizeScopes` requalify every scope
-  // key, so bare method keys no longer exist in `allKeys`; the Critique is an analysis agent and may legitimately
-  // answer with either form. Under the strict test a Critique answering `onSaved` was DROPPED, and the dropped
+  // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. `normalizeScopes` requalifies every scope
+  // key, so bare method keys do not exist in `allKeys`; the Critique is an analysis agent and may legitimately
+  // answer with either form. Under a strict test a Critique answering `onSaved` is DROPPED, and the dropped
   // rows are the dangerous ones: rows the arithmetic already counts as covered because they carry a card, which
   // the adversarial pass judged undescribed. They never reached `repairKeys`, no repair item was dispatched, and
-  // the run still reported `complete: true` — the same silent coverage hole ENG-96529 exists to close.
+  // the run would still report `complete: true` — the silent coverage hole this closes.
   const critiqueUncoveredRaw = (critique?.uncovered || []).map((u) => u?.key).filter((k) => typeof k === 'string')
   const critiqueResolved = critiqueUncoveredRaw.map((k) => ({ k, ...resolveKey(k, allKeys) }))
   const critiqueUncovered = critiqueResolved.map((r) => r.key).filter(Boolean)

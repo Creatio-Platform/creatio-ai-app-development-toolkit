@@ -61,7 +61,7 @@ SENTINEL_USABLE = "PREFLIGHT: clio-mcp-usable"
 SENTINEL_BLOCKED = "BLOCKER: clio-mcp-unavailable"
 
 # Short by design: a healthy clio answers get-tool-contract in ~1-2s, so a dead or
-# missing server is diagnosed in seconds — never the 664s/964s hangs of ENG-92985.
+# missing server is diagnosed in seconds — never a 664s/964s hang.
 DEFAULT_PROBE_TIMEOUT = 20
 
 # Upper bound on --timeout so an extreme explicit value can't defeat the "bounded,
@@ -71,7 +71,7 @@ MAX_PROBE_TIMEOUT = 120
 # Hard wall-clock ceiling the watchdog adds on top of the probe timeout. The probe
 # runs on a worker thread; if it overruns (a clio child that is alive but silent, or
 # a blocking stdout read that never sees the deadline), the watchdog force-kills the
-# child so a hung server can NEVER reproduce the ENG-92985 hang inside the gate.
+# child so a hung server can NEVER reproduce that hang inside the gate.
 PROBE_WATCHDOG_GRACE = 5
 
 # mcp_client's cold-start `initialize` handshake runs BEFORE the get-tool-contract call
