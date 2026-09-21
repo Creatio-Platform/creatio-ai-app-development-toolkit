@@ -29,7 +29,12 @@ MARKERS = (
             re.IGNORECASE,
         ),
     ),
-    ("severity_label", re.compile(r"\b(?:Blocker|Major|Minor)\b|\bP[0-3]\b")),
+    # A bare ``P1`` is a priority label only when it stands alone in prose;
+    # inside quotes it is an ordinary fixture identifier, which the left edge excludes.
+    (
+        "severity_label",
+        re.compile(r"\b(?:Blocker|Major|Minor)\b|(?:^|[\s(\[])P[0-3](?=[\s):,.\]]|$)"),
+    ),
     ("person_handle", re.compile(r"\b[a-z0-9]+-[a-z0-9]+-creatio\b", re.IGNORECASE)),
     (
         "history_narrative",
