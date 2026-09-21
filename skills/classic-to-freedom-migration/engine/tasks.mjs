@@ -2117,6 +2117,46 @@ export function renderProgress(set, dir, now = new Date().toISOString()) {
   return L.join("\n") + "\n";
 }
 
+// ---8<--- STARTABILITY: ONE PREDICATE, TWO CALLERS ---8<---
+
+// WHY IT IS EXTRACTED. `--start` made these checks inline, so "which task may I start?" had no answer except to
+// try one and read the refusal — and every orchestrator that wanted the answer in advance re-derived it in shell
+// over `index.md`, which is a DERIVED report whose shape moved under them. The same code now serves both: the
+// gate REFUSES through it and the query REPORTS through it, so an answer that disagrees with the gate is not a
+// thing that can be written. Agreement produced by one predicate is structural; agreement produced by two rules
+// kept in step by hand is a coincidence that decays.
+//
+// DELIBERATELY PER TASK, and read-only. The dispatch ledger is NOT checked here: a broken ledger is ONE fact
+// about the whole folder, and answering it per task would print it once per id and suggest N remedies for one
+// repair. Its caller states it once — `startTask` before it opens a clock, `startableTasks` as a verdict.
+export const HOLD_UNREAD = "unread";        // the engine could not parse that file and will not rewrite it
+export const HOLD_DEPS = "deps";            // something in `dependsOn` has not settled
+export const HOLD_OVERLAP = "overlap";      // another DISPATCHED task is still writing the same artifact
+export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member of THIS answer writes it first
+export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
+export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS];
+
+// `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
+// never has to re-derive who is holding it in order to say so.
+export function startBlocker(task, tasks, running = {}) {
+  // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
+  // work already done on the stand, and the front matter is a human's to repair.
+  if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
+  const byId = new Map(tasks.map((x) => [x.id, x]));
+  // THE QUEUE ORDER IS ENFORCED, not advised — a task built before its dependency reads answers that do not exist
+  // yet: the child form its related list opens, the scaffolding it saves into, the `## Notes` the next chunk of
+  // its page reads instead of redoing the work.
+  const openDeps = (task.dependsOn || []).map((d) => byId.get(d)).filter((d) => d && !SETTLED.has(d.status));
+  if (openDeps.length) return { cause: HOLD_DEPS, tasks: openDeps };
+  // ONE WRITER PER ARTIFACT. The comparison is on `writesTo` and on an OPEN CLOCK, not on the number of open
+  // tasks: tasks on different artifacts may legitimately run at once, and a read-only task claims nothing.
+  const conflicts = task.writesTo
+    ? tasks.filter((x) => x.id !== task.id && x.writesTo === task.writesTo && running[x.id])
+    : [];
+  if (conflicts.length) return { cause: HOLD_OVERLAP, tasks: conflicts };
+  return null;
+}
+
 // MARK A TASK STARTED, then regenerate. The orchestrator calls this immediately BEFORE it dispatches the
 // sub-agent, which is the whole point: until it existed, `index.md` only ever moved when an agent FINISHED, so a
 // run in flight looked identical to a run that had not begun. A fresh clock on every call is deliberate — a task
@@ -2126,33 +2166,27 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   if (merged.refused) return { ...merged, started: null };
   const t = merged.tasks.find((x) => x.id === id);
   if (!t) return { ...merged, started: null, unknownId: id };
+  const state = readTimingsFile(dir);
+  // ⛔ THE GATE REFUSES THROUGH THE SHARED PREDICATE — the same one `startableTasks` reports through, so the
+  // answer to "which task may I start?" cannot disagree with what this call then does with that id. The four
+  // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
+  // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
+  const blocker = startBlocker(t, merged.tasks, state.running);
   // A file the engine REFUSED to read is not started. `--start` used to re-render it, which is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
-  if (t.unread) {
-    return { ...merged, started: null, unread: t.file };
+  if (blocker?.cause === HOLD_UNREAD) {
+    return { ...merged, started: null, unread: blocker.file };
   }
   // ⛔ THE RUN STOPS AT THE NEXT DISPATCH, not at the end. A folder holding a closure nobody was dispatched for
   // gets no new clock: the books are repaired BEFORE another sub-agent is sent out on top of them, so the cost of
-  // a broken ledger is one task rather than a whole run.
+  // a broken ledger is one task rather than a whole run. Checked HERE rather than inside the predicate: it is one
+  // fact about the FOLDER, not about this id, and the query states it once for the same reason.
   if (merged.dispatch?.failing.length) {
     return { ...merged, started: null, blockedByDispatch: merged.dispatch };
   }
-  const state = readTimingsFile(dir);
-  // ⛔ THE QUEUE ORDER IS ENFORCED, not advised. A task whose `dependsOn` has not closed would be built against
-  // answers that do not exist yet: the child form its related list opens, the scaffolding it saves into, the
-  // `## Notes` the next chunk of its page reads instead of redoing the work.
-  const byId = new Map(merged.tasks.map((x) => [x.id, x]));
-  const openDeps = (t.dependsOn || []).map((d) => byId.get(d)).filter((d) => d && !SETTLED.has(d.status));
-  if (openDeps.length) return { ...merged, started: null, blockedByDeps: openDeps };
-  // ⛔ ONE WRITER PER ARTIFACT, enforced where the token is issued. Issuing tokens for several tasks that write
-  // the SAME artifact is what lets one sub-agent hold them all and close each with a valid signature — every
-  // other check would pass. Tasks on DIFFERENT artifacts may legitimately be open at once, so the comparison is
-  // on `writesTo` and not on the number of open clocks; a read-only task claims nothing and never conflicts.
-  const conflicts = t.writesTo
-    ? merged.tasks.filter((x) => x.id !== t.id && x.writesTo === t.writesTo && state.running[x.id])
-    : [];
-  if (conflicts.length) return { ...merged, started: null, blockedByOverlap: conflicts };
+  if (blocker?.cause === HOLD_DEPS) return { ...merged, started: null, blockedByDeps: blocker.tasks };
+  if (blocker?.cause === HOLD_OVERLAP) return { ...merged, started: null, blockedByOverlap: blocker.tasks };
   t.status = S_IN_PROGRESS;
   // THE SIGNATURE THE AGENT CANNOT MINT. The orchestrator hands this token to the sub-agent it dispatches and the
   // sub-agent echoes it into `agentNonce`. A value the agent chooses for itself is distinct on every file it
@@ -2313,6 +2347,62 @@ function attachDispatch(set, dir) {
   // already spell it this way, and the gate reads `set.dispatch` for the rest.
   set.undispatched = [...audit.never, ...audit.naUndispatched];
   return set;
+}
+
+// ---8<--- WHAT IS STARTABLE NOW ---8<---
+
+// The five answers this query can give. They are separate because their remedies are: dispatch, wait, close the
+// run, repair the ledger, or make a decision no re-run can make for you.
+export const NEXT_STARTABLE = "startable"; // hand these out now
+export const NEXT_WAITING = "waiting";     // work is in flight and the rest is behind it — NOT a failure
+export const NEXT_FINISHED = "finished";   // every task has settled
+export const NEXT_STUCK = "stuck";         // nothing startable and nothing in flight — the run cannot move itself
+export const NEXT_LEDGER = "ledger";       // the dispatch books are broken; `--start` refuses every id until they are not
+export const NEXT_VERDICTS = [NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER];
+
+// THE ANSWER IS A SET, not one task. The parallelism rule is distinct `writesTo`, so a single-task answer costs a
+// round trip per page for a folder that could fan out. But two `todo` tasks CAN write one artifact — an
+// orchestrator-authored task copies the `writesTo` of the task whose page it touches — and both pass the per-task
+// predicate, so an unfiltered set would advertise a fan-out `--start` refuses one call later. The set is
+// therefore mutually exclusive with ITSELF: the first writer of an artifact in queue order keeps it, and every
+// later writer is withheld as `sequenced`.
+export function startableTasks(set, dir) {
+  const tasks = set.tasks || [];
+  const dispatch = set.dispatch || dispatchAudit(tasks, dir);
+  const { running } = readTimingsFile(dir);
+  // ⚠ WORK IN FLIGHT IS A STATUS, NEVER A RAW CLOCK. A task recorded `blocked` KEEPS its clock — only a SETTLED
+  // task's clock is closed — so a mode that read `timings.json` to decide "something is running" reported a
+  // halted run as `waiting`, at a passing exit code, forever. That is the silent stall this whole query exists to
+  // remove, and it was observed rather than theorised.
+  const inFlight = tasks.filter((t) => t.status === S_IN_PROGRESS);
+  const candidates = tasks.filter((t) => t.status === S_TODO).sort((a, b) => (a.order || 0) - (b.order || 0));
+  // OPEN, BUT NOT THE ENGINE'S TO SCHEDULE: `blocked` is an agent's decision and an unrecognised status is a stop.
+  // Neither is startable and neither is in flight, so both are named here rather than folded into either.
+  const held = tasks
+    .filter((t) => t.status !== S_TODO && t.status !== S_IN_PROGRESS && !SETTLED.has(t.status))
+    .map((t) => ({ task: t, cause: HOLD_STATUS, tasks: [] }));
+
+  const startable = [], withheld = [];
+  const claimed = new Map();   // artifact → the member of THIS answer that already writes it
+  for (const t of candidates) {
+    const blocker = startBlocker(t, tasks, running);
+    if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file }); continue; }
+    const owner = t.writesTo ? claimed.get(t.writesTo) : null;
+    if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }
+    if (t.writesTo) claimed.set(t.writesTo, t);
+    startable.push(t);
+  }
+
+  const base = { startable, withheld, held, inFlight, dispatch, total: tasks.length,
+    settled: tasks.filter((t) => SETTLED.has(t.status)).length };
+  // ONE ANSWER FOR THE FOLDER, and it outranks every per-task answer: while a closure has no dispatch record
+  // `--start` refuses EVERY id, so naming a task startable here would advertise a dispatch the gate is about to
+  // refuse. The withheld list is kept for the reader; the startable one is empty because that is the truth.
+  if (dispatch.failing.length) return { ...base, verdict: NEXT_LEDGER, startable: [] };
+  if (startable.length) return { ...base, verdict: NEXT_STARTABLE };
+  if (candidates.length + held.length + inFlight.length === 0) return { ...base, verdict: NEXT_FINISHED };
+  if (inFlight.length) return { ...base, verdict: NEXT_WAITING };
+  return { ...base, verdict: NEXT_STUCK };
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {

@@ -424,7 +424,8 @@ in one context it had one machine check, at the very end. A session that hit a u
    buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
    plan changed, and slice then.
 5. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
-   hand-author a task list, a status table or a progress summary of your own beside it.
+   hand-author a task list, a status table or a progress summary of your own beside it. It is what a **human**
+   reads; it is **not** where you pick the next task from — that is `--next`, in rule 1 below.
 
 **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
 its coverage, its card actions, its rules, its handlers — writes the same thing, so the folder buckets them into
@@ -442,15 +443,34 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
-1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
-   requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
-   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
-   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
-   clio guidance articles and the design spec, and every other task depends on it — it does NOT cache tool
-   contracts or component docs; each build task reads its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task needs to
-   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
-   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
-   the structure gate instead, so it never reaches a task.)
+1. **ASK THE ENGINE WHICH TASK TO START — do not pick one from `index.md`:**
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next`
+   It answers with **every task that is startable right now**, in queue order, each with the exact `--start`
+   command that dispatches it — and it withholds every task that is not, naming what holds it. The answer is
+   computed by the same predicate `--start` enforces, so a task it names is one that gate accepts and a task it
+   withholds is one that gate refuses for the same reason. Nothing in it has to be parsed positionally.
+
+   **Why not the index.** `index.md` is a DERIVED report: it is regenerated from the task files on every run, it
+   carries no fact of its own, and its shape has already changed under callers who were reading it by column.
+   Scheduling off it means re-deriving, in prose or in shell, a decision the engine already makes — and the two
+   then disagree quietly. Ask; do not re-derive.
+
+   **Its five answers, and what each one asks of you.** *N startable* → dispatch them (they are a set: no two
+   write the same artifact, so they may run at once). *Nothing startable yet, work in flight* → wait for the
+   running task(s), re-run `--tasks`, ask again; this exits **0** and is not a failure. *Finished* → every task
+   has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND nothing is running: a task is
+   `blocked` or carries a status nobody recognises, and no re-run changes that — read its `## Notes` and decide.
+   *Dispatch ledger broken* (exit **2**) → repair the ledger first; `--start` refuses every id until you do.
+
+   **The queue order it answers in is leaf-first, and that is a build requirement, not a preference:** a related
+   list's Add/Edit opens the child's own form, so the child page exists before the parent list that opens it, and
+   the list page comes after the form page it is gated off. Three deliberate exceptions lead the queue: the
+   `Reference cache` runs FIRST (one read-only sub-agent fetches the clio guidance articles and the design spec,
+   and every other task depends on it — it does NOT cache tool contracts or component docs; each build task reads
+   its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task
+   needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a
+   page is never built against an unanswered question. (A question that could change WHICH pages exist blocks the
+   plan at the structure gate instead, so it never reaches a task.)
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`

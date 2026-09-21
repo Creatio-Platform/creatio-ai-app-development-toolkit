@@ -15,6 +15,7 @@ node migrate.mjs <manifest.json> --spec   # render just the per-page design spec
 node migrate.mjs <manifest.json> --stubs  # the step-5.1 behaviour-analysis handoff digest (JSON)
 node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task folder: one file per task + a derived index.md
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
+node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
@@ -176,6 +177,31 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   sub-agent, and the reason under `## Notes` is what earns it that: an `n/a` with nothing written there fails,
   because otherwise flipping every open task to `n/a` writes off a run in one edit. A sample whose duration rounds
   to zero is still a dispatch record — only the forecast filters it out.
+- **`--next` ANSWERS what `--start` would accept, instead of making the caller find out by being refused.** The
+  folder already published everything the answer needs (`status`, `dependsOn`, `writesTo`, the clocks) and
+  `--start` already enforced it — but only by refusing, so every orchestrator that wanted the answer in advance
+  re-derived it in shell over `index.md`, a DERIVED report whose columns then moved under them. Both callers now
+  go through ONE predicate (`startBlocker`): the gate refuses through it and this mode reports through it, so an
+  answer that disagrees with the gate is not a thing that can be written. Agreement produced by one predicate is
+  structural; agreement produced by two rules kept in step by hand is a coincidence that decays.
+  The answer is a SET, in queue order, and it is mutually exclusive with itself on `writesTo` — the parallelism
+  rule is distinct artifacts, so an orchestrator fans out from one call, and a set that named two writers of one
+  page body would advertise a dispatch `--start` refuses one call later. Each member carries the exact `--start`
+  command, quoted, so nothing in the output is parsed positionally.
+  Five verdicts, because their remedies share nothing: `startable` (dispatch), `waiting` (work in flight and the
+  rest behind it — exit **0**, this is the commonest empty answer and it is not an error), `finished` (every task
+  settled — go to the result report), `stuck` (nothing startable AND nothing in flight — exit **2**) and `ledger`
+  (a closure with no dispatch record — exit **2**; `--start` refuses every id until it is repaired, so no task is
+  advertised while it stands).
+  ⚠ **Work in flight is a STATUS, never a raw clock.** A task recorded `blocked` KEEPS its clock — only a SETTLED
+  task's clock is closed — so a mode that read `timings.json` to decide "something is running" reports a halted
+  run as `waiting`, at a passing exit code, forever. That was measured, not theorised, and it is why `stuck` is a
+  failing verdict.
+  It REFRESHES the folder exactly as a plain `--tasks` run does — replacing that call, not adding one. A strictly
+  read-only answer would be wrong at the commonest moment of all: immediately after a sub-agent closes a task,
+  whose clock the refresh is what closes, so the un-refreshed folder reads as a dispatch-ledger failure. For the
+  same reason it refuses to combine with `--start`, `--route`, `--verify` or `--split`: each writes the folder
+  before the answer would print, so one call could only describe a state the reader cannot place.
 - **`--start` enforces the queue, not just the ledger.** It refuses a task whose `dependsOn` has not closed, and
   refuses a second token for an artifact a dispatched task is still writing. Both are field comparisons the engine
   makes rather than rules the caller is asked to honour. The second one matters most: with
