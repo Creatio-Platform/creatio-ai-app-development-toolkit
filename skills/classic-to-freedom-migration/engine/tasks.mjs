@@ -299,7 +299,7 @@ const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.string
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
-function slugify(s) {
+export function slugify(s) {
   // The first replace collapses every run, so at most a SINGLE dash can sit at either end — no `+` needed here.
   const slug = String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-/, "").replace(/-$/, "").slice(0, 48);
   return slug || "task";

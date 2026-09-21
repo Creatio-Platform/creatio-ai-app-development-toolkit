@@ -51,6 +51,18 @@ migrations/<app-or-section-slug>/
   roadmap.md           # living execution tracker (status of every task)
   decisions.md         # decision and approval log (append-only; the plan approval lives here at BOTH scopes)
   worklog.md           # session log and runtime read-back evidence (append-only)
+  reads/               # engine-written (`migrate.mjs --reads`): the read plan, and the raw stand answers copied into it
+    index.json           # which reads the gate needs and the file each one goes into — the composing half reads it back
+    NN-meta-<key>.json   # one page's `.clio-pages/<schema>/meta.json`, copied whole
+    NN-bundle-<key>.json # …and its `bundle.json` (the merged view), copied whole
+    NN-rules-<key>.json  # the page's persisted `BusinessRule_*` schemas, for the keys that gate rules
+    NN-reachability-<key>.json # one on-stand check's answer — the value for that `reachability` key
+    NN-dashboards-migration-log.json # `DashboardMigrationLog` rows, when the plan moves dashboards — one file per run
+  evidence.json        # engine-written skeleton (`--reads`): every published evidence id already a key — fill VALUES, never keys
+  judge.json           # the same, for the independent verdict on each of those records
+  recorded.json        # engine-written skeleton (`--reads`): the on-stand keys the BUILD agent records rather than reads — replace each `null`
+  built.json           # engine-written (`migrate.mjs --verify --from`): the payload COMPOSED from reads/ — never hand-authored
+  verify.md            # engine-written (same run): the Plan-vs-Done table that payload was gated on
   build-tasks/         # engine-written (`migrate.mjs --tasks`): the approved plan cut into one-task files
     task-<slug>-<id>.md  # one task; its `status` front matter is that task's record
     index.md             # derived — regenerated from the task files on every run

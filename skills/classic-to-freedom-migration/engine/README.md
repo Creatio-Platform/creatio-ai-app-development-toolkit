@@ -18,6 +18,8 @@ node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it w
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
+node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
+node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
 node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # the MIGRATION RESULT REPORT: ledger + built pages, one verdict (plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
@@ -36,18 +38,61 @@ three sub-agents have failed at it, so the plan, the stand or the expectation is
 is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
 never reported stale.
 
+**`--reads <dir>` — WHICH reads the verify gate needs, and WHERE each response goes (SKILL.md step 7.4).** The
+list is DERIVED from the same `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
+gates can never be a key nobody was told to read. Four kinds: **two files per published page key** (`meta.json`
+for identity, `bundle.json` for the merged view), a **business-rules** read for the keys carrying a gated rule row
+only, one **reachability** read per distinct on-stand key, and — only when the plan moves any — one **dashboards**
+read per run, since `DashboardMigrationLog` is a stand table no page read can reach. An on-stand key the BUILD
+agent records rather than reads (a card widget the converter placed) is listed as the builder's, not handed to the
+read-only read-back agent as a read it cannot perform.
+
+It fixes WHICH KEYS get read and nothing beyond that: no plan publishes the Freedom schema a key was built as, so
+the agent still resolves that itself, and a key read against the wrong page comes back looking complete.
+
+`<dir>` is the MIGRATION FOLDER — the one holding `build-tasks/` — so the raw responses stay beside the run. The
+engine writes `reads/index.json` and owns every filename in it; page keys carry `:`, `@` and `#`, so the key is
+slugged and the mapping recorded, and nothing downstream parses a filename. It also writes `evidence.json` /
+`judge.json` skeletons with every published evidence id already a key, and never overwrites an existing one. Like
+`--tasks`, it WRITES rather than prints, so it refuses a second mode flag instead of losing to it.
+
+**`--verify --from <dir>` — the payload COMPOSED, not handed over.** The other half of that contract: it reads
+`reads/index.json`, opens every file the plan named, and builds the payload — identity from `meta.json`, the
+merged view from `bundle.json`, rules and reachability from their own files. `entitySchemaName` is the one DERIVED
+value, read off the primary data source rather than retyped. `evidence.json` / `judge.json` are merged when
+present, and `recorded.json` carries the on-stand keys the BUILD agent records rather than reads (a card widget
+the converter placed) — a key still `null` there is left unset, so its row stays unconfirmed. The payload is written to `<dir>/built.json`, and the artifact beside it is `verify.md` for a bare `--from` or
+`migration-result.md` under `--tasks`, where the report replaces the table. Either way the run replays offline
+with `--verify --built <that file>`.
+
+Three answers a slot can carry, and they never read alike: a **file written** is the answer; an **unwritten** file
+leaves the key out, is named on stderr and in a banner atop `verify.md`, and fails at exit 2 as NOT CHECKED (a
+re-read, not a repair); the literal **`false`** means "I asked and there is no such schema" and composes to the
+payload's `false` — a hard ❌ MISSING that opens a repair. A literal `null` is none of the three and is reported.
+
+The index is checked against the plan being verified twice: the `planVersion` stamp says the plan moved between
+the two commands (re-cut it, rather than re-run every read), and a file-set comparison catches what the stamp
+cannot — `computePlanVersion` hashes the whole manifest, so one stamp means one read list, and a set that still
+differs was hand-edited or written by a different engine build.
+
+`--from` composes with `--tasks <dir>` exactly as `--built` does. `--built <file>` is unchanged and stays for
+offline replay; the two together are refused, being two sources for one payload.
+
 Mode flags take no value and only ONE is honoured per run (the CLI picks the first it matches, so a second mode
 flag is silently ignored) — pass exactly one. `--out <file>` works with all of them, except `--tasks`, which names
-its own destination. `--tasks` is also the one mode that REFUSES a second mode flag instead of losing to it: it
+its own destination. With `--reads` it names where the printed plan goes; the index it writes is not an `--out`
+artifact and always lands in `<dir>/reads/`, because the assembly half reads it from there by path. `--tasks` is also the one mode that REFUSES a second mode flag instead of losing to it: it
 writes a folder rather than printing, so silent precedence would report a plan while slicing nothing.
 
 **The plan version.** `--plan` prints `**Plan version:** \`plan-<hash>\`` as the first line of the Overview. It is a
-deterministic short hash over three manifest inputs and only those three — `entity`, `schemas` (package + body
-CONTENT, in order) and `planMeta`. No wall-clock, no random source, and no filesystem path (a `{ file: … }` schema
-entry contributes its CONTENT), so the same manifest always yields the same version and re-planning is not a new
-version to approve. It does NOT cover `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
-`signals` or `behaviourIndex`: those reach the rendered plan too, so the version confirms that the approved and
-built plans share their MAIN-PAGE inputs — it is not a checksum of the whole artifact. It is the string the
+deterministic short hash over EVERY key the manifest carries — `entity`, `schemas` (package + body CONTENT, in
+order), `planMeta`, and equally `seed`, `detailSchemas`, `childPageSchemas`, `profileSchemas`, `section`,
+`signals` and `behaviourIndex`. No wall-clock, no random source, and no filesystem path (a `{ file: … }` entry
+contributes its CONTENT wherever it sits), so the same manifest always yields the same version and re-planning is
+not a new version to approve. An earlier version hashed an ALLOWLIST of three keys, and that is what this replaced:
+the unit set could change materially (a detail marked `editPage:false` drops a whole child page) while the version
+stayed identical, so an approval authorised a plan nobody approved. The version confirms that the approved and
+built plans were computed from the same manifest — it is not a checksum of the rendered artifact. It is the string the
 `decisions.md` approval entry names. `plan.md` is engine-WRITTEN, so nothing else can put a version in it and
 survive the next `--plan --out`.
 
@@ -348,6 +393,8 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `registry/component-index.json` — the **generated** component index (205 components × 7 platform versions; version membership as a bitmask). Regenerate with `node scripts/build-registry-index.mjs --src <static-files checkout>`; it is data, never hand-edited, and excluded from Sonar for that reason.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).
 - `designspec.mjs` — render the plan / design spec / checklist / verify table as Markdown.
+- `reads.mjs` — `--reads`: which stand reads the verify gate needs and the file each raw response goes into, derived from the checklist walk. Writes `reads/index.json`; composes nothing.
+- `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
 

@@ -59,6 +59,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
   TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
+import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
+import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
 import { renderFinalReport } from "./report.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
@@ -2709,7 +2711,7 @@ function builtPayloadIssue(built) {
 // ask Creatio whether a GUID exists. It raises the cost of a fabricated report from "copy the numbers the plan
 // already told you" to "invent a coherent identity graph", and it makes a careless copy-paste fail outright.
 // It is not a defence against a determined author, and nothing here should be described as one.
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// `GUID_RE` is imported from assemble.mjs — the drop-sweep there has to apply exactly this test.
 function missingUidIssue(entries) {
   const noUid = entries.filter(([, e]) => !GUID_RE.test(String(e.schemaUId ?? "")));
   if (!noUid.length) return null;
@@ -2748,7 +2750,15 @@ const SPLIT_FLAG = "--split";
 const START_FLAG = "--start";
 // Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
 const ROUTE_FLAG = "--route";
-const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG]);
+// `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
+// `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
+// belong beside the run.
+const READS_FLAG = "--reads";
+// `--from <dir>`: COMPOSE the `--verify` payload out of the files `--reads` named, instead of being handed one.
+// The two flags are one contract — `--reads` writes `reads/index.json`, this reads it back — so they take the
+// same folder.
+const FROM_FLAG = "--from";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, READS_FLAG, FROM_FLAG]);
 // EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
@@ -3106,6 +3116,13 @@ function runRepairMode(result, dir, verifyRes, opts) {
     repair: { written: res.written, pending: res.pending, parked: res.parked } };
 }
 
+// The artifact a `--from` run writes when `--out` names nothing: the migration result report under `--tasks`,
+// the bare plan-vs-built table otherwise. Its own function so the two conditions are not one nested ternary.
+function defaultOutFile(fromDir, tasksMode) {
+  if (!fromDir) return null;
+  return path.join(fromDir, tasksMode ? REPORT_FILE : VERIFY_FILE);
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
   if (label === "migration result report") {
@@ -3128,7 +3145,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
   const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
   let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
-  let finalReport = null;                     // `--verify --tasks`: the migration result report (ENG-99126)
+  let readProblems = [];                      // `--verify --from`: the reads that could not be opened
+  let builtWritten = null;                    // …and where the composed payload was written
+  let finalReport = null;                     // `--verify --tasks`: the migration result report
   let ledgerIncomplete = false;               // …and whether its verdict is NOT COMPLETE (exit 2 like the other gates)
   let splitText = null;                       // the `--split` file's bytes, frozen into the folder once it resolves
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
@@ -3147,8 +3166,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       .filter(([, on]) => on).map(([name]) => name);
     if (alsoAsked.length) fail(`\`--tasks\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES a folder while those print an artifact, so one of the two would silently not happen. Run them as separate commands.`);
   }
+  // `--from <dir>`: the engine COMPOSES the payload from the files `--reads <dir>` named and writes it to
+  // `<dir>/built.json`. `--built <file>` stays — offline replay and every engine test hand the gate a recorded
+  // payload, and a mode that only works against a live folder could not be tested from a fixture.
+  const fromDir = valueFlagArg(argv, FROM_FLAG, `${FROM_FLAG} ./migration-folder`, fail);
+  if (fromDir && !verifyMode) fail(`\`${FROM_FLAG}\` only means something with \`--verify\` — it composes the payload that gate reads.`);
   const builtIdx = argv.indexOf("--built");
-  if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
+  if (fromDir && builtIdx >= 0) fail(`\`${FROM_FLAG}\` and \`--built\` are two sources for ONE payload — pass the folder to compose from, or the file to replay, never both. Nothing was read.`);
+  if (verifyMode && !fromDir && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
     fail("`--verify` needs `--built <file>` — a JSON KEYED BY PAGE: " + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by (`main`, `list`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>`), and give each one clio `get-page`'s `bundle.viewConfig` VERBATIM (the merged page — not the page's own body, which cannot show template-provided components).");
   const builtFile = builtIdx >= 0 ? argv[builtIdx + 1] : null;
   // `--tasks <dir>`: the DIRECTORY the task files and the index are written into. It is created if missing, and
@@ -3159,7 +3184,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // measured putting a related list and its filter in different tasks on one that was not.
   const splitFile = valueFlagArg(argv, SPLIT_FLAG, `${SPLIT_FLAG} ./split.json`, fail);
   // `--out <file>`: WRITE the output to a file so the agent presents the file, not a hand-paste.
-  const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
+  // On a `--from` run it DEFAULTS into the migration folder: the payload lands there and the table that judges it
+  // has to land beside it, or the run is re-checkable only in halves. An explicit `--out` still wins.
+  const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail)
+    || defaultOutFile(fromDir, tasksMode);
   // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
   // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
   if (splitFile && !tasksMode) fail(`\`${SPLIT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it says where that folder's seams are.`);
@@ -3167,6 +3195,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // and never with `--verify`, whose folder writes are repair rounds rather than a dispatch.
   const startId = valueFlagArg(argv, START_FLAG, `${START_FLAG} <task-id>`, fail);
   if (startId && (!tasksMode || verifyMode)) fail(`\`${START_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` on its own — it marks the task you are about to dispatch.`);
+  // `--reads <dir>`: WRITE the read plan the verify gate needs — which pages, which rule reads, which on-stand
+  // checks, and the exact file each response goes into. Its own mode: it WRITES a folder, so pairing it with a
+  // print mode would make one of the two silently not happen (the rule `--tasks` carries).
+  const readsDir = valueFlagArg(argv, READS_FLAG, `${READS_FLAG} ./migration-folder`, fail);
+  if (readsDir) {
+    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode],
+      ["--stubs", stubsMode], ["--verify", verifyMode], [TASKS_FLAG, tasksMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (alsoAsked.length) fail(`\`${READS_FLAG}\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES the read plan for a gate that has not run yet, and those either print an artifact or verify one. Run them as separate commands.`);
+  }
   // `--route`: open a repair round over the rows a build agent recorded as NOT BUILT, without a verify run.
   const routeMode = argv.includes(ROUTE_FLAG);
   if (routeMode && !tasksMode) fail(`\`${ROUTE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it opens a repair round in that folder.`);
@@ -3231,6 +3269,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--verify` is checked BEFORE `--tasks`: with both, verify is the MODE and the folder is only where its open
   // rows are written. Matched the other way round, `--verify --tasks <dir>` re-sliced the plan and printed no
   // table at all — the caller asked for a verification and got a task folder.
+  // Derived from the SAME `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
+  // publishes can never be a key nobody was told to read. That is why the engine owns this list.
+  else if (readsDir) {
+    let plan;
+    try {
+      plan = readPlan(result, checklistOpts(manifest));
+      writeReadIndex(readsDir, plan);
+      // …and the skeletons for the two halves the stand does not hold, so no id is ever retyped.
+      writeEvidenceSkeletons(readsDir, plan);
+    } catch (e) { fail(`could not write the read plan to ${readsDir}: ${e.message}`); }
+    output = renderReadPlan(plan, readsDir);
+  }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.
   else if (tasksMode && routeMode) {
@@ -3256,17 +3306,40 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
-    let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
-    catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
+    let built;
+    if (fromDir) {
+      // COMPOSED, not handed over: every value comes out of a file clio wrote at a path `--reads` named, and the
+      // payload is written beside the run so the same gate replays against it offline.
+      // The plan the index is diffed against is derived HERE, from the manifest this run verifies — so a read
+      // plan cut against an earlier draft cannot pass as this one's.
+      let res; try { res = assembleBuilt(fromDir, readPlan(result, checklistOpts(manifest))); }
+      catch (e) { fail(`cannot compose the payload from '${fromDir}': ${e.message}`); }
+      // Built as a statement rather than nested inside the template below (Sonar S4624).
+      const why = res.problems.map((x) => x.file + " — " + x.why).join("; ");
+      if (!res.built) fail(`cannot compose the payload from '${fromDir}': ${why}.`
+        + ` Run \`${READS_FLAG} ${fromDir}\` first, then do the reads it names.`);
+      readProblems = res.problems;
+      built = res.built;
+      try { builtWritten = writeBuilt(fromDir, built); }
+      catch (e) { fail(`cannot write ${BUILT_FILE} to '${fromDir}': ${e.message}`); }
+    }
+    else { try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
+      catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); } }
     // VALIDATE BEFORE RENDERING: `renderVerify` is called outside the try above, so a throw inside it surfaces as a
     // raw Node stack instead of a diagnosable message — and a malformed payload must be a loud exit 1, never a
     // table full of ⚠ rows that reads like a half-built page.
     const issue = builtPayloadIssue(built);
+    // A COMPOSED payload that fails the guard is an engine defect or an unreadable source file, not a caller's
+    // hand-authored mistake — so it names the folder it was composed from rather than telling the caller to fix
+    // a file they never wrote.
+    if (issue && fromDir) fail(`the payload composed from '${fromDir}' ${issue}. The files under ${fromDir}/reads/ are what it was built from — check they are the ones \`${READS_FLAG}\` named.`);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by.");
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
     verifyRes = renderVerify(result, checklistOpts(manifest), built);
-    output = verifyRes.markdown + "\n";
+    // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
+    // a reader holding it must be able to tell a row nobody could read from a row nobody built.
+    output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
     if (tasksMode) {
       // ENG-99126 — an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
@@ -3275,14 +3348,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // table said "2 machine row(s) not confirmed" while the ledger held 5 open tasks, 3 partial and three
       // handlers recorded not built — and the table was what the user was shown. The report renders BOTH and its
       // verdict is their conjunction; the report carries the OPEN machine rows and per-page confirmed counts; the full row-level table is a plain --verify (no --tasks), not part of this artifact.
-      const rep = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+      // NO REPAIR ROUND OVER ROWS NOBODY READ. An unread page leaves its key out, and `syncRepairDir` turns an
+      // `unverified` row into a repair task — so without this guard the prescribed gate dispatches build agents at
+      // a page that was never checked, burns a round against the cap and can park a cause, while the same run says
+      // on stderr that the rows are NOT CHECKED and want a re-read. The dispatch gate already refuses on the same
+      // principle: rows that cannot be trusted to describe what was built are not rows to schedule work from.
+      const rep = readProblems.length
+        ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
+            + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
+        : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
       const set = rep.set || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
       finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
-      output = finalReport.markdown + "\n";
+      // The report REPLACES the table as the artifact, so the unread-file banner has to be carried onto it too —
+      // prepending it to the table alone loses it on exactly the command an orchestrated run is told to use.
+      output = [...problemBanner(readProblems), finalReport.markdown].join("\n") + "\n";
       ledgerIncomplete = !finalReport.complete;
     }
   }
@@ -3304,12 +3387,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
-    || !!dispatchGateFailure || !!partialGateFailure || ledgerIncomplete;
+    || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
+  else if (readsDir) label = "read plan";
   else if (verifyMode && tasksMode) label = "migration result report";
   else if (verifyMode) label = "verification";
   else if (tasksMode) label = "build tasks";
@@ -3321,6 +3405,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     process.stdout.write(output);
   }
+  // Same placement rule as the repair note: it names a file written BESIDE the artifact. Saying where the payload
+  // landed is what makes the run re-checkable — `--verify --built <that file>` reproduces this table offline.
+  if (builtWritten) process.stdout.write(`migrate.mjs: composed the verify payload from ${fromDir}/${READS_DIR_NAME}/ and wrote it to ${builtWritten} — replay it offline with \`--verify --built ${builtWritten}\`.
+`);
   // The repair note goes out AFTER the table (or the wrote-to-file line), because it is about what was written
   // beside that artifact, not about the artifact itself.
   if (repairNote) process.stdout.write(repairNote);
@@ -3367,6 +3455,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; fix the plan instead of re-verifying against them.\n`)
   }
+  // The READ leg, stated apart from the build legs above: a row can be open because the page is short OR because
+  // nobody could read it, and those are different jobs — a repair versus a re-read. The table cannot tell them
+  // apart (an omitted key reads ⚠ like any other unconfirmed row), so this is where the difference is said.
+  if (readProblems.length) process.stderr.write(problemLines(readProblems, fromDir).join("\n") + "\n");
   // ENG-99126 — the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
   // while the task folder still holds open work. The dispatch and not-built lines above already name their own
   // rows; this line fires for what they do not cover (tasks still todo / in-progress / partial) and names the
