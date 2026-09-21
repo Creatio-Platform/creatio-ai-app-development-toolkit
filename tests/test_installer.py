@@ -52,7 +52,7 @@ def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, 
     """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
 
     The manifest is what the installer reads: the script's own `meta.name` is still written so the
-    fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
+    fixture looks like the real artifact, but no consumer parses it.
     """
     skill_dir = source_root / "skills" / skill_dir_name
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -1079,7 +1079,7 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 
 
 class InstallCodexTests(unittest.TestCase):
-    """ENG-90514: Codex registers the remote marketplace via its CLI.
+    """Codex registers the remote marketplace via its CLI.
 
     Codex CLI has no non-interactive plugin-install subcommand, so the
     installer performs the two steps the interactive `/plugins` browser does —

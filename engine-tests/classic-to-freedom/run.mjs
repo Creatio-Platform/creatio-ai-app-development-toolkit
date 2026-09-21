@@ -637,7 +637,7 @@ check("move op applies the new order/index (A repositioned to 9, not stuck at 0)
    The defect: the correctness gate blocked on ANY non-empty `eff.warnings`, including one whose own text says
    "The element is KEPT (correct)". Warnings now carry `severity`, and the two families are asserted per producer —
    a new producer that forgets to declare one is caught by the "every warning has a severity" check below. */
-console.log("\n===== ENG-95862: warning severity + labelConfig =====");
+console.log("\n===== warning severity + labelConfig =====");
 
 const bodyOf = (pkg, diff, extra = "") =>
   `define("${pkg}",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(diff)}${extra}};});`;

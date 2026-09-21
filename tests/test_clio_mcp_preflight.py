@@ -1,4 +1,4 @@
-"""Behavioral tests for the ENG-92985 clio MCP availability preflight gate.
+"""Behavioral tests for the clio MCP availability preflight gate.
 
 These assert the gate's *behavior* — classification, exit codes, sentinels, remedy
 content, and the invariant that it never self-bootstraps — rather than the presence

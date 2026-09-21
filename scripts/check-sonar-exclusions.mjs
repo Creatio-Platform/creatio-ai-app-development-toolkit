@@ -72,7 +72,7 @@ function main() {
     }
   }
   if (failed) {
-    console.error(`\ncheck-sonar-exclusions: ${failed} glob(s) match nothing while their base dir exists — failing loud (Minor 1, PR #50).`);
+    console.error(`\ncheck-sonar-exclusions: ${failed} glob(s) match nothing while their base dir exists — failing loud.`);
     return 1;
   }
   console.log(`check-sonar-exclusions: OK (${globs.length - skipped} active, ${skipped} forward-provisioned).`);

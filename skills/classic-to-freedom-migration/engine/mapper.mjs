@@ -2710,7 +2710,7 @@ function listSectionElementDecisions(section) {
       ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
       : "";
     return { kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
-      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${captioned}${cond}` };
+      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happens to a section-declared element nobody publishes.${captioned}${cond}` };
   });
 }
 function listProcessDecision(section) {

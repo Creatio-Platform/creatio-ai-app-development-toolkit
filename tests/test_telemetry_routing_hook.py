@@ -206,7 +206,7 @@ def settled_payloads(capture: "Path", count: int, event_name: "str | None" = Non
 def outcome_files(session: str, kind: str) -> "list[Path]":
     """Every answer file for this session and kind.
 
-    One file per DISPATCH, not per kind: a second dispatch used to truncate the file a still-running
+    One file per DISPATCH, not per kind: a second dispatch would truncate the file a still-running
     child was writing to, so the files now carry a nonce and the tests have to look them all up.
     """
     state = Path(_TMP, "caadt-telemetry-routing")
@@ -2132,9 +2132,9 @@ class TelemetryStateDirSecurityTests(unittest.TestCase):
 
 
 class ConsentTelemetryHomeFallbackTests(unittest.TestCase):
-    """telemetryHome()'s no-override fallback, per platform — regression coverage for a bug
-    raised in review of PR #96: with neither CLIO_TELEMETRY_HOME nor CLIO_HOME set, the fallback
-    used to join clio's storage suffix onto a Windows-shaped `.../AppData/Local` path even on
+    """telemetryHome()'s no-override fallback, per platform. With neither CLIO_TELEMETRY_HOME
+    nor CLIO_HOME set, the fallback must not join clio's storage suffix onto a
+    Windows-shaped `.../AppData/Local` path on
     macOS/Linux, where clio's own ClioRuntimePaths.Home resolves to `~/creatio/clio` instead —
     silently and permanently making consentGranted() return false there. `process.platform` is
     overridden inside the probe script (Node allows redefining it) so both branches are exercised

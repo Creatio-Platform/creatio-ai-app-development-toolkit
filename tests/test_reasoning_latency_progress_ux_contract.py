@@ -1,8 +1,8 @@
-"""ENG-91278 — harness reasoning-latency and progress-UX contract.
+"""Harness reasoning-latency and progress-UX contract.
 
 A routine "add a section" run regressed to 50%+ of wall-time spent in model
 reasoning, with multi-minute silent gaps and recovered tool errors that read as
-failures (atomized from ENG-90506 run1). These doc-contract assertions lock the
+failures. These doc-contract assertions lock the
 three mitigations into AGENTS.md so the orchestrator keeps a routine change
 bounded and visible:
 

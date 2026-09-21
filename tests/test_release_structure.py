@@ -55,7 +55,7 @@ def read_json(relative_path):
 def _git_tracked_skill_md():
     """SKILL.md paths git tracks under skills/, or None if git is unavailable.
 
-    Used to scope the structural tests to SHIPPED skills only — an untracked
+    Scopes the structural tests to SHIPPED skills only — an untracked
     work-in-progress skill directory in the working tree is not part of any
     release and must not turn the suite red.
     """
@@ -627,7 +627,7 @@ class ReleaseStructureTests(unittest.TestCase):
         )
 
     def test_gh_steps_set_gh_host_for_custom_hosts(self):
-        """Regression: gh CLI on non-github.com hosts refuses commands when it
+        """gh CLI on non-github.com hosts refuses commands when it
         cannot identify the API host. `GH_TOKEN` alone is not enough — gh only
         auto-detects github.com from git remotes; custom hostnames require
         GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the

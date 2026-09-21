@@ -171,6 +171,53 @@ def comment_lines(text, token):
     return found
 
 
+def docstring_lines(text):
+    """(line number, text) for every line inside a triple-quoted Python string.
+
+    A docstring states what a function, class or module is for, so it carries the
+    same obligation as a comment. Single-quoted strings are left alone: those are
+    values the code computes with, not prose about it.
+    """
+    found = []
+    fence = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        rest = line
+        while True:
+            if fence is None:
+                index = min(
+                    (i for i in (rest.find('"""'), rest.find("\'\'\'")) if i != -1),
+                    default=-1,
+                )
+                if index == -1:
+                    break
+                fence = rest[index:index + 3]
+                rest = rest[index + 3:]
+                found.append((number, line))
+            else:
+                index = rest.find(fence)
+                if index == -1:
+                    if (number, line) not in found:
+                        found.append((number, line))
+                    break
+                fence = None
+                rest = rest[index + 3:]
+    return found
+
+
+# A banner or a scenario note a runner states as a string rather than a comment.
+RUNNER_PROSE = re.compile(r"""^\s*(?:console\.log\(|why:\s*)["'`](?P<text>.*)$""")
+
+
+def runner_prose(text):
+    """(line number, text) for a runner's printed banners and scenario notes."""
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = RUNNER_PROSE.match(line)
+        if match:
+            found.append((number, match.group("text")))
+    return found
+
+
 def scanned_files():
     """Every in-scope file in the tree, as (path, relative path, token or None).
 
@@ -207,9 +254,12 @@ def scan_tree():
         if token is None:
             lines = list(enumerate(text.splitlines(), start=1))
         elif token == RUNNER:
-            lines = comment_lines(text, "//") + check_titles(text)
+            lines = (comment_lines(text, "//") + check_titles(text)
+                     + runner_prose(text))
         else:
             lines = comment_lines(text, token)
+            if path.suffix == ".py":
+                lines = lines + docstring_lines(text)
         for number, line in lines:
             for kind in markers_in(line):
                 hits.append((relative, number, kind, line.strip()))

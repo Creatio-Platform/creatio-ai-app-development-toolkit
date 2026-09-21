@@ -77,7 +77,7 @@ def bullet(text, head):
 class ClassicSkillSafetyDocTests(unittest.TestCase):
     """Pin the normative phrases of prose-only safety guarantees.
 
-    Each guarantee below regressed at least once during ENG-94529 review — raw-value
+    Each guarantee below is fragile in the same way — raw-value
     logging (bf31563), the toggle fail-safe (7944948), the card contract's closed set
     (65266ce), and the Evidence rule closing on the instruction it supersedes. Prose
     review caught each one late; these locks catch the next one at commit time.

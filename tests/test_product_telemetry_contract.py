@@ -219,7 +219,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
     def test_agents_md_does_not_instruct_the_deprecated_event_names(self):
         """AGENTS.md must not name the app-creation events the vocabulary replaced.
 
-        It used to enumerate them as mandatory emission points in the UX Contract and the
+        Enumerating them as mandatory emission points in the UX Contract and the
         Orchestration Checklist while the Product Telemetry section two headings above said
         stages are delegated and must not be spelled from memory. An agent reading the file
         top to bottom got both instructions, and a measured run reported its ENTIRE funnel

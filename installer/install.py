@@ -238,7 +238,7 @@ def register_remote_marketplace_and_install_plugin(
       Claude CLI's `plugin marketplace add` silently "updates in place" on a
       re-add instead of raising "already registered", so the conflict-driven
       retry branch below never fires for Claude — an unconditional remove is the
-      only way to rebuild the entry cleanly (ENG-90475).
+      only way to rebuild the entry cleanly.
     - Copilot rejects re-add with "already registered" and keeps the old source;
       we remove first (with --force to detach installed plugins) on retry.
     - Codex rejects re-add with "already added from a different source"; we
@@ -300,7 +300,7 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     For CLI-driven agents (Codex, Claude Code, GitHub Copilot CLI) the install
     works by driving the agent's own CLI. A home directory alone is not
     sufficient — the CLI binary must also be on PATH. A leftover ``~/.copilot``
-    (or ``~/.codex`` / ``~/.claude``) whose binary is no longer on PATH is
+    (or ``~/.codex`` / ``~/.claude``) whose binary is absent from PATH is
     ignored: we have no mechanism to install into an agent we can't invoke.
 
     Cursor uses a file-copy install and requires no CLI binary.
@@ -400,7 +400,7 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
-    This used to be recovered by lexing the generated JavaScript: a hand-written JS sub-lexer in
+    Recovering this by lexing the generated JavaScript needs a hand-written JS sub-lexer in
     Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
     generator already held in structured form. It needed comment, string, unterminated-literal and
     decoy-name hardening across four review rounds, and the constructs it still could not handle are
@@ -624,7 +624,7 @@ def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_na
     `creatio` catalog (`name == marketplace_name`), the whole file is deleted —
     any top-level keys the user customized on the installer-managed catalog
     (e.g. `interface.displayName`) go with it. In practice this file was
-    installer-managed end-to-end before ENG-90514, so that loss is acceptable;
+    installer-managed end-to-end, so that loss is acceptable;
     a user-curated catalog with a different `name` field always keeps its
     other plugins and metadata intact.
     """
@@ -1025,7 +1025,7 @@ def install_claude(repo_root: Path, home: Path) -> None:
     in `known_marketplaces.json`, and a later `plugin install` joins the
     staging `temp_<ts>` dir with that absolute path, producing the
     `Marketplace file not found at .../temp_<ts>/<abs-legacy-path>` error
-    surfaced in `/plugins → Errors` (ENG-90475 comments 448799, 449177;
+    surfaced in `/plugins → Errors` (see
     upstream anthropics/claude-code#36245). An unconditional remove-then-add
     rebuilds the entry cleanly on every run and makes migration idempotent.
     """
