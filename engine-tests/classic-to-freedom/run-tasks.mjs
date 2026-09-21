@@ -4018,6 +4018,16 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         const res = startTask(d, victim.id, RUN, OPTS, null, AT(0));
         return w?.cause === HOLD_UNREAD && w.file === victim.file && res.started === null && res.unread === victim.file;
       }, () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, file: w.file })));
+    // …and the VERDICT the corrupted head produces, which the assertions above never reached. Corrupting the one
+    // task with no dependencies withholds every other task behind it, so nothing is startable and nothing is in
+    // flight — the definition of a run that cannot move itself. Raised on the pull request: asserting the
+    // per-task cause while leaving the verdict and the exit code unchecked tests half the answer.
+    check("R4 (unread): the corrupted head leaves the run STUCK — nothing startable, nothing in flight — and the CLI says so with a non-zero exit, not just a withheld entry",
+      () => a.verdict === NEXT_STUCK && a.startable.length === 0 && a.inFlight.length === 0,
+      () => ({ verdict: a.verdict, startable: idsOf(a.startable), inFlight: idsOf(a.inFlight) }));
+    // (No CLI leg here: this folder is cut with the test budget, and the CLI re-slices with the DEFAULT one, so a
+    // spawned run reads a differently-shaped folder and would assert about a state this block never built. The
+    // stuck verdict's CLI exit code is covered where the folder IS cut by the CLI — see T4.)
     fs.rmSync(d, { recursive: true, force: true });
   }
 
