@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
-  S_DONE, S_NA, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED } from "./tasks.mjs";
+  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -162,23 +162,30 @@ function planTasks(tasks) {
     .sort((a, b) => Number(a.step ?? a.order) - Number(b.step ?? b.order));
 }
 function taskCounts(tasks) {
-  const c = { total: tasks.length, done: 0, na: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
+  const c = { total: tasks.length, done: 0, na: 0, wontDo: 0, postponed: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
   for (const t of tasks) {
     if (t.unread) { c.unread++; continue; }
     if (t.status === S_DONE) c.done++;
-    else if (t.status === S_NA) c.na++;
+    else if (t.status === S_NOT_APPLICABLE) c.na++;
+    else if (t.status === S_WONT_DO) c.wontDo++;
+    else if (t.status === S_POSTPONED) c.postponed++;
     else if (t.status === S_PARTIAL) c.partial++;
     else if (t.status === S_IN_PROGRESS) c.inProgress++;
     else if (t.status === S_TODO) c.todo++;
     else if (t.status === S_BLOCKED) c.blocked++;
     else c.other++;
   }
+  // `postponed` is not open work — it is a debt with a destination — so it does not count against a run's
+  // open total the way `partial` does. The verdict logic (three-colour, ENG-99749 point 6) treats it as
+  // scheduled elsewhere.
   c.open = c.partial + c.inProgress + c.todo + c.blocked + c.unread + c.other;
   return c;
 }
 const statusParts = (tc) => {
   const p = [`✅ done ${tc.done}`];
-  if (tc.na) p.push(`— n/a ${tc.na}`);
+  if (tc.na) p.push(`— not-applicable ${tc.na}`);
+  if (tc.wontDo) p.push(`⊘ wont-do ${tc.wontDo}`);
+  if (tc.postponed) p.push(`⏸ postponed ${tc.postponed}`);
   if (tc.partial) p.push(`◐ partial ${tc.partial}`);
   if (tc.inProgress) p.push(`▶ in progress ${tc.inProgress}`);
   if (tc.todo) p.push(`☐ queued ${tc.todo}`);
@@ -187,9 +194,10 @@ const statusParts = (tc) => {
   return p;
 };
 
-// A `needs-decision` row that a LATER row (a repair round) closed `n-a` citing a recorded decision is decided —
-// the decision exists, the person made it, only the ledger has not caught up (the repair task closes its source
-// row when it closes). Such an item is reported under the boundaries WITH a decision, not as an open question.
+// A `needs-decision` row that a LATER row (a repair round) closed as a plan boundary (`not-applicable`) citing
+// a recorded decision, or as `wont-do` / `postponed` through `--decide`, is decided — the decision exists, the
+// person made it, only the ledger has not caught up (the repair task closes its source row when it closes).
+// Such an item is reported under the boundaries WITH a decision, not as an open question.
 function splitDecided(notBuilt, boundaries) {
   const decidedBy = new Map();
   for (const b of boundaries) if (b.refs.resolved.length) decidedBy.set(`${b.task.pageKey} ${labelKey(b.row.label)}`, b);
@@ -229,7 +237,7 @@ function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
     R.push(`${plural(openNotBuilt.length, "plan item")} recorded NOT BUILT (${nd} need${nd === 1 ? "s" : ""} a decision${blockedNote})`);
   }
   if (unbackedBoundaries.length) R.push(`${plural(unbackedBoundaries.length, "boundary", "boundaries")} closed by the agent with NO recorded decision`);
-  if (tc.open) R.push(`${plural(tc.open, "task")} not closed (${statusParts(tc).filter((s) => !s.startsWith("✅") && !s.startsWith("— n/a")).join(" · ")})`);
+  if (tc.open) R.push(`${plural(tc.open, "task")} not closed (${statusParts(tc).filter((s) => !s.startsWith("✅") && !s.startsWith("— not-applicable") && !s.startsWith("⊘ wont-do") && !s.startsWith("⏸ postponed")).join(" · ")})`);
   if (rc.missing) R.push(`${plural(rc.missing, "machine-checked plan item")} MISSING from the built page(s)`);
   if (rc.unverified) R.push(`${plural(rc.unverified, "machine row")} not confirmed`);
   return R;
@@ -294,7 +302,7 @@ function decisionsSection(open, pageName, repairBuilt) {
     const later = repairBuilt.get(`${it.task.pageKey} ${labelKey(it.row.label)}`);
     const laterNote = later ? ` ⏳ *${cell(later.group || later.id)} has since recorded it **built**; this row closes when that task closes — check the stand before deciding.*` : "";
     let text;
-    if (it.row?.naNoReason) text = "the row was closed `n-a` with NO reason — decide whether it is a boundary or a row to build";
+    if (it.row?.naNoReason) text = "the row was closed `not-applicable` with NO reason — decide whether it is a boundary or a row to build";
     else if (it.cause === "blocked") text = "none — the stand or a service was unreachable; a re-run may clear it";
     else if (!it.cause) text = "the task closed without accounting for this row — decide whether it was built";
     else {
@@ -315,7 +323,7 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
   const withRef = boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b));
   const without = boundaries.filter((b) => !b.refs.resolved.length);
   const L = [`## 2. Boundaries the agent closed (${withRef.length + without.length + decidedNotBuilt.length})`, ""];
-  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `n-a` in the folder is a boundary the plan itself approved."); return L; }
+  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
   if (without.length) {
     L.push(`**Without a recorded decision (${without.length}) — confirm each, or send it back as a row to build.**`
       + " Nothing was built for these and nobody but the agent said there was nothing to build.", "",
@@ -370,8 +378,9 @@ function taskRows(t, vidx, keys) {
     let state;
     const inSet = (set) => set.has(key) || (wholeRun && !!set.hasLabel?.has(lk));
     if (inSet(keys.notBuilt) && r.outcomeKind === "not-built") state = "not-built";
-    else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
-    else if (r.outcomeKind === "n-a") state = inSet(keys.unbacked) ? "boundary" : "na";
+    else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "not-applicable" || r.outcomeKind === "wont-do" || r.outcomeKind === "postponed")) state = "decided";
+    else if (r.outcomeKind === "not-applicable") state = inSet(keys.unbacked) ? "boundary" : "na";
+    else if (r.outcomeKind === "wont-do" || r.outcomeKind === "postponed") state = "decided";
     else if (r.na || r.info || hv.how === "na") state = "na";
     else if (!r.outcomeKind) state = "open";
     else if (hv.how === "hand") state = "hand";
@@ -474,11 +483,14 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
-  // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
-  // and must not leave plan rows unaccounted while the run reads COMPLETE.
-  const naUnbacked = tasks.filter((t) => t.status === S_NA
+  // A task computed `not-applicable` is the plan's own boundary (every row of the task is a plan-boundary
+  // row). Under ENG-99749 the engine writes that outcome only from `r.na`, so a `not-applicable` task with
+  // rows the plan did NOT mark that way is the same defect this rename fixes — a person's decision written
+  // as a plan fact. It must cite a recorded decision and must not leave plan rows unaccounted while the run
+  // reads COMPLETE.
+  const naUnbacked = tasks.filter((t) => t.status === S_NOT_APPLICABLE
     && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
-  if (naUnbacked.length) reasons.push(`${plural(naUnbacked.length, "task")} closed n/a with no recorded decision (or with rows left unaccounted)`);
+  if (naUnbacked.length) reasons.push(`${plural(naUnbacked.length, "task")} closed not-applicable with no recorded decision (or with rows left unaccounted)`);
   // The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read from
   // `result`, the dispatch gate passed in from migrate.mjs — so the report can never read ✅ COMPLETE on a rejected run.
   if (result?.gate?.blocked) reasons.push("the build gate is BLOCKED — the plan is not approvable");
