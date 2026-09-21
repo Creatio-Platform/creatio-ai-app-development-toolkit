@@ -65,7 +65,7 @@ class ReasoningLatencyProgressUxContractTests(unittest.TestCase):
         self.assertIn("non-blocking", lowered)
 
     def test_does_not_regress_first_turn_latency_markers(self):
-        # egression guard: the additions must not disturb the pre-existing
+        # Guard: the additions must not disturb the pre-existing
         # UX Contract markers asserted by test_default_contract_docs.py.
         for marker in [
             "first",

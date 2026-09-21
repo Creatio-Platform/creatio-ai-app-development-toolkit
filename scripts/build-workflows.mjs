@@ -72,7 +72,7 @@ const TARGETS = [
 
 // Drop `import` statements (single- and multi-line) and turn `export X` into `X`.
 // Nothing else is rewritten: the inlined text is the module's own source, so a
-// er diffing the generated file against the core sees only these removals.
+// reader diffing the generated file against the core sees only these removals.
 // Is this line an `import` (single- or multi-line) or a RE-EXPORT? Both are dropped: the inlined modules share one
 // scope, so every name is already in it. Split out so `inlineOne` stays a loop over lines.
 const isImportStart = (line) => /^import\s/.test(line)

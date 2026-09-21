@@ -259,7 +259,7 @@ function rowsForWidgets(widgets, dcmActive) {
 }
 // the friendly Region label for a card widget is `regionOf(region)`, the SAME resolver every other
 // printer sink uses: `regionOf` already maps `SideAreaProfileContainer` → "Side profile" and returns the
-// `Header / top` sentinel unchanged, so a dedicated helper only duplicated it (review d-baranovskyi). Call
+// `Header / top` sentinel unchanged, so a dedicated helper only duplicates it. Call
 // `regionOf(w.region)` directly at the Layout row, the checklist Layout-by-region group and the Coverage/--verify
 // row so the three can never drift and the raw container name never leaks to one of them.
 // a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
@@ -804,7 +804,7 @@ function orderRegions(rows) {
   return { order, byRegion };
 }
 
-// The ONE child-page template rule (vanislemarina review), shared by the recommendation banner and the Main-scope
+// The ONE child-page template rule, shared by the recommendation banner and the Main-scope
 // row so they can't drift: a related-list child with FEWER THAN 15 inputs AND flat (no tabs, no related lists) →
 // "mini"; otherwise (>= 15 inputs, OR it has tabs/related lists) → "grid". `n === 0` → null (nothing to recommend).
 // Single cut at 15, no gap.
@@ -1209,8 +1209,8 @@ function describedInText(h) {
   // rendered from an older `behaviour-index.json` reads honestly rather than citing a question mark.
   // No card to cite. A row is "described in plain language" iff BOTH prose cells are filled — the SAME `&&` rule
   // `hasPlainLanguage` uses for the "could not describe N of M" banner, so the Described-in column, the banner count
-  // and the per-cell `⚠ not described` all agree on one row (review — Rita/m-dymytrova). Both filled → say so instead
-  // of the self-contradicting `⚠ not described` beside two filled cells (review — kbondarenko); one or none → ⚠.
+  // and the per-cell `⚠ not described` all agree on one row. Both filled → say so instead
+  // of the self-contradicting `⚠ not described` beside two filled cells; one or none → ⚠.
   if (!d || (!d.card && !d.bodyCard)) return (d?.whatItDoes && d?.useCase) ? "plain-language only" : "⚠ not described";
   const cite = (card, ac) => {
     const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
@@ -1669,7 +1669,7 @@ function renderPlanBanners(result, opts) {
   if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable.`, "");
   const signalsMissing = opts.signalsMissing || [];
   if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read which package SHIPS each dashboard from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, sourcePackage? }]\` (omitted = stand data only). That is the read; \`saveInPackage\` (defaulting from it) and \`skip\` (absent unless recorded) are the user's decisions — the full two-step chain is in the skill's \`signals\` step. **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
-  // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
+  // ADVISORY (not a hard block): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
   // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
   P.push(...renderFidelityWarnings(result));
   const sq = result.effective?.seedQuality || result.seedQuality;
@@ -2315,7 +2315,7 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   // field) binds via `values.value`, so `isField` (control) misses it AND it is not in `cs.images` (the generator/
   // name-detected set). Count it here too — the SAME fieldImages fold the Layout builder uses — else a page whose
   // only image is an IMAGELOOKUP-column field gets NO image vk row, `renderVerify` never runs the crt.ImageInput
-  // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap two reviewers flagged).
+  // MISSING check, and a dropped image field passes `--verify` with exit 0 (the AC2 gap).
   const imgNames = new Set((cs.images || []).map((im) => im.classic));
   const fieldImageCount = (cs.viewConfigDiff || [])
     .filter((o) => o.values?.type === "crt.ImageInput" && o.name && !imgNames.has(o.name)).length;
@@ -2387,7 +2387,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
   // gated row for the whole typed entity (mirrors the section-registration row: built ≠ reachable). GATED via
-  // on-stand evidence so an unrouted typed entity can't exit --verify with 0 (deep-review #1).
+  // on-stand evidence so an unrouted typed entity can't exit --verify with 0.
   if (typed.length) pages.push({ label: `Per-type page routing — bind EACH Type's form by the Type column (the Freedom equivalent of Classic's per-type \`SysModuleEdit\` rows). Without it only one Type ever opens its form; the other ${typed.length - 1} are built but unreachable.`, vk: { type: "onstand", evidence: "typedRouting", what: "per-Type RelatedPage binding check", miss: "Types route to Classic / only one form opens" } });
   if (result.miniPage?.schema) {
     // The mini page is a build deliverable (vk mini) AND a WIRING deliverable: a built mini page is an orphan schema
@@ -3421,7 +3421,7 @@ const VK_RULE = new Set(["rule"]);
 // existence) is a configuration record NOT derivable from a single page's get-page ownBodySummary — but it MUST still
 // gate: an unproven one may leave built pages unreachable. So it reads an explicit on-stand EVIDENCE boolean the agent
 // supplies in `--built` (e.g. `built.typedRouting`): true → Done; false → MISSING (exit 2); ABSENT → unverified
-// (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed. (deep-review #1.)
+// (exit 2, NOT "skip") — so `--verify` cannot exit 0 until the wiring is confirmed.
 // A WORKPLACE "MOVE" ONLY ADDS. Registering a section into a workplace does not unbind the one it
 // was in: on the Applicant run the section sat in "Recruiting" AND still in "My applications" (2 SysModuleInWorkplace
 // rows), and a boolean deliverable could not see it, because `true` is the same answer for one binding and for two.
@@ -4138,8 +4138,8 @@ function verifyCtxFactory(root) {
 // on their own. `complete` is kept exactly as before (missing||unverified) for the post-hoc `--verify` CLI verdict
 // (AC7/AC8), which still treats an unconfirmed row as a reason not to call the page done.
 //
-// PR review: the axis is keyed on the row's OWNER, not on its `missing`/`unverified` label. Keying it on the label
-// was wrong in the dangerous direction — `resolveFieldsByIdentity` returns `unverified` for ANY field count below
+// The axis is keyed on the row's OWNER, not on its `missing`/`unverified` label. Keying it on the label
+// is wrong in the dangerous direction — `resolveFieldsByIdentity` returns `unverified` for ANY field count below
 // expected including `0/N`, `resolveCountVk` returns it for any partial component count, and "no `--built.pages`
 // entry" / "re-run get-page and pass viewConfig VERBATIM" are `unverified` too. All of those are the builder's own,
 // named, actionable work, and a page with none of its expected fields reported `buildComplete: true`.
@@ -4215,7 +4215,7 @@ export function renderVerify(result, opts = {}, built = {}) {
   const ctxFor = verifyCtxFactory(root);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
-  // , the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
+  // of the run, the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);

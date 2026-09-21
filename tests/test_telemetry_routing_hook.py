@@ -1028,11 +1028,11 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
     def test_works_from_a_completely_fresh_state_directory(self):
-        # egression: `markerPath` was made side-effect-free so the always-firing events touch
-        # nothing, but `markTouchedClio` — the FIRST write of a session — then had no directory to
-        # write into. The marker silently failed to appear, so Stop stayed silent for the whole
-        # session and no usage reading was ever sent. The suite could not see it because every other
-        # test shares one state directory that an earlier test had already created.
+        # Guard: `markerPath` is side-effect-free so the always-firing events touch
+        # nothing, which leaves `markTouchedClio` — the FIRST write of a session — with no directory
+        # to write into unless it creates one. Without that the marker never appears, Stop stays silent
+        # for the whole session and no usage reading is sent. Every other test shares one state
+        # directory that an earlier test already created, so only a fresh directory exercises this.
         fresh = tempfile.mkdtemp(prefix="caadt-fresh-flow-", dir=_TMP)
         session = str(uuid.uuid4())
         home = telemetry_home("granted")

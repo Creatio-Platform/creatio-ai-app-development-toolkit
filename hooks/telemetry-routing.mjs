@@ -178,12 +178,12 @@ function reportSessionUsage(payload, sessionId) {
 		return;
 	}
 	// A reading is already in flight: the emit is handed off, so a Stop arriving before clio answers
-		// would otherwise dispatch a second child over the first one's files. Also requiring
-		// `outstanding.size === size` would make this decorative — the transcript grows on nearly every
-		// turn, so the sizes almost never match and overlapping dispatches become the norm. Waiting is
+	// would otherwise dispatch a second child over the first one's files. Also requiring
+	// `outstanding.size === size` would make this decorative — the transcript grows on nearly every
+	// turn, so the sizes almost never match and overlapping dispatches become the norm. Waiting is
 	// safe because the counters are running TOTALS: the next reading carries everything this one
 	// would have, so what is lost is resolution on fast turns, never a number. Once the answer comes
-		// back — refused or otherwise — the reading is not in flight and the series continues.
+	// back — refused or otherwise — the reading is not in flight and the series continues.
 	if (inFlight) {
 		return;
 	}

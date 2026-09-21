@@ -416,7 +416,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
-        # egression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
+        # Guard: Codex CLI on Windows reports
         # the "no such marketplace" condition as
         #   `Error: marketplace `creatio` is not configured or installed`
         # — backticks around the name and "is not configured or installed"
@@ -921,7 +921,7 @@ class RemoveTomlTableBlockTests(unittest.TestCase):
             self.assertIn('network = "restricted"', body)
 
     def test_preserves_multiline_array_in_sibling_table(self):
-        # egression: a generous next-header detector ("any line starting with [")
+        # Guard: a generous next-header detector ("any line starting with [")
         # would treat the closing `]` of a multi-line array literal as a new
         # table header and leak the rest of the sibling block as orphans.
         installer = load_installer()

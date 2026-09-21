@@ -106,7 +106,7 @@ console.log(`\n===== Contract sanity =====`);
 console.log(`viewConfigDiff=${co.viewConfigDiff.length} entityRules=${co.entityBusinessRules.length} pageRules=${co.pageBusinessRules.length} details=${co.details.length} handlerStubs=${co.handlerStubs.length} needsDecision=${co.needsDecision.length}`);
 check("Contract: Owner apply-static-filter present", co.entityBusinessRules.some(r => r.targetAttribute === "Owner"));
 check("Contract: Parent make-required present", co.pageBusinessRules.some(r => r.element === "Parent" && r.action === "make-required"));
-// egression guard for the symbolic-enum BLOCKER fix: legacy FILTRATION rules (declared via
+// Guard: legacy FILTRATION rules (declared via
 // BusinessRuleModule.enums.RuleType.FILTRATION) must resolve, not collapse to BINDPARAMETER/1-rule.
 check("Contract: legacy FILTRATION rules resolved (entityRules > 1)", co.entityBusinessRules.length > 1);
 check("Contract: no rules mis-mapped to 'symbolic'", !co.needsDecision.some(n => n.kind === "rule" && /symbolic|unresolved/.test(n.reason)));
@@ -573,7 +573,7 @@ check("entity-filter: static filter marked complete + NOT in the folded line",
 const imgCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Photo", parentName: "Header", generator: "ImageCustomGeneratorV2.generateCustomImageControl" }),
   di({ name: "Code", parentName: "Header", propertyName: "items", bindTo: "Code", tip: "Resources.Strings.CodeTip" })] })]));
-// review (s-vanislemarina #4): an image/photo is a NORMAL element — it renders as an Image row in the Layout
+// An image/photo is a NORMAL element — it renders as an Image row in the Layout
 // table and is NOT surfaced as a per-image `⚠ Confirm` decision (that duplicated the layout row and dressed a
 // plain column-bound image up as custom "wire getSrc/onChange" work — classic-generator vocabulary, not Freedom).
 check("image component (generator-based, no bindTo) → images[] but NO `image` needsDecision (it's a plain layout mapping, not a decision)",
@@ -658,7 +658,7 @@ check("unmapped-component: a struct-NAMED container that states NO itemType and 
   umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "LegacyGroup")
   && !umCs.needsDecision.some(n => n.kind === "unmapped-component" && n.item === "LegacyGroupLabel"),
   () => umCs.needsDecision.filter(n => n.kind === "unmapped-component").map(n => n.item));
-// review (s-vanislemarina #2/#5): a CONTAINER whose children were MAPPED (a photo wrapper, a profile island, a
+// A CONTAINER whose children were MAPPED (a photo wrapper, a profile island, a
 // header column block) is a real layout container — NOT an unmapped micro-widget — even when its NAME misses the
 // struct whitelist (PhotoContainer / EmployeeProfile / HeaderColumnContainer were all falsely flagged "port
 // manually or drop"). Only a container whose ENTIRE subtree mapped to nothing (the true SLA-timer case) surfaces.
@@ -689,7 +689,7 @@ check("unmapped-component: an item INSIDE a mapped control (an image's tip) is N
   () => !insideUn.includes("PhotoTip"), () => insideUn);
 check("unmapped-component: an unmapped item inside a mapped CONTAINER is STILL flagged — a container does not render its children for you",
   () => insideUn.includes("StrayLabel"), () => insideUn);
-// review (s-vanislemarina #2): a primary-display label (caption getPrimaryDisplayColumnValue) = the record title,
+// A primary-display label (caption getPrimaryDisplayColumnValue) = the record title,
 // provided NATIVELY by the Freedom page title → NOT an unmapped micro-widget, and no ⚠ message. Its container
 // (HeaderColumnContainer) is spared too.
 const pdTitleCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
@@ -928,7 +928,7 @@ check("deep-nest DoS: the CLI exits cleanly (2, GATE BLOCKED) — not an uncaugh
   deepCli.status === 2 && /GATE BLOCKED/.test(deepCli.stderr || "") && !/RangeError|Maximum call stack/.test(deepCli.stderr || ""),
   () => ({ status: deepCli.status, stderr: (deepCli.stderr || "").slice(0, 120) }));
 
-/* ---- recursion depth cap: a CYCLIC childPageSchemas must terminate + stay bounded (review #4).
+/* ---- recursion depth cap: a CYCLIC childPageSchemas must terminate + stay bounded.
    If the depth>=2 guard regresses, this self-referential manifest would recurse without bound (RangeError),
    so simply COMPLETING this check proves the runaway guard holds. ---- */
 const loopBody = 'define("LoopPage", [], function() { return { entitySchemaName: "Loop", diff: [], details: { D: { schemaName: "LoopDetail", entitySchemaName: "Loop", filter: { detailColumn: "Parent", masterColumn: "Id" } } } }; });';
@@ -938,7 +938,7 @@ const loopRun = runMigration(loopManifest);
 check("recursion depth cap: cyclic childPageSchemas terminates and is bounded (no runaway)",
   !!loopRun && Array.isArray(loopRun.childPages) && loopRun.childPages.length > 0);
 
-/* ---- cycle = resolved-elsewhere, not a gap (Alexandr review). A cycle must NOT make structure.complete
+/* ---- cycle = resolved-elsewhere, not a gap. A cycle must NOT make structure.complete
    unsatisfiable (false-red on child pages) NOR clear it silently while the renderer warns (false-green on
    typed/mini). The gate and the rendered plan must AGREE. ---- */
 // (a) mutual-reference A<->B child pages, both bundles supplied → structure.complete === true (was: never true).
@@ -1125,7 +1125,7 @@ const vfCs = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "Request", parentName: "Header", propertyName: "items", bindTo: "InternalRequest" }),
   di({ name: "Dept",    parentName: "Header", propertyName: "items", bindTo: "Department" }),   // not an X column → auto-filled
 ] })]), { entityColumns: { InternalRequest: { type: "Lookup", ref: "InternalRequest" } } }); // Department NOT supplied
-// review (s-vanislemarina #4): a field whose column is NOT on the entity is a LINKED cross-datasource value —
+// A field whose column is NOT on the entity is a LINKED cross-datasource value —
 // mapped as a read-only `linkedValue` on the field (Freedom shows a related data source's column via the lookup),
 // NOT a ⚠ virtual-field assumption. The real column stays a normal field.
 check("linked cross-datasource: missing column → read-only linkedValue field (not a ⚠ virtual-field), real column stays normal",
@@ -1165,7 +1165,7 @@ check("design-spec: Confirm section present (⚠ worklist)",
 // a real fetched base chain has 150+ bodied methods; the gate blocks a < 5-method fetch OR a
 // seed whose methods are all empty `(){}` stubs. The bodies here are trivial `return;` — enough to read as real.
 const CLEAN_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}},{operation:"insert",name:"ESNTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}},{operation:"insert",name:"ChangesHistoryTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15}}],methods:{init:function(){return;},getActions:function(){return;},onSaved:function(){return;},setColumns:function(){return;},loadValues:function(){return;},onRender:function(){return;}}};});' }];
-// review (s-vanislemarina #3): STANDARD Creatio-classic framework methods are NOT surfaced as handlers or `method`
+// STANDARD Creatio-classic framework methods are NOT surfaced as handlers or `method`
 // decisions; only CUSTOM business methods are. Applies via mapRemainingLogic → covers form/mini/typed/detail pages.
 const stdMethRun = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("XPage",[],function(){return{entitySchemaName:"X",methods:{init:function(){},onSaved:function(){},setValidationConfig:function(){},createValidator:function(){},validateCareerPeriod:function(){},getRoleDetailFilter:function(){}},diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
@@ -2864,7 +2864,7 @@ check("linked-value: compact `↳ linked` per-field marker + the cross-datasourc
   && /`↳ linked` fields \(read-only, cross-datasource\)/.test(linkedCs.designSpec)
   && (linkedCs.designSpec.match(/bind the input to `<Lookup>\.<column>` READ-ONLY/g) || []).length === 1
   && !linkedCs.changeSet.needsDecision.some((n) => n.kind === "lookup-no-ref" && (n.item === "Email" || n.item === "MobilePhone")));
-// RV12 / review (s-vanislemarina #1) — an image/photo component is emitted as a REAL crt.ImageInput ELEMENT in
+// An image/photo component is emitted as a REAL crt.ImageInput ELEMENT in
 // viewConfigDiff (bound via `value`, not `control`), not just a plan row — so the agent builds it and --verify
 // counts it. It also renders a crt.ImageInput Layout row.
 const imageRowCs = runMigration({ entity: "X",
@@ -2940,7 +2940,7 @@ check("Major3 image-only form: a sole crt.ImageInput is NOT a false hollow 0-fie
   imgBound.structure.complete === true
   && !(imgBound.structure.issues || []).some((i) => /0 FIELDS/.test(i)),
   () => imgBound.structure.issues);
-// #1 FILL (s-vanislemarina Q2): column unresolved → crt.ImageInput STILL emitted with a `<FILL>` value + the recipe
+// FILL: column unresolved → crt.ImageInput STILL emitted with a `<FILL>` value + the recipe
 // on the LAYOUT row, and NO separate image-column ⚠ (that duplicated the layout row verbatim — double-surfacing).
 check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL value, and NO redundant image-column decision",
   imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && o.values.value?.endsWith("_value"))
@@ -3564,9 +3564,9 @@ check("formless empty: 0-field child with NO behaviour is marked empty (no logic
   && /\| CEPage[^|]*\| ⚠ folded to 0 fields with no behaviour[^|]*\| ⚠ verify \|/.test(formlessEmpty.plan)
   && /Folded to an EMPTY page \(0 form fields, no behaviour\)/.test(formlessEmpty.plan),
   () => ({ formless: ceChild.formless, hasLogicSpec: !!ceChild.logicSpec }));
-// review (Kravchuk minor) — hasBehaviour reaches inline-grid through the LOGIC_BEARING_KINDS `needsDecision.some(...)`
+// hasBehaviour reaches inline-grid through the LOGIC_BEARING_KINDS `needsDecision.some(...)`
 // path, NOT only via handlerStubs: a 0-field child with NO methods but an IMPERATIVE attribute (a logic-bearing
-// `attribute-imperative` decision) is still an inline grid. This is the path finding #3 narrowed (a cosmetic/registry
+// `attribute-imperative` decision) is still an inline grid. (A cosmetic/registry
 // decision must NOT qualify — formlessEmpty above covers the no-logic → empty side).
 const formlessGridViaDecision = runMigration({ entity: "Par",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Par",details:{D1:{schemaName:"CIDetail",entitySchemaName:"CI",filter:{detailColumn:"M",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D1",parentName:"T",values:{itemType:2}}]};});` }],
@@ -3969,7 +3969,7 @@ check("STRUCTURE: a non-typed Rebuild form that folds to 0 FIELDS is BLOCKED (ho
   () => hollowForm.structure.issues);
 check("STRUCTURE: the 0-field gate is top-level + form-only — a form WITH ≥1 field is NOT blocked (even with details)",
   stVerifiedNone.structure.issues.every((i) => !/0 FIELDS/.test(i)));
-// review (s-vanislemarina #3): detail editability lives in the detail's OWN config, not on the master. When the
+// Detail editability lives in the detail's OWN config, not on the master. When the
 // detail schema IS bundled (get-classic-migration-bundle gathers detailSchemas), editability is RESOLVED — no
 // per-detail "confirm view-only vs add/edit/delete" line. It fires ONLY when the schema was NOT bundled.
 check("#3 detail-editability: NOT flagged when the detail's own schema is bundled (editability resolvable from its config)",
@@ -4185,7 +4185,7 @@ check("locker (alias): a dynamic caption inside an aliased item stays ADVISORY (
   b1aliasCap.parseDiagnostics.some((d) => /diff\.0\.values\.caption/.test(d.path)) && !b1aliasCap.gate.reasons.some((r) => /structural field/.test(r)),
   () => ({ diags: b1aliasCap.parseDiagnostics, reasons: b1aliasCap.gate.reasons }));
 
-// ajor (this round) — a factory that returns a VARIABLE (`var cfg={…}; return cfg;`) resolves the same as an
+// A factory that returns a VARIABLE (`var cfg={…}; return cfg;`) resolves the same as an
 // inline object; a return the evaluator cannot resolve to an object (a call, or no return) is a ROOT-level
 // structural hole → gate blocks, not a silent empty page.
 const retAlias = runMigration({ entity: "X", seed: CLEAN_SEED,
@@ -4225,7 +4225,7 @@ const m3child = runMigration({ entity: "X",
   childPageSchemas: { C: m3childBad, CPage: m3childBad } }, { baseDir: FIX });
 check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
   m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
-// ajor 4 (this round) — a detail body that PARSES but builds its `diff` via an unresolved call resolves to
+// A detail body that PARSES but builds its `diff` via an unresolved call resolves to
 // columns:null. Its astDiagnostics must reach the gate (tagged detail:<name>) and BLOCK on the structural diff,
 // not pass green with empty columns.
 const m4detDyn = runMigration({ entity: "X",
@@ -4234,7 +4234,7 @@ const m4detDyn = runMigration({ entity: "X",
 check("Major4(detail): a detail whose diff is built by an unresolved call BLOCKS the gate (detail:<name> structural diag), not green columns:null",
   m4detDyn.gate.blocked === true && m4detDyn.gate.reasons.some((r) => /structural field/.test(r) && /detail:DynDetail/.test(r)),
   () => ({ blocked: m4detDyn.gate.blocked, reasons: m4detDyn.gate.reasons }));
-// ajor 3 (this round) — a page built with NO parent-template seed must BLOCK (a Classic page always extends a
+// A page built with NO parent-template seed must BLOCK (a Classic page always extends a
 // base template; skipping the seed drops inherited actions + layout). The skeleton-dodge (page defines its own
 // containers so `unresolvedParents` stays empty) would otherwise slip through green. Verified opt-out clears it.
 const dodgeBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}},{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});`;
@@ -4317,7 +4317,7 @@ check("F5: a deep child tree maps fully — the child is mapped AND its own gran
   f5ch?.spec && f5ch.grandChildren >= 1,
   () => ({ childMapped: !!f5ch?.spec, grandChildren: f5ch?.grandChildren }));
 
-/* ---- inor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
+/* ---- untrusted input: stand-derived captions/titles cannot inject Markdown into the plan ---- */
 // The design spec is presented "verbatim" and acted on. A hostile/garbled stand caption or column title
 // (newline + heading + fenced block + pipe + backticks) must NOT break the table or inject a line that
 // reads as an instruction — the sanitizer collapses each value to one inert cell.
@@ -4408,7 +4408,7 @@ check("#11 determinism: two runs of the same manifest produce byte-identical out
   det1 === det2 && det1.length > 100,
   () => ({ len1: det1.length, len2: det2.length, firstDiff: [...det1].findIndex((ch, i) => ch !== det2[i]) }));
 
-/* ---- ajor (supply-chain): the vendored acorn parser matches its pinned upstream provenance ---- */
+/* ---- supply chain: the vendored acorn parser matches its pinned upstream provenance ---- */
 // The one executable that processes untrusted schema-body must be integrity-checked. verify-vendor.mjs is
 // the CI gate; running it here ties the same check into the local golden run (exit 0 on a clean tree).
 const vv = spawnSync(process.execPath, [path.join(ENGINE_DIR, "verify-vendor.mjs")], { encoding: "utf8" });
@@ -4568,11 +4568,11 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
-check("ajor(imperative-sink): a piped handler/helper name is escaped in the worklist's method cell (no raw table pipe)",
+check("imperative sink: a piped handler/helper name is escaped in the worklist's method cell (no raw table pipe)",
   impLines.length === 2 && impLines.some((l) => l.includes(String.raw`onFo\|oChanged`))
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
-check("ajor(imperative-sink): the Logic table renders no method name to escape in the first place",
+check("imperative sink: the Logic table renders no method name to escape in the first place",
   /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
   () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
@@ -4613,7 +4613,7 @@ check("Minor5: a whatItDoes value starting with a block marker does NOT render a
 // a CLIENT merge that reconfigures a BASE (template-owned) field (hides it, moves it) is excluded
 // from the payload as template context; its override must be SURFACED, not silently lost. It is a CONCRETE
 // applied override (baseFieldOverrides — what to change on the template's field), NOT a ⚠ decision to punt
-// (review s-vanislemarina #6: "if there are changes, just implement them" — the delta is known, so state it).
+// (The delta is known, so state it: if there are changes, just implement them.)
 const boSeed = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }), di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" })], methods: ["init", "getActions"] });
 const boClient = L("Client", { entity: "X", diff: [di({ operation: "merge", name: "BaseFld", visible: false, layout: { column: 6, row: 2 } })] });
 const boCs = mapToFreedom(mergeHierarchy([boClient], { seedTemplate: [boSeed] }));
@@ -4624,7 +4624,7 @@ check("a client override of a BASE field (visible/layout) is surfaced as a CONCR
 const boUntouched = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "MyF", parentName: "Header", propertyName: "items", bindTo: "MyF" })] })], { seedTemplate: [boSeed] }));
 check("an UNTOUCHED base field is NOT flagged (only client-reconfigured base fields surface)",
   !(boUntouched.baseFieldOverrides || []).length);
-// Variant B (s-vanislemarina §2): the SAME base field folded as a CHILD page is BUILT (its content — a mini/grid
+// Variant B: the SAME base field folded as a CHILD page is BUILT (its content — a mini/grid
 // child target ships no entity fields) with NO override list; the main fold above suppresses it. Framework chrome
 // (templateOwned, NO bindTo) stays suppressed for the child too.
 const boSeedChrome = L("Tpl", { diff: [di({ name: "Header", itemType: 15 }), di({ name: "BaseFld", parentName: "Header", propertyName: "items", bindTo: "BaseCol" }), di({ name: "ChromeItem", parentName: "Header", propertyName: "items" })], methods: ["init", "getActions"] });
@@ -4779,10 +4779,10 @@ check("Major7: a seed with a token method but NO getActions is still looksSkelet
   m7.seedQuality.looksSkeletal === true && m7.seedQuality.hasGetActions === false && m7.warnings.some((w) => w.name === "skeletal-seed"),
   () => m7.seedQuality);
 
-/* ---- Documents-session regressions: section quick filters, custom section actions, typed-page family ----
-   All three were dropped on the real Documents migration: the section body carried them but the engine either
-   had no extractor (quick filters), an extractor too narrow to match the standard shape (section actions), or
-   no plan concept at all (typed pages). Fixtures mirror the real DocumentSectionV2 / list-entity-client-schemas. */
+/* ---- Documents-session coverage: section quick filters, custom section actions, typed-page family ----
+   All three must survive a real Documents migration. The section body carries them, and the engine needs an
+   extractor for quick filters, one wide enough to match the standard section-action shape, and a plan concept
+   for typed pages. Fixtures mirror the real DocumentSectionV2 / list-entity-client-schemas. */
 const docSecBody = `define("XSection", [], function() { return { entitySchemaName: "X", methods: {
   initFixedFiltersConfig: function() {
     var fixedFilterConfig = { entitySchema: this.entitySchema, filters: [
@@ -7118,7 +7118,7 @@ check("Plan-vs-Done checklist: the MINI PAGE also gets a WIRING row (ADD-purpose
 check("Plan-vs-Done checklist (typed): a gated 'Per-type page routing' deliverable row (bind each Type by the Type column), not banner-prose only",
   /Per-type page routing/.test(docSecRun.checklist || "") && /Type column/.test(docSecRun.checklist || "") && /SysModuleEdit/.test(docSecRun.checklist || ""),
   () => (docSecRun.checklist || "").split("\n").filter((l) => /routing|Type column|SysModuleEdit/.test(l)));
-// review (s-vanislemarina #3): STANDARD framework methods (init/onSaved) are NOT surfaced as handlers — only the
+// STANDARD framework methods (init/onSaved) are NOT surfaced as handlers — only the
 // CUSTOM business method (onContactChange) gets a handler row.
 check("Plan-vs-Done checklist: ONE row per CUSTOM handler (onContactChange); standard init/onSaved are NOT listed",
   /Handler — `onContactChange`/.test(ck) && !/Handler — `init`/.test(ck) && !/Handler — `onSaved`/.test(ck),
@@ -7211,7 +7211,7 @@ const vOk = renderVerify(vResult, {}, {
     // longer testing what its name says.
     { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
-  // on-stand reachability evidence (deep-review #1): the mini-wiring / section-registration rows are gated and only
+  // on-stand reachability evidence: the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.
   // (`reachabilityValue` still reads these root-level booleans when `reachability` says nothing about
   // the key, so the existing literal stays valid; `reachability.<k> === false` would override them, `true` never does.)
@@ -7471,7 +7471,7 @@ check("the plan Layout renders 'Editable list' + ⚠ INLINE-EDITABLE, and NO crt
 check("editable-grid emission: a lookup+service detail with NO editable grid stays a read-only Expanded list",
   regDetail?.composite === "Expanded list" && !regDetail?.editable);
 
-/* ---- render-level fixes (s-vanislemarina): #1 mini heading · #7 few-fields child · #8 pre-resolved Print/Process ---- */
+/* ---- render level: mini heading · few-fields child · pre-resolved Print/Process ---- */
 // #1 — a mini page's form section is titled "Mini page (quick-add)", NOT "<entity> form page", so it can't read
 // as a duplicate of the record page's form section (both used the same "<entity> form page" heading before).
 const miniSpec = renderDesignSpec({ entity: "X", changeSet: { viewConfigDiff: [{ name: "F", parentName: "Header", values: { control: "$F", type: "crt.Input" } }] } }, { isMiniPage: true });
@@ -7484,7 +7484,7 @@ const fewChild = renderDesignSpec({ entity: "Anniv", changeSet: { viewConfigDiff
   { name: "T", parentName: "Header", values: { control: "$T", type: "crt.Input" } }] } }, { isChildPage: true });
 check("#7 child page, few fields, no tabs/details → recommends the Mini page template (BaseMiniPageTemplate)",
   /Recommendation — small child form/.test(fewChild) && /BaseMiniPageTemplate/.test(fewChild));
-// #7 threshold (s-vanislemarina Q1): single cut at 15 — a flat child with < 15 inputs (7 here) → Mini page (NO gap).
+// Threshold: single cut at 15 — a flat child with < 15 inputs (7 here) → Mini page (NO gap).
 const midChild = renderDesignSpec({ entity: "Big", changeSet: { viewConfigDiff:
   Array.from({ length: 7 }, (_, i) => ({ name: "F" + i, parentName: "Header", values: { control: "$F" + i, type: "crt.Input" } })) } }, { isChildPage: true });
 check("#7 child page with 7 fields (< 15, flat) → recommends the Mini page template (no more 6-11 gap)",
@@ -7502,7 +7502,7 @@ const tabbedChild = renderDesignSpec({ entity: "Tabbed", changeSet: { viewConfig
   { name: "T", parentName: "Tabs", propertyName: "items", values: { type: "crt.TabContainer", caption: "#ResourceString(T)#" } }] } }, { isChildPage: true });
 check("#7c child < 15 inputs but WITH tabs → Grid page (a mini page can't hold tabs)",
   /Recommendation — child form/.test(tabbedChild) && /PageWithAreaFreedomTemplate/.test(tabbedChild) && !/small child form/.test(tabbedChild));
-// header→top-area recommendation (vanislemarina review): a form whose changeSet carries headerLayout:"wide" gets
+// header→top-area recommendation: a form whose changeSet carries headerLayout:"wide" gets
 // the top-area template recommendation — on ANY form INCLUDING a non-child (typed/base) form (the "typed pages
 // too" requirement), and NOT on a mini page or a page with no header block.
 const hdrBase = renderDesignSpec({ entity: "H", changeSet: { headerLayout: "wide", viewConfigDiff: [
@@ -7586,7 +7586,7 @@ check("inverse graph: mutual recursion does not hang or invent a root (cycle gua
   (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger && !invTrig("pingPongA")?.lifecycle);
 check("inverse graph: a declaration-triggered method keeps its OWN declared trigger, never an internal one",
   invTrig("onStageChanged")?.kind === "attribute-dependency");
-// egression from a real Order-section run: the immediate caller must not also appear in `via`, and `via` must not
+// Guard: the immediate caller must not also appear in `via`, and `via` must not
 // end on the root the trigger already names ("internal call from onContractInserted via onContractInserted").
 check("inverse graph: `via` lists the hops BETWEEN the caller and the root — never the caller itself",
   !(invTrig("roundIt")?.via || []).includes(invTrig("roundIt")?.from),
@@ -7820,19 +7820,19 @@ const hoMixed = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
   onStageChanged: { whatItDoes: "Recomputes the deal amount", useCase: "When Stage changes the amount is recalculated" }, // both, no card
   privateHelper: { whatItDoes: "Reads the current amount" }, // asymmetric — whatItDoes only, no useCase, no card
 } }), {});
-check("review #2: a prose-only row (no card) shows `plain-language only` in Described-in, not the self-contradicting `⚠ not described`",
+check("a prose-only row (no card) shows `plain-language only` in Described-in, not the self-contradicting `⚠ not described`",
   /\| onStageChanged \|[^|]*\| Recomputes the deal amount \| When Stage changes the amount is recalculated \|[^|]*\| plain-language only \|/.test(hoMixed),
   () => hoMixed.split("\n").filter((l) => /onStageChanged/.test(l)));
-check("review #2: an asymmetric row (one prose field) renders the filled cell + `⚠ not described` for the empty half, AND `⚠ not described` in Described-in — the same BOTH-cells rule the banner uses, so all three surfaces agree (banner counts it undescribed)",
+check("an asymmetric row (one prose field) renders the filled cell + `⚠ not described` for the empty half, AND `⚠ not described` in Described-in — the same BOTH-cells rule the banner uses, so all three surfaces agree (banner counts it undescribed)",
   /\| privateHelper \|[^|]*\| Reads the current amount \| ⚠ not described \|[^|]*\| ⚠ not described \|/.test(hoMixed)
     && /could not identify and describe the logic of 1 of 2 method/.test(hoMixed),
   () => hoMixed.split("\n").filter((l) => /privateHelper|could not/.test(l)));
-// review (Kravchuk minor) — the useCase-ONLY case is symmetric to whatItDoes-only: the filled cell renders, the empty
+// The useCase-ONLY case is symmetric to whatItDoes-only: the filled cell renders, the empty
 // What-it-does half AND Described-in both read `⚠ not described`, and the row counts undescribed (the BOTH-cells rule).
 const hoUseCaseOnly = renderPlan(runMigration({ ...handoffManifest, behaviourIndex: {
   onStageChanged: { useCase: "When Stage changes, the amount updates" }, // useCase only, no whatItDoes, no card
 } }), {});
-check("review (Kravchuk minor): a useCase-ONLY row renders the filled Use-case cell, `⚠ not described` in the What-it-does half AND in Described-in, and is counted undescribed",
+check("a useCase-ONLY row renders the filled Use-case cell, `⚠ not described` in the What-it-does half AND in Described-in, and is counted undescribed",
   /\| onStageChanged \|[^|]*\| ⚠ not described \| When Stage changes, the amount updates \|[^|]*\| ⚠ not described \|/.test(hoUseCaseOnly),
   () => hoUseCaseOnly.split("\n").filter((l) => /onStageChanged/.test(l)));
 
@@ -9111,7 +9111,7 @@ check("b (no contradiction): the tabbed child's own design-spec recommendation a
     spec: String(tabChild?.spec || "").split("\n").filter((l) => /Template/.test(l)).slice(0, 4) }));
 
 /* ================================================================================================================
-   M1 + M2 — the two MAJOR defects a checker drove through the real CLI to exit 0 / to a false ❌.
+   M1 + M2 — the two defects a checker can drive through the real CLI to exit 0 / to a false ❌.
 
    ONE fixture serves both: a `main` page that emits a `fields` vk WITH expected names, a `feature` vk
    (`crt.ApprovalList`, from a VisaDetailV2 detail — `uiShape: "component"`, so it is not folded into
@@ -10452,7 +10452,7 @@ try {
   check("follow-up: that attribute's ledger row is `context` (auto-accounted, counted, never a gap) — not `unaccounted` and not `decision`",
     tplGap.coverage?.rows.find((r) => r.kind === "attribute" && r.name === "TplAttr")?.disposition === "context",
     () => tplGap.coverage?.rows.filter((r) => r.kind === "attribute"));
-  // egression guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
+  // Guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
   // escalation must survive. Only an untouched, purely-inherited member gets suppressed.
   const tplGapTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",attributes:{TplAttr:{value:true}},diff:[${nameOp}]};});`;
   const tplGapTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
@@ -10462,9 +10462,9 @@ try {
     tplGapTouched.changeSet.needsDecision.some((d) => d.kind === "parse-gap" && d.item === "TplAttr"),
     () => tplGapTouched.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`));
 
-  // PR review follow-up: the earlier fixtures only exercised 'attribute'. `TEMPLATE_OWNED_LIST_KEY` covers exactly
-  // the three owner kinds a diagnostic can REACH this escalation with — attribute, message, mixin. (A second review
-  // round showed `detail`/`module` are unreachable for the same reason as `businessRules`: `isStructuralDiag` puts
+  // `TEMPLATE_OWNED_LIST_KEY` covers exactly
+  // the three owner kinds a diagnostic can REACH this escalation with — attribute, message, mixin. (`detail` and
+  // `module` are unreachable for the same reason as `businessRules`: `isStructuralDiag` puts
   // `details`/`modules` in `STRUCTURAL_ROOTS`, so `reportedElsewhere` drops those diagnostics first. A detail
   // fixture here asserted a generalization the code does not have and passed for an unrelated reason — the detail's
   // gap HARD-BLOCKS the gate and never becomes a `parse-gap` either way, so the check stayed green even with the
@@ -10511,8 +10511,8 @@ try {
     && tplGapDetail.gate.reasons.some((r) => /details\.TplDetail\.schemaName/.test(r)),
     () => ({ needsDecision: tplGapDetail.changeSet.needsDecision.map((d) => `${d.kind}:${d.item}`), gate: tplGapDetail.gate.reasons }));
 
-  // PR review follow-up: the PR body claims the fix "does not affect MobilePhone/Email/Skype (client's own Contact
-  // attributes)". Those are attributes a CLIENT schema declares itself (never marked `fromTemplate`), so they must
+  // The fix does not affect MobilePhone/Email/Skype (client's own Contact
+  // attributes). Those are attributes a CLIENT schema declares itself (never marked `fromTemplate`), so they must
   // keep escalating exactly as before — same shape as `tplGapTouched` above, named for the actual scenario.
   // The seed declares the same three names with the same unreadable shape, so `fromTemplate` is genuinely in play:
   // the client ALSO declaring them (`schemaTouched`) is what keeps them escalating, not the absence of a template

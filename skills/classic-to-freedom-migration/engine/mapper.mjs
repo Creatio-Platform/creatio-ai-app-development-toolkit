@@ -108,8 +108,8 @@ const DVT_TYPE_NAME = {
   // CrtNUI 7.8.0 L2459-2532):
   //   * Classic RENDERS these, so classic field behaviour DOES exist to port: MAPPING -> `generateMappingEdit`
   //     (`Terrasoft.MappingEdit`, L2511-2512) and STAGE_INDICATOR -> `generateStageIndicator`
-  //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task
-  //     ; until it lands, no control is asserted here — but the decision must not tell the operator
+  //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task;
+  //     until it lands, no control is asserted here — but the decision must not tell the operator
   //     there is nothing to port.
   //   * Classic THROWS `UnsupportedTypeException` for these (they have no case, so they hit `default` L2523-2529):
   //     BLOB, IMAGE, FILE, FILE_LOCATOR, COLLECTION, ENTITY, ENTITY_COLLECTION, CUSTOM_OBJECT, COMPOSITE_OBJECT,
@@ -477,7 +477,7 @@ export function mapToFreedom(eff, opts = {}) {
   // fields (entity-column-bound, defined in the child's base `*Page` that lands in the seed chain) ARE its content
   // and MUST be built + counted (else a standard child folds to 0 fields and the template threshold undercounts).
   // Framework chrome (templateOwned but NOT column-bound — BaseModulePageV2/BasePageV2 containers/actions) stays
-  // suppressed for children too. (Vanislemarina review §2 / Variant B.)
+  // suppressed for children too. (Variant B.)
   const isChildPage = !!opts.isChildPage;
   const isContentField = (f) => !f.templateOwned || (isChildPage && !!f.bindTo);
   // An image/photo item is emitted by mapImages as a crt.ImageInput — it must NOT ALSO be emitted here as a plain
@@ -744,7 +744,7 @@ const freedomRequest = (elementName) => `usr.${elementName}Clicked`;
 // Resolve a field's Freedom visibility (static false → hidden; a statically-hidden ancestor container → hidden
 // too) and surface the dynamic-visibility / ancestor-visibility decisions.
 //
-// PR review — hoisted OUT of `mapFields` to module scope rather than left as a closure over it. Sonar counts a
+// Hoisted OUT of `mapFields` to module scope rather than left as a closure over it. Sonar counts a
 // nested function's branching against its enclosing function, so `mapFields` sat one point over the S3776 ceiling
 // (16 against 15) while every one of its parts was already small. Nothing here reads `mapFields`'s locals: the two
 // facts it needs from the run — whether this is a mini page, and where to file a decision — come in as arguments.
