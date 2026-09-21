@@ -2549,27 +2549,32 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
 // a Deliverables table the engine never parsed, the `## Notes` — is byte-identical afterwards. Only the first
 // `status:` line inside the opening front-matter block is replaced; a `status:` in prose further down is not
 // front matter and is left alone.
-function setFrontMatterStatus(dir, file, status, declared = null) {
+// A `decisions:` value the caller passes lands the same way: added when the file does not carry the field, and
+// rewritten (or emptied) when it does. ENG-99749: `--decide` and its cascade write `<n>:D<N>` pairs so
+// `--revoke D<N>` can find exactly the cells it wrote.
+function setFrontMatterStatus(dir, file, status, declared = null, decisions = null) {
   // The stamp moves with the word, or every adopted file reads as hand-edited.
   const full = path.join(dir, file);
   if (!fs.existsSync(full)) return false;
   const lines = fs.readFileSync(full, "utf8").split("\n");
   if (lines[0]?.trim() !== "---") return false;
-  const at = rewriteFrontMatter(lines, status, declared);
+  const at = rewriteFrontMatter(lines, status, declared, decisions);
   if (at.status < 0) return false;
   // A FIELD THE FILE DOES NOT CARRY IS ADDED. Without the stamp the engine would keep writing this file's status
   // while every edit to it stayed undetectable; without the declaration a halt promoted out of `status:` would
   // last exactly one pass, because this same write refreshes the stamp that made it a promotion.
   if (at.stamp < 0) lines.splice(at.status + 1, 0, `statusFrom: ${statusStamp(status)}`);
   if (at.declared < 0 && declared) lines.splice(at.status + 1, 0, `declared: ${declared}`);
+  // The `decisions:` line likewise appears only once cascade writes into an adopted body for the first time.
+  if (at.decisions < 0 && decisions !== null) lines.splice(at.status + 1, 0, `decisions: ${decisions}`);
   writeIfChanged(full, lines.join("\n"));
   return true;
 }
 
-// Rewrite the three fields this write owns, in place, and report where each was found. An index of -1 means the
+// Rewrite the four fields this write owns, in place, and report where each was found. An index of -1 means the
 // file does not carry that line at all.
-function rewriteFrontMatter(lines, status, declared) {
-  const at = { status: -1, stamp: -1, declared: -1 };
+function rewriteFrontMatter(lines, status, declared, decisions = null) {
+  const at = { status: -1, stamp: -1, declared: -1, decisions: -1 };
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") break;
     if (lines[i].startsWith("statusFrom:")) {
@@ -2578,12 +2583,51 @@ function rewriteFrontMatter(lines, status, declared) {
     } else if (lines[i].startsWith("declared:")) {
       if (declared) lines[i] = `declared: ${declared}`;
       at.declared = i;
+    } else if (lines[i].startsWith("decisions:")) {
+      if (decisions !== null) lines[i] = `decisions: ${decisions}`;
+      at.decisions = i;
     } else if (lines[i].startsWith("status:")) {
       lines[i] = `status: ${status}`;
       at.status = i;
     }
   }
   return at;
+}
+
+// The Outcome cell of a numbered row in an adopted body's `## Deliverables` table, replaced in place.
+// `## Deliverables` for a repair task carries five cells (`| # | Deliverable | What was recorded | Evidence
+// behind it | Outcome |`); for a build task it carries five too (`| # | From | Deliverable | Closed by |
+// Outcome |`). Outcome is always the LAST cell, so the replacement scans for the row whose ordinal matches
+// `rowIdx + 1` and rewrites the last cell alone — leaving every other column, and every non-table line, byte
+// identical. Returns true when the file was written.
+function setAdoptedRowOutcome(dir, file, rowIdx, cellText) {
+  const full = path.join(dir, file);
+  if (!fs.existsSync(full)) return false;
+  const lines = fs.readFileSync(full, "utf8").split("\n");
+  const ordinal = rowIdx + 1;
+  const rowRe = new RegExp(String.raw`^\s*\|\s*${ordinal}\s*\|`);
+  let inTable = false;
+  for (let i = 0; i < lines.length; i++) {
+    // Only within `## Deliverables`: a numbered row elsewhere in the file (a code block, a note) must not be
+    // rewritten. The heading name is fixed by the renderer.
+    if (lines[i].trim() === ENGINE_BODY_HEADING) { inTable = true; continue; }
+    if (inTable && /^\s*##\s/.test(lines[i])) inTable = false;
+    if (!inTable) continue;
+    if (!rowRe.test(lines[i])) continue;
+    // Every cell delimiter is an unescaped pipe (see `tableCells`). The last cell is between the LAST two
+    // pipes; rewrite just that span, keeping the trailing whitespace and the closing pipe.
+    const raw = lines[i];
+    const lastPipe = raw.lastIndexOf("|");
+    if (lastPipe <= 0) continue;
+    // Walk back to the previous unescaped pipe.
+    let prevPipe = lastPipe - 1;
+    while (prevPipe > 0 && (raw[prevPipe] !== "|" || raw[prevPipe - 1] === "\\")) prevPipe--;
+    if (prevPipe <= 0) continue;
+    lines[i] = raw.slice(0, prevPipe + 1) + ` ${cell(cellText)} ` + raw.slice(lastPipe);
+    writeIfChanged(full, lines.join("\n"));
+    return true;
+  }
+  return false;
 }
 
 // CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two
@@ -2744,7 +2788,18 @@ function persistTaskSet(dir, merged) {
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
     if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      setFrontMatterStatus(dir, t.file, t.status, t.declared || null);
+      // ENG-99749: cascade may have modified the Outcome cell of an adopted task's row. Write those cells
+      // in place BEFORE the front-matter update — the front matter carries the `decisions:` map that names
+      // exactly the cells the body now holds, so the two must land together. Passed null when the run
+      // touched no cells here, so `decisions:` is not spuriously added to a file that never carried it.
+      const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+      for (const idx of dirty) {
+        const row = t.rows?.[idx];
+        if (!row) continue;
+        setAdoptedRowOutcome(dir, t.file, idx, row.outcome || "—");
+      }
+      const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
+      setFrontMatterStatus(dir, t.file, t.status, t.declared || null, decisionsArg);
       continue;
     }
     writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
@@ -3013,45 +3068,84 @@ export function applyDecision(dir, result, opts = {}) {
     : `${title || ""} (${decision})`.trim();
 
   const touched = [];
+  const cascaded = [];
   const skipped = [];
-  for (const { task, rowIndices } of picked.targets) {
-    // A repair or orchestrator-adopted task keeps its body byte-for-byte through `persistTaskSet`, so a cell
-    // edit here would be silently dropped. Cascading `--decide` into repair tasks (and standalone `postponed`
-    // on a repair task) lands in a later commit under ENG-99749 point 4; refuse cleanly here so the caller
-    // knows nothing was written for those tasks rather than believing an in-place edit landed.
-    if (task.kind === REPAIR_KIND || task.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      for (const idx of rowIndices) skipped.push({ task, n: idx + 1, why: "adopted task (repair or orchestrator-authored) — cascade / standalone postpone lands in a follow-up commit" });
-      continue;
+  const writeCell = (task, idx) => {
+    const row = task.rows[idx];
+    // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
+    // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
+    if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) {
+      skipped.push({ task, n: idx + 1, why: "plan-boundary row (engine-owned Outcome)" });
+      return false;
     }
+    if (row.outcomeKind === O_BUILT) {
+      skipped.push({ task, n: idx + 1, why: "already built — closing a built row as a decision would lie about it" });
+      return false;
+    }
+    row.outcome = cellText;
+    row.outcomeKind = outcomeKind;
+    row.outcomeCause = null;
+    row.outcomeReason = outcomeReason;
+    row.naNoReason = false;
     task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
+    task.decisions.set(idx + 1, decision);
+    // A dirty flag for `persistTaskSet` — plan tasks are fully re-rendered from `task.rows`, so nothing extra
+    // is needed for them. Adopted (repair / orchestrator) tasks keep their bodies byte-for-byte, so the
+    // in-place cell writer in `persistTaskSet` picks these indices up.
+    task.dirtyRows = task.dirtyRows instanceof Set ? task.dirtyRows : new Set();
+    task.dirtyRows.add(idx);
+    return true;
+  };
+
+  for (const { task, rowIndices } of picked.targets) {
     for (const idx of rowIndices) {
-      const row = task.rows[idx];
-      // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
-      // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
-      if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) {
-        skipped.push({ task, n: idx + 1, why: "plan-boundary row (engine-owned Outcome)" });
-        continue;
-      }
-      if (row.outcomeKind === O_BUILT) {
-        skipped.push({ task, n: idx + 1, why: "already built — closing a built row as a decision would lie about it" });
-        continue;
-      }
-      row.outcome = cellText;
-      row.outcomeKind = outcomeKind;
-      row.outcomeCause = null;
-      row.outcomeReason = outcomeReason;
-      row.naNoReason = false;
-      task.decisions.set(idx + 1, decision);
-      touched.push({ task, n: idx + 1 });
+      if (writeCell(task, idx)) touched.push({ task, n: idx + 1 });
     }
   }
   if (!touched.length) return { refused: true, problems: ["--decide touched no rows (every addressed row was already built or is a plan boundary)"], skipped };
+
+  // ---8<--- CASCADE (ENG-99749 point 4): the SAME outcome into every row whose deliverable came from a row
+  // this decision closed. Keyed on (pageKey, coverKey(label)) — the same key `settledBoundaries` and
+  // `repairCoverage` already use — so a repair task whose `covers` includes the source row's label picks up
+  // the closure and the whole repair task's status recomputes to `wont-do` or `partial` on its own next
+  // read. The source task itself is not double-touched (it is already in `touched`).
+  const touchedKeys = new Set();
+  for (const t of touched) {
+    const row = t.task.rows[t.n - 1];
+    touchedKeys.add(`${t.task.pageKey} ${coverKey(row.label)}`);
+  }
+  for (const t of merged.tasks) {
+    if (t.unread) continue;
+    for (let i = 0; i < (t.rows || []).length; i++) {
+      const row = t.rows[i];
+      const key = `${t.pageKey} ${coverKey(row.label)}`;
+      if (!touchedKeys.has(key)) continue;
+      // Do not re-hit a source row we already touched: `touched` names it by (task, n).
+      if (touched.some((x) => x.task === t && x.n === i + 1)) continue;
+      if (writeCell(t, i)) cascaded.push({ task: t, n: i + 1 });
+    }
+  }
+
+  // Recompute the status of every task the cascade touched. computeStatus reads its `outcomes` from a map;
+  // for tasks written in memory rebuild the map from `t.rows` so the newly-filled cells drive the derivation.
+  // Plan tasks would compute again on the next read too, but the in-memory `t.status` is what persistTaskSet
+  // writes into the front matter here.
+  const touchedTasks = new Set([...touched, ...cascaded].map((x) => x.task));
+  for (const t of touchedTasks) {
+    const keys = rowKeys(t.rows.map((r) => r.label));
+    const outcomes = new Map();
+    t.rows.forEach((r, i) => {
+      const parsed = parseOutcome(r.outcome || "");
+      if (parsed) outcomes.set(keys[i], parsed);
+    });
+    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, t.status || S_TODO, !!t.statusEdited);
+  }
 
   fs.mkdirSync(dir, { recursive: true });
   attachDispatch(merged, dir);
   resolvePartials(merged);
   persistTaskSet(dir, merged);
-  return { refused: false, decision, mode, destination: destination || null, touched, skipped, set: merged };
+  return { refused: false, decision, mode, destination: destination || null, touched, cascaded, skipped, set: merged };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
@@ -3069,18 +3163,9 @@ export function revokeDecision(dir, result, opts = {}) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
 
   const cleared = [];
-  const heldAdopted = [];
   for (const t of merged.tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     if (!map || !map.size) continue;
-    // A repair or orchestrator task keeps its body byte-for-byte through `persistTaskSet`; the outcome cell
-    // written by an earlier `--decide` (once cascade lands) is inside that body and cannot be revoked from
-    // here without an in-place table-cell editor. Named so the caller learns nothing was cleared for it,
-    // rather than believing the revoke reached the file.
-    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      if ([...map.values()].includes(decision)) heldAdopted.push(t);
-      continue;
-    }
     let changed = false;
     for (const [n, d] of [...map.entries()]) {
       if (d !== decision) continue;
@@ -3096,16 +3181,34 @@ export function revokeDecision(dir, result, opts = {}) {
       map.delete(n);
       cleared.push({ task: t, n });
       changed = true;
+      // Adopted-body row lands through persistTaskSet's in-place writer via `dirtyRows`.
+      if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
+        t.dirtyRows = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+        t.dirtyRows.add(idx);
+      }
     }
     if (changed) t.decisions = map;
   }
-  if (!cleared.length && !heldAdopted.length) return { refused: false, decision, cleared: [], heldAdopted: [], set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
+  if (!cleared.length) return { refused: false, decision, cleared: [], set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
+
+  // Recompute the status of every task the revoke touched — rows that were closed by decision are now
+  // blank, so a task that read `wont-do` may go back to `partial` (or `todo` if every cell is empty).
+  const touchedTasks = new Set(cleared.map((c) => c.task));
+  for (const t of touchedTasks) {
+    const keys = rowKeys(t.rows.map((r) => r.label));
+    const outcomes = new Map();
+    t.rows.forEach((r, i) => {
+      const parsed = parseOutcome(r.outcome || "");
+      if (parsed) outcomes.set(keys[i], parsed);
+    });
+    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, t.status || S_TODO, !!t.statusEdited);
+  }
 
   fs.mkdirSync(dir, { recursive: true });
   attachDispatch(merged, dir);
   resolvePartials(merged);
   persistTaskSet(dir, merged);
-  return { refused: false, decision, cleared, heldAdopted, set: merged };
+  return { refused: false, decision, cleared, set: merged };
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {

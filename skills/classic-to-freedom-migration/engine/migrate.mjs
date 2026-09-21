@@ -3321,6 +3321,10 @@ function runDecideMode(result, dir, opts) {
   const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${target}.`];
   if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
   for (const t of res.touched) lines.push(`  · ${t.task.file} row ${t.n} — ${t.task.rows[t.n - 1].label}`);
+  if (res.cascaded?.length) {
+    lines.push("", `Cascaded into ${res.cascaded.length} matching row(s) across other tasks (repair tasks whose deliverable was the same row):`);
+    for (const c of res.cascaded) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
+  }
   for (const s of res.skipped) lines.push(`  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
@@ -3328,14 +3332,12 @@ function runDecideMode(result, dir, opts) {
 function runRevokeMode(result, dir, opts) {
   const res = revokeDecision(dir, result, opts);
   if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
-  if (!res.cleared.length && !(res.heldAdopted || []).length) {
+  if (!res.cleared.length) {
     return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
-  for (const t of res.heldAdopted || []) {
-    lines.push(`  ⚠ ${t.file} still records ${opts.decision} in its \`decisions:\` map — that task is adopted (repair or orchestrator-authored) and its Outcome cell is inside a body \`persistTaskSet\` keeps byte-for-byte. In-place cascade edit lands in a follow-up commit; edit the cell by hand if you need it cleared now.`);
-  }
+  lines.push("", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 
