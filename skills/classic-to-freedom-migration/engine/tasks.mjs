@@ -581,6 +581,17 @@ const declaredOf = (meta = {}) => {
   return meta.declared === undefined || statusEditedIn(meta) ? meta.status : "";
 };
 
+// A RE-OPEN RETIRES A STALE DECLARATION. `declared:` outranks the cells, so nothing else retires it and the next
+// write puts the caller's `status: todo` back to `blocked`. A LIFECYCLE word edited into `status:` is the caller
+// reopening the task, and it retires the declaration. A CLOSING word does not: that is the claim this derivation
+// refuses. The engine writes `status: blocked` beside `declared: blocked` itself, matching its stamp, so its own
+// word never reads as a re-open.
+const declaredNow = (meta = {}) => {
+  const declared = declaredOf(meta);
+  if (!declared) return "";
+  return statusEditedIn(meta) && OPEN_LIFECYCLE.has(meta.status) ? "" : declared;
+};
+
 // `status:` was written after the engine last derived a word: the stamp it left no longer describes it.
 // An unstamped file (written before the stamp existed) is never "edited" - there is nothing to compare against.
 const statusEditedIn = (meta = {}) =>
@@ -1037,9 +1048,10 @@ function taskAttention(t) {
   if (t.unread) return out;   // its own refusal line already names the file; nothing here was recorded by anyone
   // A `status:` THAT DID NOT COME FROM HERE: the stamp no longer matches, so the word was written after the
   // engine last derived one. Reported, never honoured.
+  // THE SAME PREDICATE the report reads, called rather than restated: two copies of it drift apart in silence.
   // `adoptedRowCount` counts the body's own ordinals, so the line distinguishes a file with no table from one
   // whose table the scoped parser refused.
-  if (t.origin === TASK_ORIGIN_ORCHESTRATOR && !(t.rows || []).length) {
+  if (unreadableLedger([t]).length) {
     const shape = t.adoptedRowCount
       ? ` (the body lists ${t.adoptedRowCount} numbered row(s), but not in the engine's table shape)`
       : "";
@@ -1706,9 +1718,9 @@ function carryOver(task, prev) {
     return m ? { ...r, outcome: m.text, outcomeKind: m.outcome, outcomeCause: m.cause,
       outcomeReason: m.reason || "", naNoReason: !!m.naNoReason } : r;
   }) };
-  const declared = declaredOf(prev.meta);
+  const declared = declaredNow(prev.meta);
   const stamped = statusEditedIn(prev.meta);
-  const status = computeStatus(task, declared, outcomes, carriedOf(prev.meta), statusEditedIn(prev.meta));
+  const status = computeStatus(task, declared, outcomes, carriedOf(prev.meta), stamped);
   // A status recorded against an older row set must not be trusted silently — the deliverables it was recorded
   // for are not the deliverables now in the file. The digest the status was recorded against is therefore KEPT in
   // the file for as long as that status stands, and only a status back at `todo` (the task re-opened) adopts the
@@ -1748,7 +1760,7 @@ function adoptOrchestrated(e) {
   // it cannot parse it. Its table is read like any other and the status derived from those cells. A body with no
   // such table parses to no rows, the one case `computeStatus` answers with the carried word.
   const rows = rowsFromTable(e.table);
-  const declared = declaredOf(e.meta);
+  const declared = declaredNow(e.meta);
   const adoptedEdited = statusEditedIn(e.meta);
   return {
     id: e.meta.id, pageKey: e.meta.pageKey || "?", group: label, title: label,
@@ -1757,6 +1769,8 @@ function adoptOrchestrated(e) {
     status: computeStatus({ rows }, declared, e.outcomes, carriedOf(e.meta), adoptedEdited),
     declared,
     statusEdited: adoptedEdited,
+    // Neither field present: written before either existed. `classifyUndispatched` exempts that shape.
+    legacyShape: e.meta.declared === undefined && e.meta.statusFrom === undefined,
     rows, gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
     // The FALL-BACK count, for a file whose table the engine could not read: every leading ordinal in the body,
     // so it also sees a table the scoped parser ignores. Null when there is none — the index shows `—`, never `0`.
@@ -1937,7 +1951,7 @@ function repairRounds(existing) {
     const n = Number(e.meta.repairRound) || 1;
     // COMPUTED, not read off the front matter: a round is closed by its `Outcome` cells, so a file whose agent
     // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
-    const status = computeStatus({ rows: rowsFromTable(e.table) }, declaredOf(e.meta), e.outcomes,
+    const status = computeStatus({ rows: rowsFromTable(e.table) }, declaredNow(e.meta), e.outcomes,
       carriedOf(e.meta), statusEditedIn(e.meta));
     for (const [map, key] of [[rounds, capKey(e.meta.pageKey, e.meta.cause)],
       [openRounds, `${e.meta.pageKey} ${e.meta.cause || ""}`]]) {
@@ -2401,7 +2415,7 @@ function setFrontMatterStatus(dir, file, status, declared = null) {
   // last exactly one pass, because this same write refreshes the stamp that made it a promotion.
   if (at.stamp < 0) lines.splice(at.status + 1, 0, `statusFrom: ${statusStamp(status)}`);
   if (at.declared < 0 && declared) lines.splice(at.status + 1, 0, `declared: ${declared}`);
-  fs.writeFileSync(full, lines.join("\n"));
+  writeIfChanged(full, lines.join("\n"));
   return true;
 }
 
@@ -2459,10 +2473,10 @@ export function readTaskDir(dir) {
       const recorded = e.meta.status || S_TODO;
       // Re-computed off the file's own cells. The write phase puts the computed value into the front matter; a
       // status edited by hand afterwards must not turn a `partial` back into a `done`.
-      const status = computeStatus({ rows }, declaredOf(e.meta), e.outcomes, carriedOf(e.meta),
+      const status = computeStatus({ rows }, declaredNow(e.meta), e.outcomes, carriedOf(e.meta),
         statusEditedIn(e.meta));
       return {
-        id: e.meta.id, file: e.file, status, recordedStatus: recorded, declared: declaredOf(e.meta),
+        id: e.meta.id, file: e.file, status, recordedStatus: recorded, declared: declaredNow(e.meta),
         statusEdited: statusEditedIn(e.meta), rows, origin,
         agentNonce: e.meta.agentNonce || "", writesTo: e.meta.writesTo || "",
         dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
@@ -2495,6 +2509,9 @@ function classifyUndispatched(t, out) {
   // EVERY CLOSURE IS HELD TO A DISPATCH RECORD, whoever filed the task and whether or not it writes: a verdict
   // filed by the context that did the work is the failure this gate exists for, and a review is no exception.
   // `n/a` with a reason under `## Notes` is the one closure that needs no builder.
+  // ONE EXEMPTION, FOR A FOLDER THAT PREDATES THE GATE: an adopted file carrying neither `declared:` nor
+  // `statusFrom:` closed under the rule in force when it was written. It retires as folders turn over.
+  if (t.origin !== TASK_ORIGIN_ENGINE && t.legacyShape) return;
   if (t.status !== S_NA) { out.never.push(t); return; }
   ((t.notes || "").trim() ? out.naUndispatched : out.naNoReason).push(t);
 }
@@ -2564,6 +2581,14 @@ function attachDispatch(set, dir) {
 // WHAT EACH FILE GETS is decided by who owns its BODY. A plan task is re-rendered from the plan, with the agent's
 // `Outcome` cells carried back in by `carryOver` first. An adopted file — repair or declared — keeps its body
 // byte-for-byte and takes the computed `status:` line alone.
+// WRITTEN ONLY WHEN THE BYTES CHANGE. Every command ends in this phase, so an unconditional write rewrites the
+// whole folder on every call. A read to compare costs less than the write it saves.
+function writeIfChanged(full, next) {
+  if (fs.existsSync(full) && fs.readFileSync(full, "utf8") === next) return false;
+  fs.writeFileSync(full, next);
+  return true;
+}
+
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
   for (const t of merged.tasks) {
@@ -2574,9 +2599,9 @@ function persistTaskSet(dir, merged) {
       setFrontMatterStatus(dir, t.file, t.status, t.declared || null);
       continue;
     }
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
+    writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
-  fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+  writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
 }
 
 // ---8<--- MINTED: the orchestrator declares deliverables, the engine writes the file ---8<---
@@ -2593,8 +2618,24 @@ export const DECL_SHAPE = '{ "id": "<slug>", "pageKey": "<a page key from the pl
 // WHERE THE TASK GOES. The repair cap buckets on (pageKey, cause), so a key matching no page gets its own bucket
 // and the three-round cap over that page is bypassed; and read-only is DECLARED, never inferred from an omission,
 // because a `writesTo` nothing else writes chains the task behind nothing.
+// Every declared value the renderer interpolates into front matter or a table cell.
+function* declaredStrings(decl) {
+  for (const f of ["id", "pageKey", "group", "writesTo"]) yield [f, String(decl?.[f] ?? "")];
+  const rows = Array.isArray(decl?.deliverables) ? decl.deliverables : [];
+  for (let i = 0; i < rows.length; i++) yield [`deliverables[${i + 1}]`, String(rows[i] ?? "")];
+  for (const d of Array.isArray(decl?.dependsOn) ? decl.dependsOn : []) yield ["dependsOn", String(d ?? "")];
+}
+
 function declPlacementProblems(decl, at, identities) {
   const out = [];
+  // A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER. `group` is interpolated into the `group:` line
+  // and a row label into a table cell, so an embedded newline adds a line of its own — and a second
+  // `status:` there is read as the task's status, overriding the engine's. Rejected before anything is written.
+  for (const [field, value] of declaredStrings(decl)) {
+    if (/[\r\n]/.test(value)) {
+      out.push(`${at}: \`${field}\` contains a line break, which would forge a front-matter line`);
+    }
+  }
   const pageKey = String(decl?.pageKey ?? "").trim();
   if (!identities.has(pageKey)) {
     out.push(`${at}: \`pageKey\` \`${pageKey || "(none)"}\` is not a page this plan builds — one of: ${[...identities.keys()].join(" / ")}`);

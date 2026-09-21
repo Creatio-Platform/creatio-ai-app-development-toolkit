@@ -2802,7 +2802,116 @@ check("statusFrom (no false positive): a folder written before the stamp existed
     return set.tasks.find((x) => x.id === tgt.id)?.statusEdited !== true;
   }, "an unstamped file predates the mechanism and must not be reported as edited");
 
+/* ================================================================================================
+   A HALT IS RETIRED BY A RE-OPEN AND BY NOTHING ELSE. `declared:` outranks the cells, so a halt
+   promoted into that field is echoed back on every later pass unless something retires it — and the
+   next write then puts the caller's `status: todo` back to `blocked`. A LIFECYCLE word edited into
+   `status:` retires it. A CLOSING word does not: that is the claim the derivation exists to refuse.
+   ================================================================================================ */
+const haltedFolder = (name) => {
+  const d = tmp(name);
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  const f = taskFilePath(d, tgt.id);
+  // The one documented way to halt a task, promoted by the engine on the next pass.
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, "declared: blocked"));
+  const halted = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === tgt.id);
+  return { d, f, id: tgt.id, halted };
+};
+const typeStatus = (f, word) => fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${word}`));
+const afterTyping = (name, word) => {
+  const { d, f, id, halted } = haltedFolder(name);
+  typeStatus(f, word);
+  return { halted, after: syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === id) };
+};
+
+check("re-open (derived status): the documented recovery — `status: todo` over a promoted halt — actually reopens the task, and the declaration that halted it is gone from the derived set",
+  () => {
+    const { halted, after } = afterTyping("reopen-halt", "todo");
+    // The halt has to have been real first, or the re-open is a re-open of nothing.
+    return halted.status === "blocked" && halted.declared === "blocked"
+      && after.status === "todo" && after.declared === "";
+  }, () => { const { halted, after } = afterTyping("reopen-halt-d", "todo");
+    return { halted: { status: halted.status, declared: halted.declared },
+      after: { status: after.status, declared: after.declared } }; });
+
+check("re-open (derived status): a CLOSING word typed over a promoted halt retires nothing — `status: done` is the exact claim the derivation refuses, so the task still reads blocked",
+  () => afterTyping("reopen-closing", "done").after.status === "blocked",
+  () => afterTyping("reopen-closing-d", "done").after.status);
+
+/* ================================================================================================
+   A FILE IS WRITTEN ONLY WHEN ITS BYTES CHANGE. Every command ends in the one write phase, so an
+   unconditional write makes each call rewrite the whole folder. The mtimes are backdated first, so
+   the check does not depend on the clock's resolution.
+   ================================================================================================ */
+const BACKDATE = new Date(2000, 0, 1);
+const backdate = (d) => fs.readdirSync(d).forEach((f) => fs.utimesSync(path.join(d, f), BACKDATE, BACKDATE));
+const movedSince = (d) => fs.readdirSync(d).filter((f) => fs.statSync(path.join(d, f)).mtimeMs !== BACKDATE.getTime());
+
+check("one write phase: a re-sync that changes nothing rewrites nothing — a folder whose files all still carry their backdated mtime was not touched, so a run's I/O is proportional to what it changed and not to the folder's size",
+  () => {
+    const d = tmp("write-idempotent");
+    syncTaskDir(d, RUN, OPTS);
+    backdate(d);
+    const files = fs.readdirSync(d).length;
+    syncTaskDir(d, RUN, OPTS);
+    return files > 1 && movedSince(d).length === 0;
+  }, () => {
+    const d = tmp("write-idempotent-d");
+    syncTaskDir(d, RUN, OPTS);
+    backdate(d);
+    syncTaskDir(d, RUN, OPTS);
+    return { rewritten: movedSince(d) };
+  });
+
+check("one write phase (anti-vacuity): a re-sync over a file the caller CHANGED does rewrite it — the comparison is on content, so a halt declared in the file is still promoted on the next pass",
+  () => {
+    const d = tmp("write-changed");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, "declared: blocked"));
+    backdate(d);
+    syncTaskDir(d, RUN, OPTS);
+    return movedSince(d).includes(path.basename(f));
+  }, () => {
+    const d = tmp("write-changed-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, "declared: blocked"));
+    backdate(d);
+    syncTaskDir(d, RUN, OPTS);
+    return { rewritten: movedSince(d), expected: path.basename(f) };
+  });
+
+/* ================================================================================================
+   EVERY CLOSURE IS HELD TO A DISPATCH RECORD, with one exemption: an adopted file carrying neither
+   `declared:` nor `statusFrom:` was written before either field existed, and closed under the rule
+   in force then. The exemption is about the file's SHAPE, not about who filed the task.
+   ================================================================================================ */
+const LEGACY_ID = "orch-legacy";
+const adoptedClosure = (name, legacy) => {
+  const d = tmp(name);
+  syncTaskDir(d, RUN, OPTS);
+  const text = handWrittenText(allBuilt, "done", LEGACY_ID);
+  fs.writeFileSync(path.join(d, `task-${LEGACY_ID}.md`), legacy ? asLegacyBody(text) : text);
+  const set = syncTaskDir(d, RUN, OPTS);
+  return { task: set.tasks.find((t) => t.id === LEGACY_ID), failing: dispatchAudit(set.tasks, d).failing };
+};
+
+check("dispatch gate: an adopted file carrying NEITHER `declared:` nor `statusFrom:` closes `done` without a dispatch record — it predates both fields, so holding it to this gate would fail a run over a task nothing about which has changed",
+  () => {
+    const { task, failing } = adoptedClosure("dispatch-legacy", true);
+    // The closure has to be real first, or the exemption is over a task the gate would never have looked at.
+    return task?.status === "done" && !failing.some((t) => t.id === LEGACY_ID);
+  }, () => { const { task, failing } = adoptedClosure("dispatch-legacy-d", true);
+    return { status: task?.status, failing: failing.map((t) => t.id) }; });
+
+check("dispatch gate (anti-vacuity): the SAME closure in a file that DOES carry those fields is held to a dispatch record — a verdict filed by the context that did the work is the failure this gate exists for, adopted or not",
+  () => adoptedClosure("dispatch-current", false).failing.some((t) => t.id === LEGACY_ID),
+  () => { const { task, failing } = adoptedClosure("dispatch-current-d", false);
+    return { status: task?.status, failing: failing.map((t) => t.id) }; });
+
 console.log("\n===== minted: the orchestrator declares, the engine writes the file =====");
+
 // Declared rather than hand-authored, every task carries the engine's `Outcome` table, so the derivation always
 // has cells to read.
 const DECL = { id: "orch-render-blocker", pageKey: "child:G1", group: "Render blocker", order: 3,
@@ -2813,6 +2922,29 @@ const minted = (over = {}, dirName = "mint") => {
   syncTaskDir(d, RUN, OPTS);
   return { d, res: addTasks(d, RUN, { ...DECL, ...over }, OPTS) };
 };
+
+// A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER: the value is interpolated into a line of its own, so an
+// embedded newline adds a line, and a `status:` there is read ahead of the engine's. Refused before anything is
+// written, and the message names which value carried it.
+const forged = (over, name) => minted(over, name).res;
+
+check("minted: a declared `group` carrying a LINE BREAK is refused — the value is interpolated into the `group:` line, so a newline would forge a second `status:` line and that one is what the parser reads",
+  () => {
+    const res = forged({ group: "Owner filter\nstatus: done" }, "mint-forge-group");
+    return res.refused === true && res.problems.some((p) => /`group`/.test(p) && /line break/.test(p));
+  }, () => forged({ group: "Owner filter\nstatus: done" }, "mint-forge-group-d").problems);
+
+check("minted: the same rule covers a declared DELIVERABLE, which the engine interpolates into a table cell, and the message names WHICH one carried the break",
+  () => {
+    const rows = ["A minimal page proven to render", "The offending wiring named\nstatus: done"];
+    const res = forged({ deliverables: rows }, "mint-forge-row");
+    return res.refused === true && res.problems.some((p) => /deliverables\[2\]/.test(p) && /line break/.test(p));
+  }, () => forged({ deliverables: ["A minimal page proven to render", "The offending wiring named\nstatus: done"] },
+    "mint-forge-row-d").problems);
+
+check("minted (anti-vacuity): the same declaration WITHOUT the line break is accepted — the refusal is about the break, not about the text around it",
+  () => forged({ group: "Owner filter status: done" }, "mint-forge-control").refused === false,
+  () => forged({ group: "Owner filter status: done" }, "mint-forge-control-d").problems);
 
 check("minted: a declared task is WRITTEN by the engine, carrying its `Outcome` table and its declared rows - the orchestrator supplies the judgement, not the file shape",
   () => {
@@ -4341,6 +4473,25 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => passRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
+  // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
+  // set they are measured against is `closedSet` above, which the check before this one proves reads ✅ COMPLETE.
+  // `DRIFT` is the real thing, merged out of a folder recorded against SET's rows and re-read against SET3's.
+  const driftedSet = { planVersion: RUN.planVersion, tasks: [...closedSet.tasks, DRIFT] };
+  const driftRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: driftedSet, dir: tmp("result-report-drift") });
+  check("renderFinalReport: a task closed `done` whose ROWS DRIFTED since its cells were recorded blocks the verdict and is named — the cells were filled against deliverables the plan no longer carries, so no mark re-attaches and the collector sees nothing owed",
+    // Its drift and its closure both have to be real, or the reason is asserted over a task the guard never sees.
+    () => DRIFT.drifted === true && DRIFT.status === "done" && driftRep.complete === false
+      && driftRep.reasons.some((r) => /deliverables CHANGED since its cells were recorded/.test(r)
+        && r.includes(DRIFT.file)),
+    () => ({ complete: driftRep.complete, reasons: driftRep.reasons }));
+  const unreadSet = { planVersion: RUN.planVersion, tasks: [...closedSet.tasks,
+    { id: "o-x", file: "o-x.md", group: "Hand-written", pageKey: "main", status: "done", notes: "", origin: "orchestrator", rows: [] }] };
+  const unreadRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: unreadSet, dir: tmp("result-report-unread") });
+  check("renderFinalReport: a task closed `done` whose `## Deliverables` table could not be read blocks the verdict and is named — its status is derived from nothing at all, and no other leg of the verdict looks at the ledger's shape",
+    () => unreadRep.complete === false
+      && unreadRep.reasons.some((r) => /could not be read/.test(r) && /o-x\.md/.test(r)),
+    () => ({ complete: unreadRep.complete, reasons: unreadRep.reasons }));
+
   // ENG-99126 (3rd review RC-7): a task closed `n/a` with a plan row left unaccounted (no outcomeKind, not a boundary)
   // must NOT let the run read COMPLETE — the same self-assertion guard the row-level n-a boundary already carries.
   const naSet = { planVersion: RUN.planVersion, tasks: [
@@ -5027,6 +5178,64 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
+{
+  /* ==============================================================================================
+     `--add` AT THE ARGV LEVEL. The mint path is unit-tested above against `addTasks`; these are the
+     things only the CLI decides — which flag combinations it refuses, that a refusal writes nothing,
+     and that the success line names the file the caller now has to fill.
+     ============================================================================================== */
+  const base = tmp("cli-add");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const before = fs.readdirSync(dir).length;
+  const declFile = (decl, name) => {
+    const f = path.join(base, name + ".json");
+    fs.writeFileSync(f, JSON.stringify(decl));
+    return f;
+  };
+  // The declaration resolves against the PLAN, not against the folder's task set — the CLI slices with the real
+  // default budget, which collapses this fixture into whole-run tasks that carry no page key of their own.
+  const GOOD = { ...DECL, id: "cli-orch-add", order: 9, deliverables: ["A minimal page proven to render"] };
+
+  const lone = cliTasks(["--add", declFile(GOOD, "lone")], MANIFEST);
+  check("CLI `--add`: without `--tasks <dir>` it exits 1 naming the flag it needs — it adds a task TO a folder, and there is no folder to add to",
+    () => lone.status === 1 && /only means something with `--tasks <dir>`/.test(lone.stderr || ""),
+    () => ({ status: lone.status, stderr: lone.stderr }));
+
+  const withVerify = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "wv"), "--verify", "--built", path.join(base, "none.json")], MANIFEST);
+  check("CLI `--add` + `--verify`: exit 1 — one writes a task and the other judges the folder, so a single call would verify a folder it changed in the same breath",
+    () => withVerify.status === 1 && /Run them as separate commands/.test(withVerify.stderr || ""),
+    () => ({ status: withVerify.status, stderr: withVerify.stderr }));
+
+  const noJson = path.join(base, "not-json.json");
+  fs.writeFileSync(noJson, "{ this is not json");
+  const bad = cliTasks(["--tasks", dir, "--add", noJson], MANIFEST);
+  check("CLI `--add`: an unparseable declaration exits 1, prints the expected shape, and leaves the folder exactly as it was",
+    () => bad.status === 1 && /not valid JSON/.test(bad.stderr || "") && /pageKey/.test(bad.stderr || "")
+      && fs.readdirSync(dir).length === before,
+    () => ({ status: bad.status, stderr: (bad.stderr || "").slice(0, 300), files: fs.readdirSync(dir).length, before }));
+
+  const unresolved = cliTasks(["--tasks", dir, "--add", declFile({ ...GOOD, pageKey: "child:NOPE" }, "nopage")], MANIFEST);
+  check("CLI `--add`: a declaration that does not resolve against the plan exits 1, lists every problem, and writes NOTHING — a partially filed task is a task the folder cannot account for",
+    () => unresolved.status === 1 && /does not resolve against this plan/.test(unresolved.stderr || "")
+      && fs.readdirSync(dir).length === before,
+    () => ({ status: unresolved.status, stderr: (unresolved.stderr || "").slice(0, 400), files: fs.readdirSync(dir).length, before }));
+
+  const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);
+  check("CLI `--add`: a resolving declaration exits 0, and the answer names the file the engine wrote and how many deliverables it carries — the caller's next move is to fill that file's `Outcome` column",
+    () => ok.status === 0 && /wrote 1 declared task\(s\)/.test(ok.stdout || "")
+      && /1 deliverable\(s\)/.test(ok.stdout || "") && fs.readdirSync(dir).length === before + 1,
+    () => ({ status: ok.status, stdout: ok.stdout, stderr: ok.stderr, files: fs.readdirSync(dir).length, before }));
+  check("CLI `--add`: the file it wrote is a task the derivation can read — engine-authored table, declared rows, no outcome yet, so it reads `todo` like any freshly cut task",
+    () => {
+      const added = readTaskDir(dir).find((t) => t.id === GOOD.id);
+      return !!added && added.rows.length === 1 && added.status === "todo"
+        && added.rows[0].label === GOOD.deliverables[0] && added.origin === "orchestrator";
+    }, () => { const a = readTaskDir(dir).find((t) => t.id === GOOD.id);
+      return a ? { rows: a.rows.length, status: a.status, origin: a.origin, label: a.rows[0]?.label } : "not found"; });
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
   // A plan-level gap: `--next` refuses on exactly the terms every other task-folder mode refuses on.
   const skeletal = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
   const base = tmp("cli-next-gap");
