@@ -118,7 +118,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-AC evidence rule incomplete; missing {missing}")
 
     def test_evidence_placement_never_accepts_the_card_citation(self):
-        # The regression this replaces: the paragraph used to close on "copy from there"
+        # A paragraph closing on "copy from there" is what this replaces:
         # / "It goes in the Evidence column", whose referent is the card+AC *citation* —
         # the weaker rule the per-AC rule supersedes.
         content = read_text(MIGRATION_SKILL)
@@ -199,7 +199,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     def test_feature_flag_gates_get_a_procedure_not_a_refusal(self):
         # Feature toggles outnumber system-setting gates on a customized stand (156 vs 106
-        # schemas, ENG-94529 census), so refusing to exercise them costs more coverage than
+        # schemas, a workspace census), so refusing to exercise them costs more coverage than
         # the secret-exposure risk it avoids. Same four steps, different tools.
         para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
         missing = missing_markers(
@@ -429,7 +429,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-audience read must redact literals; missing {missing}")
 
     def test_classic_dashboards_go_through_the_migrator_not_a_rebuild(self):
-        # A section's Classic dashboards used to be invisible to the skill, so a run
+        # A section's Classic dashboards must not be invisible to the skill, or a run
         # either redrew them as a Freedom page or dropped them silently. The install is a
         # destructive clio tool (configuration build + restart), so the route and the hand-off
         # to the user are pinned, not only the tool name.

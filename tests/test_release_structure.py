@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # GitHub Copilot's skill loader drops any skill whose `description` exceeds this
-# limit; Claude Code / Codex do not enforce it. ENG-92957: the
+# limit; Claude Code / Codex do not enforce it. The
 # creatio-ui-guidelines description silently grew past the cap and Copilot
 # stopped loading the skill. Pin the invariant so a future edit fails CI here
 # rather than shipping green and breaking Copilot discovery.
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # code-point count still looks safe. Always compare against
 # len(description.encode("utf-8")).
 #
-# PROVISIONAL VALUE. 1024 is inferred, not documented by Copilot: ENG-92957
+# PROVISIONAL VALUE. 1024 is inferred, not documented by Copilot:
 # measured ~1084-byte description dropped, ~646 loaded, and ~1024 is the working
 # estimate of the threshold. The inclusive-vs-exclusive boundary is likewise
 # unconfirmed. Keep real headroom below this number (do not tune a description
@@ -31,11 +31,11 @@ MAX_SKILL_DESCRIPTION_BYTES = 1024
 # not: trimming under the cap must not silently drop a load-bearing trigger.
 LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
     # The orchestrator is the ENTRYPOINT, so its description is the only thing that can attract a
-    # cold "create an app" request. It previously named only the toolkit's own artifacts ("Business
+    # cold "create an app" request. Naming only the toolkit's own artifacts ("Business
     # Plans", "approved plan"); a live run on the plain prompt "Create Verrify1 app. It should
     # have..." never selected the skill and fell through to clio MCP alone, so none of the toolkit's
     # gates applied. These substrings are the user-intent triggers that recovery depends on — a
-    # future trim must not drop them the way ENG-92957 dropped the ui-guidelines ones.
+    # future trim must not drop them the way a cap-driven trim drops the ui-guidelines ones.
     "creatio-app-orchestrator": [
         "Creatio app", "create", "generate", "scaffold", "add", "section", "Apply proactively",
     ],
@@ -349,7 +349,7 @@ class ReleaseStructureTests(unittest.TestCase):
                 f"exceeds Copilot cap of {MAX_SKILL_DESCRIPTION_BYTES}",
             )
             # Lower bound — a trim that stays under the cap must not drop a
-            # load-bearing trigger substring (the recurring ENG-92957 failure).
+            # load-bearing trigger substring (the recurring cap-driven failure).
             for phrase in LOAD_BEARING_DESCRIPTION_SUBSTRINGS.get(skill_dir.name, []):
                 self.assertIn(
                     phrase, description,

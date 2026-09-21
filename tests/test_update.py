@@ -291,7 +291,7 @@ class UpdateAgentsTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_updates_exactly_the_targets_handed(self):
-        # update_agents no longer filters: the caller scopes the list. Passing a
+        # update_agents does not filter: the caller scopes the list. Passing a
         # single id must update only that id (one agent × two native steps).
         r1, r2, r3 = self._patch_resolvers()
         with r1, r2, r3, patch.object(self.upd.subprocess, "run", side_effect=self._ok) as run:

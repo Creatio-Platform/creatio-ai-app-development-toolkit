@@ -206,7 +206,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_resolve_clio_cmd_survives_unbalanced_quotes(self):
         # `shlex.split()` raises ValueError ("No closing quotation") on a stray unmatched quote -- a
-        # plausible typo in a manually edited env var. This used to abort MCP client startup with an
+        # plausible typo in a manually edited env var. This would otherwise abort MCP client startup with an
         # unhandled exception instead of the normal "clio not found" diagnostic.
         with patch.dict(os.environ, {"CLIO_CMD": '"clio'}):
             self.assertEqual(mcp_client._resolve_clio_cmd(), ['"clio'])
@@ -286,7 +286,7 @@ class McpClientTests(unittest.TestCase):
 
     def test_load_cli_arguments_reads_a_file_under_the_tool_tree(self):
         # The SECOND base, and the home store is patched to somewhere unrelated so this test can
-        # only pass if the TOOL-TREE store is the one that resolved. Previously the fixture went
+        # only pass if the TOOL-TREE store is the one that resolved. A fixture that went
         # under os.getcwd(), which on a Linux CI runner is itself inside $HOME — so the home store
         # served it on the first iteration and the second base was never exercised at all.
         with tempfile.TemporaryDirectory(dir=TOOL_TREE_ROOT) as temp:

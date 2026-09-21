@@ -452,7 +452,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
-        # egression for PR #73 RC-1: swallowing every RuntimeError on the
+        # Guard: swallowing every RuntimeError on the
         # pre-remove step would hide real failures (permissions, broken CLI,
         # I/O errors) behind a misleading downstream `marketplace add` error.
         installer = load_installer()
@@ -518,7 +518,7 @@ class InstallClaudeTests(unittest.TestCase):
             self.assertFalse((home / ".agents" / "skills").exists())
 
     def test_install_claude_always_removes_marketplace_first_and_tolerates_not_found(self):
-        # egression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
+        # Guard for the Windows and macOS install paths:
         # users upgrading from the old file-copy install carry a directory-source
         # `creatio` marketplace whose absolute `installLocation` survives in
         # known_marketplaces.json. Claude CLI silently "updates in place" on a
@@ -835,7 +835,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
             )
 
     def test_a_script_the_generator_never_declared_is_a_hard_error(self):
-        # Was "a script with no `meta.name`". The identity no longer lives in the script, so the
+        # The identity does not live in the script, so the
         # equivalent failure is a script the generator's `TARGETS` table never declared.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
@@ -1224,7 +1224,7 @@ class InstallCodexTests(unittest.TestCase):
     def test_failure_after_the_cache_wipe_leaves_no_dangling_enabled_block(self):
         # A previous install is on disk (cache + enabled block). If materialization fails
         # after install_codex has wiped the cache, the enabled block must be gone too —
-        # otherwise config.toml would point Codex at a version directory that no longer
+        # otherwise config.toml would point Codex at a version directory that does not
         # exists. The block comes back only when a later run materializes successfully.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

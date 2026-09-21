@@ -105,7 +105,7 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
 
 
 # Each skill must map the shared stages onto its OWN gates and name its own
-# workflow value. Telemetry previously lived only in the app orchestrator, which
+# workflow value. Telemetry confined to the app orchestrator, which
 # is why every other flow reported nothing.
 SKILL_WORKFLOWS = {
     "classic-to-freedom-migration": "classic-to-freedom-migration",
@@ -203,7 +203,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
             self.assertNotIn(stage, telemetry)
 
     def test_contract_names_the_degradation_path_for_an_older_clio(self):
-        # Raised across fourteen review rounds of PR #96: the contract delegated the vocabulary and
+        # The contract delegates the vocabulary and
         # said nothing about what happens when the connected clio does not accept it. Both halves
         # have to be here, since this is the file an agent reads for CAADT flows and the one place
         # a maintainer looks when a whole install reports nothing.
@@ -382,11 +382,11 @@ class ProductTelemetryContractTests(unittest.TestCase):
     def test_no_documented_event_name_is_outside_the_vocabulary(self):
         # The previous test catches a stage that exists but is never mentioned; this one catches
         # the opposite — a name that IS mentioned, in a place that reads as an emission point, but
-        # is not (or no longer) in STAGE_EVENTS. Because the vocabulary is delegated rather than
+        # is not in STAGE_EVENTS. Because the vocabulary is delegated rather than
         # restated here, nothing before this test asserted that a name typo'd into AGENTS.md,
         # this contract, a SKILL.md, or the Cursor rule would fail anywhere but at runtime against
         # a live clio — which rejects it silently into the hook's own `rejected`/retry path, not a
-        # CI failure a reviewer would see.
+        # CI failure a reader would see.
         surfaces = {
             "AGENTS.md": read("AGENTS.md"),
             "product-telemetry.md": read("context", "product-telemetry.md"),

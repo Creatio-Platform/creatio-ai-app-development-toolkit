@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "runtime" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import clio_mcp_preflight as pf  # noqa: E402  (path set above)
-import mcp_client  # noqa: E402  (same runtime/scripts dir; used to patch the production seam)
+import mcp_client  # noqa: E402  (same runtime/scripts dir; patched as the production seam)
 
 _HEALTHY_PROBE = {"success": True, "data": {"index": {"get-tool-contract": {"resident": True}}}, "raw": "{}"}
 
@@ -65,7 +65,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertIn(".net", remedy)
         self.assertIn("dotnet tool install clio -g", remedy)
         self.assertIn("reg-web-app", remedy)
-        # installed-but-not-on-PATH is called out (the real ENG-92985 root cause)
+        # installed-but-not-on-PATH is called out (the real root cause of a hung preflight)
         self.assertIn("path", remedy)
         self.assertIn("clio_cmd", remedy)
         # the no-self-bootstrap invariant is stated in the blocker itself
@@ -190,7 +190,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertEqual(result.reason, pf.REASON_NOT_RESOLVABLE)
 
     def test_main_rejects_out_of_range_timeout(self):
-        # #6 + PR#55 R3: 0 would silently become 120s in mcp_client; negative would
+        # 0 would silently become 120s in mcp_client; negative would
         # misclassify a healthy clio; an extreme value (> MAX_PROBE_TIMEOUT) would defeat
         # the "bounded, never hangs" invariant. argparse must reject all of them (exit 2).
         for bad in ("0", "-5", str(pf.MAX_PROBE_TIMEOUT + 1)):
@@ -372,7 +372,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
     def test_probe_is_healthy_accepts_real_tools_and_index_shapes(self):
         # production get-tool-contract returns an `index`-keyed payload (verified
         # live), but _probe_is_healthy also accepts the `tools` shape — cover BOTH positives
-        # and the empty-payload negative so a regression on either branch is caught.
+        # and the empty-payload negative so a break on either branch is caught.
         self.assertTrue(pf._probe_is_healthy({"success": True, "data": {"index": {"get-tool-contract": {}}}}))
         self.assertTrue(pf._probe_is_healthy({"success": True, "data": {"tools": [{"name": "get-tool-contract"}]}}))
         self.assertFalse(pf._probe_is_healthy({"success": True, "data": {"tools": []}}))
@@ -380,7 +380,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
 
     def test_classify_bad_clio_cmd_maps_to_not_resolvable_without_probing(self):
         # R3 (m-dymytrova) + my own review: the CLIO_CMD verify branch — the fix for
-        # the ENG-92985 root cause (installed-but-not-on-PATH / typo'd CLIO_CMD) — had ZERO
+        # the root cause (installed-but-not-on-PATH / typo'd CLIO_CMD) — had ZERO
         # coverage. A bogus CLIO_CMD must classify clio-not-resolvable and never probe.
         orig_env = os.environ.get("CLIO_CMD")
         probed = {"called": False}

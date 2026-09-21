@@ -5,9 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Bind the ENG-92985 doc-token assertions to the gate script's own constants so a
+# Bind the doc-token assertions to the gate script's own constants so a
 # rename in clio_mcp_preflight.py cannot pass both this suite and the behavioral suite
-# while the docs silently describe a sentinel/exit code the script no longer emits.
+# while the docs silently describe a sentinel/exit code the script does not emit.
 sys.path.insert(0, str(ROOT / "runtime" / "scripts"))
 import clio_mcp_preflight as pf  # noqa: E402  (path set above)
 
@@ -406,47 +406,47 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("stop with a clear error", content, str(path))
 
     def test_docs_auto_register_is_host_pattern_guarded(self):
-        # ENG-91558 (review RC-1): auto-register with default credentials must be
+        # RC-1: auto-register with default credentials must be
         # gated on a known Creatio host pattern and fall back to asking for
         # credentials otherwise (prompt-injection / untrusted-URL guard).
         for path in AUTO_REGISTER_PROMPT_URL_DOCS:
             content = read_text(path).lower()
             self.assertIn("known creatio host pattern", content, str(path))
-            # ENG-91558 (review RC-6/RC-7): the host pattern is a closed enumeration
+            # RC-6/RC-7: the host pattern is a closed enumeration
             # of concrete patterns, not an open-ended "intranet" category.
             self.assertIn(".creatio.com", content, str(path))
             self.assertIn("tscrm.com", content, str(path))
             self.assertIn("ts1-", content, str(path))
             self.assertIn("localhost", content, str(path))
-            # ENG-91558 (review RC-13): 127.0.0.1 is part of the closed enumeration
+            # RC-13: 127.0.0.1 is part of the closed enumeration
             self.assertIn("127.0.0.1", content, str(path))
             self.assertNotIn("intranet", content, str(path))
-            # ENG-91558 (review RC-16): the security-critical "no dots" single-label
+            # RC-16: the security-critical "no dots" single-label
             # narrowing for ts1-* must be locked so it cannot silently regress.
             self.assertIn("no dots", content, str(path))
-            # ENG-91558 (review RC-15): host taken from the authority component only,
+            # RC-15: host taken from the authority component only,
             # with counter-examples for the cloud wildcards and the userinfo bypass.
             self.assertIn("authority", content, str(path))
             self.assertIn("creatio.com.attacker", content, str(path))
             self.assertIn("creatio.com@", content, str(path))
             # AC2 "do not retry with guessed credentials"
             self.assertIn("do not retry", content, str(path))
-            # ENG-91558 (review RC-17): cloud *.creatio.com is NOT in the
+            # RC-17: cloud *.creatio.com is NOT in the
             # zero-confirmation tier — it requires a confirmation turn because the
             # subdomain provisioner is not guaranteed (tenancy trust boundary).
             self.assertIn("zero-confirmation", content, str(path))
-            # ENG-91558 (review RC-21): the :port suffix is stripped before host
+            # RC-21: the :port suffix is stripped before host
             # matching, so the common local/dev case (host:88) still matches.
             self.assertIn(":port", content, str(path))
             self.assertIn("does match", content, str(path))
-            # ENG-91558 (review RC-22): the URL is passed as a discrete argv arg,
+            # RC-22: the URL is passed as a discrete argv arg,
             # never shell-interpolated (path/query cannot inject metacharacters).
             self.assertIn("argv", content, str(path))
             # carve-out boundary that bounds the rule
             self.assertIn("ambiguous", content, str(path))
 
     def test_docs_host_pattern_enumeration_consistent_across_docs(self):
-        # ENG-91558 (review RC-23): the host-pattern trust boundary is stated in
+        # RC-23: the host-pattern trust boundary is stated in
         # both AGENTS.md and the runbook; assert the pattern set is identical in
         # both so a future edit to one copy cannot silently drift from the other.
         agents = read_text(ROOT / "AGENTS.md").lower()
@@ -460,7 +460,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn(token, runbook, f"runbook missing host-pattern token: {token}")
 
     def test_docs_require_env_name_slug_sanitization(self):
-        # ENG-91558 (review RC-12/RC-14): the URL-derived <env_name> must be
+        # RC-12/RC-14: the URL-derived <env_name> must be
         # sanitized to a safe slug before reaching reg-web-app, and the canonical
         # AGENTS.md contract must state it (not only the runbook).
         agents = read_text(ROOT / "AGENTS.md").lower()
@@ -470,7 +470,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("metacharacter", content)
 
     def test_docs_remind_default_password_rotation_after_auto_register(self):
-        # ENG-91558 (review RC-8): the runbook must remind the developer to rotate
+        # RC-8: the runbook must remind the developer to rotate
         # the default Supervisor password after auto-registering a non-local env.
         content = read_text(ROOT / "runbooks/01-environment-setup.md").lower()
         self.assertIn("change the default", content)
@@ -485,7 +485,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("add a section for a named entity", content, str(path))
             self.assertIn("without an extra confirmation turn", content, str(path))
             self.assertIn("askuserquestion", content, str(path))
-            # ENG-91558 (review RC-4): the "ambiguous" carve-out bounds the rule
+            # RC-4: the "ambiguous" carve-out bounds the rule
             self.assertIn("ambiguous", content, str(path))
 
     def test_docs_require_clio_mcp_availability_preflight_and_fail_fast(self):
@@ -509,7 +509,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("retry indefinitely", content, str(path))
 
     def test_docs_mandate_deterministic_preflight_gate_script(self):
-        # ENG-92985 (elevation): the STOP decision is a deterministic gate, not prose
+        # Elevation: the STOP decision is a deterministic gate, not prose
         # the agent can reason past. Every contract doc must name the gate script and
         # the three-state verdict (usable / blocked) with its sentinels + exit codes.
         # Sentinel/exit tokens are derived from the script constants (M1) so a rename
@@ -537,7 +537,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn(timeout_token, read_text(path), str(path))
 
     def test_docs_define_precise_wrapper_opt_in_signal(self):
-        # ENG-92985 (elevation, challenge C2): a generic approval is not opt-in; the
+        # Elevation, challenge C2: a generic approval is not opt-in; the
         # escape hatch is unlocked only by an explicit developer instruction, and the
         # contract-level doc (AGENTS.md) must say so.
         content = read_text(ROOT / "AGENTS.md").lower()
@@ -548,7 +548,7 @@ class DefaultContractDocsTests(unittest.TestCase):
 
     def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):
         # the Python client is an explicit opt-in escape hatch,
-        # not the default degraded path. Keep the ENG-91276 native/fallback framing
+        # not the default degraded path. Keep the native/fallback framing
         # while removing any "silent fallback" legitimization.
         for path in OPT_IN_ESCAPE_HATCH_DOCS:
             content = read_text(path).lower()
@@ -557,7 +557,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("mcp_client.py", content, str(path))
 
     def test_docs_state_b_prefers_native_mcp_before_wrapper(self):
-        # ENG-92985 (State B refinement): in State B the agent must FIRST recommend
+        # State B: in State B the agent must FIRST recommend
         # connecting native clio MCP (host-agnostic) and defer the per-host how-to to
         # the install docs — only then fall back to the wrapper. Every contract doc
         # states the recommendation and points at the install docs.
@@ -581,7 +581,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         )
 
     def test_agents_preflight_section_has_no_hardcoded_per_agent_mcp_steps(self):
-        # ENG-92985 (State B refinement): how you connect native MCP drifts per agent,
+        # State B: how you connect native MCP drifts per agent,
         # so the behavioral contract must NOT hardcode agent-specific steps (config.toml
         # edits, installer commands) inside the preflight section — those belong in the
         # install docs. Scope the check to the preflight section so the unrelated
@@ -597,7 +597,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("docs/install.md", section)
 
     def test_docs_frame_wrapper_fallback_in_plain_language(self):
-        # ENG-92985 (State B refinement): the wrapper fallback must be framed in plain
+        # State B: the wrapper fallback must be framed in plain
         # language — slower, no progress, not recommended — never buried behind jargon
         # like "may appear to hang".
         agents = read_text(ROOT / "AGENTS.md").lower()
@@ -647,7 +647,7 @@ class DefaultContractDocsTests(unittest.TestCase):
 
 
     def test_docs_present_native_option_first_and_recommended(self):
-        # ENG-92985 (choice-presentation): when the agent asks the developer how to
+        # Choice presentation: when the agent asks the developer how to
         # proceed in State B, the connect-native option must be listed FIRST and marked
         # recommended, and the wrapper must never be the first/default choice — leading
         # with the wrapper (even if native is offered second) violates prefer-native.
@@ -664,7 +664,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             # Finding 1 (self-review): assert the SPECIFIC composite anchor (encodes
             # native-listed-first) — not bare "first"/"recommended", which are satisfied
             # by unrelated text ("before the first clio operation", "not the recommended
-            # path") and would let a wrapper-first regression pass.
+            # path") and would let a wrapper-first answer pass.
             self.assertIn("connect-native option first and marked recommended", mirror, str(path))
             self.assertIn("never lead with the wrapper", mirror, str(path))
 
