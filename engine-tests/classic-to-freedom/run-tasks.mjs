@@ -19,7 +19,8 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir,
+  applyDecision, revokeDecision } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -5258,6 +5259,182 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
       && !fs.existsSync(dir),
     () => ({ status: res.status, stdout: res.stdout, exists: fs.existsSync(dir) }));
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+// ============================================================================================================
+// ENG-99749: the NEW scope-decision vocabulary. `--decide D<N>` writes wont-do / postponed cells under a
+// recorded decision; `--revoke D<N>` reverses them; the cascade reaches repair tasks; the verdict is three-
+// coloured; and a folder still carrying the retired `n/a` reads as unrecognised and lands on Attention.
+// ============================================================================================================
+console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict =====");
+{
+  const decisionsMap = () => new Map([["D13", "descope the typed forms — Marharyta 2026-09-21"],
+    ["D19", "defer dashboards to the next phase — Kateryna 2026-09-22"]]);
+
+  // ---- --decide refuses when D<N> does not resolve ---------------------------------------------------------
+  {
+    const base = tmp("decide-refuse");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D999", mode: "wont-do",
+      pages: ["main"], decisions: decisionsMap() });
+    check("ENG-99749 --decide refuses when D<N> is not in the decisions map — nothing is written; the caller must add the decision first",
+      () => bad.refused && bad.problems?.some((p) => /D999.*does not resolve/.test(p)),
+      () => ({ refused: bad.refused, problems: bad.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --postponed refuses without --to -----------------------------------------------------------
+  {
+    const base = tmp("decide-postponed-no-to");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      pages: ["main"], decisions: decisionsMap() });
+    check("ENG-99749 --decide --postponed refuses without a destination — an issue key or free text; \"later\" is not an answer",
+      () => bad.refused && bad.problems?.some((p) => /postponed.*--to/.test(p)),
+      () => ({ refused: bad.refused, problems: bad.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide addresses one row inside a task; every other row of that task is untouched -----------------
+  {
+    const base = tmp("decide-row");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length >= 2 && !x.unread
+      && x.origin === "engine" && x.kind !== "repair");
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: "1" }, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 --decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
+        () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"
+          && rr?.rows?.[1]?.outcome === "" && rr?.rows?.[1]?.outcomeKind === null,
+        () => ({ touched: res.touched?.length, row0: rr?.rows?.[0]?.outcome, row1: rr?.rows?.[1]?.outcome }));
+      // The task's status stays partial because it now has one closed cell and one blank — the row addressing
+      // was deliberately not "close the whole task", which would have been the --task <id> form.
+      check("ENG-99749 --decide --row leaves the task computed `partial` — one cell closed, the rest still owed",
+        () => rr?.status === "partial",
+        () => ({ status: rr?.status }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --task closes every row of a task; the task computes wont-do -------------------------------
+  {
+    const base = tmp("decide-task");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        taskId: t.id, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 --decide --task fills every Outcome cell of the addressed task; the task's status computes to `wont-do`",
+        () => !res.refused && rr?.status === "wont-do"
+          && rr.rows.every((r) => r.outcomeKind === "wont-do"),
+        () => ({ status: rr?.status, kinds: rr?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --postponed writes the destination into the cell -------------------------------------------
+  {
+    const base = tmp("decide-postponed");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+        destination: "ENG-12345", taskId: t.id, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      const c = rr?.rows?.[0]?.outcome || "";
+      check("ENG-99749 --decide --postponed writes `postponed — <reason> (D<N>) → <destination>` into the cell, and the task computes `partial` (postponed is a DEBT, not a closure)",
+        () => !res.refused && /^postponed — .* \(D19\) → ENG-12345$/.test(c)
+          && rr?.status === "partial",
+        () => ({ cell: c, status: rr?.status }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --revoke undoes exactly the cells that D<N> wrote ---------------------------------------------------
+  {
+    const base = tmp("revoke");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        taskId: t.id, decisions: decisionsMap() });
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 --revoke D<N> clears every cell that decision wrote; the task's rows re-enter the verification list",
+        () => !rev.refused && rev.cleared.length >= 1
+          && rr.rows.every((r) => !r.outcomeKind || r.na)
+          && rr.status !== "wont-do",
+        () => ({ cleared: rev.cleared.length, status: rr?.status, kinds: rr?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- an old `declared: n/a` folder reads as UNRECOGNISED (loud fail, not silent coercion) ----------------
+  {
+    const base = tmp("legacy-na");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    // Find one plan task and edit its `declared:` line to the retired token.
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE);
+    if (files.length) {
+      const f = path.join(dir, files[0]);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared:.*$/m, "declared: n/a"));
+      const set = syncTaskDir(dir, RUN, OPTS);
+      const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
+      check("ENG-99749 (AC 16) a folder still carrying `declared: n/a` reads as UNRECOGNISED — the word is no longer in DECLARABLE, so `declared:` is treated as empty and the file's raw `status:` word (whatever it holds) may land as unrecognised on the index — nothing is silently coerced",
+        () => {
+          const t = set.tasks.find((x) => x.file === files[0]);
+          // `n/a` in `declared:` is no longer honoured; task recomputes from its cells (all blank → carried),
+          // and the sub-agent facing prompt no longer offers `n/a` as an option.
+          return t && !TASK_STATUSES.includes("n/a")
+            && !/`declared: n\/a`/.test(idx);
+        },
+        () => ({ status: set.tasks[0]?.status, hasNaInIdx: /declared: n\/a/.test(idx) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- three-colour verdict: 🟡 when every remaining reason is a postponed row -----------------------------
+  {
+    const base = tmp("verdict-yellow");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const set = readMergedTaskDir(dir, RUN, OPTS);
+    // Manually mark a row as postponed and rebuild the report over a minimal verifyRes (no missing rows).
+    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    if (t) {
+      t.rows[0].outcome = "postponed — deferred, per decision (D19) → ENG-99999";
+      t.rows[0].outcomeKind = "postponed";
+      t.rows[0].outcomeReason = "deferred, per decision (D19) → ENG-99999";
+      const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+        set, dir, built: {}, repair: null });
+      check("ENG-99749 (AC 13) three-colour verdict — a postponed row with a D<N> and a destination renders 🟡 COMPLETE FOR THIS PHASE, not 🔴 or 🟢",
+        () => /🟡 \*\*COMPLETE FOR THIS PHASE\*\*/.test(rep.markdown)
+          && rep.verdictColour === "yellow"
+          && rep.counts.postponed >= 1,
+        () => ({ colour: rep.verdictColour, postponed: rep.counts.postponed,
+          headSnippet: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+      check("ENG-99749 (AC 14) the report carries a row-level Carry-over section for postponed items with the decision + destination",
+        () => /## Carry-over — postponed items/.test(rep.markdown)
+          && /\*\*D19\*\*/.test(rep.markdown)
+          && /ENG-99999/.test(rep.markdown),
+        () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
