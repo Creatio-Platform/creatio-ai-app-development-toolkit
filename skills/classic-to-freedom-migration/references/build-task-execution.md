@@ -30,9 +30,16 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
    a SEPARATE context judges it and cannot ask you: the shipped reference page you diffed against and each
    component you checked with `get-component-info`), the on-stand reads you ran, and for every `not-built` row what
    it is waiting on. A session killed mid-task costs that task alone, but only because you wrote as you went.
+   **Two lines are quoted verbatim into the migration result report the user reads, so write them exactly, one
+   line each under `## Notes`:** for every `not-built — needs-decision` row, `Decision needed (row N): <the
+   question and the options a person chooses between>`; for every row the machine cannot read off the page (its
+   `Closed by` cell says evidence + judge, or it is a confirm-on-stand row), `Check on stand (row N): <what to
+   open → what is expected>`. Without the first the report can only tell the user "the agent did not state the
+   question"; without the second the user is sent to your notes to find the check.
    **Append it with an in-place edit — never a shell heredoc, never a whole-file write.** A note put through the
    shell breaks on quoting and on command-length limits, and the table above your notes is the engine's: rewriting
    the file drops the `Outcome` cells your status is computed from.
+   **To have the final report count an `n-a` as an APPROVED boundary (not an open question), cite the decision in the reason as a load-bearing reference** — `per D7`, `D7: …`, `D7 (…)`, `D18 user decision: …`, or `Adjustment 2 …` — matching a heading in `decisions.md` (`## D7 — <title>` / `## D7: <title>`) or a numbered item under the plan's `### Adjustments`. A code mentioned only as a comparison (`like D7`, `similar to D7`) does NOT count. The report shows the cited decision's title beside the row, so cite the one that actually authorises THIS row.
 4. **A row you could not build is `not-built`, never a cell left blank and never absorbed into `done`.** Every row
    `built` or `n-a` computes `done`; any row `not-built` — or left unaccounted — computes `partial`. `partial` does
    not hold up the tasks that depend on yours; it holds up calling the RUN finished, and the engine names each

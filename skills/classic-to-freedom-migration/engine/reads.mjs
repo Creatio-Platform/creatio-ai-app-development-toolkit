@@ -137,10 +137,25 @@ export function writeEvidenceSkeletons(dir, plan) {
     fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
     written.push(file);
   }
+  const recorded = plan.builderRecorded || [];
+  const full = path.join(dir, RECORDED_SKELETON_FILE);
+  if (recorded.length && !fs.existsSync(full)) {
+    // `null`, not `false`: nothing has been recorded yet, and `false` is an answer — the row stays unconfirmed
+    // until the build agent replaces it.
+    const skel = {};
+    for (const b of recorded) skel[b.reachabilityKey] = null;
+    fs.writeFileSync(full, JSON.stringify(skel, null, 2) + "\n");
+    written.push(RECORDED_SKELETON_FILE);
+  }
   return written;
 }
 export const EVIDENCE_SKELETON_FILE = "evidence.json";
 export const JUDGE_SKELETON_FILE = "judge.json";
+// The on-stand keys the BUILD agent records rather than reads. They are not reads — nothing on the stand answers
+// them afterwards — but the gate still wants a value, so they need a slot the same way evidence does. Without one
+// a plan with card widgets could never reach a passing gate through `--verify --from`, while the skill forbids
+// hand-writing the payload.
+export const RECORDED_SKELETON_FILE = "recorded.json";
 
 // WRITES the index into `<dir>/reads/`. `dir` is the MIGRATION FOLDER — the one holding `build-tasks/` — so the
 // raw responses and the `built.json` composed from them sit beside the run, never in a temp dir that cannot be
@@ -194,7 +209,10 @@ export function renderReadPlan(plan, dir) {
     L.push("", "**Not reads — the BUILD agent records these**", "",
       "| Key | What it records |", "| --- | --- |",
       ...plan.builderRecorded.map((b) => `| \`${b.reachabilityKey}\` | ${b.what} — the outcome the build agent`
-        + " observed when it ran the converter; the stand does not answer it afterwards, so there is nothing to read back |"));
+        + " observed when it ran the converter; the stand does not answer it afterwards, so there is nothing to read back |"),
+    "", `Their values go in \`${RECORDED_SKELETON_FILE}\` beside this folder, written for you with each key already`
+      + " present and `null` — replace each `null` with what the build agent recorded. A key left `null` keeps its"
+      + " row unconfirmed.");
   }
   return L.join("\n") + "\n";
 }

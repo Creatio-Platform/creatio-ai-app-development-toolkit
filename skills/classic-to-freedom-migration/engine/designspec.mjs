@@ -37,7 +37,7 @@ const strip = (s) => (s == null ? "" : String(s)
 // HTML-encoded so it can never be a tag), and a Markdown link/image (`[x](javascript:…)` / `![x](…)` → break
 // the `](` so it renders literally). `&` is left as-is: a legitimate caption like "R&D" must read cleanly, and
 // since `<`/`>` are encoded there is no tag for a bare `&` to complete.
-const esc = (s) => strip(s)
+export const esc = (s) => strip(s)
   .replaceAll("`", "ˋ")
   .replaceAll("|", String.raw`\|`)
   .replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -2179,15 +2179,20 @@ export function renderPlan(result, opts = {}) {
 function buildLayoutGroupRows(cs, regionOf) {
   const top = (r) => { const s = String(r).split(" › ")[0]; return s === HEADER_TOP_REGION ? "Header" : s; };
   const order = [], byRegion = new Map();
-  const add = (region, label) => {
+  // ENG-99126 — the row also carries a `layout` vk (region kind, counts, widget types) so the built page's
+  // CONTAINERS answer it instead of a person. Before this every Layout row was vk-less and read "☐ confirm
+  // on-stand" while the same fields and grids stood confirmed on the page as a whole.
+  const add = (region, label, extra = {}) => {
     const k = top(region);
-    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, items: [] }); order.push(k); }
+    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, lists: 0, widgets: [], items: [] }); order.push(k); }
     const e = byRegion.get(k);
     if (label) e.items.push(label); else e.fields++;
+    if (extra.list) e.lists++;
+    if (extra.widgetType) e.widgets.push(extra.widgetType);
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
-  for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
+  for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`, { list: true });
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget), { widgetType: layoutWidgetType(w) });
   for (const w of cs.cardWidgets || []) {
     add(regionOf(w.region), `${esc(w.widgetKey)} (card widget)`);
   }
@@ -2196,8 +2201,22 @@ function buildLayoutGroupRows(cs, regionOf) {
     const parts = [];
     if (e.fields) parts.push(`${e.fields} field${e.fields === 1 ? "" : "s"}`);
     parts.push(...e.items);
-    return { label: `${k} — ${parts.join(" · ")}` };
+    let region = null, caption = null;
+    if (k.startsWith("Side profile")) region = "side";
+    else if (k === "Header") region = "header";
+    else if (k.startsWith("Tab · ")) { region = "tab"; caption = k.slice(6).replace(/\(new\)$/, "").trim(); }
+    const vk = region ? { type: "layout", region, caption, fields: e.fields, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
+    return { label: `${k} — ${parts.join(" · ")}`, ...(vk ? { vk } : {}) };
   });
+}
+// The Freedom component a Layout widget resolves to on the built page — the mapping row's `freedom` when it names
+// a component, else inferred from the widget's own name. What the `layout` vk looks for in the region.
+const LAYOUT_WIDGET_TYPE = [[/progress/i, "crt.EntityStageProgressBar"], [/feed|esn/i, "crt.Feed"], [/next steps/i, "crt.NextSteps"],
+  [/attach/i, "crt.FileList"], [/approval|visa/i, "crt.ApprovalList"], [/communication/i, "crt.CommunicationOptions"]];
+function layoutWidgetType(w) {
+  if (String(w.freedom || "").startsWith("crt.")) return String(w.freedom).split(/\s|\(/)[0] || "";
+  for (const [re, t] of LAYOUT_WIDGET_TYPE) if (re.test(String(w.widget || ""))) return String(t);
+  return "";   // S3800 — a string in every path (the tuple infers `RegExp | string`, so wrap `t`); "" means "none"
 }
 // Form — Coverage checklist rows (the MACHINE-verifiable counts + component types, each carrying a `vk`).
 // Own fn so checklistGroups stays under Sonar CC 15.
@@ -2517,12 +2536,21 @@ export function scopeGroups(groups, pageKey) {
 function handlerStubRows(cs) {
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
+  // ENG-99126 — each handler row carries a `handler` vk resolved against `--built.pages[k].handlers` (the page's
+  // handler source, verbatim from get-page). A Freedom port rarely keeps the Classic method NAME, so the vk also
+  // publishes the method's TRIGGERS (the attribute whose change ran it, the control it was bound to) and, for a
+  // helper folded under a caller, the caller's — a handler branching on that trigger is the port.
+  const stubByName = new Map((cs.handlerStubs || []).map((h) => [h.sourceMethod, h]));
+  const rootTrigger = (t) => (t?.kind === "internal" ? t.rootTrigger : t);
   return (cs.handlerStubs || []).map((h) => {
     const parent = foldedUnder.get(h.sourceMethod);
     // Composed, not exclusive: a folded helper the list analyzer already read is still already read.
     const unfolded = h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "";
     const note = (parent ? ` (ported with \`${esc(parent)}\`)` : "") + unfolded;
-    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note };
+    const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
+    const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
+    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note,
+      vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
@@ -2531,7 +2559,15 @@ const LIST_MAPPED_TARGET = "already mapped into the list page's own ops";
 // One row per imperative member, same sharing rule.
 function memberWorklistRows(cs) {
   return (cs.needsDecision || []).filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
-    .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` }));
+    // ENG-99126 — a virtual attribute is on the built page's `viewModelConfig.attributes` (`vmattr` vk); a
+    // `module-dep` row names Classic define() dependencies whose contribution lives in the handlers and rules that
+    // use them — nothing on the stand answers to it on its own, so it is informational, never a row to confirm.
+    .map((d) => {
+      const label = `[${esc(d.kind)}] ${esc(d.item)}`;
+      if (d.kind === "attribute-virtual") return { label, vk: { type: "vmattr", name: d.item } };
+      if (d.kind === "module-dep") return { label, info: "Classic define() dependencies — their contribution is carried by the handlers and rules that used them; nothing on the stand answers to this row on its own" };
+      return { label };
+    });
 }
 // The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
 // scope: on a withheld `list` key these ride the form page's key, where one title would be one identity for two
@@ -2835,22 +2871,16 @@ function buildCardActionRows(cs) {
     .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
   const natives = acts.filter((a) => !/process|print/i.test(a));
   if (natives.length) {
-    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
+    // ENG-99126 — the template ships these controls under stable element names, so the row is machine-checkable.
+    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`,
+      vk: { type: "cardnative", names: natives.map((a) => a.replace(/Button$/, "")) } });
   }
   return rows;
 }
-export function checklistGroups(result, opts = {}) {
-  const cs = result.changeSet || {};
-  const pm = opts.planMeta || {};
-  const typed = result.typedPages || [];
-  const childs = result.childPages || [];
-  const pageKey = pageKeyOf(opts);
-  const isMain = pageKey === "main";
-  rootAssignPageKeys(result, isMain);
-  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
-  const groups = [];
-  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
-  G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
+// The list-page group emission, extracted so checklistGroups stays under Sonar's cognitive-complexity ceiling.
+// Pushes the list-page groups into `groups` (via `G` or directly) and returns the confirm-worklist rows that
+// must ride on the FORM page's key when no gated `list` key is published.
+function emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts) {
   const section = result.section || null;
   // The List page group belongs to the LIST page's key, not the form page's: its rows are the list page's own
   // deliverables, so `--verify` gates them under their own page key. Only the main
@@ -2894,6 +2924,29 @@ export function checklistGroups(result, opts = {}) {
     groups.push(pageGroup(LIST_PAGE_KEY, "Quality gates", qualityGateRows(LIST_PAGE_KEY)));
     listConfirmOnMain = [];   // gated on `list`; never in two places
   } else G("List page", listRows);
+  // ENG-99126 — the Pages group carries an ungated `List page → <template>` identity row; when the list page is
+  // gated it ALSO carries the machine-checked `List template → …` row, so the first read "☐ confirm on-stand"
+  // beside a ✅ for the same fact. One fact, one row: drop the ungated twin whenever the gated one exists.
+  if (listRows.some((r) => r.vk?.type === "template")) {
+    const pages = groups.find((g) => g.title === "Pages");
+    if (pages) pages.rows = pages.rows.filter((r) => !r.label.startsWith("List page → "));
+  }
+  return { listConfirmOnMain, sectionLogicKey };
+}
+
+export function checklistGroups(result, opts = {}) {
+  const cs = result.changeSet || {};
+  const pm = opts.planMeta || {};
+  const typed = result.typedPages || [];
+  const childs = result.childPages || [];
+  const pageKey = pageKeyOf(opts);
+  const isMain = pageKey === "main";
+  rootAssignPageKeys(result, isMain);
+  const fill = (v, ph) => (v != null && String(v).trim() !== "" ? esc(String(v)) : ph);
+  const groups = [];
+  const G = (title, rows) => { const r = rows.filter(Boolean); if (r.length) groups.push(pageGroup(pageKey, title, r)); };
+  G("Pages", buildPageRows(result, opts, pm, typed, fill, isMain));
+  const { listConfirmOnMain, sectionLogicKey } = emitListPageGroups(groups, G, pageKey, isMain, pm, result, opts);
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
@@ -3089,13 +3142,47 @@ function resolveStructuralVk(vk, ctx) {
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
 // `name` is the uncheckable case.
+//
+// ENG-99126 — WHAT COUNTS AS THE SAME FIELD. The plan publishes the CLASSIC element names, which are the bare
+// column names (`Contact`); a Freedom builder names the element `ContactField` and binds it `control: "$Contact"`,
+// and the Interface Designer names it `PDS_Contact_<hash>`-bound. Measured on a real run: all 19 expected fields
+// on the stand, every one bound to its column, and this row read `0/19 expected fields present` because the
+// comparison was the element name, verbatim. So an expected name `n` is satisfied by a built component whose
+//   · element name is `n`, or
+//   · element name is `n` + `Field` (the builder convention the platform's own pages follow), or
+//   · bound attribute is `n` (`boundAttributeOf` — the column the field actually reads/writes).
+// Each built component satisfies at most ONE expected name (two classic items binding one column — `col`, `col_2`
+// — still need two built fields), so a page with one field cannot close a row that expects two on the same column.
+function fieldMatches(o, n) {
+  return o.name === n || o.name === `${n}Field` || o.bound === n;
+}
+// MAXIMUM bipartite matching (Kuhn's augmenting paths): assign each expected name to a DISTINCT built op it matches,
+// maximising the number matched. ENG-99740 — greedy first-match-wins could strand a name whose only op was already
+// claimed by another name that had alternatives, reporting a present field as missing (a false red). Returns the set
+// of matched name indices.
+function maxFieldMatch(names, ops) {
+  const opToName = new Array(ops.length).fill(-1);
+  const augment = (ni, seen) => {
+    for (let oi = 0; oi < ops.length; oi++) {
+      if (!seen.has(oi) && fieldMatches(ops[oi], names[ni])) {
+        seen.add(oi);
+        if (opToName[oi] < 0 || augment(opToName[oi], seen)) { opToName[oi] = ni; return true; }
+      }
+    }
+    return false;
+  };
+  const matched = new Set();
+  for (let ni = 0; ni < names.length; ni++) if (augment(ni, new Set())) matched.add(ni);
+  return matched;
+}
 function resolveFieldsByIdentity(vk, names, ops) {
-  const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
-  if (ops.length && !builtNames.size) return ["⚠ verify",
+  const identified = ops.filter((o) => o.name || o.bound);
+  if (ops.length && !identified.length) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
-  const missing = names.filter((n) => !builtNames.has(n));
+  const matched = maxFieldMatch(names, identified);
+  const missing = names.filter((_, ni) => !matched.has(ni));
   const b = names.length - missing.length;
-  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
+  if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page (element name, \`<Name>Field\`, or the bound column)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
   return ["⚠ verify", `${b}/${vk.n} expected fields present${miss}`, "unverified"];
@@ -3264,12 +3351,40 @@ export function resolveComponentVk(vk, ctx) {
 // / `condition` / `actions` but not their inner shape, so tokenizing the whole rule survives a shape change.
 // The rule's tokens, or `null` when the slot was never populated (nobody read the rules). Own fn so `resolveRuleVk`
 // stays under Sonar CC 15.
+//
+// ENG-99126 — WHAT IS TOKENIZED, and what a token has to look like to count. Two measured defects on one run:
+//   · the whole rule was tokenized, `caption` included, so a rule captioned "Employee is visible when Source is
+//     Internal recommendation" satisfied the expected identities `Employee` AND `Source` by its prose alone — a
+//     false ✅ on a row whose whole point is that the rule GOVERNS the column;
+//   · a page rule names the ELEMENT it acts on (`actions[].items: ["RejectReasonField"]`), never the bare column,
+//     so `RejectReason` was "missing" while the rule requiring it sat on the stand.
+// So only the parts that state what the rule reads and does (`condition`, `actions`) are tokenized, and every
+// token is ALSO indexed under its column form: `<Col>Field` → `<Col>`, `PDS_<Col>_<hash>` → `<Col>`. `name` and
+// `caption` are labels, and a label that happens to contain a column name is not evidence the rule governs it.
+const GOVERNED_KEYS = ["condition", "actions"];
+function columnFormsOf(token) {
+  const out = [token];
+  const field = /^(.+)Field$/.exec(token);
+  if (field) out.push(field[1]);
+  const pds = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(token);
+  if (pds) out.push(pds[1]);
+  return out;
+}
 function builtRuleTokens(built) {
   let rules = null;
   if (Array.isArray(built)) rules = built;
   else if (Array.isArray(built?.rules)) rules = built.rules;
   if (rules == null) return null;
-  return rules.map((r) => new Set(String(JSON.stringify(r)).match(/[A-Za-z_]\w*/g) || []));
+  return rules.map((r) => {
+    // A rule with none of the governed keys (an unknown shape) falls back to the whole record, minus its labels —
+    // narrowing to nothing would make every such rule match nothing and read as a shortfall the builder cannot fix.
+    let governed;
+    if (r && typeof r === "object" && GOVERNED_KEYS.some((k) => k in r)) governed = Object.fromEntries(GOVERNED_KEYS.filter((k) => k in r).map((k) => [k, r[k]]));
+    else if (r && typeof r === "object") governed = Object.fromEntries(Object.entries(r).filter(([k]) => k !== "caption" && k !== "name"));
+    else governed = r;
+    const raw = String(JSON.stringify(governed)).match(/[A-Za-z_]\w*/g) || [];
+    return new Set(raw.flatMap(columnFormsOf));
+  });
 }
 export function resolveRuleVk(vk, ctx) {
   const want = [...new Set(vk.names || [])];
@@ -3288,10 +3403,13 @@ export function resolveRuleVk(vk, ctx) {
   // A shortfall is ⚠ unverified, not ❌ MISSING — the same conservative choice `resolveFieldsByIdentity` makes for a
   // by-identity match: this ticket's whole point is to STOP built work reading as MISSING, and a rule matched by a
   // whole-token heuristic must not cry ❌ on a rule the builder named so the column token does not literally appear.
-  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule`, "ok"];
+  // The count the plan's label carries (`× N` rules) and the count matched here (distinct target attributes) are
+  // two different numbers, and a reader shown `2/5` under `× 7` cannot tell which one is short. Name both.
+  const built = tokenSets.length;
+  if (!missing.length) return ["✅ Done", `${b} of ${want.length} business rule(s) present — each expected target attribute is governed by a built page rule (${b} of ${want.length} target attribute(s), ${built} rule(s) on the built page)`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}`;
-  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute${miss}`, "unverified"];
+  return ["⚠ verify", `${b}/${want.length} business rule(s) matched by target attribute (${want.length} distinct target attribute(s) expected across the plan's ${vk.n} rule(s); ${built} rule(s) on the built page)${miss}`, "unverified"];
 }
 const VK_STRUCTURAL = new Set(["formpage", "template", "mini"]);
 const VK_COUNT = new Set(["fields", "tabs", "details", "image", "element"]);
@@ -3628,20 +3746,196 @@ const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 // `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
 // stays a visible row: a boundary the reader cannot see is a boundary the next round re-litigates.
 const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan — nothing to build, nothing to check", "skip"];
+// An informational row (ENG-99126): recorded so the ledger is complete, never a thing to confirm on the stand.
+const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
+
+// ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
+const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+const tokenIn = (src, name) => new RegExp(String.raw`(?<![\w$])${reEsc(name)}(?![\w$])`).test(src);
+// Comments and string/template literals blanked, so a method name that appears only in prose cannot close a row.
+// Approximate (template ${} expressions are blanked too) — a false negative there is the safe direction (⚠, not ✅).
+const codeOnly = (s) => String(s)
+  .replace(/\/\*[\s\S]*?\*\//g, " ")
+  .replace(/\/\/[^\n]*/g, " ")
+  .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+  .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+  .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+// A method/element name in a DEFINITION or CALL position — not a bare mention. Run over `codeOnly` output.
+const defOrCall = (code, name) => new RegExp(String.raw`(?:function\s+|\.|\b)${reEsc(name)}\s*[(:=]`).test(code);
+// Common platform identifiers that occur as ordinary Freedom handler scaffolding (`next?.handle(request)`,
+// `filters: …`, `{ handle: … }`). A name/def/call match on ANY of these is not evidence of a real Classic-method
+// port, so the handler row degrades to confirm-on-stand rather than reading a false ✅. Distinctive method names
+// (onSaved, setContactInfo, getRequestStatusFilter) are unaffected and still close on a def or a call.
+const HANDLER_NAME_DENY = new Set(["init", "save", "open", "close", "load", "handle", "handler", "request", "next", "value", "items", "filters", "filter", "config", "data", "validate"]);
+// A handler branch on an attribute change: `request.attributeName === "X"` in any quoting / spacing.
+const attrBranchIn = (src, attr) => new RegExp(`attributeName\\s*[=!]==?\\s*["'\`]${reEsc(attr)}["'\`]|["']attributeName["']\\s*:\\s*["']${reEsc(attr)}["']`).test(src);
+// HANDLERS. A Freedom port rarely keeps the Classic method name (measured: 2 of 10 on a real run — `setContactInfo`
+// became `reloadCommunicationOptions`, a filter method became a declarative filter). So the match is, in order: the
+// method name · the caller it was folded under · a handler BRANCH on the method's Classic trigger (the attribute
+// whose change ran it, the control it was bound to). None of them ⇒ ⚠ unverified, never MISSING: a port under
+// another name is legitimate, and the text says what to record so the row can be judged.
+// A handler recognised by one of the method's Classic TRIGGERS: a branch on the attribute whose change ran it, or
+// a reference to the control it was bound to. Extracted so resolveHandlerVk stays under Sonar's ceiling.
+function handlerTriggerMatch(vk, src, code) {
+  for (const t of vk.triggers || []) {
+    if (t.kind === "attribute-dependency" && t.attribute && attrBranchIn(src, t.attribute))
+      return ["✅ Done", `a handler branches on attribute \`${esc(t.attribute)}\` — the Classic trigger of \`${esc(vk.parent || vk.method)}\``, "ok"];
+    if (t.kind === "control" && t.element && defOrCall(code, t.element))
+      return ["✅ Done", `a handler names the control \`${esc(t.element)}\` that bound \`${esc(vk.method)}\``, "ok"];
+  }
+  return null;
+}
+export function resolveHandlerVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the handler for \`${esc(vk.method)}\``);
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the handler cannot exist", "missing"];
+  if (ctx.handlersSrc == null) return ["☐ confirm on-stand", "handlers not provided — pass get-page's `bundle.handlers` to auto-check this, or confirm the port on the stand", "skip"];
+  const src = ctx.handlersSrc;              // RAW — attrBranchIn needs the string literal
+  // comments + string literals blanked — for name/def matching. Memoized on the page ctx (verifyCtxFactory caches
+  // one ctx per page key), so a page's handler rows strip the source once, not once per row.
+  const code = ctx._codeOnly ?? (ctx._codeOnly = codeOnly(src));
+  if (!HANDLER_NAME_DENY.has(vk.method) && defOrCall(code, vk.method)) return ["✅ Done", `a handler defines or calls \`${esc(vk.method)}\``, "ok"];
+  if (vk.parent && defOrCall(code, vk.parent)) return ["✅ Done", `ported with \`${esc(vk.parent)}\`, which a handler defines or calls`, "ok"];
+  const trigHit = handlerTriggerMatch(vk, src, code);
+  if (trigHit) return trigHit;
+  const trig = (vk.triggers || []).map((t) => t.attribute || t.element).filter(Boolean).map((x) => `\`${esc(x)}\``).join(", ");
+  const parentNote = vk.parent ? ` / \`${esc(vk.parent)}\`` : "";
+  const trigNote = trig ? ` (nor a branch on its trigger (${trig}))` : "";
+  return ["☐ confirm on-stand", `no handler recognised for \`${esc(vk.method)}\`${parentNote}${trigNote} — a port often renames the method or replaces it with a declarative rule, so confirm on the stand and record how it was ported (a \`Check on stand\` line)`, "skip"];
+}
+export function resolveVmAttrVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, `the view-model attribute \`${esc(vk.name)}\``);
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the attribute cannot exist", "missing"];
+  // A documented-OPTIONAL slot (BUILT_SHAPE / SKILL.md): absent ⇒ NON-gating confirm-on-stand, symmetric with
+  // resolveHandlerVk's `handlersSrc == null` branch. `⚠ unverified` here would gate the run (exit 2) on every plan
+  // with a virtual attribute whose payload predates ENG-98556 — a false hard block, not a false green.
+  if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
+  if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
+  if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
+}
+// The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
+// "Basic information" is carried by `BasicInformationTabCaption`; words under 3 letters are noise.
+const captionWords = (c) => String(c || "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3).map((w) => w.toLowerCase());
+const normId = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+// Split a caption binding / element name into words on camelCase and non-alphanumeric boundaries, lower-cased.
+const tokensOf = (s) => String(s || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => w.toLowerCase());
+// 3 = the caption's words appear CONTIGUOUSLY in the container's caption or name (BasicInformation… for "Basic
+// information"); 2 = every caption word is a token of the container; 0 = no match. Token boundaries, not raw
+// substrings, so "Contact" no longer matches inside "ContactAndAccount" by accident when a better tab exists.
+function tabMatch(container, caption) {
+  const words = captionWords(caption);
+  if (!words.length) return 0;
+  const joined = words.join("");
+  if (normId(container.caption).includes(joined) || normId(container.name).includes(joined)) return 3;
+  const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
+  return words.every((w) => toks.has(w)) ? 2 : 0;
+}
+// A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
+function judgeRegion(c, where, vk, want) {
+  // Nothing machine-measurable (no fields, lists or recognised widgets) must NOT read ✅ — an empty `short` would
+  // otherwise report an unchecked region as confirmed and feed the COMPLETE verdict.
+  if (!vk.fields && !vk.lists && !(vk.widgets || []).length) return ["☐ confirm on-stand", "this region row carries nothing machine-measurable (no fields, lists or recognised widgets) — confirm the placement on the stand", "skip"];
+  const short = [];
+  if (vk.fields && c.fields.length < vk.fields) short.push(`${c.fields.length}/${vk.fields} fields`);
+  if (vk.lists && c.lists.length < vk.lists) short.push(`${c.lists.length}/${vk.lists} related lists`);
+  for (const w of vk.widgets || []) if (!c.widgets.includes(w)) short.push(`no ${w}`);
+  if (!short.length) return ["✅ Done", `${where}: ${want.join(" · ") || "present"}`, "ok"];
+  return ["⚠ verify", `${where}: ${short.join(", ")}`, "unverified"];
+}
+// The header region is judged on WIDGETS only (fields/lists live in the body), against the page's flat ops.
+function resolveLayoutHeader(vk, ctx) {
+  // Judged on WIDGETS only; the header's fields/lists are covered by the page-wide Fields / Related-lists rows.
+  // A header row with no recognised widget has nothing to machine-confirm here — say so rather than read ✅.
+  if (!(vk.widgets || []).length) return ["☐ confirm on-stand", "this header row carries no recognised widget to check — its fields are covered by the page-wide Fields row; confirm the header placement on the stand", "skip"];
+  const present = new Set(ctx.ops.map((o) => o.type));
+  const missW = (vk.widgets || []).filter((w) => !present.has(w));
+  if (!missW.length) return ["✅ Done", `header widgets: ${(vk.widgets || []).join(" · ")}`, "ok"];
+  const noList = missW.map((w) => "no " + w).join(", ");
+  return ["⚠ verify", `header: ${noList}`, "unverified"];
+}
+export function resolveLayoutVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "this region of the page");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the region cannot exist", "missing"];
+  const want = [];
+  if (vk.fields) want.push(`${vk.fields} field${vk.fields === 1 ? "" : "s"}`);
+  if (vk.lists) want.push(`${vk.lists} related list${vk.lists === 1 ? "" : "s"}`);
+  for (const w of vk.widgets || []) want.push(w);
+  const judge = (c, where) => judgeRegion(c, where, vk, want);
+  if (vk.region === "header") return resolveLayoutHeader(vk, ctx);
+  // A payload with NO containers at all (the legacy flat `ops` shape, or a viewConfig with no container nodes)
+  // cannot place anything: measure the region against the page as a whole and say so, rather than fail every
+  // region row of a page whose fields and grids are all present.
+  if (!ctx.containers.length) {
+    const whole = collectLayout(ctx.ops.map((o) => ({ type: o.type, name: o.name })), { fields: [], lists: [], widgets: [] });
+    return judge(whole, "on the page as a whole (the payload carries no containers, so the region itself could not be located)");
+  }
+  if (vk.region === "side") {
+    const side = ctx.containers.filter((c) => /Side|Profile/i.test(c.name)).sort((a, b) => b.fields.length - a.fields.length)[0];
+    if (!side) return ["⚠ verify", "no side-profile container (`Side*` / `*Profile*`) on the built page", "unverified"];
+    return judge(side, `in \`${esc(side.name)}\``);
+  }
+  return resolveLayoutTab(vk, ctx, judge);
+}
+// The tab branch of resolveLayoutVk, extracted so the parent stays under Sonar's cognitive-complexity ceiling.
+// `judge` is the parent's closure (it reads vk.fields/lists/widgets), passed in unchanged.
+function resolveLayoutTab(vk, ctx, judge) {
+  if (!captionWords(vk.caption).length) return ["⚠ verify", "this tab row carries no caption to match a built tab by — a plan gap, not a build gap", "unverified"];
+  const tabs = ctx.containers.filter((c) => /Tab/.test(c.type) || /Tab/.test(c.name));
+  const size = (c) => c.fields.length + c.lists.length + c.widgets.length;
+  const wantCount = (vk.fields || 0) + (vk.lists || 0) + (vk.widgets || []).length;
+  // Claim at most one container per region row (the discipline resolveFieldsByIdentity uses for fields), so two
+  // similarly-captioned tabs cannot both close against one big built tab. Ties: best fit, then higher score.
+  ctx.claimedContainers = ctx.claimedContainers || new Set();
+  const cand = tabs.map((c) => ({ c, score: tabMatch(c, vk.caption) }))
+    .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
+    .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
+  const tab = cand[0]?.c;
+  const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
+  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabList}`, "unverified"];
+  ctx.claimedContainers.add(tab.name);
+  return judge(tab, `in tab \`${esc(tab.name)}\``);
+}
+// The template's native card controls, by the element names it ships them under.
+// Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
+// (tokens ["tag","select"]) but NOT `StageProgressBar` (["stage","progress","bar"] — "tag" is only a substring of
+// "stage", never a token). `/Tag/i.test("StageField")` used to close a Tag control that was never built.
+const CARD_NATIVE_TOKENS = new Map([
+  ["ViewOptions", [["view", "options"], ["card", "actions"], ["action", "buttons"]]],
+  ["ReloadData", [["reload"]]],
+  ["Tag", [["tag"]]],
+]);   // a Map, not an object literal, so a schema-derived name like `constructor` cannot reach Object.prototype
+// A contiguous token subsequence match (`["card","actions"]` inside `["card","actions","button"]`).
+function tokenSeqIn(tokens, seq) {
+  for (let i = 0; i + seq.length <= tokens.length; i++) {
+    if (seq.every((s, j) => tokens[i + j] === s)) return true;
+  }
+  return false;
+}
+export function resolveCardNativeVk(vk, ctx) {
+  if (ctx.entryAbsent) return absentEntry(ctx, "the native card actions");
+  if (ctx.page === false) return ["❌ MISSING", "the page is reported as NOT BUILT, so the card actions cannot exist", "missing"];
+  const builtTokens = ctx.ops.map((o) => tokensOf(o.name));
+  const all = vk.names || [];
+  // An unknown native name falls back to its OWN camelCase tokens — boundary-safe, never a raw substring.
+  const missing = all.filter((n) => {
+    const seqs = CARD_NATIVE_TOKENS.get(n) || [tokensOf(n)];
+    return !builtTokens.some((toks) => seqs.some((seq) => seq.length && tokenSeqIn(toks, seq)));
+  });
+  if (!missing.length) return ["✅ Done", `${all.length} native card control(s) present by element name`, "ok"];
+  return ["⚠ verify", `${all.length - missing.length}/${all.length} native card controls found by element name — missing: ${missing.map(esc).join(", ")}`, "unverified"];
+}
+// S3776 — the dispatch is a table, not a ladder of ifs: a category set → its resolver, then the four single-type
+// resolvers by name. Same order and behaviour, one lookup each. (The sets are disjoint, so order among them is moot.)
+const VK_CATEGORY = [[VK_STRUCTURAL, resolveStructuralVk], [VK_COUNT, resolveCountVk], [VK_COMPONENT, resolveComponentVk],
+  [VK_RULE, resolveRuleVk], [VK_DASHBOARDS, resolveDashboardsVk], [VK_ONSTAND, resolveOnstandVk],
+  [VK_PLACEMENT, resolvePlacementVk], [VK_ENTITY, resolveEntityVk], [VK_CHILDPAGE, resolveChildPageVk], [VK_EVIDENCE, resolveEvidenceVk]];
+const VK_BY_TYPE = new Map([["handler", resolveHandlerVk], ["vmattr", resolveVmAttrVk], ["layout", resolveLayoutVk], ["cardnative", resolveCardNativeVk]]);
 export function resolveVk(vk, ctx) {
   if (!vk) return ["☐ confirm on-stand", "not derivable from get-page — confirm (render / on-stand query)", "skip"];
-  if (VK_STRUCTURAL.has(vk.type)) return resolveStructuralVk(vk, ctx);
-  if (VK_COUNT.has(vk.type)) return resolveCountVk(vk, ctx);
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
-  if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
-  if (VK_RULE.has(vk.type)) return resolveRuleVk(vk, ctx);
-  if (VK_DASHBOARDS.has(vk.type)) return resolveDashboardsVk(vk, ctx);
-  if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
-  if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
-  if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
-  if (VK_CHILDPAGE.has(vk.type)) return resolveChildPageVk(vk, ctx);
-  if (VK_EVIDENCE.has(vk.type)) return resolveEvidenceVk(vk, ctx);
-  return unknownVk();
+  for (const [set, fn] of VK_CATEGORY) if (set.has(vk.type)) return fn(vk, ctx);
+  const direct = VK_BY_TYPE.get(vk.type);
+  return direct ? direct(vk, ctx) : unknownVk();
 }
 
 // --- the `--built` payload, read per page ------------------------------------------------------------------
@@ -3655,6 +3949,21 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // `bundle.viewConfig` is a JSON TREE (`items` nesting) — plain JSON, no parser involved. Walk it into the flat
 // `{name, type}` op list every resolver already counts. Nodes carry no `parentName`; that is safe, because no
 // resolver reads one (fields match on `name`, everything else counts `type`).
+// The page attribute a FIELD component binds to, read off the node's own binding (`control: "$Contact"` for an
+// input, `value` / `checked` for the value-bound kinds). It is the field's COLUMN identity as the built page states
+// it, and the identity leg of the fields row (`resolveFieldsByIdentity`) matches on it beside the element name —
+// see that function for why the name alone was not enough. Returns null for anything that is not a `$` binding.
+// `PDS_<Column>_<hash>` is the attribute name the Interface Designer mints (a page built in the Designer, or one
+// whose fields were added there after the build): the column sits between the prefix and the hash, so it is
+// unwrapped to the bare column here. Deliberately NOT unwrapped: a name with no `PDS_` prefix — the builder chose
+// it, and it is compared as written.
+export function boundAttributeOf(node) {
+  const b = [node.control, node.value, node.checked].find((v) => typeof v === "string" && v.startsWith("$"));
+  if (!b) return null;
+  const attr = b.slice(1);
+  const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
+  return m ? m[1] : attr;
+}
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
@@ -3662,9 +3971,11 @@ function walkViewConfig(node, out = []) {
     // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
     // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
     // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
+    // A FIELD component keeps a third: the attribute it binds (`bound`), the column identity the fields row reads.
     const cols = columnsOf(node);
     const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}) });
+    const attr = boundAttributeOf(node);
+    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
   }
   return walkViewConfig(node.items, out);
 }
@@ -3751,12 +4062,48 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
 // records are run-level, not page-level). `parentTpl` has NO plan fallback — reading the PLANNED template here
 // let `dcm-bar` show ✅ Done off a template nobody built while the `template` row went ⚠ on the same input.
+// ENG-99126 — the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
+// what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
+// matched loosely by the caption words the plan published.
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
+const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
+function collectLayout(node, acc) {
+  if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
+  if (!node || typeof node !== "object") return acc;
+  const t = String(node.type || "");
+  if (LAYOUT_FIELD_RE.test(t)) acc.fields.push(node.name);
+  else if (t === "crt.DataGrid") acc.lists.push(node.name);
+  else if (LAYOUT_WIDGETS.has(t)) acc.widgets.push(t);
+  return collectLayout(node.items, acc);
+}
+function pageContainersOf(entry) {
+  const e = entryObject(entry);
+  const out = [];
+  if (e?.viewConfig == null) return out;
+  const walk = (node) => {
+    if (Array.isArray(node)) { for (const n of node) { walk(n); } return; }
+    if (!node || typeof node !== "object") return;
+    if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
+      out.push({ name: String(node.name), type: String(node.type || ""), caption: String(node.caption ?? ""), ...collectLayout(node.items, { fields: [], lists: [], widgets: [] }) });
+    }
+    walk(node.items);
+  };
+  walk(e.viewConfig);
+  return out;
+}
 export function verifyCtx(root, pageKey) {
   const page = pageEntryOf(root, pageKey);
   const ops = pageOpsOf(page);
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
+  const entry = entryObject(page);
+  // `handlers` is get-page's `bundle.handlers` — the page's handler SOURCE, a string (a parsed array is accepted
+  // too); `vmAttrs` are `bundle.viewModelConfig.attributes` keys. Both OPTIONAL: absent ⇒ that row is not checkable.
+  let handlersSrc = null;
+  if (entry?.handlers != null) handlersSrc = typeof entry.handlers === "string" ? entry.handlers : JSON.stringify(entry.handlers);
+  const vmAttrs = entry?.viewModelConfig?.attributes && typeof entry.viewModelConfig.attributes === "object" ? new Set(Object.keys(entry.viewModelConfig.attributes)) : null;
   return {
-    pageKey, page, root, ops, typeCount,
+    pageKey, page, root, ops, typeCount, handlersSrc, vmAttrs,
+    containers: pageContainersOf(page),
     // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
     // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
     gridColumns: pageGridColumnsOf(page),
@@ -3836,6 +4183,31 @@ function planGapBanner(result) {
   return ["", `> ⛔ **PLAN-level gap — NOT buildable-out-of:** ${gaps.join(" · ")}. This describes the plan/manifest, not your build: the CLI exits 2 for it in EVERY mode, and re-running \`--verify\` can never clear it. Return it to the caller; fix the manifest and re-plan.`];
 }
 
+function resolveRowKinds(r, ctxFor, key) {
+  if (r.na) return naRow(r);
+  if (r.info) return infoRow(r);
+  return resolveVk(r.vk, ctxFor(key));
+}
+function rowKindOf(r, outcome) {
+  if (r.na) return "na";
+  if (r.info) return "info";
+  if (outcome === "skip") return "confirm";
+  return r.vk ? "machine" : "confirm";
+}
+const verifyRowOwner = (o) => (o === "verifier" ? "verifier" : "builder");
+// One verify row: resolve it, tally it, and return the JSON row + the table line — extracted so renderVerify's
+// double loop stays under Sonar's cognitive-complexity ceiling.
+function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
+  const key = r.pageKey || g.pageKey || "main";
+  const [mark, ev, outcome, owner] = resolveRowKinds(r, ctxFor, key);
+  const idPart = r.id ? { id: r.id } : {};
+  // The open-row record carries the SAME cells the reader sees, plus the row number and the evidence id — so a
+  // caller repairing from the JSON and a human reading the table look at one text, not a paraphrase.
+  tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome, owner: verifyRowOwner(owner), ...idPart }, owner);
+  const row = { n: rowNo, pageKey: key, group: g.title, deliverable: r.label, status: mark, evidence: ev, outcome,
+    kind: rowKindOf(r, outcome), vkType: r.vk?.type || null, owner: verifyRowOwner(owner), ...idPart };
+  return { row, tableLine: `| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |` };
+}
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -3846,20 +4218,16 @@ export function renderVerify(result, opts = {}, built = {}) {
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
   const L = []; let n = 0;
+  // EVERY row, not only the open ones (ENG-99126): the final report the orchestrated run closes on needs the
+  // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
+  // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
+  const rows = [];
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
-      const key = r.pageKey || g.pageKey || "main";
-      const [mark, ev, outcome, owner] = r.na ? naRow(r) : resolveVk(r.vk, ctxFor(key));
-      // The open-row record carries the SAME three cells the reader sees, plus the row number and the evidence id
-      // when the row has one — so a caller repairing from the JSON and a human reading the table are looking at
-      // one text, not a paraphrase of it.
-      const rowNo = ++n;
-      // `owner` rides along on the open row too: a caller repairing from the JSON needs to know which rows are
-      // its own without re-deriving the classification the engine already made.
-      tally.add(key, outcome, { n: rowNo, deliverable: r.label, status: mark, evidence: ev, outcome,
-        owner: owner === "verifier" ? "verifier" : "builder", ...(r.id ? { id: r.id } : {}) }, owner);
-      L.push(`| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |`);
+      const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
+      rows.push(row);
+      L.push(tableLine);
     }
   }
   const { missing, unverified, builderOpen, pages } = tally;
@@ -3868,5 +4236,5 @@ export function renderVerify(result, opts = {}, built = {}) {
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages };
+  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows };
 }

@@ -20,11 +20,17 @@ export const BUILT_FILE = "built.json";
 // The verify table's default home on a `--from` run — beside the payload it judges, so the pair is re-checkable
 // together or not at all.
 export const VERIFY_FILE = "verify.md";
+// …and the orchestrated run's artifact is the migration result report, not the bare table, so it lands under its
+// own name. One artifact per run either way, in the migration folder.
+export const REPORT_FILE = "migration-result.md";
 // The two halves of the payload that are NOT stand reads: `evidence` (what a build agent did that no page body
 // can show) and `judge` (an independent verdict on those records). The stand holds neither, so they are files
 // beside the read plan rather than reads in it, keyed by the ids the ENGINE publishes.
 export const EVIDENCE_FILE = "evidence.json";
 export const JUDGE_FILE = "judge.json";
+// The on-stand keys the BUILD agent records rather than reads (see reads.mjs). Merged into `reachability`, so a
+// row whose value no read can produce still has a way to close.
+export const RECORDED_FILE = "recorded.json";
 // The provenance field's shape, in ONE place: the drop-sweep here applies the same test the payload guard will.
 // migrate.mjs imports it from here, not the reverse — this module has no dependency on that one.
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,6 +38,13 @@ export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // `meta.json` nests everything under `page`; a caller that copied only that block is accepted too, because the
 // difference is one level of nesting and refusing it would be a rule about typing, not about content.
 const metaPage = (j) => (j && typeof j === "object" && j.page && typeof j.page === "object" ? j.page : j) || {};
+
+// A page key and a reachability key come from the INDEX — a file on disk, which every guard around it already
+// treats as untrusted. `pages[k] ||= {}` with `k` of `__proto__` hands back `Object.prototype`, so the fields
+// written for that "page" land on every object in the process: the drop sweep then finds a `viewConfig` on
+// entries that never had one, and rows report as checked against data nobody read. Refused by name, so the
+// problem says what is wrong with the index rather than being silently worked around.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 const META_FIELDS = ["schemaName", "schemaUId", "packageName", "packageUId", "parentSchemaName"];
 const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers"];
@@ -49,10 +62,18 @@ export function entityOfBundle(bundle) {
 
 // Every file the index names must resolve INSIDE `<dir>/reads/`. A `file` carrying `../` would otherwise read
 // whatever it points at and compose it as a page — a hand-edited index reaching out of the migration folder.
+// The REAL path is what is checked, not the lexical one: a symlink sitting in `reads/` resolves inside the root
+// lexically while pointing anywhere, which is the same escape spelled differently.
 function resolvedReadPath(dir, file) {
   const root = path.resolve(dir, READS_DIR);
   const full = path.resolve(dir, file);
-  return full === root || full.startsWith(root + path.sep) ? full : null;
+  const inside = (q, base) => q === base || q.startsWith(base + path.sep);
+  if (!inside(full, root)) return null;
+  let real;
+  try { real = fs.realpathSync(full); } catch { return full; } // not there yet — the existence check names it
+  let realRoot = root;
+  try { realRoot = fs.realpathSync(root); } catch { /* the root itself is the caller's to create */ }
+  return inside(real, realRoot) ? full : null;
 }
 
 function readJson(dir, file, problems, what) {
@@ -204,8 +225,16 @@ function composeOneRead(dir, r, acc) {
         + " disagree. Re-cut the plan with `--reads <dir>` on this engine build" });
     return;
   }
+  const key = r.pageKey ?? r.reachabilityKey;
+  if (key != null && UNSAFE_KEYS.has(String(key))) {
+    acc.problems.push({ file: r.file, what: `\`${key}\``, index: true,
+      why: `names \`${key}\` as a key, which is no page or on-stand key a plan publishes — re-run \`--reads <dir>\`` });
+    return;
+  }
+  if (r.kind === "pageMeta") acc.metaFile.set(r.pageKey, r.file);
+  else if (r.kind === "pageBundle") acc.bundleFile.set(r.pageKey, r.file);
   const j = readJson(dir, r.file, acc.problems, label(r));
-  if (j === null) return;
+  if (j === null) { if (PAGE_KINDS.has(r.kind)) acc.unread.add(r.pageKey); return; }
   if (j === false && PAGE_KINDS.has(r.kind)) { noteDenial(acc, r); return; }
   compose(r, j, acc);
 }
@@ -251,6 +280,19 @@ function misCopiedKeys(acc) {
   return bad;
 }
 
+// WHICH FILE to blame for an entry that arrived but is unusable — named from the index rows, because the reader
+// has to know which of the two to re-copy.
+function namePageShapeProblem(acc, k, noView, noUid) {
+  const which = [];
+  if (noView) which.push(["merged bundle", acc.bundleFile.get(k), "`viewConfig`"]);
+  if (noUid) which.push(["page metadata", acc.metaFile.get(k), "a valid `schemaUId`"]);
+  for (const [what, file, missing] of which) {
+    acc.problems.push({ file: file || `${READS_DIR}/…-${k}`, what: `\`${k}\` ${what}`,
+      why: `was written and parses, but carries no ${missing} — it is not what this read asked for. Re-copy it`
+        + " from the `get-page` call for this page" });
+  }
+}
+
 // Reads `<dir>/reads/index.json` and everything it names. Returns the payload AND the problems, never a payload
 // that quietly stands in for one: the caller decides what an unread file does to the run, and it cannot decide
 // that from a payload alone. `expect` is the read plan for the manifest being verified — pass it and a stale or
@@ -264,14 +306,19 @@ export function assembleBuilt(dir, expect = null) {
     return { built: null, problems };
   }
   problems.push(...staleIndexProblems(index, expect, idxFile));
-  const pages = {};
+  // Null-prototype on purpose: nothing these maps hold can be inherited from `Object.prototype`, so even a key
+  // that slipped past the check above could not make an entry look present.
+  const pages = Object.create(null);
   const acc = {
-    problems, pages, reachability: {}, dashboards: null,
+    problems, pages, reachability: Object.create(null), dashboards: null,
     absent: new Map(),   // page key -> the page files that answered `false`; a full pair is genuinely not built
     // Recorded as the files are read, NOT derived from `pages` afterwards: the drop sweep removes a page whose
     // other file never arrived, so by then a contradiction is indistinguishable from a half-read entry.
     gotBundle: new Set(), gotMeta: new Set(),
     metaName: new Map(), bundleName: new Map(),
+    // The file each half of a page came from, so an entry that arrived unusable is blamed on the right one, and
+    // the keys already named for a read that never arrived, so absence is not reported twice.
+    metaFile: new Map(), bundleFile: new Map(), unread: new Set(),
     pageOf: (k) => (pages[k] ||= {}),
   };
   for (const r of index.reads) composeOneRead(dir, r, acc);
@@ -280,11 +327,30 @@ export function assembleBuilt(dir, expect = null) {
   // `schemaUId`. The payload guard REJECTS either at exit 1 as a shape error — which is not what happened, and it
   // kills the run before `problems` prints. Drop both to an omitted key (⚠ unverified, exit 2) and let `problems`
   // name the file. SYMMETRIC on purpose: the two files are separate copies out of one `get-page` call.
-  for (const [k, e] of Object.entries(pages)) if (e.viewConfig == null || !GUID_RE.test(String(e.schemaUId ?? ""))) delete pages[k];
+  //
+  // AND SAY WHICH FILE. A file that is missing, unparsable or `null` was named as it was read; one that EXISTS
+  // and parses but carries the wrong content was not — `meta.json` copied into both slots, or a truncated
+  // response, leaves the entry short of `viewConfig` with nothing recorded, and the key then vanishes as silently
+  // as an unread one. That is the outcome the three-answer contract and the banner exist to end.
+  for (const [k, e] of Object.entries(pages)) {
+    const noView = e.viewConfig == null;
+    const noUid = !GUID_RE.test(String(e.schemaUId ?? ""));
+    if (!noView && !noUid) continue;
+    if (!acc.unread.has(k) && !acc.absent.has(k)) namePageShapeProblem(acc, k, noView, noUid);
+    delete pages[k];
+  }
   // After the sweep: a denial outlives what drops a half-read entry.
   resolveDenials(acc, pages);
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
+  // Merged UNDER the read values, never over them: a file the stand answered wins over one an agent recorded.
+  // A `null` is "not recorded yet" and is skipped, so the row stays unconfirmed rather than closing on nothing.
+  const recorded = readSideFile(dir, RECORDED_FILE, problems, "the builder-recorded on-stand values");
+  if (recorded && typeof recorded === "object") {
+    for (const [k, v] of Object.entries(recorded)) {
+      if (v !== null && acc.reachability[k] === undefined && !UNSAFE_KEYS.has(k)) acc.reachability[k] = v;
+    }
+  }
   const built = { pages, reachability: acc.reachability };
   if (acc.dashboards) built.dashboards = acc.dashboards;
   for (const [key, file] of [["evidence", EVIDENCE_FILE], ["judge", JUDGE_FILE]]) {

@@ -21,7 +21,7 @@ node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done contr
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
 node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
-node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # …plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks
+node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # the MIGRATION RESULT REPORT: ledger + built pages, one verdict (plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks)
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
@@ -342,6 +342,31 @@ is non-empty). The stderr line names which of the two it is: `⛔ VERIFY INCOMPL
 repairable on-stand (build the missing pieces, file the evidence, re-verify); `⛔ GATE BLOCKED` / `STRUCTURE
 INCOMPLETE` / `COVERAGE INCOMPLETE` / `LIST GATE BLOCKED` describe the PLAN and fire in every mode — no build
 round closes one.
+
+**The migration result report (`--verify --built <f> --tasks <dir>`, `report.mjs`).** With a task folder the
+verify run prints ONE artifact computed from the task LEDGER and the BUILT PAGES, and its verdict is their
+conjunction — `✅ COMPLETE` only when every task is closed and dispatched, no deliverable stands recorded
+`not-built`, and every machine-checked row is present; otherwise `⛔ NOT COMPLETE — <every reason>`, exit 2 with a
+`⛔ RUN NOT COMPLETE` stderr line. Written in the plan's vocabulary (*plan item*, pages by `--built.pages[k].schemaName`),
+sections in the order a person acts on them: summary → **1** plan items recorded not built that need a decision
+(quoting the agent's `Decision needed (row N):` line from `## Notes`) → **2** boundaries the agent closed `n-a`,
+split by whether the reason cites a recorded decision (`## D<N> — …` in `decisions.md`, `N. **…**` under the plan's
+Adjustments) → **3** machine rows still open (omitted when none) → **4** the task ledger with per-task Machine /
+Evidence + judge / By hand counts (the reference-cache task is not a plan task and is not listed; dispatch is not
+reported — it stays an engine gate) → **5** per-task details quoting `Check on stand (row N):` lines. The plan-vs-built
+table is not emitted with `--tasks` at all — nothing reads it as a file; the report carries what it says. `renderVerify` publishes
+`rows` (every row with `pageKey`, `kind` `machine|confirm|na`, `vkType`, `status`, `outcome`) for it. Without
+`--tasks` the bare table is printed as before.
+**Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound
+to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
+whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.
+**Machine rows that used to be confirm-on-stand (ENG-99126):** with `--built.pages[k].handlers` and `.viewModelConfig`
+(verbatim from get-page) the engine resolves `handler` rows (method name · folded caller · a branch on the method's
+Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
+(side profile / tab found by caption words / header, measured inside the container; a container-less payload is
+judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
+informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`
+row exists.
 
 **The member ledger (`coverage`).** Every member of every merged layer — each `diff` operation, `methods` entry,
 `attributes` entry, `messages` entry, `mixins` entry, `define()` dependency and `details` entry — carries a
