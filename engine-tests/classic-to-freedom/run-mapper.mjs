@@ -8622,7 +8622,7 @@ check("a result with no engine-computed version renders NO version line — neve
   !renderPlan({ entity: "X", changeSet: {} }, {}).includes("Plan version"));
 
 /* ==================================================================================================
-   Round 2 — the defects three adversarial checkers DEMONSTRATED against the first engine.
+   Defects three adversarial checkers DEMONSTRATED against the first engine.
    Each block below reproduces one of them and pins the fix.
 
    ONE extra fixture drives F1 / F1b / F3 / F6a — a TWO-BRANCH tree in which two DIFFERENT physical child
@@ -8845,7 +8845,7 @@ check("b: a SUB-page that folds its OWN mini page emits NO `List page` group —
   () => ({ groups: ecGroups.map((g) => ({ k: g.pageKey, t: g.title })) }));
 
 /* ==================================================================================================
-   Round 3 — the coverage a MUTATION checker proved vacuous. Each block below was written by
+   Coverage a MUTATION checker proved vacuous. Each block below was written by
    breaking the implementation first and watching the suite stay green; every check here kills a named
    mutation. Nothing is asserted that survives its mutation.
    ================================================================================================== */
