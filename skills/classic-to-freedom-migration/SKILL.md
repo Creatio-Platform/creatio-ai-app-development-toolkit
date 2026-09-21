@@ -424,7 +424,8 @@ in one context it had one machine check, at the very end. A session that hit a u
    buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
    plan changed, and slice then.
 5. Present `build-tasks/index.md`. It is DERIVED — regenerated from the task files on every re-slice — so never
-   hand-author a task list, a status table or a progress summary of your own beside it.
+   hand-author a task list, a status table or a progress summary of your own beside it. It is what a **human**
+   reads; it is **not** where you pick the next task from — that is `--next`, in rule 1 below.
 
 **A task is one ARTIFACT, not one checklist group.** Every group that writes a page's `viewConfig` — its layout,
 its coverage, its card actions, its rules, its handlers — writes the same thing, so the folder buckets them into
@@ -442,15 +443,35 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
-1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
-   requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
-   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
-   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
-   clio guidance articles and the design spec, and every other task depends on it — it does NOT cache tool
-   contracts or component docs; each build task reads its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task needs to
-   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
-   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
-   the structure gate instead, so it never reaches a task.)
+1. **ASK THE ENGINE WHICH TASK TO START — do not pick one from `index.md`:**
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next`
+   It answers with **every task that is startable right now**, in queue order, each with the exact `--start`
+   command that dispatches it — and it withholds every task that is not, naming what holds it. The answer is
+   computed by the same predicate `--start` enforces, so a task it names is one that gate accepts and a task it
+   withholds is one that gate refuses for the same reason. Nothing in it has to be parsed positionally.
+
+   **Why not the index.** `index.md` is a DERIVED report: it is regenerated from the task files on every run, it
+   carries no fact of its own, and its shape has already changed under callers who were reading it by column.
+   Scheduling off it means re-deriving, in prose or in shell, a decision the engine already makes — and the two
+   then disagree quietly. Ask; do not re-derive.
+
+   **Its five answers, and what each one asks of you.** *N startable* → dispatch them (they are a set: no two
+   write the same artifact, so they may run at once). *Nothing startable yet, work in flight* → wait for the
+   running task(s), then ask again; this exits **0** and is not a failure (the ask refreshes the folder
+   itself, so a separate `--tasks` run adds nothing). *Finished* → every task
+   has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND nothing is running: a task is
+   `blocked` or carries a status nobody recognises, and no re-run changes that — read its `## Notes` and decide.
+   *Dispatch ledger broken* (exit **2**) → repair the ledger first; `--start` refuses every id until you do.
+
+   **The queue order it answers in is leaf-first, and that is a build requirement, not a preference:** a related
+   list's Add/Edit opens the child's own form, so the child page exists before the parent list that opens it, and
+   the list page comes after the form page it is gated off. Three deliberate exceptions lead the queue: the
+   `Reference cache` runs FIRST (one read-only sub-agent fetches the clio guidance articles and the design spec,
+   and every other task depends on it — it does NOT cache tool contracts or component docs; each build task reads
+   its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task
+   needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a
+   page is never built against an unanswered question. (A question that could change WHICH pages exist blocks the
+   plan at the structure gate instead, so it never reaches a task.)
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
@@ -692,8 +713,7 @@ The shape below is what the engine COMPOSES — read it to understand the table,
 
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). Nothing in the plan carries a GUID, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists).
 
-**Exit 2 is FOUR different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names — clear its `Outcome` cells AND set `status: todo`, since the cells are what hold a
-   task closed ''' + M + ''' then `--start` each and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did.
+**Exit 2 is FIVE different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names — clear its `Outcome` cells AND set `status: todo`, since the cells are what hold a task closed — then `--start` each and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did. `⛔ RUN HALTED` is about the RUN as well, and it is the one verdict no command repairs: open tasks remain, NOTHING is startable, and nothing is in flight — so the folder cannot change until somebody decides something, and re-running any mode returns the identical answer. The stdout block above it names what holds each task. Open each blocked task in the folder it names, read its `## Notes` for the hold, resolve that hold (a decision, a dependency, an artifact somebody else owns), set the file back to `status: todo`, and only then `--start` it.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration result report on an orchestrated run (`--verify --built … --tasks …`), the `--verify` table on a run with no task folder — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.

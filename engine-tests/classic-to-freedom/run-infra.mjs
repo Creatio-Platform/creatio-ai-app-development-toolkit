@@ -887,5 +887,55 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
 }
 
+
+// The orchestrator contract says ASK the engine which task to start. That instruction is the whole
+// point of the `--next` mode: without it the mode exists and nobody calls it, and the run goes back to scheduling
+// off `index.md` — a DERIVED report whose columns have already moved under a caller parsing them. A doc lint,
+// because the thing that can silently regress is a sentence, and the failure is invisible (every gate still
+// passes; the orchestrator simply re-derives a decision the engine already makes, and the two then disagree).
+{
+  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+  const engineReadme = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/README.md", import.meta.url)), "utf8");
+  const step7 = skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8."));
+  check("doc lint (anti-vacuity): step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
+    () => step7.length > 2000 && /7\.2 The orchestrator contract/.test(step7),
+    () => ({ len: step7.length, head: step7.slice(0, 120) }));
+  check("doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
+    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7),
+    () => step7.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+  check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
+    () => /do not pick one from `index\.md`/i.test(step7) && /where you pick the next task from/i.test(step7),
+    () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
+  check("doc lint (AC4): step 7 no longer instructs the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+    () => !/One task at a time, in the `Step` order the index lists/.test(step7),
+    () => step7.split("\n").filter((l) => /`Step` order/.test(l)).slice(0, 4));
+  check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
+    () => /is not a failure/.test(step7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(step7),
+    () => step7.split("\n").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
+  check("doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
+    () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
+      && /startBlocker/.test(engineReadme),
+    () => engineReadme.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+
+  // Step 8's exit-code dictionary is where an orchestrator looks up "what does exit 2 mean?". Every check above is
+  // sliced to step 7, so a verdict added to the engine and documented only there leaves the dictionary answering the
+  // same question a second, shorter way, and nothing sees it. Assert the count the dictionary states matches the
+  // verdicts it enumerates, and that every verdict the engine can print has an entry.
+  const step8 = skill.slice(skill.indexOf("### 8. Validate"));
+  const dictLine = step8.split("\n").find((l) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(l)) || "";
+  const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
+  const verdictMarks = (dictLine.match(/⛔/g) || []).length;
+  const exit2Verdicts = ["VERIFY INCOMPLETE", "GATE BLOCKED", "DISPATCH GATE", "NOT BUILT", "RUN HALTED"];
+  check("doc lint: step 8's exit-2 dictionary states as many verdicts as it enumerates — the count and the list are two answers to one question, and a reader is free to believe either",
+    () => {
+      const stated = statedCounts[(/^\*\*Exit 2 is ([A-Z]+) /.exec(dictLine) || [])[1]];
+      return Boolean(stated) && stated === verdictMarks;
+    },
+    () => ({ dictLine: dictLine.slice(0, 160), verdictMarks }));
+  check("doc lint: every exit-2 verdict the engine can print has an entry in step 8's dictionary — including the halted run, whose remedy is a decision rather than a command",
+    () => exit2Verdicts.every((v) => dictLine.includes(v)),
+    () => ({ missing: exit2Verdicts.filter((v) => !dictLine.includes(v)) }));
+}
+
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
