@@ -1,9 +1,9 @@
-// FOUR ROW KINDS THAT USED TO READ "☐ confirm on-stand" ARE MACHINE ROWS NOW. Measured on the
+// FOUR ROW KINDS THAT WOULD READ "☐ confirm on-stand" ARE MACHINE ROWS. Measured on the
 // Applicants run: 18 of the plan's rows were sent to a person while get-page already carried the answer — the
 // handler source (`bundle.handlers`), the view-model attributes (`bundle.viewModelConfig`), the containers
 // (fields / grids per tab), the template's native card buttons. Imported and run by `run-mapper.mjs`, which hands
 // it its `check` and the shared fixtures so the tally stays one number.
-export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts }) {
+export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts }) {
   const page = (extra = {}) => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: "X", schemaUId: "11111111-1111-4111-8111-111111111111",
     viewConfig: { items: [
       { type: "crt.FlexContainer", name: "SideContainer", items: [{ type: "crt.GridContainer", name: "ContactContainer", items: [
@@ -97,7 +97,7 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
       () => !!depRow && !!depRow.info && !depRow.vk && !!vr && vr.kind === "info" && vr.status === "ℹ noted" && vr.outcome === "skip",
       () => ({ depRow, vr }));
   }
-  check("checklist: when the list page publishes its gated `List template →` row, the Pages group no longer carries the ungated `List page →` twin — one fact, one row",
+  check("checklist: when the list page publishes its gated `List template →` row, the Pages group does NOT carry the ungated `List page →` twin — one fact, one row",
     () => {
       const rows = checklistGroups(lpRun, lpOpts).flatMap((x) => x.rows);
       const gated = rows.some((r) => r.vk?.type === "template" && r.label.startsWith("List template"));
@@ -136,12 +136,12 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   }
   // (1) header with a field count present: the field/list legs do not apply to the header, so a header row with
   // fields:2 still passes once its widgets are on the page — the blocker was judging that against an empty container.
-  check("layout (guard): a header row carrying fields:2 passes when its widgets are present — the header is judged on widgets, not field counts (regression on the blocker)",
+  check("layout (guard): a header row carrying fields:2 passes when its widgets are present — the header is judged on widgets, not field counts",
     () => st(L({ region: "header", fields: 2, widgets: ["crt.Feed"] })) === "✅ Done",
     () => L({ region: "header", fields: 2, widgets: ["crt.Feed"] }));
 
-  // ===== 3rd-review guards (m-dymytrova + kbondarenko-tech, all validated against this head) =====
-  // RC-2/11 cardnative: `/Tag/i` used to substring-match `StageProgressBar` ("stage" contains "tag"), closing a Tag
+  // ===== token-boundary and name-collision guards =====
+  // RC-2/11 cardnative: `/Tag/i` substring-matches `StageProgressBar` ("stage" contains "tag"), closing a Tag
   // control that was never built. Token-boundary matching must reject Stage* and still accept a real TagSelect.
   {
     const stageOnly = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [
@@ -188,17 +188,17 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     () => { const r = resolveVk({ type: "vmattr", name: "Phone" }, ctx); return st(r) === "✅ Done" && /bound by a field/.test(ev(r)); },
     () => resolveVk({ type: "vmattr", name: "Phone" }, ctx));
 
-  // ENG-99740 (Alexandr-Kravchuk): greedy first-match field claiming can strand a name. Expected [Account, Contact]
+  // Greedy first-match field claiming can strand a name. Expected [Account, Contact]
   // over an op matching BOTH (name Contact, bound Account) and one matching only Account — greedy in this order
   // takes the shared op for Account and reports Contact missing; maximum bipartite matching assigns both.
   {
     const fctx = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [
       { type: "crt.Input", name: "Contact", control: "$Account" }, { type: "crt.Input", name: "Account" }] } } } }, "main");
     const r = resolveVk({ type: "fields", n: 2, names: ["Account", "Contact"] }, fctx);
-    check("ENG-99740 (fields): maximum matching finds a full assignment where greedy first-match would strand a name — [Account, Contact] over one op matching both + one matching only Account resolve 2/2 ✅, no false 'missing'",
+    check("(fields): maximum matching finds a full assignment where greedy first-match would strand a name — [Account, Contact] over one op matching both + one matching only Account resolve 2/2 ✅, no false 'missing'",
       () => st(r) === "✅ Done" && /2 of 2 expected fields/.test(ev(r)), () => r);
   }
-  // ENG-99740 (Rita minor): a schema-derived name that collides with an Object.prototype key (`constructor`,
+  // A schema-derived name that collides with an Object.prototype key (`constructor`,
   // `toString`) must NOT crash --verify — the lookups are Maps now, and the fallbacks are boundary-safe.
   check("cardnative / vk lookups on a prototype-key name (`constructor`, `toString`) do not throw and return a normal result triple",
     () => {
@@ -206,7 +206,7 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
       const b = resolveVk({ type: "constructor" }, ctx);   // unknown vk type that is also a prototype key
       return Array.isArray(a) && a.length >= 3 && Array.isArray(b) && b.length >= 3;
     }, () => [resolveVk({ type: "cardnative", names: ["constructor"] }, ctx), resolveVk({ type: "constructor" }, ctx)]);
-  // ENG-99740 (Alexandr minor): reEsc must escape every regex metacharacter — a method name with metacharacters
+  // reEsc must escape every regex metacharacter — a method name with metacharacters
   // neither throws nor false-matches a different identifier.
   {
     const src = `[{ request: "r", handler: (request, next) => { aXb(); return next; } }]`;
@@ -215,14 +215,14 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     check("a handler method name with regex metacharacters (`a.b`) is escaped — it does NOT falsely match `aXb`, so it stays confirm-on-stand (no throw, no false ✅)",
       () => r[2] === "skip", () => r);
   }
-  // ENG-99740 (Alexandr minor): codeOnly is memoized on the page ctx (verifyCtxFactory caches one ctx per key).
+  // codeOnly is memoized on the page ctx (verifyCtxFactory caches one ctx per key).
   // Two handler rows against the SAME ctx must both resolve on the shared, once-computed stripped source.
   {
     const c = verifyCtx({ pages: { main: page({ handlers: HANDLERS, viewModelConfig: { attributes: {} } }) } }, "main");
     const r1 = resolveVk({ type: "handler", method: "onSaved", parent: null, triggers: [] }, c);
     const cachedAfterFirst = typeof c._codeOnly === "string";
     const r2 = resolveVk({ type: "handler", method: "onContactChange", parent: null, triggers: [{ kind: "attribute-dependency", attribute: "Contact" }] }, c);
-    check("ENG-99740 (memoize): two handler rows against ONE page ctx both resolve ✅, and codeOnly is computed once (ctx._codeOnly cached after the first row) — the per-row recompute is gone, outcomes unchanged",
+    check("(memoize): two handler rows against ONE page ctx both resolve ✅, and codeOnly is computed once (ctx._codeOnly cached after the first row) — no per-row recompute, outcomes unchanged",
       () => st(r1) === "✅ Done" && st(r2) === "✅ Done" && cachedAfterFirst,
       () => [r1, r2, cachedAfterFirst]);
   }

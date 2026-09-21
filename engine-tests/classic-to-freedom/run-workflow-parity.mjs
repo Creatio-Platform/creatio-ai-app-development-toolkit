@@ -59,7 +59,7 @@ function logExcerpt(logs) {
 
 // Evaluate a workflow script the way the host does. The body becomes a real ES module under the OS temp dir and is
 // imported — no `new Function`, no eval, matching the sibling runners' decision to keep these files free of a
-// dynamic-code construct a reviewer then has to reason about.
+// dynamic-code construct a reader then has to reason about.
 // A RUNAWAY CEILING on the dispatch count, so a script that does not TERMINATE fails as a divergence instead of
 // hanging the suite. Every termination guarantee this workflow has — the describe fan-out cap, the single repair
 // round, the one Critique retry — is a bound on how many agents a run may ask for, and the failure mode when one is
@@ -164,7 +164,7 @@ const ALLOWED_PROMPT_DIVERGENCES = {
     {
       // The BATCH INDEX, the second collision axis on the same path. `packBatches` partitions SCOPES, not labels,
       // and `label` is `schema || role`, so two scopes returned under one `schema` are separate batch members
-      // carrying one label — measured by the reviewer as `describe.1.UsrPage` and `describe.2.UsrPage` both being
+// carrying one label — `describe.1.UsrPage` and `describe.2.UsrPage` both being
       // handed `customizations-part-UsrPage.md`, with `acceptParts` blind to it (both items are ASKED for that
       // path and both return it). Only batches after the first move, which is why this fires on the fan-out
       // scenario alone: the single-batch case every other scenario exercises keeps the historical filename.
@@ -240,7 +240,7 @@ const ALLOWED_FINGERPRINT_DIVERGENCES = {
 
 // EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
 // `split(from).join(to)` rewrote every occurrence of `from` in the field, not the one the rule describes, so a
-// genuine regression at a second site carrying the same token was normalised in lockstep and passed the gate — and
+// genuine change at a second site carrying the same token would be normalised in lockstep and pass the gate — and
 // a key-qualification change is precisely what makes a repeated token likely. An entry may declare `count` when it
 // deliberately covers more than one occurrence; the default is 1, and a mismatch fails with the scenario and field
 // named. Firing is recorded so an entry whose `from` string stopped occurring cannot sit there as a permanent

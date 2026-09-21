@@ -278,8 +278,8 @@ check("tasks.mjs: base-field overrides build between the layout that creates the
    `await` and top-level `return` are legal there, so `node --check` on the file itself rejects a valid script
    and `import()` would EXECUTE it. Wrapping it the way the host does is the only honest syntax check.
    Why this exists: these scripts are edited as text and their prompts are template literals full of backticks,
-   so a stray backtick terminates the literal and breaks the file. That happened TWICE while writing ENG-94975,
-   and both times a human caught it — nothing in the suite would have failed. A broken workflow is not a subtle
+   so a stray backtick terminates the literal and breaks the file. That is easy to do and easy to miss:
+   only a human reading the text would catch it, and nothing else in the suite would fail. A broken workflow is not a subtle
    defect: the skill cannot run at all.
    ================================================================================================== */
 {
@@ -299,7 +299,7 @@ check("tasks.mjs: base-field overrides build between the layout that creates the
      can show it, and that field rejects control characters: `\n` and `\t` pass, `\r` does not. So a Windows
      checkout with `core.autocrlf=true` (the Git for Windows default) turned the shipped LF blob into CRLF and the
      workflow failed schema validation before a single agent ran — reported from a real run, and mystifying at the
-     point of failure because nothing in the script is wrong. ENG-94529 pinned `*.workflow.js text eol=lf`.
+     point of failure because nothing in the script is wrong. `*.workflow.js text eol=lf` pins the blob.
      The ON-DISK check is the one that matters and it needs no git: run this suite on a checkout that converted
      the file and it goes red here, naming the file, instead of failing later inside the host. */
   for (const file of wfFiles) {
@@ -633,7 +633,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const counterExamples = new Set([...doc.matchAll(/NOT\s+`(crt\.[A-Za-z][A-Za-z0-9]*)`/g)].map((m) => m[1]));
   const docTypes = allDocTypes.filter((t) => isComponentName(t) && !counterExamples.has(t));
   const unknownDocTypes = docTypes.filter((t) => !index.components[t]);
-  check(`ENG-95543 doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
+  check(`doc lint: every crt.* component type named in ${docPath} exists in the vendored component registry index`,
     docTypes.length >= 5 && unknownDocTypes.length === 0,
     () => ({ checked: docTypes.length, unknown: unknownDocTypes, excludedAsRequests: allDocTypes.filter((t) => !isComponentName(t)) }));
   // And the counter-examples must STAY counter-examples: a doc that warns "NOT crt.X" about a component the
@@ -690,7 +690,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   // The sync note must point at the file that actually HOLDS the data. It pointed at mapper.mjs and its four
   // catalogs after they moved — a stale pointer sends the next reader to the wrong file to make the paired edit,
   // which is how the "change both in the same commit" rule quietly stops being followed.
-  check("doc lint: the sync note names the shared mapping table, not the catalogs that no longer live in mapper.mjs",
+check("doc lint: the sync note names the shared mapping table, not the catalogs that do not live in mapper.mjs",
     /mapping-table\.mjs/.test(section) && !/mapper\.mjs` \(`FEATURE_CATALOG`/.test(section),
     () => section.split("\n").filter((l) => l.startsWith(">")).join(" | ").slice(0, 400));
 }
@@ -755,7 +755,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("build-workflows: a file that ends mid-import throws rather than returning a truncated module",
     () => throwsWith(["import {", "  a,"].join("\n"), "end of file"),
     "expected an 'end of file' error");
-  check("build-workflows: a single-line DOUBLE-quoted import is dropped without arming the skip — the quote style that used to delete an arbitrary span",
+check("build-workflows: a single-line DOUBLE-quoted import is dropped without arming the skip — the quote style that would otherwise delete an arbitrary span",
     () => {
       const out = stripImports(['import { x } from "./y.mjs"', "export const kept = 1", "const alsoKept = 2"].join("\n"), "synthetic.mjs");
       return !out.includes("import {") && out.includes("const kept = 1") && out.includes("const alsoKept = 2");
@@ -777,7 +777,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 // run-gate block proves all three commands meet the run-level gate. What that cannot isolate is the
 // `requires` ARGUMENT itself - it needs a workflow whose WORKFLOW_REQUIRES names a capability no step
 // repeats, which `behaviour-analysis` does not - so this stays as the cheap wiring guard for exactly that,
-// and no longer as the only thing standing behind the gate.
+// and not as the only thing standing behind the gate.
 {
   const cliSrc = readFileSync(path.join(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."),
@@ -790,9 +790,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 }
 
 /* REVIEW (architecture) — THE WORKFLOW IDENTITY MANIFEST IS THE PRODUCER'S PUBLISHED CONTRACT.
-   `installer/install.py` used to recover each workflow's name by lexing the generated JavaScript with a
-   hand-written JS sub-lexer in Python - the consumer parsing the producer's output language, while
-   `TARGETS` held `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
+   `installer/install.py` must not recover each workflow's name by lexing the generated JavaScript with a
+   hand-written JS sub-lexer in Python - that is the consumer parsing the producer's output language, while
+   `TARGETS` holds `{name, script, phases}` in structured form at emit time. `scripts/build-workflows.mjs`
    now emits `skills/_workflow-core/workflows.json` from that same table and `--check` fails on drift.
    Asserted here as well as in the drift gate, because the consequence of a stale row is not a red test:
    `provision_named_workflows` refuses a script the manifest does not carry, so it is a failed INSTALL. */
@@ -880,9 +880,9 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs", "run-tasks.mjs"]
       .every((r) => fromPkg.includes(r)),
     () => fromPkg);
-  // And the README no longer states a claim nothing enforces.
+  // And the README states no claim nothing enforces.
   const readme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
-  check("the README no longer prescribes its own two-runner subset, nor claims it is 'exactly what the CI job runs' — it points at the one declaration instead",
+  check("the README does not prescribe its own two-runner subset, nor claim it is 'exactly what the CI job runs' — it points at the one declaration instead",
     !/This is exactly what the CI job/.test(readme) && /scripts\.test/.test(readme) && /npm test/.test(readme),
     () => readme.split("\n").filter((l) => /CI job|npm test|scripts\.test/.test(l)).slice(0, 5).join("\n"));
 }
@@ -906,7 +906,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
     () => /do not pick one from `index\.md`/i.test(step7) && /where you pick the next task from/i.test(step7),
     () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
-  check("doc lint (AC4): step 7 no longer instructs the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
     () => !/One task at a time, in the `Step` order the index lists/.test(step7),
     () => step7.split("\n").filter((l) => /`Step` order/.test(l)).slice(0, 4));
   check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",

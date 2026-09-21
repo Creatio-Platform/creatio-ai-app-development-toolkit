@@ -1,5 +1,5 @@
 // Golden test for the mapper: merge -> map -> assert Freedom ChangeSet.
-import { runEng99126Checks } from "./run-mapper-eng99126.mjs";
+import { runMachineRowChecks } from "./run-mapper-machine-rows.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -9016,7 +9016,7 @@ check("preconditions: the fixture really has two FOLDED sub-pages, each deriving
   p3Folded.size === 2 && [...p3Expected.values()].every((t) => typeof t === "string" && t !== "" && t !== "FormPageTemplate")
   && p3Opts.planMeta.sectionSchema === "MSection",
   () => ({ folded: [...p3Folded.keys()], expected: [...p3Expected] }));
-check("P3 (D3, EXPECTED side): each sub-page's `template` row expects the template D2's rule derives for THAT page — never the parent's `formTemplate` leaking through the fold's opts (a mismatch the executor could never fix)",
+check("(D3, EXPECTED side): each sub-page's `template` row expects the template D2's rule derives for THAT page — never the parent's `formTemplate` leaking through the fold's opts (a mismatch the executor could never fix)",
   [...p3Expected].every(([k, tpl]) => {
     const vks = p3Rows.filter((r) => r.pageKey === k && r.vk?.type === "template").map((r) => r.vk.exp);
     return vks.length === 1 && vks[0] === tpl;
@@ -9028,7 +9028,7 @@ check("P3 (D3, EXPECTED side): each sub-page's `template` row expects the templa
 // be a queue entry nothing could ever close. The gated case is pinned in the list-page block above. Either way a
 // child/typed/mini page must emit none of these rows.
 const P3_SECTION_KEYS = new Set(["main", "list"]);
-check("P3 (D3, EXPECTED side): with a SECTION named in the plan, the section-scoped deliverables stay on the SECTION's keys — no `<childKey> · List page` group, no `List page →` row and no `Navigable section registered` row under any sub-page; and with NOTHING gated for the list page its row stays UNGATED on `main` rather than publishing an unclosable `list` unit (all ARE emitted for the section, so the absence is the override's doing)",
+check("(D3, EXPECTED side): with a SECTION named in the plan, the section-scoped deliverables stay on the SECTION's keys — no `<childKey> · List page` group, no `List page →` row and no `Navigable section registered` row under any sub-page; and with NOTHING gated for the list page its row stays UNGATED on `main` rather than publishing an unclosable `list` unit (all ARE emitted for the section, so the absence is the override's doing)",
   !p3Groups.some((g) => !P3_SECTION_KEYS.has(g.pageKey) && g.title.endsWith(" · List page"))
   && !p3Rows.some((r) => !P3_SECTION_KEYS.has(r.pageKey) && (SECTION_RE.test(r.label) || r.label.startsWith("List page →") || r.label.startsWith("List columns") || r.label.startsWith("[list-")))
   // positive controls on the same run — the rows exist, they are just page-scoped
@@ -9306,7 +9306,7 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
     return Array.isArray(v.rows) && v.rows.length === tableRows && v.rows.every((r, i) => r.n === i + 1 && r.pageKey && r.deliverable && r.status)
       && v.rows.some((r) => r.kind === "machine" && r.outcome === "ok") && v.rows.every((r) => ["machine", "confirm", "na", "info"].includes(r.kind));
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
-runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
+runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
 
 /* ---- M2: D6's tri-state for the COMPONENT rows (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /

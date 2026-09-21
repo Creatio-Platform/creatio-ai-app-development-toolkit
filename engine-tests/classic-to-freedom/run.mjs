@@ -100,7 +100,7 @@ const coSeeded = mergeHierarchy(load("contract", [
   "CoreContracts.js", "SalesContracts.js", "DocumentInContract.js", "ContractInInvoice.js",
   "ContractInOrder.js", "WorkOverride.js", "WorkSalesBase.js", "WorkCompliance.js", "WorkContractsProcess.js",
 ]), { seedTemplate: seed });
-check("F2: Contract Header/Tabs resolved by seed (no longer unresolved)",
+check("F2: Contract Header/Tabs resolved by seed (not unresolved)",
   !coSeeded.unresolvedParents.includes("Header") && !coSeeded.unresolvedParents.includes("Tabs"));
 // #2 on real data: ContractSumGroup is REMOVED by WorkOverride yet ContractSumBlock still nests under
 // it — a genuine orphan the old (tombstone-as-defined) diagnostic masked. It must now surface.
@@ -137,7 +137,7 @@ const tomb = mergeHierarchy([
 check("F2: parent surviving only as a tombstone is reported unresolved (engine⇄mapper consistent)",
   tomb.unresolvedParents.includes("Grp") && !tomb.items.some(i => i.name === "Grp"));
 // CASCADE REMOVE — removing a container drops its BASE (templateOwned) subtree (Classic runtime parity), so a
-// heavily-layered page's base remove+re-layout no longer FALSE-blocks on unresolvedParents; but a CLIENT-authored
+// heavily-layered page's base remove+re-layout does not FALSE-block on unresolvedParents; but a CLIENT-authored
 // orphan of the same removed container still SURFACES (never silently drop client content). Both in one fixture.
 const casc = mergeHierarchy(
   [makeSchema("Client", { entity: "X", diff: [
@@ -196,12 +196,12 @@ const realRun = (...ops) => mergeHierarchy([parseSchema(realBody(ops.join(",")),
 // array-order semantics that the runtime does not have — see the group-ordering pins below.
 const realRun2 = (opsA, opsB) => mergeHierarchy([parseSchema(realBody(opsA), "A"), parseSchema(realBody(opsB), "B")]);
 
-/* ---- review, Major: `set` must not hide CLIENT-authored children ----
+/* ---- `set` must not hide CLIENT-authored children ----
    `cascadeRemove` deliberately skips non-templateOwned items (its `!it.templateOwned` guard) so client-authored
-   removals surface individually, and `removed[]` filters out anything carrying `cascadeRemoved`. `replaySet` set that
-   flag on EVERY direct child, so a client element inside a replaced container vanished from the decision rows with no
+   removals surface individually, and `removed[]` filters out anything carrying `cascadeRemoved`. Setting that
+   flag on EVERY direct child would make a client element inside a replaced container vanish from the decision rows with no
    per-element diagnostic — the op's warning counts dropped children but a count is not an element. Mixed ownership is
-   the only shape that discriminates, which is exactly the test the reviewer asked for. */
+   the only shape that discriminates. */
 const setMixedSeed = parseSchema(realBody([
   `{operation:"insert",name:"Box",parentName:"Header",propertyName:"items",values:{itemType:7}}`,
   `{operation:"insert",name:"TplKid",parentName:"Box",propertyName:"items",values:{bindTo:"Name"}}`].join(",")), "Tpl");
@@ -286,7 +286,7 @@ check("`set` is the LAST bucket — written BEFORE the merge in the array it sti
 /* ---- the content properties follow the same key-presence rule as the identity ones ----
    The runtime writes whatever `values` carries, `""` and `false` included (json-applier.js L702-705). A truthiness
    guard here dropped a layer that deliberately BLANKS a caption or UNBINDS a control, so the plan kept reporting a
-   caption the page no longer shows. Both arms are pinned: the blanking case must apply, the untouched case must not. */
+   caption the page does not show. Both arms are pinned: the blanking case must apply, the untouched case must not. */
 const blanked = realRun2(
   `{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"Name",caption:"Resources.Strings.Cap"}}`,
   `{operation:"merge",name:"F",values:{caption:""}}`);
@@ -359,9 +359,9 @@ check("`set` replaces the element wholesale — the unrestated caption is gone, 
   !!setBox && setBox.caption === null && setBox.parent === "Header" && setBox.itemType === 7
   && !setRun.items.some((i) => i.name === "Kid"),
   () => ({ box: setBox, items: setRun.items.map((i) => i.name) }));
-// REWRITTEN — this pinned the defect, not the invariant. Its `Kid` is CLIENT-authored (a single client layer), so
-// "does not appear in removed[]" asserted exactly the hiding the PR #105 review caught. That is also why the
-// mutation check passed on it: the pin agreed with the bug. The real invariant is ownership-dependent, and it is
+// This pins the invariant, not a defect. A CLIENT-authored `Kid` (a single client layer) means
+// "does not appear in removed[]" would assert exactly the hiding this guards against. That is also why a
+// mutation check passes on it: such a pin agrees with the bug. The real invariant is ownership-dependent, and it is
 // pinned on the mixed-ownership fixture above; here the client-authored child must be VISIBLE.
 check("a CLIENT-authored child dropped by `set` appears in removed[] — it is a decision the reader must see, not structural cleanup",
   setRun.removed.some((r) => r.name === "Kid"),
@@ -391,7 +391,7 @@ check("the same `values` via `merge` keeps BOTH the caption and the child — th
    `values: { itemType: Terrasoft.ViewItemType.DETAIL }` and then MOVED by package `EventTracking` restating the
    same `itemType`. That real occurrence is REDUNDANT — the value repeats what the insert already set — so it can
    never witness the bug. The pin therefore uses the identical code path with a DIFFERING value, which is the only
-   way to observe it, and the redundant real shape is pinned separately as the no-regression arm. ---- */
+   way to observe it, and the redundant real shape is pinned separately as the control arm. ---- */
 const moveApplies = mergeHierarchy([
   synth("base", [{ operation: "insert", name: "SiteEventDetail", parentName: "Header", propertyName: "items", itemType: 7 }]),
   synth("top", [{ operation: "move", name: "SiteEventDetail", parentName: "HistoryTab", itemType: 2 }]),
@@ -421,7 +421,7 @@ check("a `move` that carries no `itemType` key leaves the kind intact — presen
 /* ---- the merge rule is key PRESENCE, not value — verified against core `json-applier.js` ----
    `JsonApplier.merge` takes `Object.keys(config.values)` (L583-585) and assigns unconditionally (L702-705), so a
    later layer that carries an `itemType` key AT ALL overwrites the base — including with a value this engine cannot
-   resolve. The engine used to guard on `op.itemType != null`, which silently kept the base kind and reported a
+   resolve. Guarding on `op.itemType != null` would silently keep the base kind and report a
    RADIO_GROUP the runtime had already turned into a plain bound field (`generateStandardItem` default →
    `generateModelItem`). Both directions are pinned, because a one-sided pin passes with the guard put back. ---- */
 const mergeCleared = mergeHierarchy([
@@ -552,7 +552,7 @@ const enumSrc = [
 const en = parseSchema(enumSrc, "Enum");
 const byName = Object.fromEntries(en.diff.map((d) => [d.name, d]));
 check("this.Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 (was null → degraded to plain container)", byName.gThis.itemType === 15);
-check("bare terrasoft-param Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 (param no longer an opaque proxy)", byName.gParam.itemType === 15);
+check("bare terrasoft-param Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 (param is not an opaque proxy)", byName.gParam.itemType === 15);
 check("this.Terrasoft.ViewItemType.GRID_LAYOUT resolves to 0", byName.gGrid.itemType === 0);
 check("this.Terrasoft.ContentType.LOOKUP resolves to 5 (lookup control hint)", byName.fLookThis.contentType === 5);
 check("bare terrasoft-param Terrasoft.ContentType.LOOKUP resolves to 5", byName.fLookParam.contentType === 5);
@@ -623,7 +623,7 @@ check("E2: member access on a local-object alias is FLAGGED (member-on-local-obj
 console.log("\n===== extractFnBody string safety + move-order fidelity =====");
 const braceBody = 'define("X", [], function() { return { entitySchemaName: "X", diff: [], getActions: function() { var s = "a } b { c"; return [ { "Tag": "runEscalation", "Click": "navigateToEscalation" } ]; } }; });';
 const braceRes = parseSchema(braceBody, "X");
-check("extractFnBody: a `{`/`}` inside a string no longer truncates the getActions scan",
+check("extractFnBody: a `{`/`}` inside a string does not truncate the getActions scan",
   braceRes.actionHints.includes("runEscalation") && braceRes.actionHints.includes("navigateToEscalation"));
 
 /* ---- move op must apply the new order/index, not just the parent (review #2) ---- */
@@ -633,7 +633,7 @@ const mvA = mergeHierarchy([mvBase, mvTop]).items.find((i) => i.name === "A");
 check("move op applies the new order/index (A repositioned to 9, not stuck at 0)", !!mvA && mvA.order === 9);
 
 
-/* ================= ENG-95862: severity axis on eff.warnings + `labelConfig`/handler modelling =================
+/* ================= severity axis on eff.warnings + `labelConfig`/handler modelling =================
    The defect: the correctness gate blocked on ANY non-empty `eff.warnings`, including one whose own text says
    "The element is KEPT (correct)". Warnings now carry `severity`, and the two families are asserted per producer —
    a new producer that forgets to declare one is caught by the "every warning has a severity" check below. */
@@ -674,14 +674,14 @@ check("removing `labelConfig` does NOT over-clear — a `caption` stated on the 
 const hBase = ps("HBase", [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, click: { bindTo: "onBtnClick" }, visible: false } }]);
 const hTop = ps("HTop", [{ operation: "remove", name: "Btn", properties: ["click"] }]);
 const hItem = mergeHierarchy([hBase, hTop]).items.find((i) => i.name === "Btn");
-check("ENG-95862 (key audit): `remove properties:['click']` clears the handler binding and raises no warning",
+check("key audit: `remove properties:['click']` clears the handler binding and raises no warning",
   !!hItem && !hItem.handlers.click && mergeHierarchy([hBase, hTop]).warnings.length === 0,
   () => hItem);
 // `visible` is in BOTH vocabularies: a removal must clear the static value AND the dynamic trigger, not one of them.
 const hVis = ps("HVis", [{ operation: "remove", name: "Btn", properties: ["visible"] }]);
 const hVisBase = ps("HVisBase", [{ operation: "insert", name: "Btn", parentName: "Header", propertyName: "items", values: { itemType: 5, visible: { bindTo: "isBtnVisible" } } }]);
 const hVisItem = mergeHierarchy([hVisBase, hVis]).items.find((i) => i.name === "Btn");
-check("ENG-95862 (key audit): `visible` is in BOTH vocabularies — removing it clears the field AND the handler entry, never half of it",
+check("key audit: `visible` is in BOTH vocabularies — removing it clears the field AND the handler entry, never half of it",
   !!hVisItem && hVisItem.visible === null && !hVisItem.handlers.visible, () => hVisItem);
 
 // The four AMBIGUOUS keys (`enabled`, `visible`, `readonly`, `required`) appear in a classic body both as a handler
@@ -693,18 +693,18 @@ for (const key of ["enabled", "readonly", "required"]) {
   const litBase = ps("LitB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: false } }]);
   const litTop = ps("LitT", [{ operation: "remove", name: "F", properties: [key] }]);
   const lit = mergeHierarchy([litBase, litTop]);
-  check(`ENG-95862 (key audit): a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
+  check(`key audit: a STATIC \`${key}: false\` removal is an unmodelled effect — it warns (fidelity) instead of silently doing nothing`,
     lit.warnings.length === 1 && lit.warnings[0].severity === "fidelity" && new RegExp(key).test(lit.warnings[0].hint),
     () => lit.warnings);
   const dynBase = ps("DynB", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F", [key]: { bindTo: "m" } } }]);
   const dyn = mergeHierarchy([dynBase, litTop]);
   const dynItem = dyn.items.find((i) => i.name === "F");
-  check(`ENG-95862 (key audit): the HANDLER form of \`${key}\` is modelled, so removing it clears the map entry and raises nothing`,
+  check(`key audit: the HANDLER form of \`${key}\` is modelled, so removing it clears the map entry and raises nothing`,
     dyn.warnings.length === 0 && !!dynItem && !dynItem.handlers?.[key],
     () => ({ warnings: dyn.warnings, handlers: dynItem?.handlers }));
 }
 
-// A genuinely unmodelled key stays a warning — but a FIDELITY one, which no longer blocks.
+// A genuinely unmodelled key stays a warning — but a FIDELITY one, which does not block.
 const unBase = ps("UBase", [{ operation: "insert", name: "F", parentName: "Header", propertyName: "items", values: { bindTo: "F" } }]);
 const unTop = ps("UTop", [{ operation: "remove", name: "F", properties: ["wrapClass"] }]);
 const unRun = mergeHierarchy([unBase, unTop]);

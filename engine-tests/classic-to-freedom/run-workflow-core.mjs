@@ -134,7 +134,7 @@ check("pendingIds: names exactly the items still to run, so a host resumes the b
 check("driftAt: the same ids in the same order is NO drift; a different id at that position IS",
   () => { const r = mkRun(); append(r, record(workItem({ ...okItem, id: "a" }), OUTCOME.VALUE, 1));
     return driftAt(r, 0, ["a"]) === null && driftAt(r, 0, ["z"]) !== null; });
-check("driftAt: a PERMUTATION of the window's own ids is NOT drift — `cli next` hands out one submit per item of a parallel batch, so arrival order is the host's to choose and appending them out of order used to brick the run",
+check("driftAt: a PERMUTATION of the window's own ids is NOT drift — `cli next` hands out one submit per item of a parallel batch, so arrival order is the host's to choose and appending them out of order must not brick the run",
   () => { const r = mkRun();
     for (const id of ["c", "a", "b"]) append(r, record(workItem({ ...okItem, id }), OUTCOME.VALUE, 1));
     return driftAt(r, 0, ["a", "b", "c"]) === null; });
@@ -306,7 +306,7 @@ console.log("\n===== driver: replay and resume =====");
     /Error: boom/.test(seen2[1][1] || ""), () => JSON.stringify(seen2[1]));
 }
 {
-  // Journal drift: the recorded ids no longer match what the core asks for.
+  // Journal drift: the recorded ids do not match what the core asks for.
   const run = newRun({ workflow: "echo", host: fullHost });
   append(run, record(workItem({ id: "SOMETHING-ELSE", phase: "P", role: "r", prompt: "p" }), OUTCOME.VALUE, 1));
   let msg = null;
@@ -426,7 +426,7 @@ const happyAnswer = (item) => {
     asked.filter((i) => i.phase === "Describe").length === 1 && result.describeAgents === 1);
   check("core: the Describe item's ROLE is the analysis contract itself (`classic-ui-expert`), so a host without that skill can say it cannot satisfy the item",
     asked.find((i) => i.phase === "Describe").role === "classic-ui-expert");
-  check("core: every phase is declared READ-ONLY against the stand — a behaviour analysis that could write is the safety regression no coverage count would catch",
+  check("core: every phase is declared READ-ONLY against the stand — a behaviour analysis that could write is the safety hole no coverage count would catch",
     asked.every((i) => i.access === ACCESS.STAND_READ_ONLY), () => asked.map((i) => `${i.phase}:${i.access}`).join(" "));
   check("core: the Critique step requires `independentRoles` — the adversarial pass is worthless from the context that wrote the cards",
     asked.length > 0 && result.critiqueRan === true);
@@ -500,7 +500,7 @@ const happyAnswer = (item) => {
     /Namespace every card id `<scope>\/C01`/.test(describePrompts[0].prompt)
       && /Namespace every card id `<scope>\/R2-C01`/.test(describePrompts[1].prompt),
     () => describePrompts.map((i) => (i.prompt.match(/Namespace every card id [^:]+/) || [])[0]).join(" | "));
-  check("core: the repair prompt says its part file is its own and the first pass is KEPT — nothing used to mention the file at all, so an agent had no reason to suspect it was overwriting a first pass",
+  check("core: the repair prompt says its part file is its own and the first pass is KEPT — a prompt that mentioned no file would give an agent no reason to suspect it was overwriting a first pass",
     /this round's own, empty file: the first pass's part is KEPT/.test(describePrompts[1].prompt),
     () => describePrompts[1].prompt.slice(0, 400));
   check("core: neither round's part file appears twice in Merge's inputs — the same path from two items is what made one round's cards invisible to the operator reading the report",
@@ -510,8 +510,8 @@ const happyAnswer = (item) => {
     })(), () => JSON.stringify(asked.find((i) => i.phase === "Merge").inputFiles));
 }
 {
-  // an agent that writes somewhere OTHER than the path it was handed is NAMED. The core used to
-  // accept whatever `reportPart` came back, so a part-file collision left no trace in the run at all; this line
+  // an agent that writes somewhere OTHER than the path it was handed is NAMED. Accepting
+  // whatever `reportPart` comes back would leave a part-file collision with no trace in the run at all; this line
   // is what makes a recurrence visible. A warning rather than a rejection on purpose: the returned path is the one
   // Merge folds in, so the cards are still merged and the coverage numbers still describe what the report holds.
   const { result, logs } = await runCba(INPUT, (i) => (i.phase === "Describe"
@@ -524,9 +524,9 @@ const happyAnswer = (item) => {
     result.coverage.described === 4 && result.coverage.complete === true, () => JSON.stringify(result.coverage));
 }
 {
-  // a Critique answering with a BARE method key must route into the repair round. ENG-96529
-  // requalified every scope key, so `initMini` no longer exists in `allKeys`; under the old strict
-  // `allKeys.has` filter this critique finding was DROPPED and the run still reported `complete: true` over a
+  // a Critique answering with a BARE method key must route into the repair round. Requalified
+  // scope keys mean `initMini` does not exist in `allKeys`; under a strict
+  // `allKeys.has` filter this critique finding would be DROPPED and the run would still report `complete: true` over a
   // row the adversarial pass had judged undescribed. The row carries a card, so nothing else would catch it.
   const bareCritique = { ...CLEAN_CRITIQUE, uncovered: [{ key: "initMini" }] };
   let describeRounds = 0;
@@ -700,7 +700,7 @@ check("ambiguousEntryKeys: only a key that matches SEVERAL inventory rows is lis
 check("ambiguousEntryKeys: an entry with NO card is not listed — a blank card is not coverage anywhere else in this arithmetic, so it cannot be reported as coverage that failed to attribute",
   () => helpers.ambiguousEntryKeys([{ key: "init", card: "" }], new Set(["A::init", "B::init"])).length === 0);
 
-check("keyCollapse: two scopes that both omit `schema` share the bare key form, so rows dispatched exceed coverage rows countable — the reviewer's own 5-rows/3-keys measurement",
+check("keyCollapse: two scopes that both omit `schema` share the bare key form, so rows dispatched exceed coverage rows countable — the 5-rows/3-keys measurement",
   () => {
     const collapse = helpers.keyCollapse(helpers.normalizeScopes([
       { role: "main page", schema: null, methodKeys: ["init", "save"], memberKeys: ["onSaved"] },
@@ -724,7 +724,7 @@ check("keyCollapse: a well-formed inventory is NOT a finding — at most one sch
   const { result, asked } = await runCba(INPUT, (i) => i.phase === "Context"
     ? { outcome: OUTCOME.VALUE, value: CTX_COLLAPSED }
     : happyAnswer(i));
-  check("core: a collapsed key space STOPS the run — one agent describing one `init` would mark the other scope's `init` described and the verdict would read `complete` over a denominator smaller than the surface (ENG-96529 defect 2, consumer side)",
+  check("core: a collapsed key space STOPS the run — one agent describing one `init` would mark the other scope's `init` described and the verdict would read `complete` over a denominator smaller than the surface (key-collapse defect 2, consumer side)",
     result.stopped === "key-collapse" && result.coverage.complete === false,
     () => JSON.stringify(result));
   check("core: the stop happens BEFORE any Describe item is spent — the collapse is arithmetic and is visible from the inventory alone, so there is nothing to gain by dispatching the fan-out",
@@ -804,7 +804,7 @@ function driveRetry(outcomes, onFailure) {
 
   fails.length = 0;
   const rejected = driveRetry([{ throw: new Error("529 overloaded #1") }, { throw: new Error("529 overloaded #2") }], note);
-  check("retryOnDeath: a REJECTING host collapses into the same dead outcome and never throws past the caller — the motivating 529, which used to end the run with no contradiction check at all",
+  check("retryOnDeath: a REJECTING host collapses into the same dead outcome and never throws past the caller — the motivating 529, which would otherwise end the run with no contradiction check at all",
     rejected.outcome.ran === false && rejected.attempts.length === 2
       && /529 overloaded #1/.test(fails[0].msg) && /529 overloaded #2/.test(fails[1].msg), () => JSON.stringify(fails));
 
@@ -882,7 +882,7 @@ function driveRetry(outcomes, onFailure) {
 }
 
 /* `critiqueDeathLine` and `isCritiqueShape` — the two pure answers around the retry. Both moved here with the
-   helper they belong to (they used to be exercised from run-infra.mjs against the sliced workflow block).
+   helper they belong to, and asserted here rather than from run-infra.mjs against the sliced workflow block.
    Asserted on the produced string / the verdict, never on their source. */
 {
   const lineRejected = helpers.critiqueDeathLine(1, new TypeError("529 overloaded"), true);
@@ -1083,7 +1083,7 @@ check("generated: it says it is generated and names the command that rebuilds it
 }
 
 // The real thing: EVALUATE the shipped file the way the host does, and confirm it
-// still produces the same run. A generated file that no longer runs is the one
+// still produces the same run. A generated file that does not run is the one
 // failure that would reach production silently — every module test above would
 // still be green.
 {
@@ -1102,7 +1102,7 @@ check("generated: it says it is generated and names the command that rebuilds it
   // rejection axis — the one axis where the three-outcome protocol is observable — structurally untested.
   const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));
   // The shipped body becomes a real ES module under the OS temp dir and is imported — no `new Function`, no eval,
-  // matching the sibling runners' decision to keep these files free of a dynamic-code construct a reviewer then
+  // matching the sibling runners' decision to keep these files free of a dynamic-code construct a reader then
   // has to reason about. Wrapping it in `export default async function(args, log, phase, agent, parallel)` is the
   // SAME environment the host provides: a function body with exactly those five names in scope, and a top-level
   // `return` that is the run's result.
