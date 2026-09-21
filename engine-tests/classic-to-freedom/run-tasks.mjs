@@ -3557,7 +3557,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       () => ({ status: pvR.status, head: (pvR.stdout || "").slice(0, 160), err: (pvR.stderr || "").slice(0, 160) }));
   }
 
-  // B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
+  // an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
   // fallback set carries `refused`, so `renderFinalReport` pushes a verdict reason and the CLI exits 2 naming the
   // folder — the precise false-green (COMPLETE over a ledger that was never read) this PR targets.
   {
@@ -3565,14 +3565,14 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dBad], MANIFEST);                                    // freeze a valid split first
     fs.writeFileSync(path.join(dBad, SPLIT_FILE), "not valid JSON {{{");  // then corrupt it
     const rBad = cliR(["--verify", "--built", built, "--tasks", dBad], MANIFEST);
-    check("CLI (Major B): a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
+    check("CLI: a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
       () => rBad.status === 2 && (rBad.stdout || "").startsWith("# Migration result")
         && /the task ledger could not be read/.test(rBad.stdout || "") && /⛔ \*\*NOT COMPLETE\*\*/.test(rBad.stdout || "")
         && /RUN NOT COMPLETE/.test(rBad.stderr || ""),
       () => ({ status: rBad.status, head: (rBad.stdout || "").slice(0, 400), stderr: (rBad.stderr || "").slice(0, 200) }));
   }
 
-  // C (2nd review) — the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
+  // the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
   // ☐ queued, none dispatched) contributes a `☐ queued N` reason that the machine/verify leg CANNOT produce (that
   // leg emits MISSING / not-confirmed), so exit 2 here is NOT attributable to `verifyIncomplete` alone. The clean
   // conjunction in isolation — a GREEN machine leg + an open ledger ⇒ ONLY the ledger reason — is the `openRep`
@@ -3582,7 +3582,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dQ], MANIFEST);   // sync only — every task todo, nothing started
     const rQ = cliR(["--verify", "--built", built, "--tasks", dQ], MANIFEST);
     const vQ = (rQ.stdout || "").split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
-    check("CLI (Major C): a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
+    check("CLI: a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
       () => rQ.status === 2 && /☐ queued \d+/.test(vQ) && /RUN NOT COMPLETE/.test(rQ.stderr || "")
         && /☐ queued \d+/.test(rQ.stderr || "") && / todo of /.test(rQ.stderr || ""),
       () => ({ status: rQ.status, verdict: vQ, stderr: (rQ.stderr || "").slice(0, 300) }));
@@ -3684,7 +3684,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(path.join(dRef, SPLIT_FILE), "{ broken");
     const refusedSet = readMergedTaskDir(dRef, RUN, OPTS);
     const refRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: refusedSet, dir: dRef });
-    check("renderFinalReport (Major B): a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
+    check("renderFinalReport: a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
       () => refusedSet.refused === true && refRep.complete === false
         && refRep.reasons.some((r) => /task ledger could not be read/.test(r))
         && /⛔ \*\*NOT COMPLETE\*\*/.test(refRep.markdown),
@@ -3750,7 +3750,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
           && !repCited.reasons.some((r) => /NO recorded decision/.test(r)),
         () => ({ incidental: repIncidental.counts, cited: repCited.counts }));
 
-      // taskRows (Major A, 2nd review) — a not-built plan item on ONE page must not bleed onto a
+      // taskRows — a not-built plan item on ONE page must not bleed onto a
       // same-labeled row on ANOTHER page. Two tasks share the deliverable label but live on different pages: one
       // not-built (main), one built and machine-confirmed (child:C1). The whole-run label fallback used to match by
       // bare label and mark BOTH rows not-built; taskRows now falls back to the label ONLY for the synthetic `run`
@@ -3766,7 +3766,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const secTasks = repBleed.markdown.slice(repBleed.markdown.search(/## \d+\. Tasks \(/), repBleed.markdown.search(/## \d+\. Task details/));
       const lineA = secTasks.split("\n").find((l) => l.includes("](bl-a.md)")) || "";
       const lineC = secTasks.split("\n").find((l) => l.includes("](bl-c.md)")) || "";
-      check("taskRows (Major A): a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
+      check("taskRows: a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
         () => repBleed.counts.openNotBuilt === 1
           && /save/.test(lineA) && /needs a decision/.test(lineA)
           && !/needs a decision/.test(lineC) && lineC.trim().endsWith("| — |"),

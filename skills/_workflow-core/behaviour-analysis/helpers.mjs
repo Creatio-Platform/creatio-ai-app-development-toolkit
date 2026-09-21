@@ -50,7 +50,7 @@ export function digestKeyOf(entryKey, keys) {
 // several inventory rows end in `::<key>` (AMBIGUOUS — a real row the answer could not be pinned to) and none does
 // (UNKNOWN — a key naming no row on this surface, so invented, stale or copied from another run). The remedies are
 // opposite — re-key the answer versus discard it — so a caller that has to report the failure needs to tell them
-// apart. One implementation, because two would be a second source of truth for the same lookup (PR #147 review).
+// apart. One implementation, because two would be a second source of truth for the same lookup.
 export function resolveKey(entryKey, keys) {
   if (keys.has(entryKey)) return { key: entryKey, reason: 'exact' }
   const suffix = `::${entryKey}`
@@ -149,7 +149,7 @@ export const RETRY_ATTEMPTS = 2
 //
 // Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
 // A caller re-deriving it as `!!result` reads any falsy-but-PRESENT value as "the phase never ran" and marks a real
-// answer UNCHECKED downstream (PR#88 review). Death is a NULLISH outcome; `0`, `''` and `false` are results.
+// answer UNCHECKED downstream. Death is a NULLISH outcome; `0`, `''` and `false` are results.
 // One yield, both failure shapes, no try/catch at the call site. A nullish outcome comes back as
 // `value: null`; a REJECTION is thrown into the generator by the driver's `sendFor`, and an
 // unwrapped yield let it propagate out of `run()` as a raw exception — past the structured verdict

@@ -161,7 +161,7 @@ function contextFailureReason(cause, unusable, shape) {
 function contextFailedReturn(contextOutcome, surface, log, returned = null) {
   const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
   // THREE causes, three lines. A rejection, a silent death and a truthy-but-unusable return need different
-  // repairs, and the third one used to be indistinguishable from a surface with nothing on it (PR #147 review).
+  // repairs, and the third one used to be indistinguishable from a surface with nothing on it.
   const unusable = !cause && returned !== null && returned !== undefined
   const shape = Array.isArray(returned) ? 'an array' : `a ${typeof returned}`
   if (cause) {

@@ -200,7 +200,7 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
   }
   // ENG-99740 (Rita minor): a schema-derived name that collides with an Object.prototype key (`constructor`,
   // `toString`) must NOT crash --verify — the lookups are Maps now, and the fallbacks are boundary-safe.
-  check("ENG-99740 (guard): cardnative / vk lookups on a prototype-key name (`constructor`, `toString`) do not throw and return a normal result triple",
+  check("cardnative / vk lookups on a prototype-key name (`constructor`, `toString`) do not throw and return a normal result triple",
     () => {
       const a = resolveVk({ type: "cardnative", names: ["constructor", "toString"] }, ctx);
       const b = resolveVk({ type: "constructor" }, ctx);   // unknown vk type that is also a prototype key
@@ -212,7 +212,7 @@ export function runEng99126Checks({ check, verifyCtx, resolveVk, renderVerify, c
     const src = `[{ request: "r", handler: (request, next) => { aXb(); return next; } }]`;
     const mctx = verifyCtx({ pages: { main: page({ handlers: src, viewModelConfig: { attributes: {} } }) } }, "main");
     const r = resolveVk({ type: "handler", method: "a.b", parent: null, triggers: [] }, mctx);
-    check("ENG-99740 (guard): a handler method name with regex metacharacters (`a.b`) is escaped — it does NOT falsely match `aXb`, so it stays confirm-on-stand (no throw, no false ✅)",
+    check("a handler method name with regex metacharacters (`a.b`) is escaped — it does NOT falsely match `aXb`, so it stays confirm-on-stand (no throw, no false ✅)",
       () => r[2] === "skip", () => r);
   }
   // ENG-99740 (Alexandr minor): codeOnly is memoized on the page ctx (verifyCtxFactory caches one ctx per key).

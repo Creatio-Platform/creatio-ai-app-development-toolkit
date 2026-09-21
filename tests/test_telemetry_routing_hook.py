@@ -1028,7 +1028,7 @@ class TelemetryRoutingHookBehaviorTests(unittest.TestCase):
         )
 
     def test_works_from_a_completely_fresh_state_directory(self):
-        # Regression: `markerPath` was made side-effect-free so the always-firing events touch
+        # egression: `markerPath` was made side-effect-free so the always-firing events touch
         # nothing, but `markTouchedClio` — the FIRST write of a session — then had no directory to
         # write into. The marker silently failed to appear, so Stop stayed silent for the whole
         # session and no usage reading was ever sent. The suite could not see it because every other

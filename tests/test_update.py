@@ -375,7 +375,7 @@ class NamedWorkflowRefreshTests(unittest.TestCase):
             encoding="utf-8",
         )
         # The identity the provisioner reads comes from the GENERATED manifest, not from the
-        # script text (PR #147 review) - a cached tree without it is a separate, tested failure.
+        # script text - a cached tree without it is a separate, tested failure.
         manifest = root / "skills" / "_workflow-core" / "workflows.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(

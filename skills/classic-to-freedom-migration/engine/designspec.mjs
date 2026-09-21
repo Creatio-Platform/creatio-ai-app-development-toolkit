@@ -50,7 +50,7 @@ const isField = (o) => !!o?.values?.control;
 // A form's "content field" count for STRUCTURE gates (hollow-form / typed / child folds). A bound INPUT is either
 // control-bound (every normal field) OR a `crt.ImageInput` — which binds through `value`, NOT `control`. Counting
 // only `values.control` (as the fold gates did) made an image-only quick-add form (photo / signature — squarely in
-// ENG-93926's mini-page domain) read as 0 fields → a false "EMPTY Layout, do not proceed" hard-block / mis-template.
+// mini-page domain) read as 0 fields → a false "EMPTY Layout, do not proceed" hard-block / mis-template.
 // This is the ONE shared field-count, aligned with renderVerify (which likewise expects fields + image inputs).
 // NB deliberately NOT folded into `isField`: that predicate feeds the Layout fields TABLE (which strips
 // `values.control`) and images render via their own rowsForImages path — merging them would break the table.
@@ -560,7 +560,7 @@ function listColumnLine(section) {
   if (section.listColumnSource === "entity-default") {
     return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
   }
-  // ENG-95850 (D) — a profile-sourced set is the one the list actually renders (which is why the engine takes it
+  // a profile-sourced set is the one the list actually renders (which is why the engine takes it
   // over the static declaration). The bullet's job is just to SHOW that set: the columns are visible and editable,
   // so a wrong one is something the user changes. The "a profile can be scoped — confirm this is the set every
   // user should get" caveat (and clio's own profile note) is noise here; the actionable question survives as the
@@ -594,7 +594,7 @@ function listRowActionsTable(rowActions) {
   if (!rowActions?.length) return [];
   const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
   for (const ra of rowActions) {
-    // The PROPERTY the condition binds travels with the method name (ENG-94714). `visible` and `enabled` are not
+    // The PROPERTY the condition binds travels with the method name. `visible` and `enabled` are not
     // interchangeable: porting an enablement condition as a visibility rule hides the control instead of greying
     // it, and porting either as nothing ships an always-available action. The cell says which one it is.
     // An item may bind BOTH properties (one method to `visible`, another to `enabled`), so every condition this
@@ -707,7 +707,7 @@ function dashboardsListNote(sd) {
 }
 function renderListPageBlock(result, section, opts = {}) {
   const L = ["### List page"];
-  // The LIST page's own verdict, first thing in the block (ENG-94714). It is stated HERE rather than in the plan's
+  // The LIST page's own verdict, first thing in the block. It is stated HERE rather than in the plan's
   // top banners because it is scoped: the record page above it may be perfectly approvable on the same run, and a
   // banner at the top would read as a verdict on the whole plan. Everything below it still renders — a partial
   // reading is evidence, and hiding it would leave the operator with a blocked page and no idea what was found.
@@ -1098,7 +1098,7 @@ export function renderDesignSpec(result, opts = {}) {
   // A mini page's form section is titled "Mini page (quick-add)" — NOT "<entity> form page" — so it can't be
   // mistaken for the record page's form section (the two rendered under the SAME "<entity> form page" heading,
   // which read as a duplicated block for the same page).
-  // `logicOnly` (ENG-96327) — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
+  // `logicOnly` — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
   // / ⚠ Confirm), NOT the form-page Layout. Used for a formless INLINE-GRID child: it has no form page, so a Layout
   // table (empty, or listing grid-only bits) would misdescribe it — its logic IS the deliverable to port.
   if (!opts.logicOnly) L.push(...renderFormLayoutBlock(entity, opts, order, byRegion, cs));
@@ -1606,7 +1606,7 @@ function renderBehaviourIndexBanners(result) {
     ". Add the body's own card as `bodyCard`/`bodyAc` — the behaviour report's attribution table names it (`body <scope>/Cnn`, usually a shared-core card).", "");
   return P;
 }
-// FIDELITY warnings (ENG-95862) — the half of `eff.warnings` that says "the mapping is RIGHT, an effect of the op
+// FIDELITY warnings — the half of `eff.warnings` that says "the mapping is RIGHT, an effect of the op
 // is not represented in the item model". They no longer block the gate, so they must be RENDERED: a demotion with
 // no advisory is a warning deleted, not a warning downgraded. Same standing and same voice as the `possiblyPartial`
 // seed advisory below. An `accepted` one (a recorded `manifest.warningDispositions` answer) is listed as CLOSED
@@ -1728,7 +1728,7 @@ export function boundarySectionPhrase(c) {
   return (typeof own === "string" && own.trim()) ? "the `" + esc(own.trim()) + "` section" : "another section";
 }
 
-// ENG-95850 (D) — `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
+// `list-pages` ALONE cannot answer this for a TYPED entity. An entity whose records are typed
 // registers a per-type edit card in `SysModuleEdit` instead of one `<Entity>Page`, so a search for a single `*Page`
 // legitimately finds nothing while the entity has many. A real run recorded `editPage: false` for `InternalRequest`,
 // which has ~18 typed edit pages, and the plan then asserted there was nothing to migrate; it was caught only by a
@@ -1921,7 +1921,7 @@ function rebuildChildTarget(c) {
   if (choice === "grid") return `Grid page (\`${CHILD_TEMPLATE_SCHEMA.grid}\`)`;
   return "Freedom child page";
 }
-// The `Reuse (Classic)` row's target (ENG-95861). Names the page only when one was actually recorded — a target
+// The `Reuse (Classic)` row's target. Names the page only when one was actually recorded — a target
 // cell is the one place a reader looks for "what opens instead", so a guessed name there is worse than none.
 function boundaryScopeTarget(c) {
   const pg = boundaryClassicPage(c);
@@ -2342,7 +2342,7 @@ function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
   // published as the row's verify type, so it must be a type the built page really
-  // carries and the stand really resolves. It comes from the SHARED MAPPING TABLE (ENG-95543): this used to be a
+  // carries and the stand really resolves. It comes from the SHARED MAPPING TABLE: this used to be a
   // local `FEATURE_TYPE` map — a SECOND home for the same knowledge the mapper asserted in prose, so the gate and
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
@@ -2643,7 +2643,7 @@ function confirmWorklistRows(pageKey, cs) {
 // `evidenceRows`/`evidenceIds` below dedupe by id so exactly one id is published per page.
 function qualityGateRows(pageKey) {
   const id = `${pageKey}#quality-gates`;
-  // `allowNoDiff` (ENG-95471): the ONLY evidence kind where "diffed and found nothing to fix" is a real outcome —
+  // `allowNoDiff`: the ONLY evidence kind where "diffed and found nothing to fix" is a real outcome —
   // a `#confirm`/`#childpage`/list-page record proves something was BUILT, which an empty answer never can, so
   // the concession stays scoped to this row and is not spread onto `EVIDENCE_REQUIRES` generally. It applies to
   // BOTH halves below: the FILED half is what accepts the empty `components` + `noChangesReason` shape, and the
@@ -3256,7 +3256,7 @@ function componentNoun(vk) {
   if (vk.type === "feature") return esc(String(vk.ftype || "the standard feature"));
   return COMPONENT_NOUN[vk.type] || "this page's components";
 }
-// ROLE/ANALOG matching (ENG-95470), now sourced from the SHARED MAPPING TABLE (ENG-95543) — the repoint that
+// ROLE/ANALOG matching, now sourced from the SHARED MAPPING TABLE — the repoint that
 // ticket's own comment asked for. A planned Classic-derived component type is SATISFIED by the real Freedom
 // component whose row declares it: a plan that expected `crt.ContactCommunication` (the ContactCommunication
 // ENTITY with a `crt.` prefix, a name no stand resolves) is Done when the built page carries
@@ -3269,7 +3269,7 @@ function componentNoun(vk) {
 export function componentAnalogsOf(ftype) {
   return analogsOf(ftype);
 }
-// ROLE/ANALOG match (ENG-95470): the expected component type first, then its curated Freedom analog — a migration
+// ROLE/ANALOG match: the expected component type first, then its curated Freedom analog — a migration
 // builds the NATIVE Freedom component, so `crt.CommunicationOptions` satisfies a planned `crt.ContactCommunication`
 // row. Own fn so `resolveComponentVk` keeps one level of nesting (Sonar CC 15). The not-checkable (⚠ unverified)
 // case is `ctx.entryAbsent`, handled by the caller before this runs — a page the payload cannot see is never ❌.
@@ -3343,7 +3343,7 @@ export function resolveComponentVk(vk, ctx) {
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
   return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action", "ok"] : ["⚠ verify", "no crt.Button found — confirm the action", "unverified"]; // card
 }
-// BUSINESS RULES (ENG-95470). A page's declarative rules do NOT live in its body: each persists as a separate
+// BUSINESS RULES. A page's declarative rules do NOT live in its body: each persists as a separate
 // BusinessRule_* schema, invisible to `viewConfig`, so the row's evidence is `--built.pages[<key>].businessRules` —
 // the read-page-business-rules result (`{ count, rules }`, or a bare `rules` array), NOT a page-body walk. Match is
 // by IDENTITY the same way fields match by name: an expected target attribute (a page rule's `element` / an entity
@@ -3748,7 +3748,7 @@ const unknownVk = () => ["⚠ verify", "confirm on-stand", "unverified"];
 // `vk` lookup and tallied as `skip`, so it can never become MISSING or unverified — there is nothing to build. It
 // stays a visible row: a boundary the reader cannot see is a boundary the next round re-litigates.
 const naRow = (r) => [`N/A — ${esc(r.na)}`, "not a deliverable of this plan — nothing to build, nothing to check", "skip"];
-// An informational row (ENG-99126): recorded so the ledger is complete, never a thing to confirm on the stand.
+// An informational row: recorded so the ledger is complete, never a thing to confirm on the stand.
 const infoRow = (r) => ["ℹ noted", esc(r.info), "skip"];
 
 // ===== ENG-99126 — the resolvers that turn "☐ confirm on-stand" rows into machine rows ===========================
@@ -4215,12 +4215,12 @@ export function renderVerify(result, opts = {}, built = {}) {
   const ctxFor = verifyCtxFactory(root);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
-  // (ENG-95469), the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
+  // , the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is
   // the same row set the full table renders, so the two never disagree about a page; scoping only drops OTHER pages'
   // rows, leaving the kept page's rows (and thus its tally) identical.
   const groups = opts.scopePageKey ? scopeGroups(checklistGroups(result, opts), opts.scopePageKey) : checklistGroups(result, opts);
   const L = []; let n = 0;
-  // EVERY row, not only the open ones (ENG-99126): the final report the orchestrated run closes on needs the
+  // EVERY row, not only the open ones: the final report the orchestrated run closes on needs the
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
   // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
   const rows = [];

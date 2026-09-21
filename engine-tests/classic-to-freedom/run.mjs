@@ -556,7 +556,7 @@ check("bare terrasoft-param Terrasoft.ViewItemType.CONTROL_GROUP resolves to 15 
 check("this.Terrasoft.ViewItemType.GRID_LAYOUT resolves to 0", byName.gGrid.itemType === 0);
 check("this.Terrasoft.ContentType.LOOKUP resolves to 5 (lookup control hint)", byName.fLookThis.contentType === 5);
 check("bare terrasoft-param Terrasoft.ContentType.LOOKUP resolves to 5", byName.fLookParam.contentType === 5);
-// ContentType is pinned COMPLETE (ENG-95412): a member the schema names is IDENTIFIED, never collapsed to null —
+// ContentType is pinned COMPLETE: a member the schema names is IDENTIFIED, never collapsed to null —
 // "we could not read it" and "the page did not set one" are different statements and the gate reacts to them
 // differently. The old contract left every non-LOOKUP member null to guarantee none could mis-equal LOOKUP=5;
 // that guarantee is now a property of the transcribed values themselves, which is what the second check pins.

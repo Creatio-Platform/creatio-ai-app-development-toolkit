@@ -215,7 +215,7 @@ export const CONTENT_TYPE = {
 // GROUNDWORK, deliberately unread: the item's own `dataValueType` is projected onto `items[]`/`fields[]` but has NO
 // consumer yet — `control()` is still called with the ENTITY column's type only, so a virtual field keeps raising
 // the loud `field-control` decision rather than being typed from its own declaration. Wiring that fallback is the
-// mapping task's business (ENG-95543); the projection lands here so the evidence is already carried when it does.
+// mapping task's business; the projection lands here so the evidence is already carried when it does.
 export const DATA_VALUE_TYPE = {
   GUID: 0, TEXT: 1, INTEGER: 4, FLOAT: 5, MONEY: 6, DATE_TIME: 7, DATE: 8, TIME: 9, LOOKUP: 10, ENUM: 11,
   BOOLEAN: 12, BLOB: 13, IMAGE: 14, CUSTOM_OBJECT: 15, IMAGELOOKUP: 16, COLLECTION: 17, COLOR: 18,
@@ -541,7 +541,7 @@ function buildAstScope(factory, amdDeps, src) {
 // <expr> is an identifier alias / ternary / call. We return the argument NODE (any type) and let the static
 // evaluator resolve it over the scope (so `var cfg={…}; return cfg;` resolves), instead of only accepting an
 // inline object literal — the old behaviour silently produced an EMPTY page for an aliased/ternary return and
-// the gate saw nothing to block (Major). Returns null only when the factory has no return value at all.
+// the gate saw nothing to block. Returns null only when the factory has no return value at all.
 function findFactoryReturn(factory) {
   if (factory.body.type !== "BlockStatement") return factory.body;   // arrow implicit return (any expression)
   for (const st of factory.body.body)
@@ -1247,7 +1247,7 @@ const primitiveOrNull = (x) => (typeof x === "boolean" || typeof x === "number" 
 const captionKey = (v) => (v.caption && isStr(v.caption.bindTo) ? v.caption.bindTo : strOrNull(v.caption));
 
 // The CONTROL LABEL's own caption (`labelConfig: { caption: … }`), modelled as its OWN field and never folded into
-// `caption` (ENG-95862). Folding them would make `remove properties: ["labelConfig"]` unrepresentable: there would be
+// `caption`. Folding them would make `remove properties: ["labelConfig"]` unrepresentable: there would be
 // no `labelConfig` slot left to clear, the op would pass the membership test and change nothing, and the lower
 // layer's custom label would survive a removal the runtime honours — a silent wrong answer in place of today's
 // warning. Precedence is resolved at PROJECTION time, mirroring the platform's own `getLabelCaption`
@@ -1304,7 +1304,7 @@ function normalizeDiffOp(op, i) {
     // `config.dataValueType` FIRST and only consults the view-model column when the item declares none — so the
     // item's own value OVERRIDES the column, it is not a fallback to it. The guard there is `Ext.isEmpty`, and
     // `Ext.isEmpty(0)` is false, so `dataValueType: 0` (GUID) is a legal declared value: test with `!= null` /
-    // `Object.hasOwn`, never with truthiness. Reading it is still the mapping task's business (ENG-95543); what
+    // `Object.hasOwn`, never with truthiness. Reading it is still the mapping task's business; what
     // changes here is only that the recorded precedence is now the right way round.
     dataValueType: numOrNull(v.dataValueType),
     isTab: op.propertyName === "tabs",
@@ -1481,7 +1481,7 @@ function sanitizeConditions(conds) {
 // Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
 // the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
 // in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
-// The `values` keys an op DECLARED that this engine models on NO item field (ENG-94714). `replayRemoveProperties`
+// The `values` keys an op DECLARED that this engine models on NO item field. `replayRemoveProperties`
 // already had to answer exactly this question for a `remove … properties` op, and answers it against
 // `REMOVABLE_ITEM_PROPS` — so the SAME set decides it here, rather than a second hand-kept list that could drift
 // from the first. (Referencing it from a function defined above its `const` is fine: this only runs during a fold,
@@ -1529,7 +1529,7 @@ function makeItem(op, seed, pkg) {
   };
 }
 
-// ⚠ SEVERITY — the axis `eff.warnings` lacked (ENG-95862). Two values, and the sentence that decides each is
+// ⚠ SEVERITY — the axis `eff.warnings` lacked. Two values, and the sentence that decides each is
 // written here so a NEW producer cannot be added without answering it:
 //   "correctness" — the op targeted something that DOES NOT EXIST (an item no lower schema defined), or the seed is
 //                   not a real fetched body. The engine's reading of the page is wrong or unsafe, and the remedy is
@@ -1728,7 +1728,7 @@ function replayRemoveOneProperty(k, cur) {
   if (!REMOVABLE_ITEM_PROPS.has(k)) {
     // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
     // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
-    // exists to prevent (ENG-94714). The fidelity warning below is unaffected: the removal's EFFECT is still
+    // exists to prevent. The fidelity warning below is unaffected: the removal's EFFECT is still
     // unrepresented, which is a different statement from "the key is still set".
     cur.unmodelledProps.delete(k);
     return true;
@@ -1794,7 +1794,7 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
   for (const it of items.values()) {
     if (it.parent === op.name && !it.removed) {
       it.removed = true; it.removedBy = pkg; it.removedBySeed = seed;
-      // `cascadeRemoved` ONLY for template-owned children (PR #105 review, Major). `cascadeRemove` deliberately
+      // `cascadeRemoved` ONLY for template-owned children. `cascadeRemove` deliberately
       // skips non-templateOwned items (see its `!it.templateOwned` guard), and `removed[]` filters out anything
       // carrying the flag — so setting it unconditionally hid CLIENT-authored children of a replaced container from
       // the decision rows entirely. The op's own warning counts them but does not name them, which is not the same
@@ -2087,7 +2087,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
   // 1-method stub still blocks (< 5).
   const SEED_MIN_METHODS = 5;
-  // Structural stub signal (round-10 Major 1): the seed method names that have a REAL (non-empty) body in SOME layer.
+  // Structural stub signal: the seed method names that have a REAL (non-empty) body in SOME layer.
   // The PARSER sets `emptyMethods` from real body strings; L()-built test seeds carry none → treated as real-bodied.
   const seedNonEmptyMethods = new Set(seedTemplate.flatMap(l => (l.methods || []).filter(m => !(l.emptyMethods || []).includes(m))));
   // Skeletal if near-empty by COUNT (< 5) OR every seed method is an empty stub `(){}` (seedNonEmptyMethods empty) — the

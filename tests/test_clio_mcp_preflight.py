@@ -236,7 +236,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertNotEqual(pf.EXIT_USABLE, pf.EXIT_BLOCKED)
 
     def test_probe_watchdog_window_covers_initialize_cap(self):
-        # RC-2 (PR #55 review): the watchdog window must span mcp_client's cold-start
+        # RC-2: the watchdog window must span mcp_client's cold-start
         # initialize cap PLUS the call timeout, so a slow-but-healthy cold start is never
         # force-killed (a window of just timeout+grace could fire mid-initialize).
         for timeout in (5, 20, 60):
@@ -305,7 +305,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
             mcp_client._shared_client = orig
 
     def test_truncate_detail_scrubs_url_credentials(self):
-        # RC-4 (PR #55 review): inline URL credentials in a clio error string must be
+        # RC-4: inline URL credentials in a clio error string must be
         # redacted before `detail` reaches console/JSON/CI logs.
         scrubbed = pf._truncate_detail(
             "cannot reach https://admin:s3cr3t@ts1-core-dev04:88/0/ServiceModel — timeout")

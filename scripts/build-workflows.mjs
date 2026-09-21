@@ -271,7 +271,7 @@ if (isMain) {
     }
     // Counted at the END of the body, and compared against TARGETS.length below. Incrementing it at the TOP made
     // it near-vacuous — it then equalled TARGETS.length on every run that reached the loop at all, so the only
-    // failure it could detect was an empty TARGETS, which is not a mode anyone hits (PR #147 review). Counting
+    // failure it could detect was an empty TARGETS, which is not a mode anyone hits. Counting
     // completed iterations catches the mode the message actually claims: a per-target `continue`, an early
     // `break`, or a target skipped by a future guard, all of which would otherwise exit 0 while proving nothing.
     handled++

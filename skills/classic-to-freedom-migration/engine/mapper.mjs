@@ -40,7 +40,7 @@ const isPrimaryDisplayItem = (i) => /getPrimaryDisplayColumnValue/i.test(i.capti
 // BaseModulePageV2 LEFT area that holds the profile islands (e.g. ContactContainer): a field nested
 // under it (field → ContactContainer → LeftModulesContainer) must resolve to the profile, NOT collapse
 // into a fallback tab. Adding it here is what routes those island fields to the side profile once the
-// base template is seeded (#18). Header stays separate (a WIDE header block → HeaderContainer, below).
+// base template is seeded. Header stays separate (a WIDE header block → HeaderContainer, below).
 const PROFILE_CONTAINERS = new Set(["ProfileContainer", "Header", "LeftModulesContainer"]); // classic → SideAreaProfileContainer
 const FLAT_FALLBACK = "GeneralInfoTabContainer"; // where a field lands when its parent chain is unresolvable
 
@@ -73,7 +73,7 @@ function resolveOwner(startParent, index, profileAnchors = PROFILE_CONTAINERS) {
   while (parent && hops++ < 32) {
     if (profileAnchors.has(parent)) return { kind: "profile", via: parent, groups: [...groups].reverse() };
     const p = index.get(parent);
-    // `why` distinguishes the two unresolved causes so the caller's flag is accurate (#18): the ancestor
+    // `why` distinguishes the two unresolved causes so the caller's flag is accurate: the ancestor
     // name is not defined by ANY schema/template (missing seed) vs the chain is fully defined but never
     // reaches a profile/tab anchor (climbed to the page root — a wrong/incomplete seed).
     if (!p) return { kind: "unresolved", parent, why: "undefined-parent" };
@@ -109,7 +109,7 @@ const DVT_TYPE_NAME = {
   //   * Classic RENDERS these, so classic field behaviour DOES exist to port: MAPPING -> `generateMappingEdit`
   //     (`Terrasoft.MappingEdit`, L2511-2512) and STAGE_INDICATOR -> `generateStageIndicator`
   //     (`Terrasoft.BaseProgressBar`, L2520-2521). Choosing the Freedom counterpart is the mapping task
-  //     (ENG-95543); until it lands, no control is asserted here — but the decision must not tell the operator
+  //     ; until it lands, no control is asserted here — but the decision must not tell the operator
   //     there is nothing to port.
   //   * Classic THROWS `UnsupportedTypeException` for these (they have no case, so they hit `default` L2523-2529):
   //     BLOB, IMAGE, FILE, FILE_LOCATOR, COLLECTION, ENTITY, ENTITY_COLLECTION, CUSTOM_OBJECT, COMPOSITE_OBJECT,
@@ -282,7 +282,7 @@ function fieldTypeLabel(col, meta, ctl) {
   if (ctl.lookup) return "Lookup";
   // same normalization as scalarControl: numeric codes AND clio's friendly names
   const t = normalizeDvt(String(meta.type || "").toLowerCase());
-  // SECRET TYPES FIRST — above the column-name fallback (PR #147 review). The name heuristic maps /email/i to
+  // SECRET TYPES FIRST — above the column-name fallback. The name heuristic maps /email/i to
   // "Email" and /phone|mobile/i to "Phone", so while these two sat in the generic TYPE_LABEL arm BELOW it, a
   // HASH_TEXT / SECURE_TEXT column named `UsrEmailHash`, `UsrMobilePinHash` or `UsrSecureEmail` printed in the
   // operator-facing Layout table as a migratable `Email` / `Phone` — the one label that must never be overridden
@@ -386,7 +386,7 @@ function isProfileCardModule(c) {
 // documented in `references/classic-to-freedom-mapping.md` ("Recognise it") and pinned by a golden test.
 function isCardWidgetModule(c) {
   if (!c?.recordId || !c?.widgetKey) return false;
-  // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
+  // Mutually exclusive with isProfileCardModule: a module that ALSO carries
   // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
   // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
   // decision AND a card-widget decision (a double decision R1 forbids), because mapWidgets never sees
@@ -528,7 +528,7 @@ export function mapToFreedom(eff, opts = {}) {
   D.needsDecision.forEach(d => needsDecision.push(d));
   D.accountedFor.forEach(a => accountedFor.add(a));
 
-  // ---- embedded profile cards (linked-record blocks) → the Freedom side profile (ENG-93928) ----
+  // ---- embedded profile cards (linked-record blocks) → the Freedom side profile ----
   const _pc = mapProfileCards(ctx);
   const profileCards = _pc.profileCards;
   _pc.needsDecision.forEach(d => needsDecision.push(d));
@@ -855,7 +855,7 @@ function mapFields(ctx, containers) {
   const dupBoundCols = [];                // cols the classic page binds MORE THAN ONCE (col, col_2, …)
   const secretCols = [];                  // hash/secure-text cols: emitted read-only, reported on their own
   // Pre-resolve every field's owner once, so we can DETECT the header layout type before routing.
-  // STABLE-SORT by the classic diff `order` first (Major): the eff projection preserves Map order, but the
+  // STABLE-SORT by the classic diff `order` first: the eff projection preserves Map order, but the
   // classic layout order is `order`/index — without this a field with a lower order that appears later in the
   // Map was assigned a LATER row (wrong vertical order). Fields with no explicit order keep their Map position
   // (Infinity sorts last, stably). Row assignment below then walks fields in true layout order.
@@ -1696,7 +1696,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
   // charts/widgets not in the catalog -> B9/B10 (generic). An embedded PROFILE CARD is excluded: mapProfileCards
   // already mapped it to a concrete component, so repeating it here as "propose the closest component" would both
-  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET (ENG-95806) is likewise
+  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET is likewise
   // excluded: mapWidgets emitted a concrete card-widget decision for it, so a generic component entry here would
   // duplicate the worklist and re-vague a target that is now actionable.
   for (const c of payloadComponents)
@@ -2316,7 +2316,7 @@ function mapWidgets(eff, opts = {}) {
   return { widgets, chromeWidgets, needsDecision, accountedFor, dcmActive: dcmPresent, cardWidgets };
 }
 
-// Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
+// Moment 4b: the ON-SAVE DUPLICATE CHECK — a second on-stand signal, for the same reason `dcm` is one.
 // Nothing in the classic page body reveals this behaviour. The hook is an `asyncValidate` override on
 // `CrtDeduplication.BaseEntityPage`, which reaches every entity page through the base SEED chain: it is therefore
 // `fromTemplate`, the payload filter drops it before `mapRemainingLogic` ever sees it, and the member ledger
@@ -2601,7 +2601,7 @@ function listColumnsDecision(section, columns) {
     return { kind: LIST_DECISION_KIND.columns, item: "fallback list column set",
       reason: "the Classic section declares no list columns, so the grid would ship with a single fallback column — confirm the column set the list should show" };
   }
-  // ENG-95850 (D) — A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
+  // A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
   // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
   // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
   // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
@@ -2744,7 +2744,7 @@ function listNeedsDecision(section, columns, filters, actions, rowActions = []) 
 // analyzer actually consume: a method that stops being read here must stop being marked.
 export const SECTION_VIEW_METHODS = new Set(["getGridDataColumns", "initFixedFiltersConfig", "getSectionActions",
   "getAddRecordMiniPage"]);
-// ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
+// ---- THE SECTION VIEW -------------------------------------------------------------------------
 //
 // Everything a section declares in its OWN `diff`, read off the folded section view and handed to
 // `buildListChangeSet`. Before this, the section `diff` was an unread field: every fact the plan carried about a
@@ -2959,7 +2959,7 @@ export function mapSectionView(sectionEff) {
     out.counts.sectionDeclared++;
     foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus });
   }
-  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it (PR #176 review).
+  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it.
   // `foldedIntoMenus` is filled as the loop runs, so a MENU / MENU_ITEM declared BEFORE its owning button reached
   // the in-loop guard with the set still empty: it landed in `openItems` and was folded into the button's
   // `menuItems` a few iterations later, so the same section body produced two different worklists depending on the
@@ -2999,7 +2999,7 @@ function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }
   if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
     out.labels ??= [];
     out.labels.push(sectionViewLabel(item, region));
-    // AND an open item, with its caption (PR #176 review). `labels` is a structured field with no reader in
+    // AND an open item, with its caption. `labels` is a structured field with no reader in
     // `designspec.mjs`, `migrate.mjs` or any decision list, so a section-declared LABEL was computed and then
     // discarded — the same "silently dropped" failure the MENU fold was raised for, arriving on another element
     // kind. The field stays for a structured consumer; the open item is what puts the label on the ⚠ worklist.

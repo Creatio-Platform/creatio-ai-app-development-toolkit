@@ -246,7 +246,7 @@ def _default_prober(timeout):
         try:
             # Single-shot, NON-retrying: call_mcp_tool's get-tool-contract branch retries on
             # exception (close() + re-call), which would RE-SPAWN a clio child after the
-            # watchdog kill and leave it unsupervised past the gate (PR #55 review). call_tool
+            # watchdog kill and leave it unsupervised past the gate. call_tool
             # does not retry, so after a force-kill the worker raises once and stops.
             box["result"] = mcp_client._get_shared_client().call_tool(
                 "get-tool-contract", {}, timeout=timeout)

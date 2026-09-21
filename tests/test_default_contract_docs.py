@@ -547,7 +547,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("approved command prefix", content)
 
     def test_docs_frame_mcp_client_as_opt_in_escape_hatch(self):
-        # ENG-92985 (AC5/AC7): the Python client is an explicit opt-in escape hatch,
+        # the Python client is an explicit opt-in escape hatch,
         # not the default degraded path. Keep the ENG-91276 native/fallback framing
         # while removing any "silent fallback" legitimization.
         for path in OPT_IN_ESCAPE_HATCH_DOCS:
@@ -619,7 +619,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             )
 
     def test_docs_state_b_gives_actionable_how_to_and_reload_caveat(self):
-        # ENG-92985 (#2/#3): State B must be actionable AND honest — surface WHERE the
+        # State B must be actionable AND honest — surface WHERE the
         # per-host connect steps live (install-docs pointer + optional paste-ready
         # config snippet the developer applies), and be honest that enabling native MCP
         # usually needs a session reload (fresh context), so "retry" is a new session,

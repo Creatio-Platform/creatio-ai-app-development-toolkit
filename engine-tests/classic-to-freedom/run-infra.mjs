@@ -530,13 +530,13 @@ check("cba workflow: the repair set is built by `repairKeys` off all three lists
   /const toRepair = repairKeys\(uncoveredKeys, critiqueUncovered, wiringOnly\)/.test(cbaSrc));
 // The retry BEHAVIOUR is asserted executably against `retryOnDeath` further down — this pin only keeps the call
 // site WIRED to that helper. Source-matching alone was the whole defect: it proved the loop's shape was in the
-// file and nothing about whether a second attempt ever fires (PR#88 review, Major).
+// file and nothing about whether a second attempt ever fires.
 check("cba workflow: the Critique call site DELEGATES to the executable `retryOnDeath` helper, handing it the work STEP per attempt AND a notifier that logs `critiqueDeathLine` — without the notifier clause here the whole cause-reporting deliverable could be deleted with a green suite, because a missing notifier is legitimately tolerated",
   /const \{ result: critique, ran: critiqueReturned \} = yield\* retryOnDeath\(/.test(cbaSrc)
     && /critiqueStep,/.test(cbaSrc)
     && /log\(critiqueDeathLine\(attempt, error, willRetry\)\)/.test(cbaSrc));
 // Both legs must read the helper's `ran`, never `critique`'s truthiness: a falsy-but-present Critique result would
-// otherwise be reported as a phase that never ran, marking a real answer UNCHECKED (PR#88 review, Major).
+// otherwise be reported as a phase that never ran, marking a real answer UNCHECKED.
 check("cba workflow: a Critique that never ran is LOUD and machine-readable — the log says coverage.complete is arithmetic-only, and the result carries `critiqueRan` so the caller sees it without reading logs",
   /if \(!ran\) log\('⚠ Critique never ran[^']*arithmetic-only/.test(cbaSrc)
     // `[ \t]*`, never `\s*`: `\s` matches the line terminator too, so under `/m` the quantifier overlaps the `^`
@@ -616,7 +616,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();
-  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect (ENG-95555) in its
+  // Every `crt.X` the doc names must be a real component. This is the fabricated-type defect in its
   // DOC form: `crt.ContactCommunication` was written in prose long before anyone checked it against a stand, and
   // prose is what an agent reads when Node is unavailable.
   const allDocTypes = [...new Set((doc.match(/crt\.[A-Za-z][A-Za-z0-9]*/g) || []))];
@@ -876,7 +876,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   check("the CI job and `engine/package.json` `scripts.test` name the SAME verification sequence in the SAME order — one declaration of what verifying this module means, so a contributor running the documented command runs the whole gate",
     fromCi.length > 0 && fromPkg.length === fromCi.length && fromPkg.every((r, i) => r === fromCi[i]),
     () => ({ scriptsTest: fromPkg, ciSteps: fromCi }));
-  check("review (Major, anti-vacuity): the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
+  check("the sequence is the full gate, not a subset — the integrity check, EVERY golden runner (this list is the enumeration) and the drift check are all in it",
     ["verify-vendor.mjs", "run.mjs", "run-mapper.mjs", "run-infra.mjs", "build-workflows.mjs --check", "run-workflow-core.mjs", "run-workflow-parity.mjs", "run-tasks.mjs"]
       .every((r) => fromPkg.includes(r)),
     () => fromPkg);

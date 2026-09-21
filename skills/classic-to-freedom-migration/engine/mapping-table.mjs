@@ -94,7 +94,7 @@ export const SOURCE = {
 };
 
 // GATE KIND — the STRUCTURED {kind,id} intent a row carries about WHY its Freedom target might not resolve on a
-// given stand (ENG-95683). Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
+// given stand. Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
 // the CrtCustomer360App package AND the CommonCommunicationsBehavior feature") — a human could read it, but the
 // registry gate could not branch on it, so a real component gated behind an absent package produced the same
 // "settle the target" guidance as a fabricated type that no re-plan-free action can fix. The taxonomy is aligned
@@ -110,7 +110,7 @@ export const SOURCE = {
 // the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
 export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
 
-// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE (ENG-94756, PR #182 review) ---------------------------------
+// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE ---------------------------------
 // `meta.feature` is a JOIN KEY, not a caption: the rows below declare it, `GUIDED_FEATURES` decides from it which
 // components are routed to the guidance item, and `companionRows` in designspec.mjs decides from it which page
 // owes the `AttachmentListDS` evidence row. That was three independent spellings of one string, and the failure
@@ -519,7 +519,7 @@ export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
 }
 
-/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE ----------------------------------------------------
    The rows above answer WHICH Freedom component a classic Feed / Attachments becomes and WHETHER a template tends
    to ship it (`meta.templateProvided`). Neither they nor anything else in this repository answers HOW the component
    is CONFIGURED — and that is the reported defect: a page migrated onto a non-basic template gets the components
@@ -637,7 +637,7 @@ export function satisfiedLegacyTypes() {
 // these would silently attach a gate to a different type than `--verify` gates on.
 export const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
 
-// The structured gate intent for a component type, resolved BY KIND from the shared rows (ENG-95683). This is the
+// The structured gate intent for a component type, resolved BY KIND from the shared rows. This is the
 // typed replacement for reading a package/feature prerequisite out of a row's prose: given a `crt.*` type, return
 // the `{ kind, id?, feature? }` a row records for it, or null. A null answer is meaningful — it says "no row gates
 // this type", which the registry guidance reads as "not a package-install away" (a real component simply absent on
@@ -650,7 +650,7 @@ export function gateForComponentType(type) {
   return null;
 }
 
-// The ONE-GATE-PER-TYPE invariant (ENG-95683). `gateForComponentType` returns the FIRST matching row's gate, so two
+// The ONE-GATE-PER-TYPE invariant. `gateForComponentType` returns the FIRST matching row's gate, so two
 // rows carrying DIFFERENT gates for the same component type would let array order silently decide the winner.
 // Repeating a type with the SAME gate is legal and expected — the Communication-options schema row and the entity
 // fallback row both carry `COMMS_GATE` — so the invariant is one-gate-VALUE-per-type, not one-row-per-type; only a
@@ -678,7 +678,7 @@ export function gateConflicts(rows = MAPPING_ROWS) {
   return out;
 }
 
-// The GATE SHAPE contract (ENG-95683 review). `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
+// The GATE SHAPE contract. `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
 // gates for a type — and left its sibling unchecked: a MALFORMED gate. Both are silent-wrong in the same way. A gate
 // whose `id` key is mistyped (`{ kind: "composite", package: "X" }`) reaches `registrySettleGuidance` as an id-less
 // gate and gets the "fix the mapping or the plan, re-plan" dead end — the exact message the by-kind branch exists to
@@ -715,7 +715,7 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
 }
 
 
-// ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
+// ---- LIST-PAGE VOCABULARY ---------------------------------------------------------------------
 //
 // A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
 // element become on a Freedom FORM page"; these answer the same question for a LIST page, and for the same

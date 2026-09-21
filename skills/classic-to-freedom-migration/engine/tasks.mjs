@@ -679,7 +679,7 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
-// THE TWO LINES THE FINAL REPORT READS OFF `## Notes` (ENG-99126). Free prose under the row number is still
+// THE TWO LINES THE FINAL REPORT READS OFF `## Notes`. Free prose under the row number is still
 // yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
 // migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
 // question", which is true and unhelpful.
@@ -1951,7 +1951,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   return { written, parked, pending, set: merged };
 }
 
-// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY (ENG-99126). The final report reads the ledger
+// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY. The final report reads the ledger
 // through this — the same merge `syncRepairDir` makes (plan rows carry `na`, so an agent-asserted boundary is
 // tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
 // where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say

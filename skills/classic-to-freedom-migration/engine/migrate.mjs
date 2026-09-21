@@ -19,7 +19,7 @@
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
 //        // + optional `"ownSection": "<Section>"` (ENG-95861 — the child entity owns ANOTHER SECTION: its Classic card stays
 //        // Classic, this related list keeps opening it, the page is NEVER folded and publishes no deliverable)
-//     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
+//     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed. Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
@@ -83,7 +83,7 @@ function childPageIssue(c) {
   // Positive evidence required: the agent supplies the Freedom page NAME, verified with list-entity-client-schemas
   // (a `kind: "freedom"` section/edit page for the CHILD entity) — the absence of a working fold is NOT a reason.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return null;
-  // THE SECTION BOUNDARY (ENG-95861). The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
+  // THE SECTION BOUNDARY. The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
   // this related list keeps opening the child's CLASSIC card, which the platform handles, so the child is RESOLVED —
   // not a gap, and not the self-declared skip the rule above forbids (that rule stops an AGENT dropping a child
   // because it looks big or shared; a boundary is the USER's scope decision, recorded in the manifest).
@@ -95,7 +95,7 @@ function childPageIssue(c) {
     : null;
   // A REAL Classic edit page must be mapped REGARDLESS of the add-record button — hiding Add stops NEW records,
   // not editing EXISTING ones, so the edit page still governs the record UI. Checked FIRST, so a hidden-Add
-  // heuristic can never waive a real child page (Major).
+  // heuristic can never waive a real child page.
   if (typeof c.editPage === "string" && c.editPage)
     return `child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`;
   if (c.editPage === false) return null;                       // agent verified: no Classic *Page exists
@@ -262,7 +262,7 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   return { blocked: reasons.length > 0, reasons };
 }
 
-// THE LIST GATE (ENG-94714). `computeGate` above answers for the RECORD page and deliberately excludes everything
+// THE LIST GATE. `computeGate` above answers for the RECORD page and deliberately excludes everything
 // tagged `role: "section"` — a filter added because a section body that would not parse used to block a form-page
 // plan that never consumed its `diff` (the spurious block recorded further down at the `sectionParseErrors` note).
 // That exclusion was right then and is wrong now for HALF its scope: since the section `diff` IS folded and mapped,
@@ -447,7 +447,7 @@ function enumerateChildPages(changeSet, detailSchemas) {
       editable: ds ? ds.editable : null,
       // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
       reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
-      // USER-approved section boundary (ENG-95861): the child entity owns another section, so its Classic card stays
+      // USER-approved section boundary: the child entity owns another section, so its Classic card stays
       // Classic and this list keeps opening it. Carried here as well as parsed on the detail record — a key present
       // in only one of the two places reaches no gate and no renderer, and fails silently.
       opensClassicPage: ds ? (ds.opensClassicPage ?? null) : null,
@@ -532,7 +532,7 @@ function sectionStubScopes(manifest, opts, sectionChangeSet) {
   return [stubScope("section", schema, sectionChangeSet, sectionChangeSet.standardMethodsFiltered)];
 }
 
-// THE SECTION VIEW (ENG-94714). The *Section chain folded over its OWN parent-template seed — the same
+// THE SECTION VIEW. The *Section chain folded over its OWN parent-template seed — the same
 // `mergeHierarchy` the record page uses, given the section's own `BaseDataView` chain instead of the page's
 // `BaseModulePageV2` one. `null` when no section chain was supplied, so every consumer has one thing to test.
 //
@@ -821,7 +821,7 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-// `deduplication` (ENG-94274) joins them for exactly the same reason: the on-save duplicate check is an
+// `deduplication` joins them for exactly the same reason: the on-save duplicate check is an
 // `asyncValidate` override on `CrtDeduplication.BaseEntityPage`, so it arrives via the base seed chain, counts as
 // `fromTemplate`, and is classified as ledger `context` — the page body NEVER shows it, and a migration therefore
 // dropped it in total silence. Its answer carries one extra field beyond present/absent:
@@ -1390,7 +1390,7 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, te
 // `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
 // clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
 const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
-// ENG-95850 (D) — `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
+// `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
 // profile the section ACTUALLY renders, and its own contract says a product section usually resolves to exactly that
 // ("A product section usually resolves to profile: its code declares far fewer columns than the list shows").
 // Leaving it out of this list rejected the tool's most common and most accurate answer as MALFORMED, and the run then
@@ -1495,7 +1495,7 @@ function suppliedRowActions(section) {
   const list = Array.isArray(section?.rowActions) ? section.rowActions : [];
   return list.filter((ra) => ra && typeof ra === "object" && typeof ra.name === "string" && ra.name.trim());
 }
-// `seed` — the section's OWN parent-template chain (ENG-94714), the same shape as the top-level `manifest.seed`
+// `seed` — the section's OWN parent-template chain, the same shape as the top-level `manifest.seed`
 // and collected the same way: a SECOND `get-classic-page-sources` call rooted at the *Section schema, whose
 // `seed` block is copied here. It is what defines `CombinedModeActionButtonsCardLeftContainer`, `DataGrid` and
 // `activeRowActions` (`BaseDataView` [`CrtUIPlatform7x`]), so without it every section element merges onto
@@ -1663,7 +1663,7 @@ function diffActionAsSectionAction(a) {
     source: a.source || "sectionDiff",
   };
 }
-// `sectionView` (ENG-94714) — what the section declares in its OWN `diff`, read off the folded section view by
+// `sectionView` — what the section declares in its OWN `diff`, read off the folded section view by
 // `mapSectionView`. Unioned with the method-body signals below rather than replacing them: the two sources see
 // different halves of the same list. `getSectionActions` reads the menu the section builds imperatively; the
 // `diff` declares the buttons it inserts into the command bar, and until now only the first half reached the plan.
@@ -1826,7 +1826,7 @@ function detailSchemaRecord(e, scanText, p) {
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
     // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
     reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
-    // USER-approved SECTION BOUNDARY (ENG-95861): this child entity owns another section, so its Classic edit page
+    // USER-approved SECTION BOUNDARY: this child entity owns another section, so its Classic edit page
     // stays Classic and the Freedom related list keeps opening it. A STRING names that page (the honest form — the
     // plan can then print it); `true` declares the boundary and leaves the name to the body's own `editPage` read.
     // Normalized to `string | true | null` here so every reader tests one shape. NOT body-derivable: no detail body
@@ -2194,7 +2194,7 @@ function computePlanVersion(manifest, readBody) {
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
-// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE (ENG-95683). A missing component used to get one
+// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE. A missing component used to get one
 // blanket "settle the target before building" whether it was a real component an install could recover or a name no
 // action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
 // can say the actionable thing:
@@ -2573,7 +2573,7 @@ export function runMigration(manifest, opts = {}) {
   // one annotated array is what every surface reports (ENG-95862 item 5).
   eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
-  // …and the LIST page's own verdict, on the section's evidence alone (ENG-94714). Separate from `gate` on purpose:
+  // …and the LIST page's own verdict, on the section's evidence alone. Separate from `gate` on purpose:
   // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
   const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -3573,7 +3573,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
-  // ⛔ LIST GATE (ENG-94714) — the LIST deliverable's own verdict. It gates exactly like the three above: the plan
+  // ⛔ LIST GATE — the LIST deliverable's own verdict. It gates exactly like the three above: the plan
   // already prints "⛔ The list page is NOT approvable", and without this leg the CLI still exited 0 next to that
   // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
   // could build the Freedom list from a section whose `diff` was never readable.
@@ -3687,7 +3687,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + " calling it done.\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
-  // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse
+  // FIDELITY warnings are advisory — printed on the same channel and in the same voice as the parse
   // diagnostics above, so demoting them out of the ⛔ banner does not make them invisible.
   const fidelity = (result.effective?.warnings || []).filter((w) => w.severity === "fidelity" && !w.accepted);
   if (fidelity.length) {

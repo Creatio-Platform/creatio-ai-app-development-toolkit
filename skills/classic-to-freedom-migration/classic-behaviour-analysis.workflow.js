@@ -100,7 +100,7 @@ const ACCESS_VALUES = new Set(Object.values(ACCESS))
 // distinguishes a NULLISH return ("terminal death — the host already exhausted
 // its own retries") from a REJECTION ("the host refused, the schema threw, the
 // prompt was malformed"), and reports which one happened. Collapsing them was a
-// real defect (PR#88 review), so the protocol names all three states rather than
+// real defect, so the protocol names all three states rather than
 // leaving an adapter to invent a convention:
 //
 //   OUTCOME.VALUE — the item produced a result. Driven into the generator with
@@ -703,7 +703,7 @@ function digestKeyOf(entryKey, keys) {
 // several inventory rows end in `::<key>` (AMBIGUOUS — a real row the answer could not be pinned to) and none does
 // (UNKNOWN — a key naming no row on this surface, so invented, stale or copied from another run). The remedies are
 // opposite — re-key the answer versus discard it — so a caller that has to report the failure needs to tell them
-// apart. One implementation, because two would be a second source of truth for the same lookup (PR #147 review).
+// apart. One implementation, because two would be a second source of truth for the same lookup.
 function resolveKey(entryKey, keys) {
   if (keys.has(entryKey)) return { key: entryKey, reason: 'exact' }
   const suffix = `::${entryKey}`
@@ -802,7 +802,7 @@ const RETRY_ATTEMPTS = 2
 //
 // Returns `{ result, ran }`, not the bare value. `ran` is what this loop KNOWS — an attempt handed back something.
 // A caller re-deriving it as `!!result` reads any falsy-but-PRESENT value as "the phase never ran" and marks a real
-// answer UNCHECKED downstream (PR#88 review). Death is a NULLISH outcome; `0`, `''` and `false` are results.
+// answer UNCHECKED downstream. Death is a NULLISH outcome; `0`, `''` and `false` are results.
 // One yield, both failure shapes, no try/catch at the call site. A nullish outcome comes back as
 // `value: null`; a REJECTION is thrown into the generator by the driver's `sendFor`, and an
 // unwrapped yield let it propagate out of `run()` as a raw exception — past the structured verdict
@@ -1459,7 +1459,7 @@ function contextFailureReason(cause, unusable, shape) {
 function contextFailedReturn(contextOutcome, surface, log, returned = null) {
   const cause = failureCause(contextOutcome.error, !!contextOutcome.error)
   // THREE causes, three lines. A rejection, a silent death and a truthy-but-unusable return need different
-  // repairs, and the third one used to be indistinguishable from a surface with nothing on it (PR #147 review).
+  // repairs, and the third one used to be indistinguishable from a surface with nothing on it.
   const unusable = !cause && returned !== null && returned !== undefined
   const shape = Array.isArray(returned) ? 'an array' : `a ${typeof returned}`
   if (cause) {

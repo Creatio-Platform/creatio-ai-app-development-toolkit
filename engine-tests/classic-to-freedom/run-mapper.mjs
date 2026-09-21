@@ -106,7 +106,7 @@ console.log(`\n===== Contract sanity =====`);
 console.log(`viewConfigDiff=${co.viewConfigDiff.length} entityRules=${co.entityBusinessRules.length} pageRules=${co.pageBusinessRules.length} details=${co.details.length} handlerStubs=${co.handlerStubs.length} needsDecision=${co.needsDecision.length}`);
 check("Contract: Owner apply-static-filter present", co.entityBusinessRules.some(r => r.targetAttribute === "Owner"));
 check("Contract: Parent make-required present", co.pageBusinessRules.some(r => r.element === "Parent" && r.action === "make-required"));
-// Regression guard for the symbolic-enum BLOCKER fix: legacy FILTRATION rules (declared via
+// egression guard for the symbolic-enum BLOCKER fix: legacy FILTRATION rules (declared via
 // BusinessRuleModule.enums.RuleType.FILTRATION) must resolve, not collapse to BINDPARAMETER/1-rule.
 check("Contract: legacy FILTRATION rules resolved (entityRules > 1)", co.entityBusinessRules.length > 1);
 check("Contract: no rules mis-mapped to 'symbolic'", !co.needsDecision.some(n => n.kind === "rule" && /symbolic|unresolved/.test(n.reason)));
@@ -601,7 +601,7 @@ check("getActions custom action surfaced into cardActions (not lost)",
 // A tab caption is `#ResourceString(Key)#` — the ONE form that renders on a tab (`$Resources.Strings.*` does not;
 // see ./references/classic-to-freedom-mapping.md). The guarantee here is unchanged: the key is the page's OWN
 // classic key (MyTabCap), never a synthesized `<name>Caption`, and it is still flagged unresolved with no resources.
-check("real tab caption keeps the classic resource KEY (not synthesized) + flagged UNRESOLVED when no resources supplied (#13)",
+check("real tab caption keeps the classic resource KEY (not synthesized) + flagged UNRESOLVED when no resources supplied",
   actCs.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "#ResourceString(MyTabCap)#"
   && actCs.needsDecision.some(n => n.kind === "tab-caption" && n.item === "MyTab" && /unresolved/.test(n.reason)));
 
@@ -989,7 +989,7 @@ const flavorDiamond = runMigration({ entity: "PE", noParentTemplate: true, addRe
   miniPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } } });
 const fdChildSpec = flavorDiamond.childPages.find((c) => c.spec)?.spec || "";
 const fdMiniSpec = flavorDiamond.miniPage?.spec || "";
-check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child AND as the add mini page) gets its OWN spec per flavor — NO cross-flavor memo hit + the mini keeps its 'Mini page (quick-add)' heading the child does not (PR#58 Minor 2)",
+check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child AND as the add mini page) gets its OWN spec per flavor — NO cross-flavor memo hit + the mini keeps its 'Mini page (quick-add)' heading the child does not",
   flavorDiamond.memoStats.hits === 0 && flavorDiamond.memoStats.misses === 2
     && /Mini page \(quick-add\)/.test(fdMiniSpec) && !/Mini page \(quick-add\)/.test(fdChildSpec),
   () => ({ memoStats: flavorDiamond.memoStats, miniHasHeading: /Mini page \(quick-add\)/.test(fdMiniSpec), childHasHeading: /Mini page \(quick-add\)/.test(fdChildSpec) }));
@@ -1350,23 +1350,23 @@ check("list-column evidence from another section is gated, not thrown",
   () => listColumnGateRun({ success: true, sectionSchema: "ContactSectionV2", entity: "Contact",
     source: "entity-default", columns: [{ name: "Name" }] }).structure?.issues);
 // The example used to be `"profile"` — which is a REAL source `get-classic-list-columns` returns, and gating it was
-// ENG-95850's D defect (the engine rejected the tool's most common answer as malformed and forced a worse re-read).
+// defect (the engine rejected the tool's most common answer as malformed and forced a worse re-read).
 // The subject of this check is an UNKNOWN source, so it needs a value the tool genuinely never returns.
 check("an unknown source is gated with the received value named",
   () => gatedOn(listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "grid-profile", columns: [{ name: "Name" }] }), /malformed: source "grid-profile"/),
   () => listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
     source: "grid-profile", columns: [{ name: "Name" }] }).structure?.issues);
-// --- ENG-95850 (D): `source: "profile"` is ACCEPTED, USED, and ASKED ABOUT ONCE. Classic keeps a section's visible
+// --- `source: "profile"` is ACCEPTED, USED, and ASKED ABOUT ONCE. Classic keeps a section's visible
 // columns as saved grid-profile data, so this is the set the list actually renders — and the tool's own contract says
 // a product section usually resolves to it. The engine used to reject it as malformed, so the run re-read with
 // `ignore-profile=true` and got the statically declared set: fewer columns than the list shows.
 const profileRun = listColumnGateRun({ success: true, sectionSchema: "Applicant1Section", entity: "Applicant",
   source: "profile", columns: [{ name: "Name" }, { name: "JobTitle" }] });
-check("ENG-95850 (D): a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
+check("a profile-sourced read is NOT gated any more — it is the set the Classic list renders, and rejecting it forced a re-read that returns fewer columns",
   () => !gatedOn(profileRun, /malformed: source/) && !gatedOn(profileRun, /list-column/),
   () => profileRun.structure?.issues);
-check("ENG-95850 (D): the profile columns are the ones the plan RENDERS (accepted + used, not re-read to fewer columns)",
+check("the profile columns are the ones the plan RENDERS (accepted + used, not re-read to fewer columns)",
   () => /Name/.test(profileRun.designSpec) && /JobTitle/.test(profileRun.designSpec),
   () => (profileRun.designSpec || "").split("\n").filter((l) => /List columns/.test(l)).join("\n"));
 // the columns are shown and editable, so the profile-provenance caveat (and clio's own profile note)
@@ -1387,7 +1387,7 @@ check("a profile-sourced set shows its columns with NO profile caveat on the `- 
     { kind: "field-labels", item: "SomeField", reason: "fetch the caption on-stand" },
     { kind: "visibility-rule", item: "SomeRule", reason: "wire the dynamic visibility rule" },
   ] } }, { embedded: true });
-  check("ENG-96327 (D): the human ⚠ Confirm keeps genuine decisions — a map-or-drop component AND a builder-only visibility-rule (no --units channel, so plan.md IS the builder's worklist) — and DROPS only cosmetic (field-labels) noise",
+  check("the human ⚠ Confirm keeps genuine decisions — a map-or-drop component AND a builder-only visibility-rule (no --units channel, so plan.md IS the builder's worklist) — and DROPS only cosmetic (field-labels) noise",
     /\*\*\[component\]\*\* FancyWidget/.test(shrinkSpec)
       && /\*\*\[visibility-rule\]\*\*/.test(shrinkSpec)
       && !/\[field-labels\]/.test(shrinkSpec),
@@ -2048,7 +2048,7 @@ check("when the `list` key IS published the same items ride on `list` and are ne
       && new Set(rows.map((r) => r.vk.id)).size === rows.length; },
   () => checklistGroups(lpRun, lpOpts).flatMap((g) => g.rows).filter((r) => r.confirm).map((r) => ({ k: r.pageKey, id: r.vk.id })));
 const KIND_LIST_COLUMNS = "list-columns";
-/* ---- ENG-95503 (reopened) — THE FALLBACK COLUMN SET. Measured on a full Applicant1Section run: the section
+/* ---- THE FALLBACK COLUMN SET. Measured on a full Applicant1Section run: the section
    declared no columns, so the on-stand read returned the entity's single display column (`entity-default`), and the
    design spec rendered that as ⚠ prose while the ChangeSet raised no decision at all: the ⚠ Confirm gate only fired
    on a set that was EMPTY. A fallback set is an unanswered question too, so it must raise a `list-columns` decision
@@ -2369,7 +2369,7 @@ check("#5: a mid-range seed (30 methods, 5..149) → possiblyPartial ADVISORY, b
 const fullSeed = mergeHierarchy(clientF(), { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: Array.from({ length: 160 }, (_, i) => "m" + i) })] });
 check("#5: a full seed (160 methods, >=150) → NOT possiblyPartial",
   fullSeed.seedQuality.possiblyPartial === false);
-// review (PR#58 round 10 / Major 1, option B) — STRUCTURAL stub-detect: the count-based gate alone clears a >=5-method
+// STRUCTURAL stub-detect: the count-based gate alone clears a >=5-method
 // seed whose methods are ALL empty stubs `(){}` (a broken / metadata-only fetch that returned names without bodies). The
 // PARSER now marks empty bodies (emptyMethods), so a seed whose methods have NO real body is skeletal regardless of count
 // — while a seed with >=5 REAL-bodied methods (< 150) stays a NON-blocking possiblyPartial advisory (no false-block on a
@@ -2413,11 +2413,11 @@ const capResolved = mapToFreedom(mergeHierarchy([capClient()]), { resources: { M
 // (plan metadata the agent authors), and the "resolved" state just clears the needs-decision nudge.
 // A TAB references its key as `#ResourceString(<key>)#` (the only form a tab renders); a GROUP keeps the
 // `$Resources.Strings.<key>` binding. Either way the literal "Vacancies"/"Details" never reaches the page body.
-check("#5/#13 (Major 4): resolved tab caption stays a #ResourceString key reference + text in resources map + no tab-caption decision",
+check("#5/#13: resolved tab caption stays a #ResourceString key reference + text in resources map + no tab-caption decision",
   capResolved.viewConfigDiff.find(o => o.name === "MyTab")?.values.caption === "#ResourceString(MyTabCaption)#"
   && capResolved.resources.MyTabCaption === "Vacancies"
   && !capResolved.needsDecision.some(n => n.kind === "tab-caption"));
-check("#5/#13 (Major 4): resolved group caption stays a $Resources binding + text in resources map + no group-caption decision",
+check("#5/#13: resolved group caption stays a $Resources binding + text in resources map + no group-caption decision",
   capResolved.viewConfigDiff.find(o => o.name === "Grp")?.values.caption === "$Resources.Strings.GrpCaption"
   && capResolved.resources.GrpCaption === "Details"
   && !capResolved.needsDecision.some(n => n.kind === "group-caption"));
@@ -2436,12 +2436,12 @@ const lblResolved = mapToFreedom(mergeHierarchy([lblClient()]), { columnTitles: 
 // a column-bound field AUTO-labels from its entity column on the page, so we NEVER write an inline
 // `label`. The human title rides along as PLAN-only `titleText` (so the design spec reads the title, not the code).
 const mpVals = lblResolved.viewConfigDiff.find(o => o.name === "MobilePhone")?.values;
-check("#5/#13 fields (Major 4): columnTitles → field titleText is the human title (plan metadata), and NO inline page label",
+check("#5/#13 fields: columnTitles → field titleText is the human title (plan metadata), and NO inline page label",
   mpVals?.titleText === "Mobile phone" && !("label" in mpVals)
   && lblResolved.viewConfigDiff.find(o => o.name === "ExpertiseLevel")?.values.titleText === "Specialist expertise level");
 const lblUnresolved = mapToFreedom(mergeHierarchy([lblClient()]));
 const mpUnres = lblUnresolved.viewConfigDiff.find(o => o.name === "MobilePhone"); // guard: capture before property access
-check("#5/#13 fields (Major 4): without columnTitles, NO inline label AND no titleText on the page + ONE aggregate field-labels nudge",
+check("#5/#13 fields: without columnTitles, NO inline label AND no titleText on the page + ONE aggregate field-labels nudge",
   !!mpUnres && !("label" in mpUnres.values) && mpUnres.values.titleText === undefined
   && lblUnresolved.needsDecision.filter(n => n.kind === "field-labels").length === 1);
 
@@ -2798,7 +2798,7 @@ try {
   const unit2 = "addGridOperationsMenuItems: function(){ getButtonMenuItem( { " + "y".repeat(190) + " } ) }\n"; // ~250B
   const adversarial = unit1.repeat(6000) + unit2.repeat(1500);
   const bytes = Buffer.byteLength(adversarial);
-  // BASELINE-RELATIVE bound (review Minor): a fixed `ms < 1000` is flaky on contended/Windows CI where a legit bounded
+  // BASELINE-RELATIVE bound: a fixed `ms < 1000` is flaky on contended/Windows CI where a legit bounded
   // ~1MB scan can drift past 1s under GC/CPU pressure. Catastrophic backtracking is ORDERS of magnitude worse
   // (seconds→minutes), so compare against a same-process trivial-body baseline with a wide absolute ceiling: the test
   // still fails loudly on real ReDoS but tolerates ordinary scheduler jitter.
@@ -2949,7 +2949,7 @@ check("#1 image FILL: column unresolved → crt.ImageInput still emitted, FILL v
   imageRowCs.changeSet.viewConfigDiff.some((o) => o.name === "Photo" && o.values.type === "crt.ImageInput" && o.values.value?.endsWith("_value"))
   && !imageRowCs.changeSet.needsDecision.some((n) => n.kind === "image-column")
   && /crt\.ImageInput/.test(imageRowCs.designSpec) && /IMAGELOOKUP/.test(imageRowCs.designSpec));
-// #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity). review (PR#58 round 4 #1):
+// #1/#3 cross-datasource: the photo binds a RELATED object's column (not on this entity). review:
 // it must NOT emit a concrete `$ContactPhoto` binding — that column is not an attribute here, and the on-entity
 // attribute/pdsColumn declaration is skipped for crossDs, so the value was DANGLING (and --verify counted the
 // built-but-unbound image green). It now falls to a FILL placeholder (`$Photo_value`, read-only, filled) — the real
@@ -3091,7 +3091,7 @@ const rvDupResult = { changeSet: { viewConfigDiff: [
 const rvDup = renderVerify(rvDupResult, {}, { ops: [
   { name: "Amount", type: "crt.Input" }, { name: "Amount_2", type: "crt.Input" }, { name: "Amount_3", type: "crt.Input" },
 ], ...QG_EVIDENCE });
-check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control (PR#58 Major)",
+check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control",
   rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
   () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
 // REPLACES the old "#verify feature drift" pin, and it had to be replaced rather than kept: that check
@@ -3245,13 +3245,13 @@ check("#image-collision(explicit-first): Img1 explicitly binds the sole IMAGELOO
       && collide.length === 1;                                  // and it's flagged, not silently doubled
   })(),
   () => JSON.stringify(imgExplicitFirst.changeSet.images));
-// review (PR#58 round 9 / Minor 5) — the THIRD collision order the guard missed: TWO EXPLICIT binds to the SAME sole
+// the THIRD collision order the guard missed: TWO EXPLICIT binds to the SAME sole
 // IMAGELOOKUP column. Both resolve to it, so the collision must fire on the explicit path too (not only auto-fallback):
 // the FIRST keeps the column, the SECOND is FILLed (its bind dropped) + an image-column decision — never two widgets on
 // one column. (Before the fix both bound `$Photo` with no decision.)
 const imgTwoExplicit = runMigration({ entity: "X", entityColumns: { Photo: { type: "ImageLookup" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Img1",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"Photo"}},{operation:"insert",name:"Img2",parentName:"Header",propertyName:"items",values:{generator:"ImageCustomGeneratorV2.gen",bindTo:"Photo"}}]};});` }] }, { baseDir: FIX });
-check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole IMAGELOOKUP → FIRST keeps it, SECOND is FILLed + decision, not both on $Photo (PR#58 Minor 5)",
+check("#image-collision(two-explicit): Img1 + Img2 BOTH explicitly bind the sole IMAGELOOKUP → FIRST keeps it, SECOND is FILLed + decision, not both on $Photo",
   (() => {
     const imgs = imgTwoExplicit.changeSet.images;
     const a = imgs.find((x) => x.classic === "Img1"), b = imgs.find((x) => x.classic === "Img2");
@@ -3890,20 +3890,20 @@ check("CHILD_PAGE_ANSWERS names the boundary AND that it is the user's scope dec
   && /a SECTION BOUNDARY is the user's scope decision, not a skip you declare/.test(CHILD_PAGE_ANSWERS),
   () => CHILD_PAGE_ANSWERS);
 
-// --- ENG-95850 (D): a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
+// --- a single `*Page` search cannot answer the child-page question for a TYPED entity. `list-pages`
 // finding no `<Entity>Page` is not the same as the entity having no Classic card — a typed entity registers a per-type
 // card in `SysModuleEdit` instead. A real run recorded `editPage: false` for `InternalRequest` (~18 typed edit pages)
 // and the plan asserted there was nothing to migrate; only a hand-written Adjustments entry caught it.
-check("ENG-95850 (D): the recorded `editPage: false` sentence no longer reads as VERIFIED — it names the typed-entity check that has to confirm it",
+check("the recorded `editPage: false` sentence no longer reads as VERIFIED — it names the typed-entity check that has to confirm it",
   () => /Recorded: no separate child page/.test(DESIGNSPEC_SRC)
     && !/\*\*Verified: no separate child page\.\*\*/.test(DESIGNSPEC_SRC)
     && /TYPED entity registers a per-type edit card/.test(DESIGNSPEC_SRC)
     && /also returns no \\`editPages\\`/.test(DESIGNSPEC_SRC));
-check("ENG-95850 (D): the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
+check("the child-page ANSWER list names `list-entity-client-schemas` as the call that settles a typed entity, so the answer is not recorded off `list-pages` alone",
   () => /list-entity-client-schemas` by that '/.test(DESIGNSPEC_SRC)
     && /TYPED entity registers per-type edit cards instead of one/.test(CHILD_PAGE_ANSWERS)
     && /finding no `\*Page` is not the same as the entity having no Classic card/.test(CHILD_PAGE_ANSWERS));
-check("ENG-95850 (D): the REUSE sentence carries the same caveat — the two places that state 'no Classic child page' cannot disagree about how strong that claim is",
+check("the REUSE sentence carries the same caveat — the two places that state 'no Classic child page' cannot disagree about how strong that claim is",
   () => /A TYPED entity registers per-type cards rather than one/.test(DESIGNSPEC_SRC));
 
 /* ---- CHARACTERISATION: the detail record's manifest entry OVERRIDES what the body scan derived — `entity`,
@@ -4173,22 +4173,22 @@ check("Blocker1(part1): an unresolved construct AT a structural key (diff via a 
   b1call.gate.blocked === true && b1call.gate.reasons.some((r) => /structural field/.test(r) && /diff/.test(r)));
 check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
   !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
-// Blocker (this round): an alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`)
+// locker (this round): an alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`)
 // must NOT resolve to a silent hole. The lazy-node alias eval flags `diff.0.values` in the real sink → the
 // gate blocks, instead of the old green pass with 0 fields and the field mislabelled unmapped-component.
 const b1aliasDyn = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values: makeValues()}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
-check("Blocker (alias): an aliased diff item with a dynamic values object is diagnosed (diff.N.values) and BLOCKS the gate",
+check("locker (alias): an aliased diff item with a dynamic values object is diagnosed (diff.N.values) and BLOCKS the gate",
   b1aliasDyn.gate.blocked === true && b1aliasDyn.gate.reasons.some((r) => /structural field/.test(r) && /diff\.0\.values/.test(r)),
   () => ({ blocked: b1aliasDyn.gate.blocked, reasons: b1aliasDyn.gate.reasons, diags: b1aliasDyn.parseDiagnostics }));
 // and the sibling advisory boundary via an alias: a dynamic CAPTION deep in an aliased item stays advisory.
 const b1aliasCap = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F",caption:makeCaption()}}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
-check("Blocker (alias): a dynamic caption inside an aliased item stays ADVISORY (surfaced, not a structural block)",
+check("locker (alias): a dynamic caption inside an aliased item stays ADVISORY (surfaced, not a structural block)",
   b1aliasCap.parseDiagnostics.some((d) => /diff\.0\.values\.caption/.test(d.path)) && !b1aliasCap.gate.reasons.some((r) => /structural field/.test(r)),
   () => ({ diags: b1aliasCap.parseDiagnostics, reasons: b1aliasCap.gate.reasons }));
 
-// Major (this round) — a factory that returns a VARIABLE (`var cfg={…}; return cfg;`) resolves the same as an
+// ajor (this round) — a factory that returns a VARIABLE (`var cfg={…}; return cfg;`) resolves the same as an
 // inline object; a return the evaluator cannot resolve to an object (a call, or no return) is a ROOT-level
 // structural hole → gate blocks, not a silent empty page.
 const retAlias = runMigration({ entity: "X", seed: CLEAN_SEED,
@@ -4228,7 +4228,7 @@ const m3child = runMigration({ entity: "X",
   childPageSchemas: { C: m3childBad, CPage: m3childBad } }, { baseDir: FIX });
 check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
   m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
-// Major 4 (this round) — a detail body that PARSES but builds its `diff` via an unresolved call resolves to
+// ajor 4 (this round) — a detail body that PARSES but builds its `diff` via an unresolved call resolves to
 // columns:null. Its astDiagnostics must reach the gate (tagged detail:<name>) and BLOCK on the structural diff,
 // not pass green with empty columns.
 const m4detDyn = runMigration({ entity: "X",
@@ -4237,7 +4237,7 @@ const m4detDyn = runMigration({ entity: "X",
 check("Major4(detail): a detail whose diff is built by an unresolved call BLOCKS the gate (detail:<name> structural diag), not green columns:null",
   m4detDyn.gate.blocked === true && m4detDyn.gate.reasons.some((r) => /structural field/.test(r) && /detail:DynDetail/.test(r)),
   () => ({ blocked: m4detDyn.gate.blocked, reasons: m4detDyn.gate.reasons }));
-// Major 3 (this round) — a page built with NO parent-template seed must BLOCK (a Classic page always extends a
+// ajor 3 (this round) — a page built with NO parent-template seed must BLOCK (a Classic page always extends a
 // base template; skipping the seed drops inherited actions + layout). The skeleton-dodge (page defines its own
 // containers so `unresolvedParents` stays empty) previously slipped through green. Verified opt-out clears it.
 const dodgeBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}},{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});`;
@@ -4320,7 +4320,7 @@ check("F5: a deep child tree maps fully — the child is mapped AND its own gran
   f5ch?.spec && f5ch.grandChildren >= 1,
   () => ({ childMapped: !!f5ch?.spec, grandChildren: f5ch?.grandChildren }));
 
-/* ---- Minor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
+/* ---- inor (untrusted input): stand-derived captions/titles cannot inject Markdown into the plan ---- */
 // The design spec is presented "verbatim" and acted on. A hostile/garbled stand caption or column title
 // (newline + heading + fenced block + pipe + backticks) must NOT break the table or inject a line that
 // reads as an instruction — the sanitizer collapses each value to one inert cell.
@@ -4356,16 +4356,16 @@ const htmlRun = runMigration({ entity: "X", resources: { TC2: htmlCap }, seed: C
 // all. The rendered spec keeps its no-live-vector guarantee independently (it renders whatever caption text it can
 // resolve, so the escaping path must stay sound regardless of which caption form feeds it).
 const htmlTabOp = htmlRun.changeSet.viewConfigDiff.find((o) => o.name === "HT");
-check("sanitize (Major 5): a hostile tab caption cannot reach the PAGE BODY at all — the tab carries only the resource KEY reference",
+check("sanitize: a hostile tab caption cannot reach the PAGE BODY at all — the tab carries only the resource KEY reference",
   htmlTabOp?.values?.caption === "#ResourceString(TC2)#"
   && !/img|javascript|INJECT/.test(JSON.stringify(htmlTabOp?.values ?? {})),
   () => JSON.stringify(htmlTabOp));
-check("sanitize (Major 5): an inline HTML tag + Markdown link + newline caption yields NO LIVE vector in the rendered spec — no new heading line, no live <img> tag, no live link",
+check("sanitize: an inline HTML tag + Markdown link + newline caption yields NO LIVE vector in the rendered spec — no new heading line, no live <img> tag, no live link",
   !/^\s{0,3}#{1,6}\s+INJECT/m.test(htmlRun.designSpec)     // newline can't start a heading
   && !/<img/.test(htmlRun.designSpec)                      // angle brackets never survive as a live tag
   && !/\]\(javascript/.test(htmlRun.designSpec),           // link syntax broken
   () => htmlRun.designSpec.split("\n").filter((l) => /img|javascript|INJECT/.test(l)));
-// entity-heading path (Major 1): entity from an untrusted body can't start a new heading line in the SPEC.
+// entity-heading path: entity from an untrusted body can't start a new heading line in the SPEC.
 const entRun = runMigration({ entity: "Ent\n## OWNED", seed: CLEAN_SEED, planMeta: FULL_PLANMETA,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
 check(String.raw`sanitize: entity with \n# cannot start a new heading line in the design spec OR the plan (Major 1, all 5 sites)`,
@@ -4402,7 +4402,7 @@ check("#5: the missing-column field is mapped as a linked value (recipe footnote
   reasonRun.changeSet.viewConfigDiff.some((o) => o.values?.linkedValue === true)
   && /`↳ linked` fields \(read-only, cross-datasource\)/.test(reasonRun.designSpec) && !/&lt;X&gt;/.test(reasonRun.designSpec));
 
-// determinism (#11) — the same manifest must produce byte-identical output on repeat runs (no dependence on
+// determinism — the same manifest must produce byte-identical output on repeat runs (no dependence on
 // Map/object iteration nondeterminism). Compare full JSON of two independent runs of a rich manifest.
 const detManifest = { entity: "SupportUnit", entityColumns: SU_COLS, schemas: SU_SCHEMAS, seed: CLEAN_SEED, detailSchemas: SU_DETAILS, planMeta: FULL_PLANMETA };
 const det1 = JSON.stringify(runMigration(detManifest, { baseDir: FIX }));
@@ -4411,7 +4411,7 @@ check("#11 determinism: two runs of the same manifest produce byte-identical out
   det1 === det2 && det1.length > 100,
   () => ({ len1: det1.length, len2: det2.length, firstDiff: [...det1].findIndex((ch, i) => ch !== det2[i]) }));
 
-/* ---- Major (supply-chain): the vendored acorn parser matches its pinned upstream provenance ---- */
+/* ---- ajor (supply-chain): the vendored acorn parser matches its pinned upstream provenance ---- */
 // The one executable that processes untrusted schema-body must be integrity-checked. verify-vendor.mjs is
 // the CI gate; running it here ties the same check into the local golden run (exit 0 on a clean tree).
 const vv = spawnSync(process.execPath, [path.join(ENGINE_DIR, "verify-vendor.mjs")], { encoding: "utf8" });
@@ -4433,7 +4433,7 @@ check("vendor-integrity: no engine source imports acorn by BARE specifier — `f
 check("vendor-integrity(guard): the bare-acorn detector catches `from \"acorn\"` AND side-effect `import \"acorn\"`",
   bareAcornRe.test('import { parse } from "acorn";') && bareAcornRe.test('import "acorn";')
   && !bareAcornRe.test('createRequire(import.meta.url)("./vendor/acorn.cjs")'));
-// Import-time RCE guard (PR #58): engine.mjs must NOT STATICALLY import the vendored parser — a hoisted
+// Import-time RCE guard: engine.mjs must NOT STATICALLY import the vendored parser — a hoisted
 // `import … from "./vendor/acorn…"` evaluates the (possibly tampered) module BEFORE the integrity check runs, so
 // a top-level payload would fire regardless of the gate. The parser is loaded LAZILY via createRequire inside
 // getAcornParse(), only AFTER ensureVendorIntegrity() passes — so a tampered bundle throws before its bytes run.
@@ -4483,7 +4483,7 @@ try {
   const vNoMan = vvOn(vvDir);
   check("vendor-integrity(neg): an unreadable/absent manifest FAILS — exit 1 + 'cannot read'",
     vNoMan.status === 1 && /cannot read/.test(vNoMan.stderr || ""));
-  // (e) DENY-UNKNOWN (review round 4 #5): an UNPINNED .mjs sibling in vendor/ must fail closed — otherwise a module
+  // (e) DENY-UNKNOWN: an UNPINNED .mjs sibling in vendor/ must fail closed — otherwise a module
   // loaded transitively (e.g. by acorn.cjs) would bypass the hash gate. (acorn.cjs today is self-contained + the only
   // pinned .mjs, so this guards the future: a new unpinned .mjs is a hard failure, not a silent bypass.)
   fs.writeFileSync(provPath, JSON.stringify({ files: { "t.txt": { package: "x", version: "1", sha256: "0".repeat(64) } } }));
@@ -4492,12 +4492,12 @@ try {
   const vUnpinned = vvOn(vvDir);
   check("vendor-integrity(neg): an UNPINNED .mjs sibling FAILS closed — exit 1 + 'unpinned executable module' (deny-unknown, no transitive-load bypass)",
     vUnpinned.status === 1 && /unpinned executable module/.test(vUnpinned.stderr || ""), () => (vUnpinned.stderr || "").slice(0, 160));
-  // (f) DENY-UNKNOWN is RECURSIVE (PR#58 round 9 / Minor 3): a NESTED unpinned module must fail closed too — a flat
+  // (f) DENY-UNKNOWN is RECURSIVE: a NESTED unpinned module must fail closed too — a flat
   // top-level scan would miss vendor/sub/evil.js while it stays equally loadable (require("./sub/evil.js")).
   fs.mkdirSync(path.join(vvDir, "sub"));
   fs.writeFileSync(path.join(vvDir, "sub", "evil.js"), "module.exports = 1;\n");
   const vNested = vvOn(vvDir);
-  check("vendor-integrity(neg): a NESTED unpinned module (vendor/sub/evil.js) FAILS closed — deny-unknown walks recursively, not only the flat top level (PR#58 Minor 3)",
+  check("vendor-integrity(neg): a NESTED unpinned module (vendor/sub/evil.js) FAILS closed — deny-unknown walks recursively, not only the flat top level",
     vNested.status === 1 && /sub\/evil\.js: unpinned executable module/.test(vNested.stderr || ""), () => (vNested.stderr || "").slice(0, 200));
   // (g) DROPPED acorn PIN (PR#58 round 10 / Major 3b), real-path: a provenance that DROPS the executable's own pin while
   // the executable stays present must fail closed — deny-unknown flags the now-unpinned acorn.cjs, so getAcornParse never
@@ -4507,17 +4507,17 @@ try {
   const vDroppedPin = vvOn(vvDir);
   check("vendor-integrity(neg): acorn.cjs present but its provenance pin DROPPED → FAILS closed (deny-unknown; acorn is never a verified ok entry) (PR#58 round 10 Major 3b)",
     vDroppedPin.status === 1 && /acorn\.cjs: unpinned executable module/.test(vDroppedPin.stderr || ""), () => (vDroppedPin.stderr || "").slice(0, 200));
-  // (h) CASE-INSENSITIVE + native addons (PR#58 round 11 / Major 1): on a case-insensitive FS (Windows / default macOS)
+  // (h) CASE-INSENSITIVE + native addons: on a case-insensitive FS (Windows / default macOS)
   // an UPPERCASE-extension sibling (evil.JS / evil.CJS) is still require()-able, and a `.node` native addon is
   // dlopen-able — a case-sensitive `.js`-only scan would miss BOTH. The extension is lower-cased and `.node` included.
   fs.writeFileSync(path.join(vvDir, "evil.JS"), "//\n");
   const vUpper = vvOn(vvDir);
-  check("vendor-integrity(neg): an UPPERCASE-extension sibling (evil.JS) FAILS closed — deny-unknown lower-cases the extension (case-insensitive-FS require bypass) (PR#58 round 11 Major 1)",
+  check("vendor-integrity(neg): an UPPERCASE-extension sibling (evil.JS) FAILS closed — deny-unknown lower-cases the extension (case-insensitive-FS require bypass)",
     vUpper.status === 1 && /evil\.JS: unpinned executable module/.test(vUpper.stderr || ""), () => (vUpper.stderr || "").slice(0, 200));
   fs.rmSync(path.join(vvDir, "evil.JS"));
   fs.writeFileSync(path.join(vvDir, "addon.node"), "\0");
   const vNode = vvOn(vvDir);
-  check("vendor-integrity(neg): a native addon (addon.node) FAILS closed — deny-unknown covers .node, not only .cjs/.mjs/.js (PR#58 round 11 Major 1)",
+  check("vendor-integrity(neg): a native addon (addon.node) FAILS closed — deny-unknown covers .node, not only .cjs/.mjs/.js",
     vNode.status === 1 && /addon\.node: unpinned executable module/.test(vNode.stderr || ""), () => (vNode.stderr || "").slice(0, 200));
 } finally {
   fs.rmSync(vvDir, { recursive: true, force: true });
@@ -4528,7 +4528,7 @@ try {
 // version stored/threw only on call #1, so parse #2..N ran on a tampered parser). Restore after so later goldens are
 // unaffected. This is the seam the review asked for (resettable memo) + the golden the memoized re-throw lacked.
 // The seam is GATED behind C2F_TEST_SEAM=1 (inert on the shipped surface); arm it ONLY for these goldens and DISARM
-// it in `finally` so it never stays live for the rest of the shared-process run (review round-5 Minor #3).
+// it in `finally` so it never stays live for the rest of the shared-process run.
 let acThrows = 0, acLastMsg = "", acornPinThrew = false, acornPinMsg = "";
 process.env.C2F_TEST_SEAM = "1";
 try {
@@ -4571,11 +4571,11 @@ check("Minor2: section processNames are escaped at the sink (pipe neutralized), 
 const logicSpec = renderDesignSpec({ entity: "X", changeSet: { handlerStubs: [
   { sourceMethod: "onFo|oChanged", category: "handler" }, { sourceMethod: "setFo|oInfo", category: "handler" }] } });
 const impLines = logicSpec.split("\n").filter((l) => /onFo|setFo/.test(l));
-check("Major(imperative-sink): a piped handler/helper name is escaped in the worklist's method cell (no raw table pipe)",
+check("ajor(imperative-sink): a piped handler/helper name is escaped in the worklist's method cell (no raw table pipe)",
   impLines.length === 2 && impLines.some((l) => l.includes(String.raw`onFo\|oChanged`))
   && impLines.some((l) => l.includes(String.raw`setFo\|oInfo`)) && !impLines.some((l) => /[^\\]\|o(Changed|Info)/.test(l)),
   () => JSON.stringify(impLines));
-check("Major(imperative-sink): the Logic table renders no method name to escape in the first place",
+check("ajor(imperative-sink): the Logic table renders no method name to escape in the first place",
   /#### Business rules/.test(logicSpec) && !(logicSpec.split("#### Business rules")[1] || "").split("####")[0].includes("Fo"),
   () => (logicSpec.split("#### Business rules")[1] || "").split("####")[0]);
 
@@ -5714,7 +5714,7 @@ check("signals gate CLI: unresolved signals in --plan → exit 2 + stderr diagno
   sigCli.status === 2 && /on-stand signals not resolved/i.test(sigCli.stderr || ""),
   () => ({ status: sigCli.status, stderr: (sigCli.stderr || "").slice(0, 120) }));
 
-/* ---- section DASHBOARDS — the FOURTH on-stand signal (ENG-95793). A classic section's 7x dashboards are stand
+/* ---- section DASHBOARDS — the FOURTH on-stand signal. A classic section's 7x dashboards are stand
    DATA (SysDashboard rows filtered by the section's SysModule), not schema code, so they can only reach the pure
    engine through manifest.signals. Each item also carries its DELIVERY MODE — the package that ships it, or
    stand-only — because the migrated dashboard must ship the same way (the migrator writes it as a client unit
@@ -5995,7 +5995,7 @@ check("F1 docs: the reference does NOT restate it - it names the parameter and p
   && !mappingFlat.includes("pick the layer whose `UId`")
   && mappingFlat.includes("Resolving each of them, and the order the runs go in, is the skill's"),
   () => "the reference is repeating the skill's parameter recipe again");
-// The regression this locks (ENG-95807 / B1): the migrator briefly accepted a bare JSON array of ids on
+// The regression this locks: the migrator briefly accepted a bare JSON array of ids on
 // SysDashboardsSelectionStateFilter, and the skill documented that notation. The second notation was reverted as
 // undiscoverable, so a skill that still teaches it hands the process a value that does not deserialize into a
 // filter - selecting nothing and reporting no error, the same silent no-op as the Guid.Empty trap above.
@@ -6830,7 +6830,7 @@ const PROFILE_BODY = `define("InternalRequestEmployeeTransferPage",[],function()
   },
   diff:[
     // A real page that embeds a profile card also has its OWN fields. One is enough here and it is required: the
-    // hollow-form gate (PR #58) blocks a fold that produced 0 fields, and a field-less fixture would trip it for a
+    // hollow-form gate blocks a fold that produced 0 fields, and a field-less fixture would trip it for a
     // reason that has nothing to do with profile cards.
     {operation:"insert",name:"Subject",parentName:"Header",propertyName:"items",values:{bindTo:"Subject"}},
     {operation:"insert",name:"RequesterProfile",parentName:"LeftModulesContainer",propertyName:"items",values:{itemType:Terrasoft.ViewItemType.MODULE}},
@@ -7589,7 +7589,7 @@ check("inverse graph: mutual recursion does not hang or invent a root (cycle gua
   (invTrig("pingPongA")?.kind === "internal") && !invTrig("pingPongA")?.rootTrigger && !invTrig("pingPongA")?.lifecycle);
 check("inverse graph: a declaration-triggered method keeps its OWN declared trigger, never an internal one",
   invTrig("onStageChanged")?.kind === "attribute-dependency");
-// Regression from a real Order-section run: the immediate caller must not also appear in `via`, and `via` must not
+// egression from a real Order-section run: the immediate caller must not also appear in `via`, and `via` must not
 // end on the root the trigger already names ("internal call from onContractInserted via onContractInserted").
 check("inverse graph: `via` lists the hops BETWEEN the caller and the root — never the caller itself",
   !(invTrig("roundIt")?.via || []).includes(invTrig("roundIt")?.from),
@@ -8022,7 +8022,7 @@ check("handoff BACK: a section-scope key DESCRIBES the section's own row, and ra
 // helper over different subsets, so the split is only as good as its subset boundary: a key satisfying both
 // filters would be double-bannered, and one satisfying neither would silently drop the pre-existing `unmatched`
 // coverage signal. Each case alone (above) cannot catch that — the classification is a property OF the run, so
-// it takes one run holding all three (PR#88 review).
+// it takes one run holding all three.
 const secSplit = runMigration({ ...handoffManifest, planMeta: { sectionSchema: "DealSection" }, section: [{ pkg: "DealPkg", body: SECTION_BODY }],
   behaviourIndex: {
     onStageChanged: { card: "C01", ac: ["AC-1"] }, // a PAGE scope owns it
@@ -8047,7 +8047,7 @@ check("handoff BACK: `unmatched` is computed over EVERY scope, so a section-owne
 // a pin that only ever sees one scope cannot see that widening. The widening is correct — a section mixin carried
 // by a wiring card alone needs the banner as much as a page one — but it was silent, and the next scope type could
 // move keys with nothing failing. Pinned on BOTH sides of the section scope so the pin proves the DELTA rather
-// than today's output (PR#88 review, Major). `coverage.complete` is deliberately
+// than today's output. `coverage.complete` is deliberately
 // asserted UNCHANGED here: it comes from `buildCoverage(eff/changeSet/manifest)`, which never reads `stubIndex`,
 // and the review that asked for this pin assumed the opposite — pinning it is what keeps that answer honest.
 const wiringIdx = { "DealSection::mixin:orderUtil": { card: "C10", ac: ["AC-9"] }, "mixin:someMixin": { card: "C11", ac: ["AC-8"] } };
@@ -8075,7 +8075,7 @@ check("handoff BACK: adding the section scope leaves `coverage.complete` and the
 // banner names it too and would satisfy a plan-wide regex even if this banner dropped its key list entirely
 // (`mixin:someMixin` also appears in the member table). So render ONCE, slice the banner's own line — it is pushed
 // as a single concatenated template string — and assert the keys inside that slice. Verified by mutation: blanking
-// the banner's key list turns this check red (PR#88 review, Minor).
+// the banner's key list turns this check red.
 const wiringPlanLines = renderPlan(wiringWithSec, {}).split("\n");
 const wiringBannerLine = wiringPlanLines.find((l) => /name only a wiring card/.test(l)) || "";
 check("handoff BACK: a wiring-only row renders its ⚠ plan banner naming EVERY wiring-only key ON THAT LINE — the advisory is the ONLY signal for an `externalRef` row, which never blocks on coverage",
@@ -8438,7 +8438,7 @@ check("template-provided components nested 4 levels deep in the merged `bundle.v
   // dropped without anything going red.
   && /Feed \(`crt\.Feed`\) — settings: `get-guidance name=page-modification-standard-components` \| ✅ Done/.test(tplProvidedDeep.markdown)
   // positive control: the SAME expectations, without those nodes, are MISSING — 4 now that Approvals gates on
-  // TWO components (crt.Approval + crt.ApprovalList) instead of one (ENG-95859).
+  // TWO components (crt.Approval + crt.ApprovalList) instead of one.
   && tplProvidedShallow.missing === 4,
   () => ({ deep: { m: tplProvidedDeep.missing, u: tplProvidedDeep.unverified }, shallow: { m: tplProvidedShallow.missing },
     rows: tplProvidedDeep.markdown.split("\n").filter((l) => /crt\./.test(l)).map((l) => l.slice(0, 110)) }));
@@ -9990,13 +9990,13 @@ try {
   const commsRun = validateRun({ standardFeatures: [{ feature: "Communication options" }] },
     { index: commsStandIdx, version: "8.3.9" });
   const commsFinding = commsRun.findings.find((f) => f.componentType === "crt.CommunicationOptions");
-  check("ENG-95683 (T1/R1): a gated real component (crt.CommunicationOptions) absent on the stand is a finding whose gate marks it a COMPOSITE and names the package/feature",
+  check("a gated real component (crt.CommunicationOptions) absent on the stand is a finding whose gate marks it a COMPOSITE and names the package/feature",
     !!commsFinding && commsFinding.kind === "unknown-component"
     && commsFinding.gate?.kind === GATE_KIND.COMPOSITE && commsFinding.gate?.id === "CrtCustomer360App"
     && commsFinding.gate?.feature === "CommonCommunicationsBehavior",
     () => commsRun.findings);
   const commsGuidance = registrySettleGuidance(commsFinding);
-  check("ENG-95683 (T1/R1): the guidance for a gated component says install `CrtCustomer360App`, enable `CommonCommunicationsBehavior`, re-run the BUILD, and NO re-plan",
+  check("the guidance for a gated component says install `CrtCustomer360App`, enable `CommonCommunicationsBehavior`, re-run the BUILD, and NO re-plan",
     /install the `CrtCustomer360App` package/.test(commsGuidance) && /enable the `CommonCommunicationsBehavior` feature/.test(commsGuidance)
     && /re-run the BUILD/.test(commsGuidance) && /no re-plan/.test(commsGuidance) && !/--plan --out/.test(commsGuidance),
     () => commsGuidance);
@@ -10005,14 +10005,14 @@ try {
   // and the guidance keeps the "fix the mapping/plan and re-run `--plan --out`" branch (no install can make it real).
   const fabRun = validateRun({ viewConfigDiff: [{ name: "X", values: { type: "crt.NotAComponent" } }] }, { version: "8.3.0" });
   const fabFinding = fabRun.findings.find((f) => f.componentType === "crt.NotAComponent");
-  check("ENG-95683 (T2/R2): a fabricated non-component type carries NO gate and keeps the 'fix the mapping/plan, re-run `--plan --out`' guidance",
+  check("a fabricated non-component type carries NO gate and keeps the 'fix the mapping/plan, re-run `--plan --out`' guidance",
     !!fabFinding && fabFinding.kind === "unknown-component" && fabFinding.gate == null
     && /fix the mapping or the plan/.test(registrySettleGuidance(fabFinding)) && /--plan --out/.test(registrySettleGuidance(fabFinding))
     && !/re-run the BUILD/.test(registrySettleGuidance(fabFinding)),
     () => fabFinding);
 
   // T3 — the typed intent is surfaced through the derived FEATURE_CATALOG view (not parsed out of `note`/`freedom`).
-  check("ENG-95683 (T3/R3): FEATURE_CATALOG exposes the structured {kind,id} gate for a known gated row",
+  check("FEATURE_CATALOG exposes the structured {kind,id} gate for a known gated row",
     FEATURE_CATALOG.ContactCommunicationDetail?.gate?.kind === GATE_KIND.COMPOSITE
     && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.id === "CrtCustomer360App"
     && FEATURE_CATALOG.ContactCommunicationDetail?.gate?.feature === "CommonCommunicationsBehavior"
@@ -10455,7 +10455,7 @@ try {
   check("follow-up: that attribute's ledger row is `context` (auto-accounted, counted, never a gap) — not `unaccounted` and not `decision`",
     tplGap.coverage?.rows.find((r) => r.kind === "attribute" && r.name === "TplAttr")?.disposition === "context",
     () => tplGap.coverage?.rows.filter((r) => r.kind === "attribute"));
-  // Regression guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
+  // egression guard: the SAME shape, but the CLIENT schema also declares the attribute (schemaTouched) — the
   // escalation must survive. Only an untouched, purely-inherited member gets suppressed.
   const tplGapTouchedClient = `define("P",[],function(){return{entitySchemaName:"X",attributes:{TplAttr:{value:true}},diff:[${nameOp}]};});`;
   const tplGapTouched = runMigration({ entity: "X", entityColumns: { Name: { type: "ShortText" } },
@@ -10624,7 +10624,7 @@ try {
     () => ({ needsDecision: secRun.changeSet.needsDecision.filter((d) => d.kind === "field-control"),
       emitted: secRun.changeSet.viewConfigDiff.filter((o) => ["H", "S", "I", "B"].includes(o.name)).map((o) => ({ name: o.name, type: o.values?.type })) }));
 
-  // review (Blocker), the FAIL-CLOSED half: an encrypted or hashed column must not reach the ChangeSet as
+  // review, the FAIL-CLOSED half: an encrypted or hashed column must not reach the ChangeSet as
   // an editable cleartext input, and the only reader-facing surface must not call it ordinary text. Both were true
   // before this: `scalarControl` withheld the control on purpose and the caller undid that one line later with
   // `ctl || { type: "crt.Input" }`, while `fieldTypeLabel` had no arm for either type.
@@ -11050,7 +11050,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       return p.complete === false && p.buildComplete === false && p.missing >= 1
         && p.openRows.some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)); },
     () => pageOf({ pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE }).openRows);
-  // The BUILDER-OWNED `unverified` class (ENG-95901 review): `resolveCountVk` maps a PARTIAL count to `unverified`
+  // The BUILDER-OWNED `unverified` class: `resolveCountVk` maps a PARTIAL count to `unverified`
   // and `resolveFieldsByIdentity` maps every short field set — `0/N` included — to `unverified`, so the label axis
   // alone would call these builds complete. The `owner` says whose work is open, and the build axis reads the owner.
   check("a PARTIAL component count (1 of 4 crt.DataGrid) is NOT build-complete — `missing` is 0 and the row reads `unverified`, but the row is the BUILDER's, so `buildComplete` is false and `builderOpen` counts it",
@@ -11673,7 +11673,7 @@ check("AC-4/R8 (PR #182 review, raised by BOTH reviews): on the BASIC form templ
 // all besides. Substituting one name for the other makes them byte-identical — every route, every disposition,
 // every gated row. An edit that made the route (or anything else in the plan) template-dependent goes red here,
 // and the failure payload names the first line that did it.
-check("AC-4/R8 (PR #182 review): the plan rendered on the BASIC template and on the top-area template differ ONLY in the template name — substituting one for the other makes the two documents byte-identical, so nothing in this plan, route included, varies by template family",
+check("AC-4/R8: the plan rendered on the BASIC template and on the top-area template differ ONLY in the template name — substituting one for the other makes the two documents byte-identical, so nothing in this plan, route included, varies by template family",
   () => faBasicPlan.split(FA_BASIC_TEMPLATE).join(FA_TOPAREA_TEMPLATE) === faPlan
     && faBasicPlan.includes(FA_BASIC_TEMPLATE) && faPlan.includes(FA_TOPAREA_TEMPLATE)
     && faBasicRowRecs.map((r) => r.label).join("\n").split(FA_BASIC_TEMPLATE).join(FA_TOPAREA_TEMPLATE)
@@ -12561,7 +12561,7 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
       if (body) asWrite(d, r.file, body());
     });
     const composed = assembleBuilt(d, readPlan(lpRun, checklistOpts(LP_MANIFEST)));
-    check("ENG-98556 (seam): `--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
+    check("`--reads` → fill every file it names → compose reports ZERO problems — the vocabulary the two modules share is pinned by a real index, not a hand-written one",
       () => composed.problems.length === 0 && Object.keys(composed.built.pages).length > 0
         && Object.values(composed.built.pages).every((p) => p.viewConfig !== undefined),
       () => ({ problems: composed.problems, pages: Object.keys(composed.built.pages) }));
@@ -12578,7 +12578,7 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
         && replay.status === fromRun.status,
       () => ({ fromStatus: fromRun.status, replayStatus: replay.status,
         identical: fs.existsSync(replayOut) && fs.readFileSync(replayOut, "utf8") === composedTable }));
-    check("ENG-98556 (seam): `--reads` printed the plan it wrote — the agent acts on stdout, so an index written with nothing printed would leave the reads undiscoverable",
+    check("`--reads` printed the plan it wrote — the agent acts on stdout, so an index written with nothing printed would leave the reads undiscoverable",
       () => /Read plan/.test(plan.stdout || "") && index.reads.length > 0,
       () => ({ printed: (plan.stdout || "").slice(0, 120), reads: index.reads.length }));
   } finally { fs.rmSync(d, { recursive: true, force: true }); }

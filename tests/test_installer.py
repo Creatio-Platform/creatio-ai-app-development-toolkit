@@ -416,7 +416,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
-        # Regression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
+        # egression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
         # the "no such marketplace" condition as
         #   `Error: marketplace `creatio` is not configured or installed`
         # — backticks around the name and "is not configured or installed"
@@ -452,7 +452,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
-        # Regression for PR #73 RC-1: swallowing every RuntimeError on the
+        # egression for PR #73 RC-1: swallowing every RuntimeError on the
         # pre-remove step would hide real failures (permissions, broken CLI,
         # I/O errors) behind a misleading downstream `marketplace add` error.
         installer = load_installer()
@@ -518,7 +518,7 @@ class InstallClaudeTests(unittest.TestCase):
             self.assertFalse((home / ".agents" / "skills").exists())
 
     def test_install_claude_always_removes_marketplace_first_and_tolerates_not_found(self):
-        # Regression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
+        # egression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
         # users upgrading from the old file-copy install carry a directory-source
         # `creatio` marketplace whose absolute `installLocation` survives in
         # known_marketplaces.json. Claude CLI silently "updates in place" on a
@@ -921,7 +921,7 @@ class RemoveTomlTableBlockTests(unittest.TestCase):
             self.assertIn('network = "restricted"', body)
 
     def test_preserves_multiline_array_in_sibling_table(self):
-        # Regression: a generous next-header detector ("any line starting with [")
+        # egression: a generous next-header detector ("any line starting with [")
         # would treat the closing `]` of a multi-line array literal as a new
         # table header and leak the rest of the sibling block as orphans.
         installer = load_installer()

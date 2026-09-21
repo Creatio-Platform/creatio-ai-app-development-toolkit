@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CI guard (Minor 1, PR #50): every `sonar.exclusions` glob in `.sonarcloud.properties` must still
+// CI guard: every `sonar.exclusions` glob in `.sonarcloud.properties` must still
 // match >=1 real file, so a rename/move that silently voids an exclusion — re-surfacing the ~100
 // fixture false-positives the exclusion exists to suppress — fails LOUDLY instead of no-op'ing.
 //

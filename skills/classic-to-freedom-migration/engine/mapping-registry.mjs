@@ -132,7 +132,7 @@ export const isAdvisory = (f) => ADVISORY.has(f.kind);
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
 export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), version = null } = {}) {
   const findings = rows.flatMap((r) => validateRow(r, { index, version }));
-  // Table-wide invariant (ENG-95683): no component type may carry two divergent gates. This is a whole-table check,
+  // Table-wide invariant: no component type may carry two divergent gates. This is a whole-table check,
   // not a per-row one, so it is folded in here after the per-row findings. `gate-conflict` is a hard error.
   // ...and the sibling invariant: a gate must have the SHAPE the guidance reads. A malformed gate is silent-wrong
   // the same way a divergent one is (it degrades to the re-plan dead end), so `gate-shape` is a hard error too.
@@ -319,7 +319,7 @@ export function validateRun(changeSet, { index = vendoredIndex(), version = null
   const findings = [];
   const bitCount = (index?.meta?.versions || []).length;
   for (const [ctype, why] of runTypes(changeSet)) {
-    // The structured gate intent for this type, resolved BY KIND from the shared rows (ENG-95683). Carried on the
+    // The structured gate intent for this type, resolved BY KIND from the shared rows. Carried on the
     // finding so the run-time guidance can branch by CAUSE — a gated composite (install/enable + re-run the build)
     // vs. a type no row gates (fix the mapping/plan and re-run `--plan --out`) — instead of one blanket "settle the
     // target" for both. It is attached to the resolution findings (absent / unknown), not to the compositeOnly

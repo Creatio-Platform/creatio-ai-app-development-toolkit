@@ -339,7 +339,7 @@ class ReleaseStructureTests(unittest.TestCase):
             description = (data.get("description") or "").strip()
             self.assertTrue(description,
                             f"{skill_dir.name}: empty or missing description:")
-            # Upper bound — pin the Copilot description-byte cap (ENG-92957): a
+            # Upper bound — pin the Copilot description-byte cap: a
             # description over the limit parses fine everywhere but is silently
             # dropped by Copilot, so it must fail here rather than ship green.
             description_bytes = len(description.encode("utf-8"))

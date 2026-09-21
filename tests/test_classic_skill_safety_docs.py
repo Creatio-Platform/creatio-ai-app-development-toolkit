@@ -357,7 +357,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     def test_message_counterpart_search_is_run_once_and_widened(self):
         # Two failures to hold apart. Deferring the search left 18 of 30 threads open
-        # (ENG-94529), so it must actually run; re-running it per scope is unbounded on a
+        # , so it must actually run; re-running it per scope is unbounded on a
         # customer stand, so it runs ONCE and the caller owns it when there is one.
         content = read_text(REFERENCE_FOLLOWING)
         missing = missing_markers(

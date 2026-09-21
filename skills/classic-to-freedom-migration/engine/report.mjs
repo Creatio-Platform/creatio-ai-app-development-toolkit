@@ -1,4 +1,4 @@
-// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on (ENG-99126).
+// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on.
 //
 // Before this module the run ended on two files that disagreed. `--verify` printed the plan-vs-built table and a
 // verdict computed from its machine rows alone ("2 machine row(s) not confirmed"); `build-tasks/index.md` — the
