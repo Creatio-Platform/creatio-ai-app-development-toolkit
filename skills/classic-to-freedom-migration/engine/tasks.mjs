@@ -2590,22 +2590,16 @@ export const DECL_SHAPE = '{ "id": "<slug>", "pageKey": "<a page key from the pl
   + ' "order": <n>, "writesTo": "<the artifact it writes>" | "readOnly": true, "deliverables": ["<row>", ...],'
   + ' "dependsOn": ["<task id>", ...] (optional), "stopGate": true (optional) }';
 
-function declProblems(decl, i, identities, taken) {
-  const at = `declaration ${i + 1}`;
-  const id = String(decl?.id ?? "").trim();
-  if (!id) return [`${at} has no \`id\``];
-  if (id !== slugify(id)) return [`${at}: \`id\` \`${id}\` is not a slug — lower-case letters, digits and dashes, at most 48 characters`];
-  if (taken.has(id)) return [`${at}: \`id\` \`${id}\` is already claimed in this folder`];
+// WHERE THE TASK GOES. The repair cap buckets on (pageKey, cause), so a key matching no page gets its own bucket
+// and the three-round cap over that page is bypassed; and read-only is DECLARED, never inferred from an omission,
+// because a `writesTo` nothing else writes chains the task behind nothing.
+function declPlacementProblems(decl, at, identities) {
   const out = [];
-  // VALIDATED AGAINST THE PLAN: the repair cap buckets on (pageKey, cause), so a key matching no page gets its
-  // own bucket and the three-round cap over that page is bypassed.
   const pageKey = String(decl?.pageKey ?? "").trim();
   if (!identities.has(pageKey)) {
     out.push(`${at}: \`pageKey\` \`${pageKey || "(none)"}\` is not a page this plan builds — one of: ${[...identities.keys()].join(" / ")}`);
   }
   if (!String(decl?.group ?? "").trim()) out.push(`${at} has no \`group\` (the title the queue shows)`);
-  // READ-ONLY IS DECLARED, NEVER INFERRED FROM AN OMISSION, and the artifact is one the plan builds: a `writesTo`
-  // nothing else writes chains the task behind nothing, and an omitted one would make it read-only in silence.
   const writesTo = String(decl?.writesTo ?? "").trim();
   const artifacts = new Set([...identities.values()].map((k) => `page:${k}`));
   if (decl?.readOnly === true && writesTo) out.push(`${at} declares BOTH \`readOnly\` and \`writesTo\``);
@@ -2613,15 +2607,31 @@ function declProblems(decl, i, identities, taken) {
   else if (writesTo && !artifacts.has(writesTo)) {
     out.push(`${at}: \`writesTo\` \`${writesTo}\` is not an artifact this plan builds — one of: ${[...artifacts].join(" / ")}`);
   }
-  // `dependsOn` NAMES TASKS THAT EXIST. An id nothing in the folder claims would put the task behind a gate
-  // that never closes, and `--start` would refuse it for ever.
-  for (const id2 of Array.isArray(decl?.dependsOn) ? decl.dependsOn : []) {
-    if (!taken.has(String(id2).trim())) out.push(`${at}: \`dependsOn\` names \`${id2}\`, which no task in this folder has`);
+  return out;
+}
+
+// WHAT IT CARRIES AND WHAT IT WAITS ON. A `dependsOn` id nothing in the folder claims puts the task behind a gate
+// that never closes, and `--start` would refuse it for ever; no deliverables means nothing to derive a status from.
+function declContentProblems(decl, at, taken) {
+  const out = [];
+  for (const dep of Array.isArray(decl?.dependsOn) ? decl.dependsOn : []) {
+    if (!taken.has(String(dep).trim())) out.push(`${at}: \`dependsOn\` names \`${dep}\`, which no task in this folder has`);
   }
   const rows = Array.isArray(decl?.deliverables) ? decl.deliverables : [];
   if (!rows.length) out.push(`${at} declares no \`deliverables\` — a task with no rows has nothing to derive a status from`);
   if (rows.some((r) => !String(r ?? "").trim())) out.push(`${at} has an empty deliverable`);
   return out;
+}
+
+// The identity checks come first and answer alone: without a usable `id` nothing else about the declaration can
+// be reported against it.
+function declProblems(decl, i, identities, taken) {
+  const at = `declaration ${i + 1}`;
+  const id = String(decl?.id ?? "").trim();
+  if (!id) return [`${at} has no \`id\``];
+  if (id !== slugify(id)) return [`${at}: \`id\` \`${id}\` is not a slug — lower-case letters, digits and dashes, at most 48 characters`];
+  if (taken.has(id)) return [`${at}: \`id\` \`${id}\` is already claimed in this folder`];
+  return [...declPlacementProblems(decl, at, identities), ...declContentProblems(decl, at, taken)];
 }
 
 // Mint one task per declaration. REFUSES THE WHOLE SET on any problem, as `--split` does: half a set written is
@@ -2649,7 +2659,7 @@ export function addTasks(dir, result, declarations, opts = {}) {
       dependsOn: (Array.isArray(d.dependsOn) ? d.dependsOn : []).map((x) => String(x).trim()).filter(Boolean),
       writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
     };
-    task.file = `task-${slugify(`${task.pageKey}-${task.group}`)}-${task.id}.md`;
+    task.file = taskFileName(task);
     fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null }));
     written.push(task);
   }
