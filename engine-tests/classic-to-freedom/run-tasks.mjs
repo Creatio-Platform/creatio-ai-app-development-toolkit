@@ -17,6 +17,8 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
+  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
+  NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -899,6 +901,33 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
       && fifth.tasks.some((t) => t.origin === "orchestrator" && t.file === ORCH_FILE)
       && readIndex(dir).includes(`[${ORCH_FILE}](${ORCH_FILE})`),
     () => ({ unchanged: fs.readFileSync(orchPath, "utf8") === ORCH_BODY, index: readIndex(dir) }));
+  // An adopted `id` is free text from outside the engine, and it is interpolated into the `--start` commands the
+  // CLI prints for a human to paste into a shell. A file whose `id` is not a task id is refused by name, exactly
+  // as a colliding one is — and it never reaches the queue, so nothing carries that text onward.
+  {
+    const badPath = path.join(dir, "orch-bad-id.md");
+    const BAD_ID = "x; rm -rf $HOME";
+    fs.writeFileSync(badPath, `---
+id: ${BAD_ID}
+status: todo
+origin: orchestrator
+pageKey: main
+group: Bad id
+order: 4
+---
+
+## Notes
+
+n/a
+`);
+    const withBad = syncTaskDir(dir, RUN, OPTS);
+    check("syncTaskDir: an adopted file whose `id` is not a task id is REFUSED by name and never enters the queue — the id is interpolated into a command a human pastes into a shell, so its shape is checked where the file is adopted rather than trusted downstream",
+      () => (withBad.blocked || []).some((b) => b.file === "orch-bad-id.md" && /not a task id/.test(b.reason))
+        && !withBad.tasks.some((t) => t.id === BAD_ID),
+      () => ({ blocked: (withBad.blocked || []).map((b) => b.file), ids: withBad.tasks.map((t) => t.id) }));
+    fs.rmSync(badPath, { force: true });
+    syncTaskDir(dir, RUN, OPTS);
+  }
   check("syncTaskDir: an ENGINE task file IS rewritten from the plan — an edit to its deliverable table is replaced, because the rows are the plan's and the plan may have changed",
     () => {
       const ep = path.join(dir, taskAt(fifth, "main", SCAFFOLD_LABEL).file);
@@ -2166,10 +2195,15 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
   const base = tmp("cli");
   const dir = path.join(base, "build-tasks");   // deliberately NOT pre-created: the mode must create it
   const run = cliTasks(["--tasks", dir], MANIFEST);
-  check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count and the index to present",
+  // The note no longer tells the caller to pick the next task off the index's `Step` column. That
+  // instruction and the `--next` mode are two answers to one question printed on one stream, and the index is a
+  // DERIVED report whose shape has already moved under a caller parsing it.
+  check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count, the index to present and the mode that answers WHICH task to start",
     () => run.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE))
       && new RegExp(String.raw`wrote ${CLI_SET.tasks.length} build task\(s\) \+ ${TASK_INDEX_FILE}`).test(run.stdout || "")
-      && /Hand ONE task file at a time to a build sub-agent/.test(run.stdout || ""),
+      && /Do NOT pick the next task off that index/.test(run.stdout || "")
+      && /--next/.test(run.stdout || "")
+      && !/in the `Step` order that index lists/.test(run.stdout || ""),
     () => ({ status: run.status, stdout: run.stdout, stderr: run.stderr, ls: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
   check("migrate.mjs --tasks: with nothing recorded yet the note says 0 done and prints NO ⚠ line — a clean slice must not ask for a human eye it does not need",
     () => new RegExp(String.raw`— 0 done, ${CLI_SET.tasks.length} not\.`).test(run.stdout || "") && !/need a human eye/.test(run.stdout || ""),
@@ -3763,6 +3797,529 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
         && /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) && !/\| Form page \|/.test(fs.readFileSync(outN, "utf8")),
       () => ({ status: runN.status, stderr: (runN.stderr || "").slice(0, 300), hasName: /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) }));
   }
+}
+
+
+/* ================================================================================================
+   "What is startable NOW", answered by the engine instead of by each orchestrator.
+   The claim under test is an EQUIVALENCE, not a second scheduler: the same predicate `--start`
+   refuses through is the one the query reports, so the two cannot drift. Every check below pairs
+   its claim with an anti-vacuity check, because "no two members share an artifact" and "nothing is
+   withheld" are both trivially true of an empty answer.
+   ================================================================================================ */
+console.log("\n===== the startable set — one predicate, two callers =====");
+{
+  // A folder brought to a known state, with every dependency dispatched/signed/closed the way a real run does.
+  const folderAt = (closeThrough = 0) => {
+    const d = tmp("next");
+    syncTaskDir(d, RUN, OPTS);
+    let m = 0;
+    for (const t of [...SET.tasks].sort((a, b) => a.order - b.order)) {
+      if (t.order > closeThrough) break;
+      runTask(d, t.id, RUN, OPTS, m); m += 2;
+    }
+    return d;
+  };
+  const answerOf = (d) => startableTasks(syncTaskDir(d, RUN, OPTS), d);
+  const idsOf = (list) => list.map((x) => (x.task || x).id);
+  const HEAD = SET.tasks.find((t) => t.order === 1).id;          // the reference cache: the only task with no deps
+
+  // ---- T1 (R1) — the head of the queue, and everything behind it withheld -----------------------
+  {
+    const d = folderAt(0);
+    const a = answerOf(d);
+    check("T1 fixture (anti-vacuity): the fresh folder really holds a dependency CHAIN — exactly one task has no `dependsOn`, and the other nine wait on it directly or transitively, so 'withholds what waits' is not a claim about an empty list",
+      () => SET.tasks.filter((t) => (t.dependsOn || []).length === 0).length === 1 && SET.tasks.length === 10,
+      () => SET.tasks.map((t) => ({ id: t.id, dep: t.dependsOn })));
+    check("T1 (R1): on a fresh folder the answer names the head of the queue and NOTHING else — the orchestrator asks which task to start instead of reading the `Step` column off a derived index",
+      () => a.verdict === NEXT_STARTABLE && idsOf(a.startable).join(",") === HEAD,
+      () => ({ verdict: a.verdict, startable: idsOf(a.startable) }));
+    check("T1 (R1): every other task is WITHHELD with the cause that holds it — `deps`, naming the open task(s) it waits on, so an empty-looking queue is never unexplained",
+      () => a.withheld.length === 9 && a.withheld.every((w) => w.cause === HOLD_DEPS && w.tasks.length > 0),
+      () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- the vocabulary is CHECKED, not free text ------------------------------------------------
+  // A cause or a verdict spelled differently from the published constant reaches a caller as a string that
+  // matches nothing, and that caller's `else` branch then silently does the wrong thing. Same rule the status
+  // vocabulary in this module already carries.
+  {
+    const d = folderAt(1);
+    const a = answerOf(d);
+    check("vocabulary (anti-vacuity): the sampled answer really carries a verdict AND at least one withheld cause, so the membership check below reads something",
+      () => !!a.verdict && a.withheld.length > 0, () => ({ verdict: a.verdict, withheld: a.withheld.length }));
+    check("vocabulary: every verdict and every cause the query emits is one of the published constants — a caller branching on these strings must never meet a spelling nobody declared",
+      () => NEXT_VERDICTS.includes(a.verdict)
+        && [...a.withheld, ...a.held].every((w) => HOLD_CAUSES.includes(w.cause)),
+      () => ({ verdict: a.verdict, causes: [...new Set([...a.withheld, ...a.held].map((w) => w.cause))] }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- T1b (R1) — several unblocked at once, in queue order ------------------------------------
+  {
+    const d = folderAt(2);   // reference cache + scaffolding closed: the four page builds are all unblocked
+    const a = answerOf(d);
+    check("T1b fixture (anti-vacuity): closing the cache and the scaffolding really unblocks MORE THAN ONE task — an ordering claim over a one-member answer is vacuous",
+      () => a.startable.length > 1, () => ({ verdict: a.verdict, startable: idsOf(a.startable) }));
+    check("T1b (R1): the answer is the whole set of tasks startable right now, in QUEUE order — an orchestrator can fan out from one call instead of asking once per page",
+      () => a.verdict === NEXT_STARTABLE
+        && a.startable.map((t) => t.order).join(",") === [...a.startable].sort((x, y) => x.order - y.order).map((t) => t.order).join(","),
+      () => a.startable.map((t) => ({ order: t.order, id: t.id })));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- T3 (R2) — the set is mutually exclusive with ITSELF on `writesTo` ------------------------
+  {
+    const d = folderAt(2);
+    // An orchestrator-authored task on an artifact the plan already schedules — the case SKILL.md 7.2 rule 5
+    // describes verbatim ("copy the `writesTo` from the task whose page it touches").
+    fs.writeFileSync(path.join(d, "zz-orchestrator-main.md"),
+      `---\nid: orch0001\nstatus: todo\norigin: orchestrator\npageKey: main\ngroup: Extra main work\norder: 99\nwritesTo: page:main\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+    const a = answerOf(d);
+    check("T3 fixture (anti-vacuity): the folder really holds TWO todo tasks writing `page:main` and an answer with SEVERAL writers in it — so 'no two members share an artifact' is a claim about a real choice and not about a one-member list",
+      () => {
+        const set = syncTaskDir(d, RUN, OPTS);
+        return set.tasks.filter((t) => t.writesTo === "page:main" && t.status === "todo").length === 2
+          && a.startable.filter((t) => t.writesTo).length > 1;
+      }, () => ({ pair: syncTaskDir(d, RUN, OPTS).tasks.filter((t) => t.writesTo === "page:main").map((t) => ({ id: t.id, dep: t.dependsOn })), startable: idsOf(a.startable) }));
+    check("T3 (R2): no two tasks in ONE answer write the same artifact — over a real folder the write chain already serializes them (the second writer waits on the first), so the answer carries at most one writer per artifact and an orchestrator may fan the whole set out at once",
+      () => new Set(a.startable.filter((t) => t.writesTo).map((t) => t.writesTo)).size === a.startable.filter((t) => t.writesTo).length,
+      () => a.startable.map((t) => ({ id: t.id, w: t.writesTo })));
+    // ---- the PER-TASK overlap arm (R2) — a writer that is already DISPATCHED ---------------------
+    // The set rule below holds a second writer while BOTH are merely `todo`. The OTHER arm is the one the gate
+    // refuses through: a conflicting writer with an OPEN CLOCK. Nothing above opens one, so `overlap` — a live
+    // branch of the query and the only cause the CLI renders as "is being written by" — was reached solely
+    // through `--start`, and the refuse loop that names it was silently vacuous.
+    // The write chain is what keeps the ORDER-99 task above away from this arm: a same-artifact task added AFTER
+    // the engine's writer waits on it, so `deps` answers first. A task added BEFORE it does not — the chain points
+    // the other way — so it meets the open clock itself, which is the only shape that reaches `overlap` on a real
+    // folder.
+    {
+      const od = folderAt(2);
+      const writer = syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.writesTo === "page:main");
+      startTask(od, writer.id, RUN, { ...OPTS, dispatchToken: "tok-main" }, null, AT(30));
+      fs.writeFileSync(path.join(od, "zz-orchestrator-main.md"),
+        `---\nid: orch0002\nstatus: todo\norigin: orchestrator\npageKey: main\ngroup: Extra main work\norder: 0\nwritesTo: page:main\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+      const ov = answerOf(od);
+      const w = ov.withheld.find((x) => x.task.id === "orch0002");
+      check("T3 fixture (anti-vacuity): the engine's own `page:main` writer really holds an OPEN CLOCK here, and the orchestrator's task does NOT wait on it — without both, the overlap arm is never reached and the assertion below would pass over a cause nothing produced",
+        () => !!readTimingsFile(od).running[writer.id]
+          && !(syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.id === "orch0002")?.dependsOn || []).includes(writer.id),
+        () => ({ running: Object.keys(readTimingsFile(od).running), writer: writer.id,
+          deps: syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.id === "orch0002")?.dependsOn }));
+      check("T3 (R2): a task whose artifact is being written by a DISPATCHED task is WITHHELD as `overlap`, naming that writer — the arm `--start` refuses through, reported before a sub-agent is sent at a page somebody else is already editing",
+        () => w?.cause === HOLD_OVERLAP && idsOf(w.tasks).join(",") === writer.id,
+        () => ({ withheld: ov.withheld.map((x) => ({ id: x.task.id, cause: x.cause, on: idsOf(x.tasks || []) })) }));
+      // …and the LINE that renders it. `overlap` is the one cause whose sentence names the ARTIFACT rather than
+      // the task waited on, so a caller reading stdout learns which deliverable is busy — and that sentence had no
+      // reader anywhere until here. It needs its OWN folder: the CLI re-cuts with the DEFAULT budget, so a folder
+      // sliced with the test budget is reshaped out from under the clock opened above.
+      {
+        const cbase = tmp("cli-overlap");
+        const cdir = path.join(cbase, "tasks");
+        const cman = path.join(cbase, "manifest.json");
+        fs.writeFileSync(cman, JSON.stringify(MANIFEST));
+        const cli = (...args) => spawnSync(process.execPath, [MIGRATE, cman, ...args], { encoding: "utf8" });
+        cli("--tasks", cdir);
+        const busy = readTaskDir(cdir).find((t) => t.writesTo);
+        cli("--tasks", cdir, "--start", busy.id);
+        // Added BEFORE the running writer in queue order, for the same reason as above: behind it the write chain
+        // would answer `deps` and the overlap arm would never be reached.
+        fs.writeFileSync(path.join(cdir, "zz-orchestrator-overlap.md"),
+          `---\nid: orch0003\nstatus: todo\norigin: orchestrator\npageKey: ${busy.pageKey}\ngroup: Extra work\norder: 0\nwritesTo: ${busy.writesTo}\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+        // A second orchestrator task, on an artifact NOBODY else writes, so the folder still has something to hand
+        // out: the withheld list is rendered under the STARTABLE verdict, and an answer with nothing startable
+        // prints only what is in flight — which is where the overlap line would have gone unread again.
+        fs.writeFileSync(path.join(cdir, "zz-orchestrator-free.md"),
+          `---\nid: orch0004\nstatus: todo\norigin: orchestrator\npageKey: ${busy.pageKey}\ngroup: Unrelated work\norder: 0\nwritesTo: notes:extra\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+        const ovCli = cli("--tasks", cdir, "--next");
+        check("T3 fixture (anti-vacuity): the folder the CLI cut really has a DISPATCHED writer with an open clock and a second task on that same artifact — else the rendered line below is asserted over an answer that never reaches the overlap arm",
+          () => !!readTimingsFile(cdir).running[busy.id]
+            && readTaskDir(cdir).filter((t) => t.writesTo === busy.writesTo).length === 2,
+          () => ({ running: Object.keys(readTimingsFile(cdir).running), busy: busy.id,
+            onArtifact: readTaskDir(cdir).filter((t) => t.writesTo === busy.writesTo).map((t) => t.id) }));
+        check("T3 (R2, CLI): the overlap is RENDERED — stdout names the busy ARTIFACT and the task writing it, not the generic 'waits on N task(s)' every other cause prints",
+          () => (ovCli.stdout || "").includes("`" + busy.writesTo + "` is being written by " + busy.id),
+          () => ({ status: ovCli.status, stdout: ovCli.stdout, stderr: ovCli.stderr }));
+        fs.rmSync(cbase, { recursive: true, force: true });
+      }
+      fs.rmSync(od, { recursive: true, force: true });
+    }
+    fs.rmSync(d, { recursive: true, force: true });
+    // …and the SET-LEVEL rule itself, which does not depend on that chain existing. `chainMerged` is what makes
+    // two same-artifact tasks unreachable at once TODAY; the answer's own contract is that it never names two
+    // writers of one artifact, so it is asserted directly rather than being left to a property of the merge that
+    // a later change to the queue could quietly remove.
+    {
+      const bare = tmp("next-set-rule");
+      const twin = (id, order) => ({ id, order, file: `${id}.md`, status: "todo", origin: "engine",
+        pageKey: "main", group: "Page build", writesTo: "page:main", dependsOn: [], rows: [] });
+      const solo = { ...twin("solo0001", 3), writesTo: "page:list", pageKey: "list" };
+      const tasks = [twin("first001", 1), twin("second01", 2), solo];
+      const hand = startableTasks({ tasks }, bare);
+      check("T3 fixture (anti-vacuity): with the chain removed, the per-task predicate really does pass BOTH writers of `page:main` — so the exclusion below is the set rule doing the work and nothing else",
+        () => tasks.filter((t) => t.writesTo === "page:main").every((t) => startBlocker(t, tasks, {}) === null),
+        () => tasks.map((t) => ({ id: t.id, blocker: startBlocker(t, tasks, {}) })));
+      check("T3 (R2): the answer excludes its own members against each other — the FIRST writer of an artifact in queue order is named, the second is withheld as `sequenced`, and a task on a different artifact is unaffected",
+        () => hand.startable.map((t) => t.id).join(",") === "first001,solo0001"
+          && hand.withheld.length === 1 && hand.withheld[0].task.id === "second01"
+          && hand.withheld[0].cause === HOLD_SEQUENCED && hand.withheld[0].tasks[0].id === "first001",
+        () => ({ startable: hand.startable.map((t) => t.id), withheld: hand.withheld.map((w) => ({ id: w.task.id, cause: w.cause })) }));
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+  }
+
+  // ---- T2 (R4) — the answer AGREES with `--start`, in both directions ---------------------------
+  {
+    const src = folderAt(2);
+    const inFlightId = SET.tasks.find((t) => t.order === 3).id;
+    startTask(src, inFlightId, RUN, { ...OPTS, dispatchToken: "tok-inflight" }, null, AT(30));
+    const a = answerOf(src);
+    check("T2 fixture (anti-vacuity): the folder really holds all three states at once — an OPEN clock, a non-empty startable set and a non-empty withheld set — so neither direction of the equivalence below is asserted over nothing",
+      () => Object.keys(readTimingsFile(src).running).length > 0 && a.startable.length > 0 && a.withheld.length > 0,
+      () => ({ running: Object.keys(readTimingsFile(src).running), startable: idsOf(a.startable), withheld: a.withheld.length }));
+    // ACCEPT DIRECTION — each against its OWN copy of the folder, because starting one changes the answer for the rest.
+    check("T2 (R4, accept): every task the query NAMES is accepted by `--start` on the same folder — the query does not advertise work the gate would then refuse",
+      () => a.startable.every((t) => {
+        const copy = tmp("next-accept");
+        fs.cpSync(src, copy, { recursive: true });
+        const res = startTask(copy, t.id, RUN, OPTS, null, AT(40));
+        fs.rmSync(copy, { recursive: true, force: true });
+        return res.started?.id === t.id;
+      }), () => idsOf(a.startable));
+    // REFUSE DIRECTION — and with the SAME cause, which is what makes this one predicate rather than two rules.
+    check("T2 (R4, refuse): every task the query WITHHOLDS for a per-task cause is refused by `--start` with that same cause, naming the same task(s) — agreement produced by one predicate, not by two rules kept in step by hand",
+      () => a.withheld.filter((w) => w.cause !== HOLD_SEQUENCED).every((w) => {
+        const copy = tmp("next-refuse");
+        fs.cpSync(src, copy, { recursive: true });
+        const res = startTask(copy, w.task.id, RUN, OPTS, null, AT(40));
+        fs.rmSync(copy, { recursive: true, force: true });
+        if (res.started) return false;
+        if (w.cause === HOLD_DEPS) return (res.blockedByDeps || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
+        if (w.cause === HOLD_OVERLAP) return (res.blockedByOverlap || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
+        return !!res.unread;
+      }), () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
+    // HELD DIRECTION — the class the equivalence used to skip. A task the query holds for its STATUS must be
+    // refused by `--start` too: a gate that stamped a clock on it would send a sub-agent at work somebody has
+    // already decided to stop, while the query was still printing it as a decision nobody has made.
+    check("T2 (R4, refuse): a task the query HOLDS for its status is refused by `--start` on the same folder — the held class is part of the equivalence, not an exception to it",
+      () => {
+        const copy = tmp("next-held");
+        fs.cpSync(src, copy, { recursive: true });
+        const target = a.startable[0];
+        editFrontMatter(copy, target.id, "status", "blocked");
+        const heldAnswer = answerOf(copy);
+        const res = startTask(copy, target.id, RUN, OPTS, null, AT(40));
+        fs.rmSync(copy, { recursive: true, force: true });
+        return heldAnswer.held.some((h) => h.task.id === target.id && h.cause === HOLD_STATUS)
+          && !res.started && res.blockedByStatus === "blocked";
+      }, () => ({ startable: idsOf(a.startable) }));
+    // LEDGER DIRECTION — a broken dispatch ledger makes the gate refuse EVERY id, so a per-task cause computed as
+    // if the ledger were healthy publishes a cause the gate would not give. The query used to answer `deps` here
+    // while `--start` on that same id answered with the ledger refusal: two callers of one predicate disagreeing
+    // on one folder, which is precisely the invariant the whole design rests on.
+    check("T2 (R4, refuse): with the dispatch ledger broken, every cause the query publishes is the one `--start` actually gives for that id — the ledger outranks the per-task causes in the answer exactly as it does in the gate",
+      () => {
+        const copy = tmp("next-ledger");
+        fs.cpSync(src, copy, { recursive: true });
+        // Close a TODO task with no dispatch record: that is what the ledger audit fails on, and every task
+        // still open is then refused by the gate for the ledger rather than for its own cause.
+        editFrontMatter(copy, a.startable[0].id, "status", "done");
+        const led = answerOf(copy);
+        if (led.verdict !== NEXT_LEDGER || !led.withheld.length) { fs.rmSync(copy, { recursive: true, force: true }); return false; }
+        const ok = led.withheld.every((w) => {
+          const one = tmp("next-ledger-one");
+          fs.cpSync(copy, one, { recursive: true });
+          const res = startTask(one, w.task.id, RUN, OPTS, null, AT(40));
+          fs.rmSync(one, { recursive: true, force: true });
+          if (res.started) return false;
+          if (w.cause === HOLD_UNREAD) return !!res.unread;
+          if (w.cause === HOLD_STATUS) return !!res.blockedByStatus;
+          // everything else must carry the ledger cause, and the gate must answer with the ledger refusal
+          return w.cause === HOLD_LEDGER && res.blockedByDispatch?.failing.length > 0;
+        });
+        fs.rmSync(copy, { recursive: true, force: true });
+        return ok;
+      },
+      () => "the query must not publish a per-task cause the gate would not give while the ledger is failing");
+    // …and the more specific truth is not thrown away, only demoted: it is what will hold the task once the
+    // books are repaired, which is the next thing the reader needs.
+    check("T2 (R4): the relabelled entry keeps what will hold the task AFTER the ledger is repaired, as `underlying` — demoted, never discarded",
+      () => {
+        const copy = tmp("next-ledger-underlying");
+        fs.cpSync(src, copy, { recursive: true });
+        editFrontMatter(copy, a.startable[0].id, "status", "done");
+        const led = answerOf(copy);
+        const relabelled = led.withheld.filter((w) => w.cause === HOLD_LEDGER);
+        fs.rmSync(copy, { recursive: true, force: true });
+        return relabelled.length > 0 && relabelled.every((w) => HOLD_CAUSES.includes(w.underlying) && w.underlying !== HOLD_LEDGER);
+      }, () => "every ledger-relabelled entry carries its original cause under `underlying`");
+    fs.rmSync(src, { recursive: true, force: true });
+  }
+
+  // ---- the fourth per-task cause (R4) — a file the engine could not read ------------------------
+  // `--start` refuses it rather than rewriting it, so the query must withhold it for the same reason: advertising
+  // it would send a sub-agent at a file whose `## Notes` are the only record of work already done on a stand.
+  {
+    const d = tmp("next-unread");
+    const set0 = syncTaskDir(d, RUN, OPTS);
+    const victim = set0.tasks.find((t) => t.order === 1);
+    // Unterminated front matter — the same corruption the `--start` refusal is asserted over.
+    fs.writeFileSync(path.join(d, victim.file), `---\nid: ${victim.id}\nstatus: todo\n\n## Notes\nwork already done on the stand\n`);
+    const set = syncTaskDir(d, RUN, OPTS);
+    const a = startableTasks(set, d);
+    check("R4 fixture (anti-vacuity): the folder really holds a task the engine REFUSED to read — else the withholding below is asserted over a file it could parse perfectly well",
+      () => set.tasks.some((t) => t.id === victim.id && t.unread),
+      () => set.tasks.filter((t) => t.unread).map((t) => t.id));
+    check("R4 (unread): the query withholds an unreadable task with cause `unread` and names the file — the same refusal `--start` makes, out of the same predicate, so nothing is advertised that the gate would then refuse",
+      () => {
+        const w = a.withheld.find((x) => x.task.id === victim.id);
+        const res = startTask(d, victim.id, RUN, OPTS, null, AT(0));
+        return w?.cause === HOLD_UNREAD && w.file === victim.file && res.started === null && res.unread === victim.file;
+      }, () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, file: w.file })));
+    // …and the VERDICT the corrupted head produces, which the assertions above never reached. Corrupting the one
+    // task with no dependencies withholds every other task behind it, so nothing is startable and nothing is in
+    // flight — the definition of a run that cannot move itself. Raised on the pull request: asserting the
+    // per-task cause while leaving the verdict and the exit code unchecked tests half the answer.
+    check("R4 (unread): the corrupted head leaves the run STUCK — nothing startable, nothing in flight — and the CLI says so with a non-zero exit, not just a withheld entry",
+      () => a.verdict === NEXT_STUCK && a.startable.length === 0 && a.inFlight.length === 0,
+      () => ({ verdict: a.verdict, startable: idsOf(a.startable), inFlight: idsOf(a.inFlight) }));
+    // (No CLI leg here: this folder is cut with the test budget, and the CLI re-slices with the DEFAULT one, so a
+    // spawned run reads a differently-shaped folder and would assert about a state this block never built. The
+    // stuck verdict's CLI exit code is covered where the folder IS cut by the CLI — see T4.)
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- T4 (R6) — a clock is NOT work in flight --------------------------------------------------
+  // The defect this pins: a task recorded `blocked` KEEPS its clock (only a settled
+  // task's clock is closed), so a mode that reads the raw clock reports a halted run as `waiting` — at a passing
+  // exit code, forever. That is precisely the silent stall this feature exists to remove.
+  {
+    const d = tmp("next-blocked");
+    syncTaskDir(d, RUN, OPTS);
+    startTask(d, HEAD, RUN, { ...OPTS, dispatchToken: "tok-head" }, null, AT(0));
+    editFrontMatter(d, HEAD, "status", "blocked");
+    const set = syncTaskDir(d, RUN, OPTS, null);
+    const a = startableTasks(set, d);
+    check("T4 fixture (anti-vacuity): the blocked task's clock really is STILL OPEN and its status really is `blocked` — the whole point is that those two facts disagree, and a mode reading the clock alone cannot tell",
+      () => !!readTimingsFile(d).running[HEAD] && set.tasks.find((t) => t.id === HEAD).status === "blocked",
+      () => ({ running: readTimingsFile(d).running, status: set.tasks.find((t) => t.id === HEAD)?.status }));
+    check("T4 (R6): a `blocked` task with an open clock is NOT work in flight — the answer is the failing not-in-flight verdict, so an orchestrator is never left polling a run that can no longer change",
+      () => a.verdict === NEXT_STUCK && a.inFlight.length === 0,
+      () => ({ verdict: a.verdict, inFlight: idsOf(a.inFlight), startable: idsOf(a.startable) }));
+    check("T4 (R6): the verdict names what holds the run — the blocked task is reported as HELD by its status, and every other task by the dependency it waits on",
+      () => a.held.some((h) => h.task.id === HEAD && h.cause === HOLD_STATUS) && a.withheld.length > 0,
+      () => ({ held: a.held.map((h) => ({ id: h.task.id, cause: h.cause })), withheld: a.withheld.length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+
+  // ---- T5 (R3) — the four empty answers are distinguishable -------------------------------------
+  {
+    // FINISHED — every task settled, nothing left to hand out.
+    const dFin = folderAt(10);
+    const aFin = startableTasks(syncTaskDir(dFin, RUN, OPTS), dFin);
+    check("T5 fixture (anti-vacuity): the finished folder really has every task SETTLED and a dispatch record for each — else `finished` would be indistinguishable from a ledger failure",
+      () => {
+        const set = syncTaskDir(dFin, RUN, OPTS);
+        return set.tasks.every((t) => t.status === "done") && set.dispatch.failing.length === 0;
+      }, () => syncTaskDir(dFin, RUN, OPTS).tasks.map((t) => t.status));
+    check("T5 (R3, finished): a folder whose every task has settled answers `finished` with an empty set and nothing withheld — the run is over, and that is not a failure",
+      () => aFin.verdict === NEXT_FINISHED && aFin.startable.length === 0 && aFin.withheld.length === 0 && aFin.held.length === 0,
+      () => ({ verdict: aFin.verdict, startable: idsOf(aFin.startable), withheld: aFin.withheld.length, held: aFin.held.length }));
+    fs.rmSync(dFin, { recursive: true, force: true });
+
+    // WAITING — work dispatched, the rest behind it. The commonest empty answer, and NOT an error.
+    const dW = folderAt(1);
+    const scaffold = SET.tasks.find((t) => t.order === 2).id;
+    startTask(dW, scaffold, RUN, { ...OPTS, dispatchToken: "tok-scaffold" }, null, AT(20));
+    const aW = startableTasks(syncTaskDir(dW, RUN, OPTS), dW);
+    check("T5 (R3, waiting): with a task in flight and every remaining task behind it, the answer is `waiting` — an orchestrator polls, and the run does NOT fail",
+      () => aW.verdict === NEXT_WAITING && aW.startable.length === 0 && aW.inFlight.map((t) => t.id).join(",") === scaffold,
+      () => ({ verdict: aW.verdict, startable: idsOf(aW.startable), inFlight: idsOf(aW.inFlight) }));
+    fs.rmSync(dW, { recursive: true, force: true });
+
+    // LEDGER — a closure nobody was dispatched for. Answered ONCE for the folder, not once per task.
+    const dL = folderAt(0);
+    const victim = SET.tasks.find((t) => t.order === 3).id;
+    editFrontMatter(dL, victim, "status", "done");
+    const setL = syncTaskDir(dL, RUN, OPTS);
+    const aL = startableTasks(setL, dL);
+    check("T5 fixture (anti-vacuity): the ledger folder really holds a closed task with NO dispatch record, and more than one task is otherwise open — so 'answered once for the folder' is a claim about a real choice",
+      () => setL.dispatch.failing.length > 0 && setL.tasks.filter((t) => t.status === "todo").length > 1,
+      () => ({ failing: setL.dispatch.failing.map((t) => t.id), todo: setL.tasks.filter((t) => t.status === "todo").length }));
+    check("T5 (R3, ledger): a failing dispatch ledger is answered ONCE for the whole folder — the verdict is `ledger`, the set is empty and no task is named startable while the books are broken, exactly as `--start` refuses",
+      () => aL.verdict === NEXT_LEDGER && aL.startable.length === 0 && aL.dispatch.failing.length > 0,
+      () => ({ verdict: aL.verdict, startable: idsOf(aL.startable), failing: aL.dispatch.failing.map((t) => t.id) }));
+    fs.rmSync(dL, { recursive: true, force: true });
+  }
+}
+
+
+console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
+{
+  // The CLI has no `run: 0` to hand it, so it slices this fixture with the REAL default budget — which collapses
+  // it to one build task plus one review. That is the right shape for this block: the build is startable, the
+  // review waits on it, so both directions of the answer exist at the smallest size the engine produces.
+  const base = tmp("cli-next");
+  // A directory and a manifest whose names carry a SPACE and shell metacharacters, on purpose: the printed command
+  // is the deliverable, and a wrapper that fires only on whitespace would hand `&` or `$` straight to the shell —
+  // which is a command-injection surface, not a quoting nit, because this block then runs the string through one.
+  const dir = path.join(base, "build & tasks");
+  const manifestPath = path.join(base, "the $manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
+  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  cliFile("--tasks", dir);
+
+  const fresh = cliFile("--tasks", dir, "--next");
+  const cmdLines = (out) => (out || "").split("\n").map((l) => l.trim()).filter((l) => l.includes("--start "));
+  check("--next (anti-vacuity): the folder the CLI cut really holds MORE THAN ONE task, one of which waits on another — else 'names the startable one and withholds the rest' is a claim about a one-task folder",
+    () => {
+      const set = readTaskDir(dir);
+      return set.length > 1 && set.some((t) => t.dependsOn.length > 0);
+    }, () => readTaskDir(dir).map((t) => ({ id: t.id, dep: t.dependsOn })));
+  check("--next: a folder with work to hand out exits 0 and NAMES the startable task(s) — the orchestrator asks the engine instead of re-deriving the schedule off a derived report",
+    () => fresh.status === 0 && /task\(s\) STARTABLE NOW/.test(fresh.stdout || "") && cmdLines(fresh.stdout).length >= 1,
+    () => ({ status: fresh.status, stdout: fresh.stdout, stderr: fresh.stderr }));
+  check("--next (R7): the answer does NOT also tell the caller to hand tasks out in the order the index lists — two answers to one question on one stream is the contradiction this mode exists to end",
+    () => !/`Step` order/.test(fresh.stdout || "") && !/Hand ONE task file at a time/.test(fresh.stdout || ""),
+    () => fresh.stdout);
+  check("--next (R3): every task it withholds is named WITH the cause that holds it — an empty-looking queue with no reason is exactly what sends a caller back to reading index.md",
+    () => /WITHHELD/.test(fresh.stdout || "") && /waits on \d+ task\(s\)/.test(fresh.stdout || ""),
+    () => fresh.stdout);
+
+  // R5 — the printed command is the deliverable: run it verbatim, through a shell, and it must start that task.
+  {
+    const cmd = cmdLines(fresh.stdout)[0];
+    // The id goes through the same encoder as every other element — it is front matter, not a value the engine
+    // necessarily minted — so the golden unwraps it rather than assuming it was printed bare.
+    const startedId = cmd.split("--start ")[1].trim().replace(/^["']|["']$/g, "");
+    const ran = spawnSync(cmd, { shell: true, encoding: "utf8" });
+    check("--next (R5): the command printed beside a task is directly RUNNABLE as printed — quoted paths and all, on a folder and a manifest whose names contain spaces — and it starts exactly that task",
+      () => ran.status === 0 && new RegExp(`DISPATCH TOKEN for \`${startedId}\``).test(ran.stdout || "")
+        && readTaskDir(dir).find((t) => t.id === startedId)?.status === "in-progress",
+      () => ({ cmd, status: ran.status, stdout: (ran.stdout || "").slice(0, 400), stderr: (ran.stderr || "").slice(0, 400) }));
+    // …and with that task in flight and the rest behind it, the answer is `waiting` and the run does NOT fail.
+    const waiting = cliFile("--tasks", dir, "--next");
+    check("--next (R3): with work in flight and everything else behind it the answer is NOTHING STARTABLE YET and the exit code is 0 — waiting is the commonest empty answer and it is not an error",
+      () => waiting.status === 0 && /NOTHING STARTABLE YET/.test(waiting.stdout || "") && /IN FLIGHT:/.test(waiting.stdout || ""),
+      () => ({ status: waiting.status, stdout: waiting.stdout, stderr: waiting.stderr }));
+
+    // F2 — waiting is not a reason to stop naming a decision. With one task in flight and another recorded
+    // `blocked`, the held task must still be named, and the printed figures must add up to `total`.
+    {
+      const copy = tmp("cli-next-held");
+      fs.cpSync(dir, copy, { recursive: true });
+      const other = readTaskDir(copy).find((t) => t.id !== startedId && t.status === "todo");
+      editFrontMatter(copy, other.id, "status", "blocked");
+      const cliCopy = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", copy, "--next"], { encoding: "utf8" });
+      check("--next (R3): a task held for a DECISION is named on the waiting verdict too — something else being in flight does not make it stop needing one, and leaving it out is the halted task reading as normal waiting, one task smaller",
+        () => /NOTHING STARTABLE YET/.test(cliCopy.stdout || "")
+          && /HELD — somebody has to decide/.test(cliCopy.stdout || "")
+          && cliCopy.stdout.includes(other.id)
+          && / 1 task\(s\) in flight and 1 behind them /.test(cliCopy.stdout || ""),
+        () => ({ status: cliCopy.status, held: other.id, stdout: cliCopy.stdout }));
+      fs.rmSync(copy, { recursive: true, force: true });
+    }
+
+    // R6 — the same folder, with that in-flight task recorded `blocked`. Its clock is still open.
+    editFrontMatter(dir, startedId, "status", "blocked");
+    const stuck = cliFile("--tasks", dir, "--next");
+    check("--next (R6): a task recorded `blocked` with its clock still OPEN is not reported as in flight — the CLI does NOT exit clean on that folder, because an orchestrator reading a passing code here would poll a run that can never change",
+      () => stuck.status === 2 && /NOTHING STARTABLE AND NOTHING IN FLIGHT/.test(stuck.stdout || "")
+        && /RUN HALTED/.test(stuck.stderr || "") && !!readTimingsFile(dir).running[startedId],
+      () => ({ status: stuck.status, stdout: stuck.stdout, stderr: stuck.stderr, running: readTimingsFile(dir).running }));
+    check("--next (R6): the halted answer names the blocked task as a DECISION rather than a schedule, and says why a clock alone is not work in flight",
+      () => /HELD — somebody has to decide/.test(stuck.stdout || "") && /KEEPS its clock/.test(stuck.stdout || ""),
+      () => stuck.stdout);
+  }
+  // F4 — a refusal prints NOTHING WRITTEN and names no task, so it must not exit like an answer. Every other
+  // `--next` non-answer exits 2; a frozen cut the plan no longer resolves used to exit 0 beside that banner.
+  {
+    fs.writeFileSync(path.join(dir, SPLIT_FILE), JSON.stringify({ planVersion: "nope", items: "not a list" }));
+    const refused = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--next"], { encoding: "utf8" });
+    check("--next (R3): a frozen split the plan no longer resolves is a REFUSAL, not an answer — it prints NOTHING WRITTEN and exits non-zero, like every other --next non-answer",
+      () => refused.status !== 0 && /NOTHING WRITTEN/.test(refused.stdout || ""),
+      () => ({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The FINISHED answer, end to end: a folder whose every task has settled with a dispatch record for each.
+  const base = tmp("cli-next-done");
+  const dir = path.join(base, "build-tasks");
+  const manifestPath = path.join(base, "m.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(MANIFEST));
+  const cliFile = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, ...args], { encoding: "utf8" });
+  cliFile("--tasks", dir);
+  const CLI_OPTS = checklistOpts(MANIFEST);
+  for (const t of [...buildTaskSet(RUN, CLI_OPTS).tasks].sort((a, b) => a.order - b.order)) {
+    runTask(dir, t.id, RUN, CLI_OPTS, t.order * 2);
+  }
+  const done = cliFile("--tasks", dir, "--next");
+  check("--next (anti-vacuity): the folder really is fully settled with a clean dispatch ledger — else `finished` would be indistinguishable from the ledger verdict below",
+    () => readTaskDir(dir).every((t) => t.status === "done") && dispatchAudit(readTaskDir(dir), dir).failing.length === 0,
+    () => readTaskDir(dir).map((t) => t.status));
+  check("--next (R3): a fully settled folder exits 0 and says the build is FINISHED, pointing at the migration result report rather than at another task",
+    () => done.status === 0 && /all \d+ task\(s\) have settled/.test(done.stdout || "") && /--verify --tasks/.test(done.stdout || ""),
+    () => ({ status: done.status, stdout: done.stdout }));
+
+  // …and the LEDGER verdict: one closure nobody was dispatched for, answered ONCE for the folder.
+  const victim = readTaskDir(dir)[0];
+  fs.rmSync(path.join(dir, TIMINGS_FILE), { force: true });
+  const ledger = cliFile("--tasks", dir, "--next");
+  check("--next (R3): a broken dispatch ledger is answered ONCE for the whole folder, not once per task — it exits 2 and advertises NO id, because `--start` would refuse every one of them",
+    () => ledger.status === 2 && /closed task\(s\) have no/.test(ledger.stdout || "")
+      && !/STARTABLE NOW/.test(ledger.stdout || "") && /DISPATCH GATE/.test(ledger.stderr || ""),
+    () => ({ status: ledger.status, stdout: (ledger.stdout || "").slice(0, 600), stderr: (ledger.stderr || "").slice(0, 300) }));
+  check("--next (R3): the failing files are named ONCE, on stderr, by the same writer every other mode's dispatch gate uses — the answer points at them instead of printing a second copy a reader could take for a second finding",
+    () => (ledger.stderr || "").includes(victim.file) && !(ledger.stdout || "").includes(victim.file)
+      && /on stderr/.test(ledger.stdout || ""),
+    () => ({ stdoutHasFile: (ledger.stdout || "").includes(victim.file), stderr: (ledger.stderr || "").slice(0, 400) }));
+  // F5 — the stdin note qualifies PRINTED COMMANDS, so it must follow the commands and not a substring of the
+  // prose. The ledger answer's own text names `--start` while dispatching nothing; a note about "each command
+  // above" under it describes none.
+  {
+    const ledgerStdin = cliTasks(["--tasks", dir, "--next"], MANIFEST);
+    check("--next: the stdin advisory follows the printed COMMANDS, not the word `--start` in the prose — under a verdict that dispatches nothing there are no commands for it to qualify",
+      () => !/read the manifest from stdin/.test(ledgerStdin.stdout || "") && !/STARTABLE NOW/.test(ledgerStdin.stdout || ""),
+      () => ({ status: ledgerStdin.status, stdout: (ledgerStdin.stdout || "").slice(0, 600) }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // THE FLAG REFUSALS. Each of these WRITES the folder before the answer would be printed, so a single call would
+  // describe a state the reader cannot identify — before the write or after it.
+  const base = tmp("cli-next-flags");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const someId = readTaskDir(dir)[0].id;
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify({ planVersion: RUN.planVersion, items: FULL_SPLIT.items }, null, 2));
+  for (const [label, args] of [["--start", ["--start", someId]], ["--route", ["--route"]],
+    ["--verify", ["--verify", "--built", "nope.json"]], ["--split", ["--split", splitPath]]]) {
+    const res = cliTasks(["--tasks", dir, "--next", ...args], MANIFEST);
+    check(`--next + ${label}: exit 1 with an actionable message and NO answer printed — the other flag moves the folder, so one call could only describe a state the reader cannot place`,
+      () => res.status === 1 && /--next/.test(res.stderr || "") && (res.stdout || "").trim() === "",
+      () => ({ label, status: res.status, stdout: res.stdout, stderr: res.stderr }));
+  }
+  const alone = spawnSync(process.execPath, [MIGRATE, "-", "--next"], { input: JSON.stringify(MANIFEST), encoding: "utf8" });
+  check("--next without --tasks: exit 1 — it answers a question about a task FOLDER, and without one there is nothing to answer about",
+    () => alone.status === 1 && /--tasks/.test(alone.stderr || ""),
+    () => ({ status: alone.status, stderr: alone.stderr }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // A plan-level gap: `--next` refuses on exactly the terms every other task-folder mode refuses on.
+  const skeletal = { ...MANIFEST, seed: [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return 1;}}};});' }] };
+  const base = tmp("cli-next-gap");
+  const dir = path.join(base, "build-tasks");
+  const res = cliTasks(["--tasks", dir, "--next"], skeletal);
+  check("--next: a plan-level gap answers with the same refusal every other task-folder mode gives and creates NOTHING — a scheduling answer over a plan that is not buildable-out-of would schedule work against deliverables the plan cannot state",
+    () => res.status === 2 && /NOTHING WRITTEN — no task folder for a plan with gaps/.test(res.stdout || "")
+      && !fs.existsSync(dir),
+    () => ({ status: res.status, stdout: res.stdout, exists: fs.existsSync(dir) }));
+  fs.rmSync(base, { recursive: true, force: true });
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
