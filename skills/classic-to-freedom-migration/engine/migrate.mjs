@@ -57,7 +57,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
-  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir } from "./tasks.mjs";
+  TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir, startableNow } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -2750,6 +2750,11 @@ const SPLIT_FLAG = "--split";
 const START_FLAG = "--start";
 // Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
 const ROUTE_FLAG = "--route";
+// `--next`: ANSWER the question an orchestrator asks before every dispatch — which task(s) can I start right now.
+// Takes no value, and pairs with `--tasks <dir>` because the answer is that folder's. It refreshes the folder
+// exactly as a plain `--tasks` run does (the clocks of everything that closed since the last pass are closed
+// FIRST, or a task whose sub-agent has just finished would read as a ledger failure) and then prints the set.
+const NEXT_FLAG = "--next";
 // `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
 // `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
 // belong beside the run.
@@ -2763,7 +2768,7 @@ const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_F
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
-const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, ...VALUE_FLAGS]);
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -2879,6 +2884,10 @@ let dispatchGateFailure = null;
 // Separate from the dispatch gate: that one refuses to schedule more work, this one only withholds "finished"
 // from the run. Rebuild, defer or accept is the user's decision.
 let partialGateFailure = null;
+// `--next` found nothing startable and nothing in flight. The folder is written and correct; what is wrong is
+// that the run cannot proceed on its own, and an orchestrator reading only the exit code would take exit 0 for
+// "carry on" — which is how a stalled run becomes a silent one.
+let nextStallFailure = null;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -2931,9 +2940,76 @@ function splitDriftLines(set) {
   return L;
 }
 
-function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
+// ---8<--- `--next`: the startable set, in the words `--start` would use ---8<---
+
+// ONE BLOCKED TASK, in the cause's own words. Deliberately the same sentences `startRefusalText` prints, because
+// the promise this mode makes is that its answer AGREES with `--start`: a task it withholds here is refused there
+// for the reason named here, and two wordings for one cause is how a reader starts believing they are two rules.
+function blockedLine(b) {
+  const who = `   · \`${b.task.id}\` (${b.task.file})`;
+  if (b.cause === "unread") {
+    return `${who} — could not be READ: its front matter is unterminated or malformed. Repair that file by hand.`;
+  }
+  if (b.cause === "deps") {
+    return `${who} — waits on ${b.deps.length} task(s) that have not closed: `
+      + b.deps.map((d) => `\`${d.id}\` (\`${d.status}\`)`).join(", ");
+  }
+  if (b.cause === "claimed") {
+    return `${who} — writes \`${b.task.writesTo}\`, which \`${b.conflicts[0].id}\` above it in this same list already claims.`
+      + " One writer per artifact: dispatch that one, close it, then ask again.";
+  }
+  return `${who} — writes \`${b.task.writesTo}\`, and \`${b.conflicts[0].id}\` is dispatched and still writing it.`;
+}
+
+// WHY THE ANSWER IS EMPTY, which is the question a reader asks the moment it is. "Nothing to start" reads
+// identically whether the run FINISHED, is waiting on a sub-agent that is still working, or cannot proceed at
+// all — and only the last of those is something to act on.
+function emptyNextLines(next, dir) {
+  if (next.verdict === "finished") {
+    return [`✅ NOTHING IS STARTABLE because nothing is left — every task in ${dir} is settled (\`done\` / \`n/a\` / \`partial\`).`,
+      "The run's close report is step 8: do the reads, then `--verify --from <migration-folder> --tasks <dir>`."];
+  }
+  if (next.verdict === "ledger") {
+    return ["⛔ NOTHING IS STARTABLE — the dispatch gate is failing, and `--start` refuses whichever task you name"
+      + " while it stands. The rows and their remedies are on the ⛔ line(s) below. Clear ALL of them, then ask again."];
+  }
+  const L = next.verdict === "waiting"
+    ? [`⏳ NOTHING IS STARTABLE YET — ${next.running.length} task(s) are IN FLIGHT and everything left waits on them.`
+        + " This is the normal shape of a run in progress: re-run this mode when one of them closes.",
+      ...next.running.map((t) => `   · running: \`${t.id}\` (${t.file})`)]
+    : [`⛔ NOTHING IS STARTABLE and NOTHING IS IN FLIGHT — ${next.open.length} task(s) are still open and the run`
+        + " cannot proceed on its own:"];
+  if (next.blocked.length) return [...L, ...next.blocked.map(blockedLine)];
+  // NOT A CANDIDATE AT ALL. An open task that is not `todo` — one recorded `blocked`, or left `in-progress` by a
+  // sub-agent that died — is never in the pool the causes above describe, so a folder holding only those printed
+  // a heading and no rows. Its status IS the finding, and the remedy is a hand edit rather than a dispatch.
+  return [...L, ...next.open.map((t) => `   · \`${t.id}\` (${t.file}) — recorded \`${t.status}\`, which no dispatch clears.`
+    + " Re-open it (`status: todo`) once whatever it is waiting on is settled.")];
+}
+
+// THE ANSWER AN ORCHESTRATOR ACTS ON: the ids AND the exact command for each. Nothing here is a table to parse by
+// column — the two PoC runs that answered this question for themselves both did it by reading a derived report,
+// one with an `awk` over `index.md` that a later reshape of that report would have pointed at the wrong column
+// without saying so.
+function nextBlockLines(next, dir, startCmd) {
+  const L = ["", "--- startable now ---"];
+  if (!next.startable.length) return [...L, ...emptyNextLines(next, dir)];
+  const many = next.startable.length > 1;
+  L.push(`${next.startable.length} task(s) can be started RIGHT NOW, in \`Step\` order`
+    + (many ? " — they write different artifacts and list none of each other in `dependsOn`, so they may be dispatched together:" : ":"));
+  for (const t of next.startable) {
+    L.push(`   · \`${t.id}\`  — ${t.title || t.file}${t.writesTo ? `  (writes \`${t.writesTo}\`)` : "  (read-only)"}`);
+    L.push(`     ${startCmd(t.id)}`);
+  }
+  L.push("Mark the task started with the command above BEFORE you dispatch it — that is what issues its dispatch token.");
+  if (next.blocked.length) L.push("Not startable yet:", ...next.blocked.map(blockedLine));
+  return L;
+}
+
+function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null, next = null) {
   dispatchGateFailure = null;
   partialGateFailure = null;
+  nextStallFailure = null;
   const gaps = planGaps(result);
   if (gaps.length) {
     return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
@@ -2989,6 +3065,14 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // round), or parked after its rounds. The gate reads the same folder state in either mode.
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
+  // AFTER the gates above, so the ledger verdict this mode reports is the one they just computed — and BEFORE
+  // the progress block, because the startable set is what the reader acts on and the progress block is what they
+  // paste into the chat.
+  if (next) {
+    const answer = startableNow(set, dir);
+    if (answer.verdict === "stalled") nextStallFailure = { open: answer.open, dir };
+    lines.push(...nextBlockLines(answer, dir, next));
+  }
   lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set));
   return lines.join("\n") + "\n";
 }
@@ -3208,6 +3292,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // `--route`: open a repair round over the rows a build agent recorded as NOT BUILT, without a verify run.
   const routeMode = argv.includes(ROUTE_FLAG);
   if (routeMode && !tasksMode) fail(`\`${ROUTE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it opens a repair round in that folder.`);
+  // `--next`: ASK which task(s) are startable, instead of picking one from `index.md` and finding out at `--start`.
+  const nextMode = argv.includes(NEXT_FLAG);
+  if (nextMode && !tasksMode) fail(`\`${NEXT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — the question it answers is about that folder's tasks.`);
+  // Each of these WRITES something into the folder that changes the answer — a repair round adds tasks, `--start`
+  // opens a clock, a verify round closes rows — so a run that did both would print an answer about a folder it had
+  // already moved, and the reader could not tell which state it describes. One call asks; the next one acts.
+  if (nextMode && startId) fail(`\`${NEXT_FLAG}\` and \`${START_FLAG}\` are separate calls — one ASKS what can be started, the other marks the task you are about to dispatch. Ask first, then \`${START_FLAG}\` a task this mode names.`);
+  if (nextMode && routeMode) fail(`\`${NEXT_FLAG}\` and \`${ROUTE_FLAG}\` are separate calls — \`${ROUTE_FLAG}\` SCHEDULES repair work, which changes what is startable. Route first, then ask.`);
+  if (nextMode && verifyMode) fail(`\`${NEXT_FLAG}\` and \`--verify\` are separate calls — the verify round writes repair tasks into the folder, which changes what is startable. Verify first, then ask.`);
   if (routeMode && verifyMode) fail(`\`${ROUTE_FLAG}\` and \`--verify\` do the same routing — \`--verify ${TASKS_FLAG} <dir>\` already writes a round over every open row, its own and the not-built ones. Drop \`${ROUTE_FLAG}\`; it is for a run in flight, which has no \`--built\` payload to verify with.`);
   // Both write the folder, and running them in one call would name a repair task and mark it started in the same
   // breath — so a caller reading the output could not tell which task the token belongs to.
@@ -3302,7 +3395,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    // THE COMMAND, not an id to assemble. `--next` prints the exact invocation for each task it names, so nothing
+    // in its answer has to be parsed or reconstructed — the manifest and the folder are this run's own.
+    const startCmd = nextMode
+      ? (id) => `node ${process.argv[1]} ${fromFile ? arg : "<manifest>"} ${TASKS_FLAG} ${tasksDir} ${START_FLAG} ${id}`
+      : null;
+    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId, startCmd); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {
@@ -3387,7 +3485,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
-    || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete;
+    || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
+    || !!nextStallFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
@@ -3438,6 +3537,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       + " were recorded by the agent that built them as NOT built. The task files and the index ARE written and"
       + " current; what is not true is that this migration is finished.\n");
     process.stderr.write(notBuiltFailureText(items) + "\n");
+  }
+  // The `--next` leg of exit 2. The folder is written and the slice is fine; what is wrong is that the run has
+  // nothing it can dispatch and nothing running to change that, which on exit 0 would read as "carry on".
+  if (nextStallFailure) {
+    process.stderr.write(`migrate.mjs: ⛔ NOTHING STARTABLE — ${nextStallFailure.open.length} task(s) in`
+      + ` ${nextStallFailure.dir} are still open, none can be started and none is in flight. The`
+      + " `--- startable now ---` block above names what is holding each one. This is a decision for a person,"
+      + " not a re-run.\n");
   }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");

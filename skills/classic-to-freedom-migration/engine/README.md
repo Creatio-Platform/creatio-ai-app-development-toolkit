@@ -17,6 +17,7 @@ node migrate.mjs <manifest.json> --tasks <dir>          # WRITE the build-task f
 node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it where s.json says, then freezing that cut into <dir>
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
+node migrate.mjs <manifest.json> --tasks <dir> --next   # …and ANSWER which task(s) are startable right now, each with the exact --start command for it
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
@@ -181,6 +182,27 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   makes rather than rules the caller is asked to honour. The second one matters most: with
   several tokens open on one artifact, a single sub-agent can hold them all and close each with a valid
   signature, and every other check passes. The check compares `writesTo`, so a read-only task never conflicts.
+
+- **`--next` ANSWERS the question `--start` used to answer only by refusing.** An orchestrator asks the same thing
+  before every dispatch — which task can I start now — and until this mode existed there was no way to ask: the
+  index carries order, status, `writesTo` and dispatch, but each task's `dependsOn` lives in its own file, so the
+  caller could not work startability out and guessed. Both PoC runs invented a substitute (an `awk` over
+  `index.md` reading a derived table by column position; a hand-edited `order:`), and both were safe only because
+  `--start` refuses a bad pick.
+  It is a thin wrapper, deliberately: `startBlocker` in `tasks.mjs` is the ONE predicate, `startTask` refuses
+  through it and `startableNow` reports through it, so a task the mode names is one `--start` accepts and a task
+  it withholds is refused there for the cause named here. It prints a SET — the parallelism rule is distinct
+  `writesTo`, so a one-task answer would cost a round trip per page — and the set is mutually exclusive with
+  itself: two `todo` tasks on one artifact both pass the per-task predicate, and naming both would invite exactly
+  the fan-out the next `--start` refuses.
+  It runs the SAME folder refresh a plain `--tasks` does, so it replaces that call rather than adding one — and it
+  has to: `syncTaskDir` closes the clocks of everything that finished since the last pass BEFORE it audits, and a
+  read-only answer would report a task whose sub-agent has just closed it as a ledger failure.
+  Four empty answers, because their remedies differ: `finished`, `waiting` (work in flight — normal, exit 0),
+  `stalled` (nothing running and nothing startable — exit 2, because silence plus exit 0 over a run that cannot
+  proceed is what this mode exists to remove), and `ledger` (the dispatch gate is failing; the answer is for the
+  whole folder, not per task). It refuses to combine with `--start`, `--route` or `--verify`: each of those MOVES
+  the folder, so one call would answer about a state the reader cannot identify.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing

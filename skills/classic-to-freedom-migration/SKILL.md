@@ -442,15 +442,40 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
 **7.2 The orchestrator contract.** Six rules; everything else in this step serves them.
 
-1. **One task at a time, in the `Step` order the index lists.** The order is leaf-first and it is a build
-   requirement, not a preference: a related list's Add/Edit opens the child's own form, so the child page exists
-   before the parent list that opens it, and the list page comes after the form page it is gated off. Three
-   deliberate exceptions lead the queue: the `Reference cache` runs FIRST (one read-only sub-agent fetches the
-   clio guidance articles and the design spec, and every other task depends on it — it does NOT cache tool
-   contracts or component docs; each build task reads its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task needs to
-   exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a page is
-   never built against an unanswered question. (A question that could change WHICH pages exist blocks the plan at
-   the structure gate instead, so it never reaches a task.)
+1. **ASK THE ENGINE WHICH TASK TO START — do not pick one yourself, and do not read `index.md` to decide:**
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --next`
+   It refreshes the folder exactly as a plain `--tasks` run does — so it REPLACES that call, it does not add one —
+   and then prints a `--- startable now ---` block: the task(s) that can be started right now, in `Step` order,
+   each with the exact `--start` command to run for it. Copy that command; nothing in the block is a table to read
+   by column.
+
+   **Why this is the engine's answer and not yours.** It applies the checks `--start` applies — every `dependsOn`
+   settled, no task already writing the same artifact, the dispatch ledger clean — so a task it names is one
+   `--start` accepts and a task it withholds is refused there for the reason given here. Picking from `index.md`
+   instead means re-deriving a rule the engine already owns: one run wrote itself an `awk` over that file that
+   took the first row whose status column read `todo` (no dependency check, no write-conflict check, and column
+   positions a later change to the report silently invalidates), another hand-edited a task's `order` to steer it.
+   Neither is a rule this skill sanctions.
+
+   **It names a SET, and the set may be dispatched together.** Two tasks appear side by side only when they write
+   different artifacts and neither waits on the other — in practice the page builds once `Scaffolding` closes,
+   and a read-only review beside a build. Everything in rule 2 still holds for each member: one sub-agent per
+   task, its own fresh context, its own token.
+
+   **An EMPTY answer says which kind of empty it is**, because the three have nothing in common: `finished`
+   (every task settled — go to step 8), `waiting` (work is in flight and the rest is behind it — normal; ask
+   again when it closes), or nothing startable with nothing running, which exits 2 and names what is holding each
+   task. A failing dispatch ledger answers once for the whole folder: nothing may be started until it is cleared.
+
+   **The order it hands you is leaf-first and it is a build requirement**, not a preference: a related list's
+   Add/Edit opens the child's own form, so the child page exists before the parent list that opens it, and the
+   list page comes after the form page it is gated off. Three deliberate exceptions lead the queue: the
+   `Reference cache` runs FIRST (one read-only sub-agent fetches the clio guidance articles and the design spec,
+   and every other task depends on it — it does NOT cache tool contracts or component docs; each build task reads
+   its own from the stand), then `Scaffolding` — the app, package, section and page shells that every other task
+   needs to exist. Within each page its `⚠ Confirm worklist` rows come first inside that page's own task, so a
+   page is never built against an unanswered question. (A question that could change WHICH pages exist blocks the
+   plan at the structure gate instead, so it never reaches a task.)
 
    **Mark it started BEFORE you dispatch — EVERY task, the review included:**
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --start <task-id>`
@@ -465,7 +490,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it that: an `n/a` with
    nothing written there fails too.
 
-   **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
+   **`--start` also enforces the two scheduling rules, so neither is yours to remember** — and `--next` answers
+   from the same predicate, so what it names is what `--start` accepts. It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
    artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
    single sub-agent hold both and sign each correctly.
@@ -491,7 +517,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 3. **The task file is the record — the sub-agent writes its own status into it.** You do not transcribe a status
    the sub-agent reported to you: the file is what survives your own session ending. A task whose sub-agent died
    without writing stays `todo`/`in-progress` and is re-dispatched.
-4. **Re-run `--tasks` after every task.** It refreshes `index.md` from the files, keeps the deliverable rows in
+4. **Re-run the mode after every task — as `--next`, which is the same refresh plus the answer to what comes
+   next.** It rewrites `index.md` from the files, keeps the deliverable rows in
    step with the plan, and fills the index's `Attention` section. Read that section — it is where an unrecognised
    status, a task recorded `done` whose deliverables have since changed, and a task that left the plan surface.
 5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to hold two
