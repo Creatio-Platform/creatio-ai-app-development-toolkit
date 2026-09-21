@@ -3109,6 +3109,17 @@ function nextAnswerLines(a, dir, cmdFor) {
   ...(a.held.length ? [`HELD — ${a.held.length} task(s) need a decision:`, ...a.held.map(heldLine)] : [])];
 }
 
+// THIS MODE ASKS; IT DOES NOT CUT. The refresh below creates the folder it is pointed at, so a mistyped or
+// cwd-relative path used to be cut fresh and then answered with a confident step-1 dispatch over a ledger nobody
+// built — the caller could not tell "the run has not started" from "you gave me the wrong path". Returns the
+// refusal text, or null for a folder that really holds a cut (which is refreshed exactly as before).
+function nextFolderRefusal(dir) {
+  if (fs.existsSync(dir) && fs.existsSync(path.join(dir, TASK_INDEX_FILE))) return null;
+  return `migrate.mjs: ⛔ NOTHING WRITTEN — no task folder at ${dir}: this mode reports which tasks are startable`
+    + ` and never cuts one, so nothing was created there. The path is resolved against the current directory — check`
+    + ` it, and if the run has not started yet cut the folder first with \`${TASKS_FLAG} ${dir}\`.\n`;
+}
+
 // The same folder refresh a plain `--tasks` run performs — REPLACING that call, not adding one. A strictly
 // read-only answer would be wrong at the commonest moment of all: right after a sub-agent closes a task, whose
 // clock is closed by the refresh. Without it that closure reads as a dispatch-ledger failure and the mode would
@@ -3116,11 +3127,13 @@ function nextAnswerLines(a, dir, cmdFor) {
 function runNextMode(result, dir, opts, cmdFor) {
   dispatchGateFailure = null;
   startableGateFailure = null;
-  // A REFUSAL IS NOT AN ANSWER, so it must not exit like one. Both early returns below print NOTHING WRITTEN and
+  // A REFUSAL IS NOT AN ANSWER, so it must not exit like one. The early returns below print NOTHING WRITTEN and
   // name no task; leaving the gates unset made them exit 0 — the same code a `waiting` or `finished` answer
   // carries — while every other `--next` non-answer (`stuck`, `ledger`) exits 2.
   const gapRefusal = planGapRefusal(result);
   if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
+  const noFolder = nextFolderRefusal(dir);
+  if (noFolder) { nextRefusalFailure = true; return noFolder; }
   const set = syncTaskDir(dir, result, opts);
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set); }
   const answer = startableTasks(set, dir);

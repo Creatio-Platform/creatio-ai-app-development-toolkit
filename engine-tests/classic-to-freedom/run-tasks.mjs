@@ -3886,6 +3886,66 @@ console.log("\n===== the startable set — one predicate, two callers =====");
     check("T3 (R2): no two tasks in ONE answer write the same artifact — over a real folder the write chain already serializes them (the second writer waits on the first), so the answer carries at most one writer per artifact and an orchestrator may fan the whole set out at once",
       () => new Set(a.startable.filter((t) => t.writesTo).map((t) => t.writesTo)).size === a.startable.filter((t) => t.writesTo).length,
       () => a.startable.map((t) => ({ id: t.id, w: t.writesTo })));
+    // ---- the PER-TASK overlap arm (R2) — a writer that is already DISPATCHED ---------------------
+    // The set rule below holds a second writer while BOTH are merely `todo`. The OTHER arm is the one the gate
+    // refuses through: a conflicting writer with an OPEN CLOCK. Nothing above opens one, so `overlap` — a live
+    // branch of the query and the only cause the CLI renders as "is being written by" — was reached solely
+    // through `--start`, and the refuse loop that names it was silently vacuous.
+    // The write chain is what keeps the ORDER-99 task above away from this arm: a same-artifact task added AFTER
+    // the engine's writer waits on it, so `deps` answers first. A task added BEFORE it does not — the chain points
+    // the other way — so it meets the open clock itself, which is the only shape that reaches `overlap` on a real
+    // folder.
+    {
+      const od = folderAt(2);
+      const writer = syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.writesTo === "page:main");
+      startTask(od, writer.id, RUN, { ...OPTS, dispatchToken: "tok-main" }, null, AT(30));
+      fs.writeFileSync(path.join(od, "zz-orchestrator-main.md"),
+        `---\nid: orch0002\nstatus: todo\norigin: orchestrator\npageKey: main\ngroup: Extra main work\norder: 0\nwritesTo: page:main\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+      const ov = answerOf(od);
+      const w = ov.withheld.find((x) => x.task.id === "orch0002");
+      check("T3 fixture (anti-vacuity): the engine's own `page:main` writer really holds an OPEN CLOCK here, and the orchestrator's task does NOT wait on it — without both, the overlap arm is never reached and the assertion below would pass over a cause nothing produced",
+        () => !!readTimingsFile(od).running[writer.id]
+          && !(syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.id === "orch0002")?.dependsOn || []).includes(writer.id),
+        () => ({ running: Object.keys(readTimingsFile(od).running), writer: writer.id,
+          deps: syncTaskDir(od, RUN, OPTS).tasks.find((t) => t.id === "orch0002")?.dependsOn }));
+      check("T3 (R2): a task whose artifact is being written by a DISPATCHED task is WITHHELD as `overlap`, naming that writer — the arm `--start` refuses through, reported before a sub-agent is sent at a page somebody else is already editing",
+        () => w?.cause === HOLD_OVERLAP && idsOf(w.tasks).join(",") === writer.id,
+        () => ({ withheld: ov.withheld.map((x) => ({ id: x.task.id, cause: x.cause, on: idsOf(x.tasks || []) })) }));
+      // …and the LINE that renders it. `overlap` is the one cause whose sentence names the ARTIFACT rather than
+      // the task waited on, so a caller reading stdout learns which deliverable is busy — and that sentence had no
+      // reader anywhere until here. It needs its OWN folder: the CLI re-cuts with the DEFAULT budget, so a folder
+      // sliced with the test budget is reshaped out from under the clock opened above.
+      {
+        const cbase = tmp("cli-overlap");
+        const cdir = path.join(cbase, "tasks");
+        const cman = path.join(cbase, "manifest.json");
+        fs.writeFileSync(cman, JSON.stringify(MANIFEST));
+        const cli = (...args) => spawnSync(process.execPath, [MIGRATE, cman, ...args], { encoding: "utf8" });
+        cli("--tasks", cdir);
+        const busy = readTaskDir(cdir).find((t) => t.writesTo);
+        cli("--tasks", cdir, "--start", busy.id);
+        // Added BEFORE the running writer in queue order, for the same reason as above: behind it the write chain
+        // would answer `deps` and the overlap arm would never be reached.
+        fs.writeFileSync(path.join(cdir, "zz-orchestrator-overlap.md"),
+          `---\nid: orch0003\nstatus: todo\norigin: orchestrator\npageKey: ${busy.pageKey}\ngroup: Extra work\norder: 0\nwritesTo: ${busy.writesTo}\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+        // A second orchestrator task, on an artifact NOBODY else writes, so the folder still has something to hand
+        // out: the withheld list is rendered under the STARTABLE verdict, and an answer with nothing startable
+        // prints only what is in flight — which is where the overlap line would have gone unread again.
+        fs.writeFileSync(path.join(cdir, "zz-orchestrator-free.md"),
+          `---\nid: orch0004\nstatus: todo\norigin: orchestrator\npageKey: ${busy.pageKey}\ngroup: Unrelated work\norder: 0\nwritesTo: notes:extra\n---\n\n## Notes\nAdded by the orchestrator.\n`);
+        const ovCli = cli("--tasks", cdir, "--next");
+        check("T3 fixture (anti-vacuity): the folder the CLI cut really has a DISPATCHED writer with an open clock and a second task on that same artifact — else the rendered line below is asserted over an answer that never reaches the overlap arm",
+          () => !!readTimingsFile(cdir).running[busy.id]
+            && readTaskDir(cdir).filter((t) => t.writesTo === busy.writesTo).length === 2,
+          () => ({ running: Object.keys(readTimingsFile(cdir).running), busy: busy.id,
+            onArtifact: readTaskDir(cdir).filter((t) => t.writesTo === busy.writesTo).map((t) => t.id) }));
+        check("T3 (R2, CLI): the overlap is RENDERED — stdout names the busy ARTIFACT and the task writing it, not the generic 'waits on N task(s)' every other cause prints",
+          () => (ovCli.stdout || "").includes("`" + busy.writesTo + "` is being written by " + busy.id),
+          () => ({ status: ovCli.status, stdout: ovCli.stdout, stderr: ovCli.stderr }));
+        fs.rmSync(cbase, { recursive: true, force: true });
+      }
+      fs.rmSync(od, { recursive: true, force: true });
+    }
     fs.rmSync(d, { recursive: true, force: true });
     // …and the SET-LEVEL rule itself, which does not depend on that chain existing. `chainMerged` is what makes
     // two same-artifact tasks unreachable at once TODAY; the answer's own contract is that it never names two

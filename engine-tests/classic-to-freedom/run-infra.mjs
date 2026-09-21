@@ -916,6 +916,25 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
       && /startBlocker/.test(engineReadme),
     () => engineReadme.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+
+  // Step 8's exit-code dictionary is where an orchestrator looks up "what does exit 2 mean?". Every check above is
+  // sliced to step 7, so a verdict added to the engine and documented only there leaves the dictionary answering the
+  // same question a second, shorter way, and nothing sees it. Assert the count the dictionary states matches the
+  // verdicts it enumerates, and that every verdict the engine can print has an entry.
+  const step8 = skill.slice(skill.indexOf("### 8. Validate"));
+  const dictLine = step8.split("\n").find((l) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(l)) || "";
+  const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
+  const verdictMarks = (dictLine.match(/⛔/g) || []).length;
+  const exit2Verdicts = ["VERIFY INCOMPLETE", "GATE BLOCKED", "DISPATCH GATE", "NOT BUILT", "RUN HALTED"];
+  check("doc lint: step 8's exit-2 dictionary states as many verdicts as it enumerates — the count and the list are two answers to one question, and a reader is free to believe either",
+    () => {
+      const stated = statedCounts[(/^\*\*Exit 2 is ([A-Z]+) /.exec(dictLine) || [])[1]];
+      return Boolean(stated) && stated === verdictMarks;
+    },
+    () => ({ dictLine: dictLine.slice(0, 160), verdictMarks }));
+  check("doc lint: every exit-2 verdict the engine can print has an entry in step 8's dictionary — including the halted run, whose remedy is a decision rather than a command",
+    () => exit2Verdicts.every((v) => dictLine.includes(v)),
+    () => ({ missing: exit2Verdicts.filter((v) => !dictLine.includes(v)) }));
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);
