@@ -1407,10 +1407,23 @@ function latestPerDeliverable(items) {
 export const notBuiltOpenItems = (tasks) =>
   latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
 
+// ENG-99749 point 3 / AC 8: a `needs-decision` row is NOT open work for the router — it is the build agent
+// raising a question, and only a person's `--decide` can settle it. Feeding it to the repair rounds today
+// burned three sub-agents on a page a person had to answer for anyway (measured on ENG-99135: 84 of the 96
+// undispatched round-1 repair tasks were for the 14 descoped typed forms). `blocked` still routes: a re-run
+// may clear the technical obstacle it named.
+const ROUTABLE_NOT_BUILT_CAUSES = new Set([CAUSE_BLOCKED]);
+
 export function notBuiltOpenRows(tasks) {
   const items = notBuiltOpenItems(tasks);
   const pages = {};
   for (const it of items) {
+    // A row a person has to settle stays out of every repair round. Left un-dispatched, it still shows up on
+    // the report (its task remains `partial`, and `notBuiltOpenItems` lists it there), so the reader sees
+    // it — nothing is silently dropped. An unaccounted row (blank cell over a closing status, `it.cause`
+    // null) STAYS routable: the round asks the next agent to record whatever happened, which is a repair
+    // task can do.
+    if (it.cause && !ROUTABLE_NOT_BUILT_CAUSES.has(it.cause)) continue;
     const key = it.task.pageKey;
     if (!pages[key]) pages[key] = { openRows: [] };
     pages[key].openRows.push({
