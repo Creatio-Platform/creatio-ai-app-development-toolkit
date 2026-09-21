@@ -28,7 +28,7 @@ function ensureVendorIntegrity() {
   return true;
 }
 
-// Test seam (AC1 fail-closed regression): force or reset the memoized vendor-integrity result so a golden can prove
+// Test seam (AC1 fail-closed): force or reset the memoized vendor-integrity result so a golden can prove
 // the PARSE surface throws on EVERY call when the check failed — not just the first (the fail-open a prior version
 // had). Pass a `{ ok, failures, results }` object to force a state, or `null` to restore the real memoized check on
 // the next parse. GATED behind `C2F_TEST_SEAM=1`: on the shipped runtime surface (no flag) it is an inert no-op, so
@@ -389,7 +389,7 @@ function resolveMemberValue(node, scope) {
 }
 
 // The root identifier a member chain reads off (`cfg.items[0].x` → "cfg"), or null if the base isn't a plain
-// identifier. Used to tell an unresolved LOCAL-object member access (flag it) from a framework-enum miss (fine).
+// identifier. Tells an unresolved LOCAL-object member access (flag it) from a framework-enum miss (fine).
 function memberBase(node) { let cur = node; while (cur?.type === "MemberExpression") { cur = cur.object; } return cur?.type === "Identifier" ? cur.name : null; }
 
 function makeAstEvaluator(scope, diagnostics, src) {
@@ -438,7 +438,7 @@ function makeAstEvaluator(scope, diagnostics, src) {
   }
   function evalArray(node, path) {
     return node.elements.map((el, i) => {
-      // A sparse hole (`[ , {…}]`) previously returned null with NO diagnostic, then crashed downstream when
+      // A sparse hole (`[ , {…}]`) must not return null with NO diagnostic, which then crashes downstream when
       // normalizeDiff read `.index` off it. Flag it (structural if it sits on `diff`/`details`) so the gate
       // blocks with a real reason instead of a raw TypeError, and the null slot is skipped by consumers.
       if (!el) { flag("sparse-hole", node, [...path, i]); return null; }
@@ -523,7 +523,7 @@ function buildAstScope(factory, amdDeps, src) {
   });
   // Top-level consts/vars in the factory body so BOTH `var x = "Foo"; return { name: x }` and
   // `var d = [ … ]; return { diff: d }` resolve. The AST parser (which replaced the vm) lost the array/object
-  // alias case — the vm EXECUTED the body so the alias just worked (Blocker 1: an aliased diff silently
+  // alias case — a vm that EXECUTED the body would make the alias just work, and an aliased diff would silently
   // became []). Literals go straight in as values. Array/object initializers are stored as LAZY AST NODES,
   // not pre-computed values: pre-computing them with a throwaway diagnostics sink silently DROPPED any dynamic
   // construct inside (e.g. `var d=[{…, values: makeValues()}]`), so the aliased diff resolved to a hole with
@@ -557,7 +557,7 @@ export function parseSchema(src, pkg) {
   const astDiagnostics = [];
   let ast;
   // `locations: true` so each method node carries its 1-based line span — the plan cites WHERE a behaviour lives
-  // in the classic body, which is what lets a reviewer check the engine's reading against the source. Purely
+  // in the classic body, which is what lets a reader check the engine's reading against the source. Purely
   // additive to the AST shape; nothing else reads `loc`.
   try { ast = acornParse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations: true }); }
   catch (e) { return { ...buildSchemaResult(pkg, src, "acorn parse failed: " + String(e?.message || e), {}, []), astDiagnostics }; }
@@ -830,7 +830,7 @@ function methodFactsFromAst(retArg, scope) {
   return out;
 }
 
-// Extract a named function/method BODY by brace-matching (a regex can't balance braces) — used to scope
+// Extract a named function/method BODY by brace-matching (a regex can't balance braces) — scopes
 // the getActions scan to that method only. Returns "" when the function isn't found (→ no hints, no noise).
 function extractFnBody(src, name) {
   const openers = [
@@ -1161,7 +1161,7 @@ function safeKeys(o) { return o && typeof o === "object" ? Object.keys(o).filter
 function plainObj(o) { return o && typeof o === "object" && !Array.isArray(o) ? o : {}; }
 
 // ---- Imperative-member capture: `attributes` / `messages` / `mixins` ------------------------------------
-// These three blocks used to be read for their KEYS at most (`attributes`) or not at all (`messages`, `mixins`),
+// These three blocks are read in full: reading `attributes` for their KEYS at most, and `messages` / `mixins` not at all,
 // so the behaviour they declare could not be reported, let alone accounted for. The values are ordinary object
 // literals, so the SAME static evaluator that already resolved `diff`/`businessRules` has them in hand — no
 // function body is executed or read here. Only the sub-keys whose value is a FUNCTION collapse to the AST_FN
@@ -1279,7 +1279,7 @@ function enablement(v) {
   return typeof v.enabled === "boolean" ? v.enabled : null;
 }
 
-// A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) previously fell
+// A null/non-object slot (a sparse hole `[ , {…}]` or the residue of an unresolved spread) must not fall
 // straight through to `op.index`/`op.name` below and threw a raw TypeError. Return null here and let the
 // null-safe filter in normalizeDiff drop it. `astIndex: i` (the ORIGINAL position in the AST diff) is carried
 // on every surviving op so the dynamic-property reporter (migrate.mjs) can match a `diff.<i>.values.*`
@@ -1488,7 +1488,7 @@ function sanitizeConditions(conds) {
 // long after module init.)
 //
 // Recorded because a section's `merge DataGrid` carries `controlColumnName` / `applyControlConfig` /
-// `controlCellClass` — real configuration with no Freedom analog, which used to vanish at PARSE time: the fixed
+// `controlCellClass` — real configuration with no Freedom analog, which must not vanish at PARSE time: the fixed
 // field set in `normalizeDiffOp` keeps what it models and drops the rest, so nothing downstream could even name
 // what was lost. The list mapper raises each one as a named open item instead.
 // Op-level keys (`parentName`, `propertyName`, `index`) are not in `values` and so never reach this set.
@@ -1649,7 +1649,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   applyMergeOrderVisible(op, cur);
   // Key PRESENCE for these too, not truthiness. The runtime writes whatever `values` carries, including `""` and
   // `false` (core `json-applier.js` L702-705). A truthiness guard here dropped a layer that deliberately BLANKS a
-  // caption or UNBINDS a control — the engine then reported a caption the page no longer shows. Same rule as
+  // caption or UNBINDS a control — the engine would then report a caption the page does not show. Same rule as
   // `mergeIdentityProps`, so content and identity properties stop behaving differently for no reason.
   applyMergeContentFields(op, cur);
   // `labelConfig` is ONE diff key modelled as the `labelCaption` field, so the presence test is on the DIFF key —
@@ -1680,7 +1680,7 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   }
   if (op.parentName) { cur.parent = op.parentName; }
   // a reposition also carries the NEW order/index — apply it so tab/field ordering survives the move
-  // (previously only the parent was updated, so a pure reorder silently kept the old position).
+  // (updating only the parent would let a pure reorder silently keep the old position).
   if (op.order != null) { cur.order = op.order; }
   // A `move` also carries its OWN `values`, and the runtime applies them: `convertMoveOperationToRemove` turns the
   // move into a remove + an insert and then does `Ext.apply(insertOperationItem, operationItem)` (core
@@ -1712,9 +1712,9 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
 // L719-732, and it runs in a LATER group than plain removes at L304). The engine models a subset of a view item's
 // keys under the same names the diff uses, so a named key it does not model is WARNED rather than ignored — the
 // alternative is telling the reader a property was cleared when nothing happened.
-// `labelConfig` and the HANDLER vocabulary joined the set in ENG-95862: an audit of what a real `remove … properties`
+// `labelConfig` and the HANDLER vocabulary are in the set: an audit of what a real `remove … properties`
 // may name, against what the engine models on an item, found exactly those two families modelled-but-unclearable —
-// the worst of the three states, because the plan then reports a property the page no longer has. (The audit and how
+// the worst of the three states, because the plan then reports a property the page does not have. (The audit and how
 // to re-run it: `engine-internals.md` → "remove … properties key audit".)
 // `TOP_LEVEL_ITEM_PROPS` = the keys held as a FIELD on the item record (cleared with `cur[k] = null`), as opposed to
 // the two families modelled elsewhere: `value`/`labelConfig` (own named fields) and the handlers map.
@@ -1726,7 +1726,7 @@ const REMOVABLE_ITEM_PROPS = new Set([...TOP_LEVEL_ITEM_PROPS, "value", "labelCo
 // Sonar's cognitive-complexity budget; the decision order below is unchanged.
 function replayRemoveOneProperty(k, cur) {
   if (!REMOVABLE_ITEM_PROPS.has(k)) {
-    // …and the key is no longer DECLARED on the element either. Without this, the list mapper would raise an open
+    // …and the key is not DECLARED on the element either. Without this, the list mapper would raise an open
     // item about configuration a later layer already cleared — the mirror of the silent drop `unmodelledProps`
     // exists to prevent. The fidelity warning below is unaffected: the removal's EFFECT is still
     // unrepresented, which is a different statement from "the key is still set".
@@ -2072,7 +2072,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // building on it silently drops base actions + the true nesting. Surface it as a WARNING so the SKILL's
   // hard gate (warnings must be empty) blocks the build until the real base schemas are fetched.
   const seedMethodNames = new Set(seedTemplate.flatMap(l => l.methods || []));
-  // INFORMATIONAL ONLY — surfaced in seedQuality for diagnostics; it NO LONGER gates `looksSkeletal` (that is now the
+  // INFORMATIONAL ONLY — surfaced in seedQuality for diagnostics; it does NOT gate `looksSkeletal` (that is
   // kind-agnostic method-COUNT test below). Kept because a record-page seed defining `getActions` is useful context
   // when reading a seedQuality dump; do NOT reintroduce it as a gate (keying on it false-blocked section/mini seeds).
   const hasGetActions = seedMethodNames.has("getActions");
@@ -2081,7 +2081,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // in the normal flow — the thing worth catching is a broken/near-empty FETCH, not a "hand skeleton". So the test
   // is KIND-AGNOSTIC: a real fetched base chain of ANY kind defines MANY methods (verified on-stand: record ≈347,
   // section `BaseSectionV2` = 428, mini `BaseMiniPage` = 152), while a broken/empty fetch has ≈0. Keying on the
-  // method COUNT (not a specific method) fixes the false-block this used to hit: it keyed on `getActions`, which
+  // method COUNT (not a specific method) avoids a false block: keying on `getActions`, which
   // ONLY record pages define — sections define `getSectionActions`, mini pages none — so real section/mini seeds
   // were wrongly flagged, which pushed the agent into a workaround (bundling the section as `schemas` + a thin
   // seed) that produced hollow folds. Count-based: 150–430 (real) all clear; ≈0 (broken fetch) blocks; a token
@@ -2125,7 +2125,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     // (defining insert came from a seed schema): payload = client-authored items, structural identity =
     // template ownership. Keyed projections below carry `fromTemplate` (= no schema schema contributed).
     items: alive.map(i => ({ name: i.name, parent: i.parent, propertyName: i.propertyName,
-      // `?? null` because an item built from an op whose `itemType` key was absent used to project as `undefined`,
+      // `?? null` because an item built from an op whose `itemType` key was absent projects as `undefined`,
       // which no consumer could tell from "the key was there and we could not read it".
       itemType: i.itemType ?? null, itemTypeUnresolved: !!i.itemTypeUnresolved,
       // `engineOnlyStub` marks an item the RUNTIME does not have (see `replayMerge`). It must reach consumers, or
@@ -2142,7 +2142,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
-      // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
+      // control/options at all — `item.handlers` is what the table's tier B is defined in terms of.
       handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
       // the `values` keys the body declared on this element that the engine models on no field, SORTED
       // so two folds of the same input produce byte-identical output. Empty on almost every element; non-empty is
@@ -2171,7 +2171,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // A method with a resolved trigger needs no guess in the plan; one with none is honestly "trigger unresolved".
       triggers: methodTriggers(n, attributes, items),
     })),
-    // Imperative members, now reaching the effective model. `attributes` in particular used to be parsed and
+    // Imperative members, reaching the effective model. `attributes` in particular must not be parsed and
     // then dropped here, which is why an imperatively filtered lookup (`lookupListConfig.filters`) had no member
     // in the plan at all while the declarative FILTRATION equivalent was fully mapped.
     attributes: [...attributes.values()].map(a => ({ ...a, fromTemplate: !a.schemaTouched })),

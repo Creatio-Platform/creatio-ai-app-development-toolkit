@@ -183,7 +183,7 @@ export const TASK_BUDGET = {
   confirm: 2,       // one on-stand question answered before the build
   row: 2,           // anything else
   // MINUTES PER UNIT OF WEIGHT — the only figure here that is a measurement rather than a judgement, and the one
-  // the progress block forecasts from. Median of the five sub-agents of one live run (ENG-98351, opus 4.8 at
+  // the progress block forecasts from. Median of the five sub-agents of one live run (opus 4.8 at
   // medium effort): refs 12→7.0 min, scaffolding 10→10.0, form page 36→28.3, list page 14→6.8, review 8→6.5.
   // The spread is 0.49–1.00, so a single number is not honest on its own: `forecastMinutes` reports a RANGE, and
   // once this run has closed tasks of its own it forecasts from those instead of from this constant. One run, one
@@ -611,7 +611,7 @@ function closedByOf(row) {
 }
 
 // The `From` column names the plan group each deliverable was read from. A task now spans several groups (they
-// write one artifact between them), so without it the file would no longer say which part of the plan a row is.
+// write one artifact between them), so without it the file could not say which part of the plan a row is.
 function renderRowTable(rows, repair = false) {
   // A repair row is shown with what was RECORDED against it and the EVIDENCE behind that, verbatim. A sub-agent
   // sent to fix a row needs what was actually observed; re-describing it in the engine's own words is how a repair
@@ -1427,7 +1427,7 @@ export function mergeTaskSet(fresh, existing = []) {
   const tasks = fresh.tasks.map((t) => carryOver(t, matchFor(byId, t)));
   const claimed = new Set(fresh.tasks.map((t) => t.id));
   // An orchestrator file whose `id` an engine task also claims cannot become that task's record (`matchFor`), and
-  // it is not `extra` either — so it used to fall out of the index entirely: no queue row, no `## Attention` line.
+  // it is not `extra` either — so without this it falls out of the index entirely: no queue row, no `## Attention` line.
   // Worse, when its name equalled the engine task's computed file name, `syncTaskDir` wrote the engine task over
   // it and destroyed its `## Notes`. It is refused instead: named on Attention and never written to.
   const malformedId = new Set();
@@ -1967,7 +1967,7 @@ export function readMergedTaskDir(dir, result, opts = {}) {
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
 // re-slice reads the copy. That is what makes a later run a RECONCILIATION rather than a second opinion: the cut
-// is not re-decided, so a recorded `done` cannot move to a task that no longer exists.
+// is not re-decided, so a recorded `done` cannot move to a task that does not exist.
 export function readFrozenSplit(dir) {
   const p = path.join(dir, SPLIT_FILE);
   if (!fs.existsSync(p)) return null;
@@ -2197,7 +2197,7 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
   // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
   const blocker = startBlocker(t, merged.tasks, state.running);
-  // A file the engine REFUSED to read is not started. `--start` used to re-render it, which is exactly what
+  // A file the engine REFUSED to read is not started. Re-rendering it in `--start` is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
   if (blocker?.cause === HOLD_UNREAD) {
@@ -2466,7 +2466,7 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   // same side of `SETTLED`.
   resolvePartials(merged);
   for (const t of merged.tasks) {
-    // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
+    // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
     // A REPAIR FILE IS THE RECORD OF ITS ROUND and is never re-authored — its rows are one verify run's, not the

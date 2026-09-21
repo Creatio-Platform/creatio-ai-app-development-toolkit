@@ -1,6 +1,6 @@
 // REGISTRY VALIDATION of the shared mapping table.
 //
-// Every `crt.*` type the engine emits used to be confirmed by hand on a stand ("read get-component-info for its
+// Every `crt.*` type the engine emits would otherwise be confirmed by hand on a stand ("read get-component-info for its
 // contract"), which is a per-run human step that a mapping row cannot carry. This module turns most of it into a
 // machine check: a row's `componentType` must exist, its `propMap` keys must be real `inputs`, and its `events`
 // must be real `outputs` — of the platform version the migration actually targets.
@@ -46,8 +46,8 @@ function versionBit(version, index) {
 // A row is worth validating when it names a `crt.*` type at all — as the thing the engine EMITS (`target`) or as
 // the thing the `--verify` gate looks for on the built page (`verify`). The second half matters as much as the
 // first: a standard-feature row emits nothing itself, but a wrong gate type there is how a page gets judged
-// against a component that does not exist (`crt.ContactCommunication` — the defect ENG-95555 catalogues by hand).
-// Reuses the table's own `rowComponentType` resolver (ENG-95683 RC-7) so the emit-over-verify precedence is
+// against a component that does not exist (`crt.ContactCommunication` is the case a hand-kept catalogue records).
+// Reuses the table's own `rowComponentType` resolver (RC-7) so the emit-over-verify precedence is
 // single-sourced with the gate lookup — a local copy here was free to drift from the one the gate resolves through.
 const namedType = rowComponentType;
 const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
@@ -193,7 +193,7 @@ export function rankCandidates(terms, { index = vendoredIndex(), version = null,
 // ---- THE RUN-TIME REGISTRY: the stand's own answer, when there is one --------------------------------------
 // The vendored index is the offline fallback and the CI check's subject. A real migration can do better: the target
 // stand's registry, exported for ITS platform version. This is the half that makes the feature reachable on a real
-// run instead of waiting on a clio-side change — the failure mode ENG-95412's change 7 shipped with.
+// run instead of waiting on a clio-side change — the failure mode a stand-gated guard ships with.
 //
 // The channel is the MANIFEST, like `enumVocabulary`: manifests are how stand-derived facts already reach the
 // engine, and `get-classic-page-sources` is what writes them. `manifest.componentRegistry` is either the export

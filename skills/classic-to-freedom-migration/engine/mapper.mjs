@@ -13,7 +13,7 @@ import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForIte
 // target — so the same rows serve the mapper, the `--verify` gate and the reference doc. The accessors below
 // are the mapper's view onto those rows; their semantics are unchanged.
 const ROLE = ITEM_ROLE_VALUES;
-// The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reviewer can act on.
+// The member NAME for a kind, so a typed ⚠ reads `RADIO_GROUP 'IsPrimary'` — the identity a reader can act on.
 const ITEM_KIND_NAME = Object.fromEntries(Object.entries(VIEW_ITEM_TYPE).map(([k, v]) => [v, k]));
 // The kind the schema stated, or null when it stated none. Null is not "unknown element": Classic reads a missing
 // itemType as a field, and it is the one case where a name-shaped fallback applies (see `dropVerdict`).
@@ -564,7 +564,7 @@ export function mapToFreedom(eff, opts = {}) {
   const standardMethodsFiltered = _rl.standardMethodsFiltered;
   _rl.needsDecision.forEach(d => needsDecision.push(d));
 
-  // ---- imperative MEMBERS the engine used to read for their names at most (attributes) or not at all
+  // ---- imperative MEMBERS read in full, rather than for their names at most (attributes) or not at all
   // (messages / mixins / the full define() dep list) ----
   mapImperativeMembers(eff, cols).needsDecision.forEach(d => needsDecision.push(d));
 
@@ -669,7 +669,7 @@ function createContainers(ctx) {
         // catalog lists crt.TabContainer ("Single tab within a TabPanel") and crt.TabPanel but NO `crt.Tab`, nine
         // real Freedom pages across two stands carry 0 crt.Tab nodes, and a real tab insert reads
         // `{parentName:"Tabs", propertyName:"items", values:{type:"crt.TabContainer", items:[], caption:"#ResourceString(K)#"}}`.
-        // This previously emitted `crt.Tab` into `propertyName:"tabs"` with a `$Resources.Strings.*` caption — a
+        // Emitting `crt.Tab` into `propertyName:"tabs"` with a `$Resources.Strings.*` caption would be a
         // component that does not exist, in a slot that is not the one the platform fills, with the one caption
         // form the skill's own mapping reference says will NOT render on a tab.
         { operation: "insert", name: tab, parentName: "Tabs", propertyName: "items",
@@ -976,7 +976,7 @@ function mapFields(ctx, containers) {
     const nearMissing = missingColumn ? nearestColumns(col, cols) : [];
     const ctl = control(meta.type, f.contentType, meta.ref);
     // a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
-    // the control deliberately, and the caller used to undo that one line later by defaulting to an editable
+    // the control deliberately, so the caller must not undo that one line later by defaulting to an editable
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
     // than folded into the "type was not recognized" bucket, which was untrue for these two.
@@ -990,7 +990,7 @@ function mapFields(ctx, containers) {
     const elName = nameCount[col] === 1 ? col : `${col}_${nameCount[col]}`;
     // Unique element names are not the whole answer: the second control still binds the SAME attribute, so the
     // built page shows one value in two places and the plan's Layout table lists the column twice in two
-    // different regions, where nothing connects them. The per-field line this used to emit was folded away and
+    // different regions, where nothing connects them. A per-field line here is folded away and
     // came back as nothing at all — a run shipped `UsrNotes` in the top area and `UsrNotes_2` on a tab, both on
     // `$UsrNotes`, and nobody saw it until the page was open. Collected here, summarised once below.
     if (nameCount[col] === 2) dupBoundCols.push(col);
@@ -1346,7 +1346,7 @@ function mapDetails(ctx, containers, profileRegion) {
     if (!detailTitle && d.caption?.startsWith("Resources.Strings.")) needsDecision.push({ kind: "detail-caption", item: d.schemaName || d.key,
       reason: `detail title unresolved — caption is the resource key '${d.caption}'; pass the detail's title via manifest.detailSchemas["${d.schemaName}"].title (from its localizable strings) or manifest.resources, or confirm; do NOT invent one` });
   };
-  // Build the emitted detail record (Expanded / inline-Editable list) — ENG-93929 editable-grid intent + columns.
+  // Build the emitted detail record (Expanded / inline-Editable list) — editable-grid intent + columns.
   const buildCustomDetail = (d, dinfo, dentity, tab, detailTitle) => {
     const editable = detectDetailAddMechanism(dinfo);
     details.push({
@@ -1402,7 +1402,7 @@ function mapCardActions(eff) {
 
 // ---- Imperative MEMBERS: attributes / messages / mixins / module deps -----------------------------------
 // These blocks reach the effective page now (see engine.mjs `mergeNamedFacts`). Each carries behaviour with a
-// documented Freedom target, and each previously produced NOTHING — no ChangeSet entry, no decision, no count.
+// documented Freedom target, and each would otherwise produce NOTHING — no ChangeSet entry, no decision, no count.
 // A `lookupListConfig.filters` filter and a declarative FILTRATION rule are the same user-visible behaviour
 // ("this lookup is filtered") reached two ways; only the declarative one was ever mapped, so the imperative one
 // could not even be compared against it.
@@ -1553,7 +1553,7 @@ function mapImperativeMembers(eff, cols) {
   for (const a of client(eff.attributes)) needsDecision.push(...attributeDecisions(a, hasColumn));
   for (const m of client(eff.messages)) needsDecision.push(messageDecision(m));
   // `covers` — the other member ids this one decision accounts for. A mixin is declared twice (in `mixins` and as a
-  // `define()` dependency) and the ledger tracks both; the aggregate below no longer lists mixin modules, so without
+  // `define()` dependency) and the ledger tracks both; the aggregate below does not list mixin modules, so without
   // this the dep member has no route to `decision` and the coverage gate blocks. Bare-name fallback is allowed only
   // when it resolves to a single actual define() dep; otherwise two modules with the same last segment must stay loud.
   for (const m of client(eff.mixins)) needsDecision.push({ kind: "mixin", item: m.name, detail: m.module || null,
@@ -1754,7 +1754,7 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
   // parallel fresh Freedom rebuild builds the ALIVE set (which already excludes removed items), so "the client
   // removed X" needs no action — you just don't build X. Flagging removals only added noise (a re-laid-out base
   // element read as a "deletion to confirm"). The final scope is the answer; removals are not a worklist item.
-  // (`eff.removed` is still available for diagnostics; it just no longer generates ⚠ decisions.)
+  // (`eff.removed` is still available for diagnostics; it just does not generate ⚠ decisions.)
 
   // Fix 3: referenced UI modules (define() deps that render UI OUTSIDE this page's diff)
   // e.g. CasesEstimateLabel → the SLA response/solution timer + its START/END buttons. The migration
@@ -1956,7 +1956,7 @@ function mapRules(payloadRules, payloadFields, knownElements = new Set()) {
   // C4: flag a rule ONLY when its target resolves to NOTHING on the page — neither a mapped field NOR any known
   // element (tab / group / container). Business rules legitimately target more than fields: hiding a TAB or GROUP
   // hides all its fields, so a rule targeting `…TabLabel` / `…Group…` is valid, not a dangling reference. Those
-  // used to be mis-flagged as "no field for it"; now only a target absent from the whole page (an entity-only
+  // must not be mis-flagged as "no field for it"; only a target absent from the whole page (an entity-only
   // column with no element, or a stale binding) is surfaced.
   const emittedCols = new Set(payloadFields.map(f => f.bindTo || f.name));
   const ruleTargets = new Set(
@@ -2038,7 +2038,7 @@ function resolveImageBinding(i, cols, soleImageCol, soleUsed) {
     // An EXPLICIT bind to the sole IMAGELOOKUP column reserves it too. A SECOND image resolving to that column —
     // by auto-fallback OR by another explicit bind — is the SAME collision: two crt.ImageInput must not share one
     // column. Resolve it identically to the auto path: keep the FIRST on the column, FILL the second (drop its
-    // bind → boundCol null) and raise the image-column decision. (The guard previously fired only on the auto
+    // bind → boundCol null) and raise the image-column decision. (A guard firing only on the auto
     // path, so TWO explicit binds to soleImageCol both resolved to it — two widgets silently on one column.)
     if (soleUsed) { soleCollision = true; boundCol = null; }
     else usedSole = true;
@@ -2528,7 +2528,7 @@ function listViewModelOps(columns, filters) {
 //
 // INPUT CONTRACT — `section.rowActions`, one entry per `DataGridActiveRow…` item the section declares:
 //   { name, caption?, condition?, package? }
-// FED BY THE FOLD since ENG-94714: `mapSectionView` reads the `activeRowActions` items off the folded section view
+// FED BY THE FOLD: `mapSectionView` reads the `activeRowActions` items off the folded section view
 // and `mergeRowActions` unions them with anything the manifest supplied, the fold winning. The manifest arm is kept
 // — it is how a row action read by hand off a stand still reaches the plan when no section bundle was collected.
 //
@@ -2580,7 +2580,7 @@ export const LIST_DECISION_KIND = {
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
 // THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
-// answer. TWO shapes ask it, and the second was the ENG-95503 chain break: an EMPTY set was gated, while a FALLBACK
+// answer. TWO shapes ask it, and the second is where a chain breaks: an EMPTY set was gated, while a FALLBACK
 // set — the section declared no columns, so the resolver returned the entity's single display column — was rendered
 // as ⚠ prose in the design spec and raised no decision at all. So the question reached the operator while their
 // ANSWER had no published id to be recorded against, on exactly the shape this channel exists for.
@@ -2603,7 +2603,7 @@ function listColumnsDecision(section, columns) {
   }
   // A PROFILE-SOURCED SET IS THE ONE THE LIST RENDERS, AND STILL WORTH ONE QUESTION. Classic keeps a
   // section's visible columns as saved grid-profile data, so `source: "profile"` is the most accurate answer the
-  // resolver can give and the engine now accepts it (it used to reject it as malformed, forcing a re-read with
+  // resolver can give and the engine accepts it (rejecting it as malformed would force a re-read with
   // `ignore-profile=true` — the statically declared set, deliberately fewer columns than the list shows). But a
   // profile can be SCOPED, so adopting one silently would migrate whatever scope happened to be read as the
   // section's default for everyone. So: use it, and ask once. Fixed literal `item`, same reason as the fallback
@@ -2751,7 +2751,7 @@ export const SECTION_VIEW_METHODS = new Set(["getGridDataColumns", "initFixedFil
 // Classic list came from method bodies (`getGridDataColumns`, `initFixedFiltersConfig`, `getSectionActions`,
 // `getAddRecordMiniPage`), so an element the section INSERTED — a command-bar button, a `DataGridActiveRow…` row
 // action — reached nothing at all. Measured on two real bundles read from a stand: `OpportunitySectionV2` alone
-// declares eight such elements, all of them previously dropped without a trace.
+// declares eight such elements, all of which would otherwise be dropped without a trace.
 //
 // NOT `mapToFreedom`. That function maps a RECORD page, and the difference is not cosmetic: fed this same bundle
 // it emits one op and puts it in `SideAreaProfileContainer`, a record-page region. `buildListChangeSet` stays the
@@ -2928,7 +2928,7 @@ function sectionViewLabel(item, region) {
     package: lastProvenancePackage(item) };
 }
 // The grid itself and the containers are already owned by the list surface or are layout, so they are accounted for
-// and silent. `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a
+// and silent. `OWNER.FOLDED` is deliberately NOT in this list: including it is what drops a
 // section-declared MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold
 // exists now, and what it claimed is skipped by the caller — so reaching here means nothing folded this element.
 function isAccountedForOnListSurface(region, row) {
@@ -2950,7 +2950,7 @@ export function mapSectionView(sectionEff) {
   const childrenByParent = indexChildrenByParent(items);
   // Names a command-bar button folded into its own `menuItems`. Anything MENU-shaped that is NOT in here belongs
   // to no button on this surface and becomes a named open item — that is what makes "nothing is silently dropped"
-  // true for the menu family, which the blanket `OWNER.FOLDED` skip used to swallow.
+  // true for the menu family, which a blanket `OWNER.FOLDED` skip swallows.
   const foldedIntoMenus = new Set();
   const out = { commandBarActions: [], rowActions: [], gridConfig: [], openItems: [],
     counts: { items: items.length, sectionDeclared: 0, chrome: 0 } };
