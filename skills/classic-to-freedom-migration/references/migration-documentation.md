@@ -72,7 +72,7 @@ migrations/<app-or-section-slug>/
 
 **An answered ⚠ Confirm item is recorded in `decisions.md` like every other decision** — the question as the engine published it, the answer, who decided and when. Step 7 builds against that entry; an answer closes no `--verify` row on its own, the deliverable is still built and verified.
 
-Use a stable slug, for example `gdpr-for-creatio`. Do not rename the folder mid-project.
+Use a stable slug, for example `gdpr-compliance`. Do not rename the folder mid-project.
 
 **One `customizations.md` per analyzed SURFACE.** For a single section that is the one file above. For whole-package scope the folder is named after the app, so several surfaces would collide on one name — write each as `customizations-<section-slug>.md` in the same folder. Left to itself the sub-agent writes into a folder named after the *section* it analyzed (its own default is per-section, which is why it never collides on its side); the migration folder is the unit here, so **pass the exact path** (SKILL.md step 5.1) and that overrides the default. Otherwise a whole-package run scatters one report per section-slug folder, away from the plan that cites them.
 

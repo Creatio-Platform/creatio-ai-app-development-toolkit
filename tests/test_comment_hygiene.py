@@ -38,11 +38,16 @@ MARKERS = (
         re.compile(r"\b(?:Blocker|Major|Minor)\b|(?:^|[\s(\[])P[0-3](?=[\s):,.\]]|$)"),
     ),
     ("person_handle", re.compile(r"\b[a-z0-9]+-[a-z0-9]+-creatio\b", re.IGNORECASE)),
+    # "used to" is history only in the active voice: "X used to be Y". The passive
+    # "a wrapper is used to justify" names a purpose. "Regression" likewise names a
+    # test artifact ("regression gate") as often as it narrates a defect.
     (
         "history_narrative",
         re.compile(
-            r"\bbefore the fix\b|\bpreviously\b|\bused to\b|\bno longer\b"
-            r"|\bregression\b",
+            r"\bbefore the fix\b|\bpreviously\b|\bno longer\b"
+            r"|(?<!\bis )(?<!\bare )(?<!\bwas )(?<!\bwere )(?<!\bbe )(?<!\bbeen )"
+            r"(?<!\bbeing )\bused to\b"
+            r"|\bregression\b(?!\s+(?:gate|test|tests|suite|net|fixture))",
             re.IGNORECASE,
         ),
     ),
@@ -98,6 +103,9 @@ EXEMPT_PATHS = (
     "docs/telemetry-transport-decision.md",
     ".ai/specs",
     "tests/test_comment_hygiene.py",
+    # A dated gap analysis whose subject IS the before-state it measured; its
+    # `file:line` references deliberately point at the code as it was.
+    "skills/classic-to-freedom-migration/docs/imperative-logic-gap.md",
     "engine-tests/classic-to-freedom/baseline",
 )
 
