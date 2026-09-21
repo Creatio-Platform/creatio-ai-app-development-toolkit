@@ -2,9 +2,9 @@
 //
 // Turns the raw Classic schema bodies (assembled by clio get-classic-page-sources, or the
 // manual fallback) into one effective Classic page and a Freedom ChangeSet + needsDecision[]. This is the
-// deterministic 80% the skill used to ask the agent to do by hand (enumerate chain → merge diff/details/
+// deterministic 80% of the work the skill would otherwise ask the agent to do by hand (enumerate chain → merge diff/details/
 // businessRules by eye). A thin I/O wrapper over engine.mjs (mergeHierarchy) + mapper.mjs (mapToFreedom); the
-// golden runners (repo-root engine-tests/classic-to-freedom/run.mjs + run-mapper.mjs) remain the regression gate for the logic itself.
+// golden runners (repo-root engine-tests/classic-to-freedom/run.mjs + run-mapper.mjs) are the gate for the logic itself.
 //
 // Manifest shape (JSON):
 //   {
@@ -17,7 +17,7 @@
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
 //        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
-//        // + optional `"ownSection": "<Section>"` (ENG-95861 — the child entity owns ANOTHER SECTION: its Classic card stays
+//        // + optional `"ownSection": "<Section>"` (the child entity owns ANOTHER SECTION: its Classic card stays
 //        // Classic, this related list keeps opening it, the page is NEVER folded and publishes no deliverable)
 //     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed. Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
@@ -88,7 +88,7 @@ function childPageIssue(c) {
   // not a gap, and not the self-declared skip the rule above forbids (that rule stops an AGENT dropping a child
   // because it looks big or shared; a boundary is the USER's scope decision, recorded in the manifest).
   // This is the resolution that keeps the fold from happening at all (`foldOneChildPage` returns early), so a warning
-  // inside a page NOBODY IS MIGRATING can no longer block the parent's gate — the whole cost of the run this fixes.
+  // inside a page NOBODY IS MIGRATING must not block the parent's gate — the whole cost of the run this prevents.
   if (boundaryChild(c)) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
@@ -106,7 +106,7 @@ function childPageIssue(c) {
 }
 
 // ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
-// mini), so the three call sites can no longer drift on cycle or memo semantics (a fix to one used to be easy to
+// mini), so the three call sites cannot drift on cycle or memo semantics (a change to one is easy to
 // miss in the other two). Callers pass the resolved `key` + its schema map + the shared fold context, and only
 // differ in how they map the returned `res` (a runMigration result) onto their OWN record shape. Returns:
 //   { status: "cycle" }        — key is an ancestor on THIS branch → resolved-elsewhere; do not recurse.
@@ -141,8 +141,8 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
     // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
-    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
-    // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
+    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) would see `{}` and every
+    // signal-driven row — the DCM widget gate, and the on-save duplicate check — would silently vanish
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
     const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
@@ -217,8 +217,8 @@ function applyWarningDispositions(warnings, manifest) {
 }
 
 // The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
-// used to append to all eight producers ("op hit a missing item / skeletal seed") described a condition that was
-// provably absent on the run it blocked, and sent the remedy search to the wrong file for 12 hours.
+// would otherwise append to all eight producers ("op hit a missing item / skeletal seed") describes a condition that can be
+// provably absent on the run it blocks, and sends the remedy search to the wrong file.
 function warningsReason(warnings) {
   const blocking = (warnings || []).filter(isCorrectnessWarning);
   if (!blocking.length) return null;
@@ -263,9 +263,9 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
 }
 
 // THE LIST GATE. `computeGate` above answers for the RECORD page and deliberately excludes everything
-// tagged `role: "section"` — a filter added because a section body that would not parse used to block a form-page
+// tagged `role: "section"` — a filter that exists because a section body that will not parse must not block a form-page
 // plan that never consumed its `diff` (the spurious block recorded further down at the `sectionParseErrors` note).
-// That exclusion was right then and is wrong now for HALF its scope: since the section `diff` IS folded and mapped,
+// That exclusion is right for HALF its scope: since the section `diff` IS folded and mapped,
 // a structural gap in it means the LIST page is built from an incomplete reading — while the form page is still
 // perfectly fine.
 //
@@ -536,9 +536,9 @@ function sectionStubScopes(manifest, opts, sectionChangeSet) {
 // `mergeHierarchy` the record page uses, given the section's own `BaseDataView` chain instead of the page's
 // `BaseModulePageV2` one. `null` when no section chain was supplied, so every consumer has one thing to test.
 //
-// ONE fold, TWO consumers, on purpose. It used to be computed inside `sectionStubScopes` and thrown away with
-// that function's ChangeSet; the list page could not see it, which is why every element a section declared in its
-// `diff` was dropped. Folding it twice would be the other way to share it, and would let the two readings of the
+// ONE fold, TWO consumers, on purpose. Computing it inside `sectionStubScopes` throws it away with
+// that function's ChangeSet, leaving the list page unable to see it, which drops every element a section declares in its
+// `diff`. Folding it twice would be the other way to share it, and would let the two readings of the
 // same chain drift apart — the exact failure `mapping-table.mjs` was created to end.
 //
 // SEEDED, unlike the call this replaces. Without `seedTemplate` the fold has no `DataGrid`, no
@@ -922,9 +922,9 @@ function existingAppIssues(p, target) {
   return issues;
 }
 // ONE opts object for every row-rendering entry point (`--checklist`, `--verify`, the plan/spec renderers) and
-// for the sub-page folds. `--checklist` and `--verify` used to build their own, and the verify one was thinner
-// (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agreed only for as long
-// as no row helper read the gap, and the first helper that did would silently render two different row sets.
+// for the sub-page folds. `--checklist` and `--verify` building their own risks a thinner verify one
+// (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agree only for as long
+// as no row helper reads the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
   const blank = (v) => v == null || String(v).trim() === "";
@@ -1011,7 +1011,7 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 }
 // A child that is NOT rebuilt here still publishes its page key when it owes a deliverable — with a GATED row.
 // A reuse child owes the RelatedPage binding; a child whose Classic page exists (or was never verified) owes the
-// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (ENG-95861 — its
+// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (its
 // Classic card stays Classic, so this plan builds nothing for it), one already mapped higher on this branch (cycle)
 // and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
 // all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
@@ -1027,7 +1027,7 @@ function publishUnfoldedChild(c, pageKey) {
   publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
 }
 // The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
-// advisories) — used to tell a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
+// advisories) — tells a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
 const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency", "rule", "entity-filter", "method"]);
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
@@ -1035,7 +1035,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
   // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
   // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
-  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card used to be mandatory, and
+  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card would otherwise be mandatory, and
   // ONE of that card's own merge warnings was enough to ⛔ the parent plan for work nobody had asked for.
   // Checked AFTER `reuseFreedomPage` on purpose: if the child already ships a Freedom form, reuse is the better
   // answer (the related list opens Freedom rather than staying on Classic), and it owes a binding row this does not.
@@ -1078,7 +1078,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   }
   c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
   c.grandChildren = c.childPages.length;
-  c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
+  c.childBlocked = !!res.gate?.blocked;    // a nested child's spec is valid only if it cleared its OWN gates
   c.childReasons = res.gate?.reasons || [];
   c.childStructIncomplete = !!(res.structure && !res.structure.complete);
   c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
@@ -1289,7 +1289,7 @@ function diagnosticOwner(p, schema) {
 const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins" };
 // The set of member NAMES, per ownerKind, that no CLIENT schema touched (`fromTemplate`) — built once per run
 // from `eff`, the same source `buildCoverage` reads. A name in this set already gets ledger disposition `context`
-// (ENG-95412 follow-up: `disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
+// (`disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
 // these to `needsDecision` would silently promote it out of `context` — asking a human to resolve a value that
 // belongs to the platform's own template, not to anything the client wrote).
 function templateOwnedNames(eff) {
@@ -1317,8 +1317,8 @@ function diagnosticGapText(d, p) {
 // section schema and a main schema can legitimately carry the same `pkg`, and they are different bodies to open.
 const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(pkg ?? ""));
 // Routes the pkg-tagged diagnostic POOL (not just the main-page chain): main + seed, `detail:<name>`,
-// `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
-// layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
+// `profile:<name>` and section layers all reach the plan. Taking `schemas` alone would leave four of the five
+// layer kinds console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
 // `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
 // AC22: the owning member's OWN row must say the value could not be read. The `⚠ Imperative members` table prints
 // `needsDecision[].detail` (designspec `imperativeMemberRows` filters `needsDecision`, so the ledger's `SOURCES`
@@ -1364,7 +1364,7 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, te
     // A member no CLIENT schema touched is inherited base-template content — the coverage ledger already counts
     // it `context` (excluded by design, never a gap). Escalating its parse ambiguity to `needsDecision` would rank
     // it `decision` instead (disposition() ranks decision above context) and hand a human a platform-owned value
-    // that isn't theirs to resolve and carries no new information — the exact defect ENG-95412's reopening found.
+    // that isn't theirs to resolve and carries no new information.
     // `templateOwned` is built from `eff` (main + seed chain ONLY, see call site) and keyed by NAME alone — a
     // detail/profile/section schema can declare its own member under a name that collides with an unrelated
     // template-owned main-page member. `templateOwnedTags` gates the lookup to diagnostics that actually came
@@ -1488,7 +1488,7 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
 // instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
 // own cause + remedy — a gate reason, not an abort.
 // `rowActions` — one entry per `DataGridActiveRow…` item the section declares, `{ name, caption?, condition?, package? }`.
-// Still accepted after ENG-94714 taught the fold to produce these itself: a run that collected no section bundle
+// Accepted alongside the fold's own production of these: a run that collected no section bundle
 // (no `section.schemas`/`section.seed`) has no fold to read them from, and a row action read by hand off a stand must
 // still reach the plan. Unioned with the fold's own entries, and the FOLD wins — see `mergeRowActions`.
 function suppliedRowActions(section) {
@@ -1627,7 +1627,7 @@ export function mergeSectionActions(fromLayers = []) {
 
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
-// EXPORTED as the seam this precedence rule is asserted through. Since ENG-94714 the fold arm is live (it carries
+// EXPORTED as the seam this precedence rule is asserted through. The fold arm is live (it carries
 // the `activeRowActions` items `mapSectionView` read), so the rule now decides a real collision rather than a
 // hypothetical one.
 export function mergeRowActions(fromLayers = [], fromManifest = []) {
@@ -1750,7 +1750,7 @@ function resolveDetailBody(name, e, bodyOf) {
 // eval'd); returns the mechanism descriptor or null for a plain list. Extracted for Sonar CC 15.
 // Exported for a direct perf/ReDoS golden: every text-scan below uses BOUNDED quantifiers ([\s\S]{0,80}? etc.) or a
 // linear global match — no nested/ambiguous quantifier — so a large adversarial body stays linear (no catastrophic
-// backtracking). engine.mjs documents a prior ~32s/700KB regression fixed exactly this way. GUARDED by two goldens in
+// backtracking). engine.mjs documents why the quantifiers are bounded: an unbounded one costs ~32s on 700KB. GUARDED by two goldens in
 // engine-tests/classic-to-freedom/run-mapper.mjs — a wall-clock timing bound on a ~700KB adversarial body
 // ("Minor4 ReDoS: detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
 // ({0,N}) ("Minor4 structural …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
@@ -2158,7 +2158,7 @@ function feedPlanObject(h, value, readBody, state, depth) {
   // only inside a `schemas`/`seed` array. Before this, `section` entries and file-backed `detailSchemas` /
   // `profileSchemas` were walked generically, which hashed the PATH STRING: editing one of those files changed
   // the rendered plan and left `planVersion` identical, so an old approval authorised a plan the user never saw.
-  // Reproduced on a two-file manifest before the fix — same version before and after rewriting the detail body.
+  // Reproduced on a two-file manifest: same version before and after rewriting the detail body.
   // The remaining keys (`title`, `entity`, …) are still hashed below; only `body`/`file` are replaced by content.
   if (typeof value.file === "string" || typeof value.body === "string") {
     h.update("\u0001B");
@@ -2194,9 +2194,9 @@ function computePlanVersion(manifest, readBody) {
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
-// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE. A missing component used to get one
+// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE. A missing component must not get one
 // blanket "settle the target before building" whether it was a real component an install could recover or a name no
-// action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
+// action short of a re-plan can fix. The finding carries the row's structured `{kind,id}` gate, so the guidance
 // can say the actionable thing:
 //   • a VERSION-scoped miss (`component-absent-in-version`) — the component IS registered, just not carried by the
 //     target platform version, so no package install can add it; target a version that carries it (or re-plan). This
@@ -2222,7 +2222,7 @@ export function registrySettleGuidance(finding) {
   }
   return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
 }
-// ENG-95683 (item 2) — the compositeOnly ADVISORY, computed by `validateRun` and (until this feature) discarded. A
+// The compositeOnly ADVISORY, computed by `validateRun` and otherwise discarded. A
 // compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
 // Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
 // needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
@@ -2260,7 +2260,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 //
 // TEST-ONLY EXPORT — no production caller outside this module. `runMigration` is the public surface; this is
 // exported (like `buildCoverage` / `registrySettleGuidance`, the same convention) so a test can drive it against a
-// hand-built changeSet. ENG-95683 review: the decision to KEEP it was taken explicitly rather than left implicit.
+// hand-built changeSet. The decision to KEEP it is taken explicitly rather than left implicit.
 // The reason it cannot be replaced by an end-to-end fixture is a property of the mapper, not a gap in the tests:
 // `resolveProps` ALWAYS also writes `values.type` for a table element, so in any changeSet a real run can produce,
 // the `viewConfigDiff` source of `enginePositioned` already covers every type the `tableElements` source would —
@@ -2268,7 +2268,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 // because the other branch would satisfy the assertion first. Deleting that line would leave the e2e test green.
 // The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
 // items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
-// non-vacuous regression test of its own. Do not call it from production code.
+// non-vacuous test of its own. Do not call it from production code.
 export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
@@ -2329,7 +2329,7 @@ function readSchemaBody(e, baseDir) {
     throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
   const base = path.resolve(baseDir);
   const resolved = path.resolve(base, e.file);
-  // Containment applies to EVERY `file`, relative OR absolute (review — arbitrary-file-read Blocker): the manifest is
+  // Containment applies to EVERY `file`, relative OR absolute — otherwise an arbitrary file can be read: the manifest is
   // stand-derived / untrusted, so a `file` that resolves outside the manifest base dir — a `../…` escape OR an
   // absolute path like `/etc/passwd` — is refused, never read into the plan. A caller that legitimately needs files
   // from a directory sets `baseDir` to contain them (the golden fixtures pass `baseDir: FIX` with relative `file`s);
@@ -2411,7 +2411,7 @@ export function runMigration(manifest, opts = {}) {
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
-    profileSchemas,                           // ENG-93928 — parsed embedded-profile bodies (entity + displayed columns)
+    profileSchemas,                           // parsed embedded-profile bodies (entity + displayed columns)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
@@ -2570,7 +2570,7 @@ export function runMigration(manifest, opts = {}) {
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
   // turns `blocked` into a loud banner + non-zero exit, and the renderer prints the banner into the artifact.
   // The operator's recorded answers on FIDELITY warnings, folded in BEFORE the gate and the renderer read them, so
-  // one annotated array is what every surface reports (ENG-95862 item 5).
+  // one annotated array is what every surface reports.
   eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
   // …and the LIST page's own verdict, on the section's evidence alone. Separate from `gate` on purpose:
@@ -2634,7 +2634,7 @@ export function runMigration(manifest, opts = {}) {
       // advisory, and clearable via `manifest.warningDispositions`).
       warnings: eff.warnings,
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
-      seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
+      seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton
       features: eff.features,                 // feature toggles gating runtime visibility (union, not one state)
       referencedModules: eff.referencedModules, // UI-rendering deps outside the page-schema migration unit
     },
@@ -2702,7 +2702,7 @@ function builtPayloadIssue(built) {
 }
 
 // PROVENANCE. The shape check above proves the payload is well-formed; it does not prove it came from the stand.
-// A payload synthesised from the plan alone used to reach exit 0 with no Creatio contact at all, because
+// A payload synthesised from the plan alone would otherwise reach exit 0 with no Creatio contact at all, because
 // everything it needed was published in the plan. These identifiers are NOT: the plan publishes no GUID of any
 // kind, so `schemaUId` / `packageUId` can only come from a real `get-page` — and they have to agree with each
 // other across the whole payload, which a fabricated set will not do by accident:
@@ -2898,7 +2898,7 @@ let partialGateFailure = null;
 // variable, because it is neither a plan gap, nor a short build, nor a broken ledger: it is a decision somebody
 // has to make, and an orchestrator that read a passing exit code here would poll a halted run forever.
 let startableGateFailure = null;
-// ⛔ `--next` REFUSED TO ANSWER — a plan with gaps, or a frozen cut that no longer resolves. Its own variable
+// ⛔ `--next` REFUSED TO ANSWER — a plan with gaps, or a frozen cut that does not resolve. Its own variable
 // rather than a reuse of the one above: that one carries the halted-run ANSWER its stderr banner renders, and a
 // refusal has no answer to render. It only has to make the exit code agree with the banner already on stdout.
 let nextRefusalFailure = false;
@@ -3003,10 +3003,10 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   const cut = set.split ? `a frozen split of ${set.split.items} item(s)` : "the built-in budget slicer";
   const lines = [
     `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not. Cut by ${cut}.`,
-    // ⚠ DO NOT PUT THE PICKING INSTRUCTION BACK. This line used to say "hand ONE task file at a time, in the
-    // `Step` order that index lists", which told the caller to schedule off a DERIVED report — the very thing
-    // `--next` exists to replace, and a contradiction the engine was printing against itself once the mode
-    // existed. The index is still what a human reads; it is no longer what anyone picks from.
+    // ⚠ DO NOT PUT THE PICKING INSTRUCTION BACK. A line saying "hand ONE task file at a time, in the
+    // `Step` order that index lists" tells the caller to schedule off a DERIVED report — the very thing
+    // `--next` exists to replace, and a contradiction the engine would be printing against itself. The index
+    // is what a human reads; it is not what anyone picks from.
     `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Do NOT pick the next task off that index: ask the engine with \`${TASKS_FLAG} ${dir} ${NEXT_FLAG}\`, which answers with every task startable right now and the exact \`${START_FLAG}\` command for each. Hand each named task to its OWN sub-agent, and re-run this mode after every status change.`,
   ];
   const refused = set.blocked?.length || 0;
@@ -3114,7 +3114,7 @@ function nextAnswerLines(a, dir, cmdFor) {
 }
 
 // THIS MODE ASKS; IT DOES NOT CUT. The refresh below creates the folder it is pointed at, so a mistyped or
-// cwd-relative path used to be cut fresh and then answered with a confident step-1 dispatch over a ledger nobody
+// cwd-relative path would be cut fresh and then answered with a confident step-1 dispatch over a ledger nobody
 // built — the caller could not tell "the run has not started" from "you gave me the wrong path". Returns the
 // refusal text, or null for a folder that really holds a cut (which is refreshed exactly as before).
 function nextFolderRefusal(dir) {
@@ -3306,8 +3306,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
-  // on a correctly built page. The fail string three lines below says the same thing; this comment used to say
-  // the opposite, which is exactly the kind of drift that gets a payload hand-built from the wrong source.
+  // on a correctly built page. The fail string three lines below says the same thing; a comment saying
+  // the opposite is exactly the kind of drift that gets a payload hand-built from the wrong source.
   // A second mode flag alongside `--tasks` is a LOUD stop, not a silent precedence win. Every other mode is a
   // print; this one WRITES a folder, so "the first flag matched wins" would answer `--plan --tasks ./d` with a plan
   // on stdout and no folder — and a caller reading the exit code would believe the tasks were sliced.
