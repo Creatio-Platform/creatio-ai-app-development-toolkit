@@ -453,6 +453,66 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   return L;
 }
 
+// ENG-99749 point 6 helpers — the carry-over row-level list of every postponed item, with its decision and
+// destination parsed out of the cell text. `--decide --postponed` writes cells shaped `postponed — <reason>
+// (D<N>) → <destination>`; the regexes below pick the D<N> and the destination back out for the report.
+const POSTPONED_DECISION_RE = /\(D\d{1,3}\)/;
+const POSTPONED_DEST_RE = /→\s*(.+?)\s*$/;
+function parsePostponedCell(text) {
+  const s = String(text || "");
+  const dmatch = s.match(/\(D(\d{1,3})\)/);
+  const decision = dmatch ? `D${dmatch[1]}` : null;
+  const destMatch = s.match(POSTPONED_DEST_RE);
+  const destination = destMatch ? destMatch[1] : null;
+  return { decision, destination };
+}
+function collectPostponedRows(tasks) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== "postponed") return;
+      const { decision, destination } = parsePostponedCell(r.outcome);
+      out.push({ task: t, row: r, n: i + 1, decision, destination });
+    });
+  }
+  return out;
+}
+function postponedGroups(items) {
+  const by = new Map();
+  for (const it of items) {
+    const key = `${it.decision || "?"} → ${it.destination || "?"}`;
+    if (!by.has(key)) by.set(key, { decision: it.decision, destination: it.destination, rows: [] });
+    by.get(key).rows.push(it);
+  }
+  return [...by.values()];
+}
+// A destination that reads as an issue key (`ENG-12345`, `PROJ-42`) is rendered as a link into the same
+// Jira/GitHub tracker the plan lives in; free text passes through as-is. The link target uses a per-project
+// convention (`https://…/browse/<KEY>`) that the reader's environment resolves — the report is markdown, so
+// this is just a hint rather than a hard reference.
+const ISSUE_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+const renderDestination = (d) => {
+  const s = String(d || "").trim();
+  if (!s) return "—";
+  if (ISSUE_KEY_RE.test(s)) return `[${cell(s)}](https://creatio.atlassian.net/browse/${encodeURIComponent(s)})`;
+  return cell(s);
+};
+function carryOverSection(items, pageName) {
+  if (!items.length) return [];
+  const L = [`## Carry-over — postponed items (${items.length})`, "",
+    "Rows a person deferred through `--decide --postponed`. Each is a DEBT with a destination — not a real"
+    + " miss (the verdict stays 🟡, not 🔴), but they are not done either and belong on a backlog. Use this"
+    + " list to file follow-up work; the destination is what the person named when they decided.",
+    "", "| # | Page | Plan item | Decision | Destination | Recorded in |",
+    "| --- | --- | --- | --- | --- | --- |"];
+  items.forEach((it, i) => {
+    const dec = it.decision ? `**${it.decision}**` : "⚠ no D<N> found in the cell";
+    L.push(`| ${i + 1} | ${pageName(it.row.pageKey || it.task.pageKey)} | ${cell(it.row.label)} | ${dec} | ${renderDestination(it.destination)} | [${cell(it.task.group || it.task.id)}](${enc(it.task.file)}), row ${it.n} |`);
+  });
+  return L;
+}
+
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
@@ -498,13 +558,35 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   if (result?.coverage && !result.coverage.complete) reasons.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
   if (result?.listGate?.blocked) reasons.push("the LIST page gate is BLOCKED — the list page is not approvable");
   if (gates?.dispatchFailed) reasons.push("the DISPATCH gate failed — a task was closed with no dispatch token");
+  // ENG-99749 point 6: THREE-COLOUR VERDICT. Postponed items (row cells marked `postponed` through
+  // --decide) are a DEBT with a destination — not a real miss and not a done row. Collected here from the
+  // merged tasks so the verdict can distinguish "the machine has nothing left to do, the person has a debt"
+  // (🟡) from "someone still has work here" (🔴).
+  const postponedRows = collectPostponedRows(tasks);
   const complete = reasons.length === 0;
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
-  const verdict = complete
-    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`
-    : `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}`;
+  const postponedCount = postponedRows.length;
+  const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
+  let verdict;
+  if (!complete) {
+    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
+    // hide a shortfall.
+    verdict = `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}`;
+  } else if (postponedCount) {
+    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
+    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
+    // section carries the full list; this line is the headline.
+    const grouped = postponedGroups(postponedRows);
+    const headline = grouped.length === 1
+      ? `${plural(postponedCount, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
+      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section${manualNote ? "" : ""}`;
+    verdict = `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}`;
+  } else {
+    verdict = `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`;
+  }
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
+  const carryOver = carryOverSection(postponedRows, pageName);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
@@ -516,10 +598,12 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
+    ...(carryOver.length ? ["", ...carryOver] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
-  return { markdown: md, complete, reasons,
-    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft } };
+  return { markdown: md, complete, reasons, postponed: postponedRows,
+    verdictColour: !complete ? "red" : postponedCount ? "yellow" : "green",
+    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount } };
 }
