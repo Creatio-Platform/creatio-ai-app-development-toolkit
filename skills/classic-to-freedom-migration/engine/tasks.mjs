@@ -1287,12 +1287,16 @@ function attentionLines(set) {
 }
 
 export function countStatuses(tasks) {
-  const counts = { done: 0, open: 0, partial: 0, other: 0 };
+  const counts = { done: 0, open: 0, partial: 0, postponed: 0, wontDo: 0, na: 0, other: 0 };
   for (const t of tasks) {
     if (t.unread) counts.other++;
     else if (t.status === S_DONE) counts.done++;
-    // Counted in its own bucket: folded into `open` it reads as work still queued, folded into `other` it sits
-    // behind a word meaning "unrecognised".
+    // Each closure word gets its own bucket: `wont-do` and `not-applicable` count as done (no more work is
+    // owed), but they are reported separately so the reader can see how the total was reached. `postponed`
+    // is a debt with a destination and stays out of both `open` and `done`.
+    else if (t.status === S_NOT_APPLICABLE) counts.na++;
+    else if (t.status === S_WONT_DO) counts.wontDo++;
+    else if (t.status === S_POSTPONED) counts.postponed++;
     else if (t.status === S_PARTIAL) counts.partial++;
     else if (OPEN_STATUSES.has(t.status)) counts.open++;
     else counts.other++;
@@ -1325,9 +1329,13 @@ export function assertedBoundaryRows(tasks) {
 // inside a task whose word is wrong.
 // A task still OPEN is left alone: its cells are being filled as the agent goes, so a `not-built` recorded
 // halfway through is not yet its verdict and routing it would send a second agent at a row somebody holds.
-// `not-applicable` and `blocked` are out entirely, as they are in `computeStatus`.
+// `not-applicable`, `wont-do` and `blocked` are out entirely — the task carries no owed rows a repair round
+// should re-open. `postponed` is a debt but not open work in this phase, so it is out too; the row-level
+// `postponed` cell is not routed either (its debt is carried by the report's carry-over section, not by a
+// re-dispatch).
 function owedRows(t) {
-  if (t.unread || t.status === S_NOT_APPLICABLE || t.status === S_BLOCKED) return [];
+  if (t.unread || t.status === S_NOT_APPLICABLE || t.status === S_WONT_DO
+    || t.status === S_POSTPONED || t.status === S_BLOCKED) return [];
   if (!SETTLED.has(t.status)) return [];
   const rows = t.rows || [];
   // The same "nothing recorded anywhere" guard `computeStatus` applies: a task nobody marked at all says nothing
@@ -1451,7 +1459,12 @@ const mergePages = ({ residual = {}, verified = {} }) => {
 // closed there — including rows recorded after it ran, which nobody has looked at.
 // A row this round ACCOUNTED FOR: built, or an approved boundary with the reason that earns it. `parseOutcome`
 // has already turned a reasonless `not-applicable` into `not-built`, so there is no self-certified skip to filter here.
-const ROW_SETTLED = new Set([O_BUILT, O_NOT_APPLICABLE]);
+// A row this repair round accounted for. `built` and the plan's boundary close the row cleanly; `wont-do`
+// closes it as a person's decision. `postponed` is a DEBT — the row is not on the stand and won't be this
+// phase — so it does NOT settle the row for the round; it is treated like `not-built` for coverage purposes
+// so the row still shows up in whatever surface tracks postponed items (repair rows carry over into a
+// subsequent round's ledger the same way, so the debt stays visible).
+const ROW_SETTLED = new Set([O_BUILT, O_NOT_APPLICABLE, O_WONT_DO]);
 
 // The keys this round's own cells account for, and the keys they leave open. A row with no outcome is unsettled.
 // NOT-BUILT WINS WITHIN A ROUND, and an unaccounted cell with it: `coverKey` hashes the label alone — no `::n`
@@ -1758,6 +1771,13 @@ const statusStamp = (status) => shortHash(String(status || ""));
 //   `declared` — the agent's input: `blocked` or nothing (ENG-99749 removed `n/a` from the vocabulary).
 //   `outcomes` — the `Outcome` cells, one per row.
 //   `carried`  — the word the engine last wrote, which stands wherever the cells cannot answer.
+//
+// ENG-99749 rules over the extended row vocabulary (built · not-built · not-applicable · wont-do · postponed):
+//   · any `not-built` or blank cell ⇒ `partial` (the run cannot close over an unbuilt or unaccounted row)
+//   · at least one `postponed` and the rest closed ⇒ `partial` (`postponed` is a debt, not a closure)
+//   · every cell `wont-do` ⇒ `wont-do` (the person answered off the whole task)
+//   · every cell `not-applicable` ⇒ `not-applicable` (the plan pre-filled every row)
+//   · every cell in {built, not-applicable, wont-do} with at least one `built` ⇒ `done`
 function computeStatus(task, declared, outcomes, carried, edited = false) {
   // `edited` is the ONE input a caller must not forget, so every caller derives it the same way: through
   // `statusEditedIn(meta)`. Two readers of one file that disagree about it derive two different words.
@@ -1776,6 +1796,16 @@ function computeStatus(task, declared, outcomes, carried, edited = false) {
   // cannot stand.
   if (marks.some((m) => !m)) return CLOSED.has(carried) ? S_PARTIAL : carried;
   if (marks.some((m) => m?.outcome === O_NOT_BUILT)) return S_PARTIAL;
+  // A `postponed` cell is a debt — the person answered "not this phase", the row is not built and will not be
+  // this run — so the task cannot compute `done`. Every other cell must be closed for the debt to be the ONE
+  // thing holding the task; otherwise the earlier not-built / blank guard has already returned.
+  if (marks.some((m) => m?.outcome === O_POSTPONED)) return S_PARTIAL;
+  // Whole-task scope words the engine computes when every row agrees: `wont-do` (all cells are the person's
+  // answer to skip the work) and `not-applicable` (all cells are the plan's own boundary). A `built` beside
+  // any of them keeps the task on the `done` side of the ledger.
+  const hasBuilt = marks.some((m) => m?.outcome === O_BUILT);
+  if (!hasBuilt && marks.every((m) => m?.outcome === O_WONT_DO)) return S_WONT_DO;
+  if (!hasBuilt && marks.every((m) => m?.outcome === O_NOT_APPLICABLE)) return S_NOT_APPLICABLE;
   return S_DONE;
 }
 
@@ -2040,7 +2070,10 @@ function repairRounds(existing) {
 // said why it could not proceed is answered by a person, not by an identical fourth task.
 // `partial` counts as an attempt: the round ran and every row was accounted for. Leaving it out holds the cause
 // `pending` forever — no next round, and the cap that would park it never fires.
-const ROUND_ATTEMPTED = new Set([S_DONE, S_NOT_APPLICABLE, S_PARTIAL]);
+// `wont-do` and `not-applicable` count as attempted (the round ran and every row was accounted for); a
+// task computed `postponed` never opens here (a task with a postponed cell computes `partial`, which IS
+// listed, so the round-cap machinery sees it through that word).
+const ROUND_ATTEMPTED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_PARTIAL]);
 
 // Build the repair tasks one verify run calls for. `verifyPages` is `renderVerify`'s `pages` map: each entry
 // carries the rows that run left open, with the text the reader saw rather than a paraphrase of it.
@@ -2265,11 +2298,13 @@ export function forecastMinutes(weight, samples, B = TASK_BUDGET) {
 // filled `endedAt` in as well, with a time it rounded to the minute. The engine then saw the field set, recorded
 // no sample, and the progress block went on saying "no task of this run has closed yet" over `done 1`. A field
 // the caller must not touch does not belong in the file the caller edits.
-const CLOSED = new Set([S_DONE, S_NOT_APPLICABLE]);
-// `CLOSED` answers "counts as done" — the index total, the progress line. `SETTLED` answers "the agent is
-// finished with it": the clock stops, a dispatch record is owed, dependents are released. `partial` is SETTLED
-// and not CLOSED: the next task runs, the run may not be called complete.
-const SETTLED = new Set([...CLOSED, S_PARTIAL]);
+// `CLOSED` answers "counts as done" — the index total, the progress line. Under ENG-99749 the plan's
+// `not-applicable`, and the person's `wont-do`, both close the task (no more work is owed on it).
+const CLOSED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO]);
+// `SETTLED` answers "the agent is finished with it": the clock stops, a dispatch record is owed,
+// dependents are released. `partial` and `postponed` are SETTLED and not CLOSED — the run may not be
+// called complete while there is `partial` work, and `postponed` is an admitted debt with a destination.
+const SETTLED = new Set([...CLOSED, S_PARTIAL, S_POSTPONED]);
 
 // `running` is the open clocks, keyed by task id; `samples` the closed ones. Both in one file so a run's timing
 // state is one thing to read, write and delete.
