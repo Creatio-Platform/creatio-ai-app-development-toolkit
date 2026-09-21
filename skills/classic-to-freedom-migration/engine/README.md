@@ -185,9 +185,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
   the index changes nothing.
-- **The engine owns the deliverable rows; the caller owns `status` and `## Notes`.** A re-run rewrites the rows from
-  the current plan (they are the plan's) and never touches the caller's two. A task whose `id` carries
-  `origin: orchestrator` is neither rewritten nor removed — it is not the engine's to author.
+- **The engine owns the deliverable rows AND `status:`; the caller owns the `Outcome` column, `declared:` and
+  `## Notes`.** `status` is derived from the cells on every pass and written back; `declared` holds the caller's two
+  words, `blocked` and `n/a`. A re-run rewrites the rows from the current plan (they are the plan's) and never
+  touches the caller's three. An adopted file — a repair round's or one declared through `--tasks --add` — is
+  neither rewritten nor removed: only its `status:` line moves.
 - **Ids are content-derived — not positional, and not count-derived** — a short hash over (the page's
   `pageDedupeId`, the artifact, the chunk's structural anchor). The dedupe id and not the page KEY, because
   `claimPageKey` gives a base key to its first claimant: an inserted sibling can take `child:<Entity>` and push an

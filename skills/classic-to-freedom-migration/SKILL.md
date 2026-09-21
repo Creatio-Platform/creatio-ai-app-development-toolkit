@@ -460,7 +460,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
    **This is a GATE, not a warning.** A task recorded `done` that was never started this way FAILS the run: the
    next `--start` refuses and opens no clock, a plain `--tasks` exits 2, and so does `--verify --tasks`. The
-   message names every such file and the `--start` that re-opens it. Re-open each one (`status: todo`), start it,
+   message names every such file and the `--start` that re-opens it. Re-open each one (clear its `Outcome` cells,
+   then `status: todo`), start it,
    and hand it to its own sub-agent — the whole set, because `--start` refuses while any of it stands. `n/a` is
    the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it that: an `n/a` with
    nothing written there fails too.
@@ -496,7 +497,15 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    status, a task recorded `done` whose deliverables have since changed, and a task that left the plan surface.
 5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to hold two
    separate pieces of work, or add one the plan does not model, by writing a new file with `origin: orchestrator`
-   (`id`, `status`, `pageKey`, `group`, `order` front matter) — the engine keeps it and never rewrites it. Give it
+   by DECLARING it and letting the engine write the file:
+   `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --add <decl.json>`, where the
+   declaration is `{ "id": "<slug>", "pageKey": "<a page key from the plan>", "group": "<title>", "order": <n>,
+   "writesTo": "<the artifact it writes>" | "readOnly": true, "deliverables": ["<row>", ...],
+   "dependsOn": ["<task id>", ...], "stopGate": true }` — the last two optional; a list of declarations is fine; one
+   bad declaration refuses the whole set and writes nothing). The engine validates the `pageKey` against the plan,
+   writes the file with its own `Outcome` table, and from then on the body is yours and is never re-authored.
+   **Do not hand-write the file.** Its status is derived from that table like every other task's, and a
+   hand-written body the engine cannot parse is a task whose status nothing can derive. Give it
    a `writesTo:` naming the artifact it writes (copy the value from the task whose page it touches) so the engine
    chains it behind the other writers of that page; a corrective task for a decision that changes an already-built
    page is exactly this case, and without the field it sits in the queue writing a page body with nothing
@@ -654,7 +663,8 @@ machine-checked plan item is present. **Present that file verbatim as your final
 `build-tasks/index.md` or the bare table in its place, and never a summary of your own. The engine copies `name` from each page's
 `bundle.json` into the payload as `schemaName` — that is how the report names the pages.
 Where the ledger and the built page disagree — a task `done` while the table names a MISSING row, or the reverse —
-the stand is right: re-open the task whose rows that row belongs to (`status: todo`) and re-slice.
+the stand is right: re-open the task whose rows that row belongs to (clear its `Outcome` cells, then
+`status: todo`) and re-slice.
 
 The same command runs the dispatch gate over the folder — read-only, no re-slice — so the run cannot close while a
 task stands closed with nobody dispatched for it. While it fails, **no repair task is written**: a repair round
@@ -682,7 +692,8 @@ The shape below is what the engine COMPOSES — read it to understand the table,
 
 **`schemaUId` is the PROVENANCE field and the CLI rejects a payload without it (exit 1).** Copy it verbatim from `get-page` (`page.schemaUId`). Nothing in the plan carries a GUID, so it cannot be derived from the plan — only from a real read. The identities must also agree: the same `schemaUId` may not appear under two keys, and one `packageName` may not carry two `packageUId` values. This proves the payload is internally CONSISTENT, not that it came from the stand (the engine is offline and cannot ask Creatio whether a GUID exists).
 
-**Exit 2 is FOUR different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names (`status: todo`), `--start` each, and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did.
+**Exit 2 is FOUR different verdicts — do not treat them alike.** `⛔ VERIFY INCOMPLETE — YOUR BUILD is incomplete` is yours to repair: build the missing pieces, file the on-stand evidence, re-verify. `⛔ GATE BLOCKED` / `STRUCTURE INCOMPLETE` / `COVERAGE INCOMPLETE` fire in **every** mode, including `--verify`, and mean the PLAN has a gap — no build round closes one and re-running buys an identical answer. Fix the manifest, re-run `--plan`, re-approve if the plan changed, then build. `⛔ DISPATCH GATE` is about the RUN, not the plan or the build: tasks were closed with no sub-agent dispatched for them, or signed with a token dispatch never issued for them. **The folder and `index.md` WERE written and are current** — do not re-cut them. Re-open every file it names — clear its `Outcome` cells AND set `status: todo`, since the cells are what hold a
+   task closed ''' + M + ''' then `--start` each and hand each to its own sub-agent. `⛔ NOT BUILT` is about a DELIVERABLE: a build agent recorded a row of its task as not built, so its task computes `partial` and nothing is scheduled to close that row. It fires in **every** `--tasks` run and keeps firing until the row is routed — `--tasks <dir> --route` opens that round mid-run, with none of the `--built` payload `--verify` needs. Do not answer it by writing a repair file yourself: a repair task is recognised by front matter the engine writes, so a hand-written one settles no row and the same gate fires again over work somebody already did.
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration result report on an orchestrated run (`--verify --built … --tasks …`), the `--verify` table on a run with no task folder — present it as-is, and NEVER substitute a hand-authored "done" / "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where deliverables vanish: one run built the pages, wrote its own status table, and silently omitted the navigable-section registration — the user had to catch it. If you wrote a status table, you did it wrong; run `--verify` and present that. What the table does NOT contain — a plan deviation you propose, a plan-level gap — you surface in prose alongside it, never folded into the table.

@@ -56,7 +56,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
-import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
+import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
   TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -2749,6 +2749,7 @@ const TASKS_FLAG = "--tasks";
 const SPLIT_FLAG = "--split";
 const START_FLAG = "--start";
 // Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
+const ADD_FLAG = "--add";
 const ROUTE_FLAG = "--route";
 // `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
 // `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
@@ -3041,6 +3042,13 @@ const ROUND_EMPTY = {
 // The round's report, identical for both entry points except for where its rows came from.
 function repairRoundLines(res, dir, kind) {
   const lines = [];
+  // A row held back because the ledger settled it by decision is NOT written as a round, so this is the only
+  // place the caller hears about it.
+  for (const b of res.boundaries || []) {
+    lines.push(`migrate.mjs: NOT routed — \`${b.row.deliverable}\` (${b.pageKey}) was closed \`n-a\` with a reason`
+      + ` on ${b.task.file}, and a verify run re-opened it. The decision stands: confirm the boundary, or record`
+      + ` the row \`not-built\` to schedule the work.`);
+  }
   if (res.written.length) {
     const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
     lines.push(`migrate.mjs: wrote ${res.written.length} repair task(s) (round ${byRound.join(", ")}) to ${dir}`
@@ -3206,6 +3214,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (alsoAsked.length) fail(`\`${READS_FLAG}\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES the read plan for a gate that has not run yet, and those either print an artifact or verify one. Run them as separate commands.`);
   }
   // `--route`: open a repair round over the rows a build agent recorded as NOT BUILT, without a verify run.
+  // `--add <file.json>`: the orchestrator DECLARES a task the plan does not model and the engine writes the
+  // file. The declaration is the contract; the file shape is the engine's.
+  const addIdx = argv.indexOf(ADD_FLAG);
+  const addFile = addIdx >= 0 ? argv[addIdx + 1] : null;
+  if (addIdx >= 0 && (!addFile || addFile.startsWith("--")))
+    fail(`\`${ADD_FLAG}\` needs a path to the declaration file`);
+  if (addFile && !tasksMode) fail(`\`${ADD_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it adds a task to that folder.`);
+  if (addFile && verifyMode) fail(`\`${ADD_FLAG}\` writes a task; \`--verify\` reads the folder. Run them as separate commands.`);
+  if (addFile && startId) fail(`\`${ADD_FLAG}\` and \`${START_FLAG}\` are separate calls — one FILES the task, the other marks the one you are about to dispatch.`);
   const routeMode = argv.includes(ROUTE_FLAG);
   if (routeMode && !tasksMode) fail(`\`${ROUTE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it opens a repair round in that folder.`);
   if (routeMode && verifyMode) fail(`\`${ROUTE_FLAG}\` and \`--verify\` do the same routing — \`--verify ${TASKS_FLAG} <dir>\` already writes a round over every open row, its own and the not-built ones. Drop \`${ROUTE_FLAG}\`; it is for a run in flight, which has no \`--built\` payload to verify with.`);
@@ -3283,6 +3300,26 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
   // be a second opinion on seams the folder froze.
+  else if (tasksMode && addFile) {
+    let text;
+    try { text = fs.readFileSync(addFile, "utf8"); }
+    catch (e) { fail(`cannot read ${ADD_FLAG} '${addFile}': ${e.message}`); }
+    let decl;
+    try { decl = JSON.parse(text); }
+    catch (e) { fail(`${ADD_FLAG} '${addFile}' is not valid JSON: ${e.message}. Expected shape: ${DECL_SHAPE}`); }
+    let res;
+    try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
+    catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
+    if (res.refused) {
+      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing.
+      fail(`${ADD_FLAG} '${addFile}' does not resolve against this plan:\n`
+        + res.problems.map((x) => "  — " + x).join("\n") + `\nExpected shape: ${res.shape}`);
+    }
+    output = [`migrate.mjs: wrote ${res.written.length} declared task(s) to ${tasksDir} + ${TASK_INDEX_FILE}.`,
+      ...res.written.map((t) => `  — ${t.file} (${t.rows.length} deliverable(s))`),
+      "The file is the engine's to write and yours to fill: its `Outcome` column is what its status is derived",
+      "from, exactly as for a task cut from the plan. `--start` it like any other before you dispatch.", ""].join("\n");
+  }
   else if (tasksMode && routeMode) {
     try { output = runRouteMode(result, tasksDir, checklistOpts(manifest)); }
     catch (e) { fail(`cannot write repair tasks to '${tasksDir}': ${e.message}`); }

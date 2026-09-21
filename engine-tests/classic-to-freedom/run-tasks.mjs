@@ -13,7 +13,7 @@ import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-mig
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
-  taskFileName, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
+  taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
@@ -175,6 +175,41 @@ const readIndex = (dir) => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf
 const AT = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const taskFilePath = (dir, id) => path.join(dir, fs.readdirSync(dir).find((x) => x.endsWith(".md")
   && x !== TASK_INDEX_FILE && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
+const NOT_BUILT_BLOCKED = "not-built — blocked";
+const rowCount = (text) => text.split("\n").filter((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); }).length;
+const allBuilt = (text) => {
+  let t = text;
+  for (let i = 1; i <= rowCount(text); i++) { t = setOutcome(t, i, "built"); }
+  return t;
+};
+
+// CLOSE A TASK THE WAY AN AGENT DOES: account for every row. Typing the word is not a closure.
+const closeCells = (dir, id, mark = "built") => {
+  const f = taskFilePath(dir, id);
+  let text = fs.readFileSync(f, "utf8");
+  const n = (text.match(/^\|\s*\d+\s*\|/gm) || []).length;
+  // A LEGACY four-column table has no `Outcome` cell to fill, so there is nothing to account for and the
+  // recorded word is the only close such a file has ever had.
+  if (!/\| Outcome \|/.test(text)) {
+    fs.writeFileSync(f, text.replace(/^status: .*$/m, "status: done"));
+    return;
+  }
+  for (let i = 1; i <= n; i++) text = setOutcome(text, i, typeof mark === "function" ? mark(i) : mark);
+  fs.writeFileSync(f, text);
+};
+// The shape a folder written BEFORE these fields carries: no `declared:`, no `statusFrom:`.
+// A LEGACY body carries NEITHER field, so a fixture claiming that shape must strip both.
+const asLegacyBody = (t) => t.split(String.fromCharCode(10))
+  .filter((l) => !l.startsWith("declared:") && !l.startsWith("statusFrom:")).join(String.fromCharCode(10));
+const asLegacyFile = (dir, id) => {
+  const f = taskFilePath(dir, id);
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+    .replace(/^declared: .*$\n/m, "").replace(/^statusFrom: .*$\n/m, ""));
+};
+// Everything but the status line and the stamp that moves with it. The lines are REMOVED, not blanked, so a file
+// that acquires a stamp still compares equal to one that never had it.
+const sansStatusLines = (x) => x.split(String.fromCharCode(10))
+  .filter((l) => !l.startsWith("status:") && !l.startsWith("statusFrom:")).join(String.fromCharCode(10));
 const editFrontMatter = (dir, id, key, value) => {
   const f = taskFilePath(dir, id);
   fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`));
@@ -183,7 +218,7 @@ const editFrontMatter = (dir, id, key, value) => {
 function runTask(dir, id, run, opts, min) {
   const token = `tok-${id}`;
   startTask(dir, id, run, { ...opts, dispatchToken: token }, null, AT(min));
-  editFrontMatter(dir, id, "status", "done");
+  closeCells(dir, id);
   editFrontMatter(dir, id, "agentNonce", token);
   syncTaskDir(dir, run, { ...opts, now: AT(min + 1) });
   return token;
@@ -869,7 +904,7 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   // The caller records progress the only way the design sanctions: in the task's OWN file.
   const target = taskAt(first, "child:G1", "Quality gates");
   const p = path.join(dir, target.file);
-  fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace("status: todo", "status: done") + "\nguidelines pass filed as ev-7\n");
+  fs.writeFileSync(p, allBuilt(fs.readFileSync(p, "utf8")) + "\nguidelines pass filed as ev-7\n");
   const second = syncTaskDir(dir, RUN, OPTS);
   check("syncTaskDir: a re-run reads the recorded state back OFF THE FILES — the status and the notes written into one task file survive, and the index counts them",
     () => taskAt(second, "child:G1", "Quality gates").status === "done"
@@ -895,7 +930,9 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   fs.writeFileSync(orchPath, ORCH_BODY);
   const fifth = syncTaskDir(dir, RUN, OPTS);
   check("syncTaskDir: an `origin: orchestrator` file in the folder is left BYTE-FOR-BYTE as it was, is placed in the order by its own `order`, and appears on the index — read, never authored",
-    () => fs.readFileSync(orchPath, "utf8") === ORCH_BODY
+    // Its BODY is untouched. The `status:` line and the stamp beside it are the engine's, and a file that never
+    // had a stamp acquires one the first time the engine writes its status.
+    () => sansStatusLines(fs.readFileSync(orchPath, "utf8")) === sansStatusLines(ORCH_BODY)
       && fifth.tasks.some((t) => t.origin === "orchestrator" && t.file === ORCH_FILE)
       && readIndex(dir).includes(`[${ORCH_FILE}](${ORCH_FILE})`),
     () => ({ unchanged: fs.readFileSync(orchPath, "utf8") === ORCH_BODY, index: readIndex(dir) }));
@@ -910,7 +947,9 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   check("syncTaskDir: a status recorded in a file, re-sliced against a plan whose rows for that task CHANGED, is flagged on the index and keeps the digest it was recorded against — the whole point of the folder is that a closed task cannot quietly stand for deliverables it was never closed against",
     () => {
       const dp = path.join(dir, taskAt(SET, "main", DRIFT_GROUP).file);
-      fs.writeFileSync(dp, fs.readFileSync(dp, "utf8").replace("status: todo", "status: done"));
+      // Closed the LEGACY way on purpose: this fixture is about a status recorded against an older row set, and
+      // cells would make the re-slice compute `partial` and print that remedy instead of the drift one.
+      fs.writeFileSync(dp, asLegacyBody(fs.readFileSync(dp, "utf8")).replace("status: todo", "status: done"));
       const drifted = syncTaskDir(dir, RUN3, OPTS3);
       return taskAt(drifted, "main", DRIFT_GROUP).drifted === true
         && /the plan's deliverables for it have CHANGED since/.test(readIndex(dir))
@@ -919,6 +958,7 @@ console.log("\n===== syncTaskDir: the task file is the record, the index is rege
   check("syncTaskDir: re-opening that task (`status: todo`) clears the flag and adopts the plan's current rows — the warning is not sticky once the caller has acted on it",
     () => {
       const dp = path.join(dir, taskAt(SET, "main", DRIFT_GROUP).file);
+
       fs.writeFileSync(dp, fs.readFileSync(dp, "utf8").replace("status: done", "status: todo"));
       const reopened = syncTaskDir(dir, RUN3, OPTS3);
       return taskAt(reopened, "main", DRIFT_GROUP).drifted === false
@@ -1652,7 +1692,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     // "--start before every dispatch" re-rendered an adopted repair file through `renderTaskFile`, whose
     // `rows` are empty for an adopted task: the Deliverables table came back empty and the sub-agent was
     // dispatched with nothing to build.
-    check("start: `--start` on an ADOPTED repair task moves only its `status:` line — its Deliverables, its origin and its authored body are byte-identical afterwards, because the engine never parsed that body and re-rendering it empties the table the sub-agent is dispatched against",
+    check("start: `--start` on an ADOPTED repair task moves only its `status:` line and the stamp that belongs to it — its Deliverables, its origin and its authored body are byte-identical afterwards, because the engine never parsed that body and re-rendering it empties the table the sub-agent is dispatched against",
       () => {
         const d3 = tmp("start-adopted");
         syncTaskDir(d3, RUN, OPTS);
@@ -1663,7 +1703,8 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         const res3 = startTask(d3, rep.id, RUN, OPTS, null, at(0));
         const after3 = fs.readFileSync(f3, "utf8");
         const ok = res3.started?.id === rep.id
-          && after3 === before3.replace(/^status: .*$/m, "status: in-progress")
+          && sansStatusLines(after3) === sansStatusLines(before3)
+          && /^status: in-progress$/m.test(after3)
           && res3.started.origin === "orchestrator"
           && (before3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length === (after3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length
           && (after3.match(/^[ \t]*\|[ \t]*\d+[ \t]*\|/gm) || []).length > 0;
@@ -1725,9 +1766,11 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     // file would close the very clock the open-clock case exists to leave open.
     const fileOf = (d, id) => path.join(d, fs.readdirSync(d).find((x) => x.endsWith(".md") && x !== TASK_INDEX_FILE
       && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(d, x), "utf8"))));
+    // A task closes by accounting for its rows; the two words an agent writes go in `declared:`.
     const setStatus = (d, id, s) => {
+      if (s === "done") { closeCells(d, id); return; }
       const f = fileOf(d, id);
-      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${s}`));
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, `declared: ${s}`));
     };
     // Fixed tokens so the assertions can name them; a real dispatch mints its own.
     const CLOSED_FOR_TEST = new Set(["done", "n/a"]);
@@ -1887,16 +1930,29 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       setStatus(d, rep.id, "done");   // closed with no dispatch record, exactly the shape the gate exempts
       const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
       const adopted = set.tasks.find((t) => t.id === rep.id);
-      const rowRe = rep.file.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
       check("column (anti-vacuity): the repair task is adopted as `origin: orchestrator` — otherwise the exemption below is asserted about an engine-origin row",
         () => adopted?.origin === "orchestrator",
         () => adopted);
-      check("column: an orchestrator-origin task closed with no dispatch record does NOT fail the gate — the engine did not schedule it, so it is not held to a dispatch record",
-        () => set.dispatch.failing.every((t) => t.id !== rep.id) && !set.dispatch.never.some((t) => t.id === rep.id),
-        () => ({ failing: set.dispatch.failing.map((t) => t.id) }));
-      check("column: and its Dispatched cell reads `—`, not `⚠ never` — the column carries the warning only where the gate itself would",
-        () => adopted?.dispatched === "pending" && !new RegExp(`${rowRe}.*⚠ never`).test(readIndex(d)),
+      check("column: an adopted task that WRITES an artifact IS held to a dispatch record — it writes a page exactly as a plan task does, and \"the engine did not schedule it\" is not a reason a closure needs no builder",
+        () => set.dispatch.failing.some((t) => t.id === rep.id) && set.dispatch.never.some((t) => t.id === rep.id),
+        () => ({ failing: set.dispatch.failing.map((t) => t.id), repairWritesTo: adopted?.writesTo }));
+      check("column: and its Dispatched cell reads `\u26a0 never` — the column READS the gate rather than restating it, so the two cannot disagree about which row is failing",
+        () => adopted?.dispatched === "never"
+          && /⚠ never/.test(readIndex(d).split("\n").find((x) => x.includes(rep.file)) || ""),
         () => readIndex(d).split("\n").find((l) => l.includes(rep.file)));
+    }
+
+    // ---- an adopted READ-ONLY task claims nothing, so it is still exempt ----
+    {
+      const d = gateDir();
+      const roFile = "task-orch-readonly.md";
+      fs.writeFileSync(path.join(d, roFile),
+        "---\nid: orch-ro\nstatus: done\ndeclared: \norigin: orchestrator\npageKey: main\ngroup: A read-only review\norder: 3\nwritesTo: \n---\n\n# A read-only review\n\n## Notes\n\njudged it myself\n");
+      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
+      const ro = set.tasks.find((t) => t.id === "orch-ro");
+      check("gate: an adopted READ-ONLY task is held to a dispatch record too — a verdict filed by the context that did the work is the failure this gate exists for, and a declared review is no exception",
+        () => !!ro && !ro.writesTo && set.dispatch.failing.some((t) => t.id === "orch-ro"),
+        () => ({ found: !!ro, writesTo: ro?.writesTo, status: ro?.status, failing: set.dispatch.failing.map((t) => t.id) }));
     }
 
     // ---- the signature: a value the agent does not choose ----
@@ -2323,7 +2379,8 @@ console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round 
       fs.writeFileSync(p1, fs.readFileSync(p1, "utf8").replace("status: todo", "status: in-progress") + "\nfixed 3 so far\n");
       const before = fs.readFileSync(p1, "utf8");
       const res = cliTasks(["--tasks", dir], MANIFEST);
-      return fs.readFileSync(p1, "utf8") === before
+      // Its BODY is untouched; the `status:` line and the stamp that moves with it are the engine's.
+      return sansStatusLines(fs.readFileSync(p1, "utf8")) === sansStatusLines(before)
         && !/no longer in the plan/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"))
         && res.status === 0;
     }, () => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-900));
@@ -2379,13 +2436,6 @@ function setOutcome(text, n, value) {
   }).join("\n");
 }
 // Hoisted: written by most checks below.
-const NOT_BUILT_BLOCKED = "not-built — blocked";
-const rowCount = (text) => text.split("\n").filter((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); }).length;
-const allBuilt = (text) => {
-  let t = text;
-  for (let i = 1; i <= rowCount(text); i++) { t = setOutcome(t, i, "built"); }
-  return t;
-};
 // One task re-read through the merge, exactly as `syncTaskDir` does it: render → edit → parse → carry over.
 const reread = (task, set, edit) => {
   const text = edit(renderTaskFile(task, set));
@@ -2393,12 +2443,12 @@ const reread = (task, set, edit) => {
   return merged.tasks[0];
 };
 
-check("BACKWARD COMPATIBLE: a task whose Outcome column is entirely empty keeps the status it recorded — every folder written before this existed is in exactly that shape, and turning them all `partial` on the first re-slice would make the new state meaningless",
+check("BACKWARD COMPATIBLE: a task in a LEGACY folder (no `declared:` field) whose Outcome column is entirely empty keeps the status it recorded — every folder written before this existed is in exactly that shape, and turning them all `partial` on the first re-slice would make the new state meaningless",
   () => {
-    const asDone = reread(SAMPLE, SET, (t) => t.replace("status: todo", "status: done"));
-    const asTodo = reread(SAMPLE, SET, (t) => t);
+    const asDone = reread(SAMPLE, SET, (t) => asLegacyBody(t).replace("status: todo", "status: done"));
+    const asTodo = reread(SAMPLE, SET, (t) => asLegacyBody(t));
     return asDone.status === "done" && asTodo.status === "todo";
-  }, () => ({ done: reread(SAMPLE, SET, (t) => t.replace("status: todo", "status: done")).status }));
+  }, () => ({ done: reread(SAMPLE, SET, (t) => asLegacyBody(t).replace("status: todo", "status: done")).status }));
 
 check("BACKWARD COMPATIBLE: a file carrying the OLD four-column table (no Outcome column at all) parses to no outcomes and keeps its recorded status — the parser must not read the `Closed by` cell as an outcome",
   () => {
@@ -2446,14 +2496,14 @@ check("a task still IN PROGRESS with only some rows filled stays `in-progress` �
   () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: in-progress")).status);
 
 check("`n/a` survives an outcome cell — it is the one closure that legitimately has no builder, it is earned by the reason under `## Notes` that the dispatch gate reads, and a stale cell must not take that exemption away",
-  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: n/a")).status === "n/a",
-  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: n/a")).status);
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: n/a")).status === "n/a",
+  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: n/a")).status);
 
 check("`blocked` survives an outcome cell too — it is the only HALT an agent can reach (rule 5 asks for it when migrated content reads like an instruction), and since `partial` releases dependents, computing `partial` over it would walk the queue past a stop set on purpose",
   () => {
-    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked"));
+    const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: blocked"));
     return t.status === "blocked" && notBuiltRows([t]).length === 0;
-  }, () => reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked")).status);
+  }, () => reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: blocked")).status);
 
 check("a `blocked` task still HALTS its dependents — `--start` refuses a task whose `dependsOn` is blocked, exactly as before this change; only `partial` releases them",
   () => {
@@ -2463,7 +2513,7 @@ check("a `blocked` task still HALTS its dependents — `--start` refuses a task 
     // over it asserts nothing.
     const tgt = taskAt(s1, "child:G1", "Page build");
     const fp = path.join(d, tgt.file);
-    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, NOT_BUILT_BLOCKED).replace("status: todo", "status: blocked"));
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: blocked"));
     const s2 = syncTaskDir(d, RUN, OPTS);
     const dep = s2.tasks.find((t) => (t.dependsOn || []).includes(tgt.id));
     // No dependent means the FIXTURE stopped exercising the halt, which has to fail rather than pass quietly.
@@ -2506,6 +2556,595 @@ check("notBuiltRows names the DELIVERABLE and its cause, not just the task — `
     return items.length === 1 && items[0].n === 2 && items[0].cause === "blocked"
       && items[0].row.label === SAMPLE.rows[1].label;
   }, () => notBuiltRows([reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED))]));
+
+console.log("\n===== ENG-99748: a hand-written task is computed from its own cells, like every other =====");
+// An ADOPTED file: read, never re-authored. Built from the engine's own rendering so the table is in the shape a
+// declared task carries, and re-keyed to an id no plan task claims (`matchFor` would otherwise match it).
+const ADOPTED_ID = "orch-hand-written";
+const ADOPTED_FILE = "task-orch-hand-written.md";
+const handWrittenText = (mutate, status, id = ADOPTED_ID) => {
+  const text = renderTaskFile(SAMPLE, SET)
+    .replace(/^id: .*$/m, `id: ${id}`)
+    .replace(/^origin: .*$/m, "origin: orchestrator")
+    .replace("status: todo", `status: ${status}`);
+  return mutate ? mutate(text) : text;
+};
+const handWritten = (mutate, status = "done") =>
+  mergeTaskSet(SET, [{ file: ADOPTED_FILE, ...parseTaskFile(handWrittenText(mutate, status)) }])
+    .tasks.find((t) => t.id === ADOPTED_ID);
+
+check("ENG-99748: a hand-written task whose table parses and carries a `not-built` row computes `partial` — a typed `done` does not stand, because the word would be the verdict of the party that did the work",
+  () => {
+    const t = handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED));
+    return t.origin === "orchestrator" && t.status === "partial";
+  }, () => { const t = handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED));
+    return { origin: t?.origin, status: t?.status, rows: t?.rows.map((r) => r.outcome) }; });
+
+check("ENG-99748: its rows are READ, so the unbuilt deliverable is NAMED — an adopted file used to be carried with no rows at all, which hid the admission from the report and the gate even where the word was right",
+  () => {
+    const t = handWritten((x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED));
+    const items = notBuiltRows([t]);
+    return items.length === 1 && items[0].n === 2 && items[0].cause === "blocked"
+      && items[0].row.label === SAMPLE.rows[1].label;
+  }, () => notBuiltRows([handWritten((x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED))]));
+
+check("ENG-99748: the row reaches the OPEN list too — the report, the index attention list and the exit-2 unrouted count all read through it",
+  () => notBuiltOpenItems([handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED))]).length === 1,
+  () => notBuiltOpenItems([handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED))]));
+
+check("ENG-99748: all rows `built` computes `done` on a hand-written task as well — the rule is symmetric, not a way of failing adopted files",
+  () => handWritten((x) => allBuilt(x), "todo").status === "done",
+  () => handWritten((x) => allBuilt(x), "todo"));
+
+check("ENG-99748: a hand-written body with NO parseable deliverables table keeps its recorded word — unchanged behaviour, and the one case the engine genuinely cannot say anything about",
+  () => {
+    const t = handWritten((x) => x.slice(0, x.indexOf("## Deliverables")) + "## Notes\n\nfreeform body\n", "done");
+    return t.rows.length === 0 && t.status === "done";
+  }, () => { const t = handWritten((x) => x.slice(0, x.indexOf("## Deliverables")) + "## Notes\n\nfreeform body\n", "done");
+    return { rows: t?.rows.length, status: t?.status }; });
+
+check("ENG-99748: `not built` as PROSE under `## Notes` computes nothing — the table parser is scoped to the Deliverables section, so an agent explaining itself cannot move its own status",
+  () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done").status === "done",
+  () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done"));
+
+check("ENG-99748: `blocked` and `n/a` are still never computed over on a hand-written task — the two words an agent chooses deliberately keep meaning what they say",
+  () => ["blocked", "n/a"].every((w) =>
+    handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status === w),
+  () => ["blocked", "n/a"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
+
+check("ENG-99748: a task still OPEN is left alone — a `not-built` recorded while its sub-agent is still filling cells is not yet a verdict, and routing a round at it would send a second agent at a row somebody is holding",
+  () => {
+    const t = handWritten((x) => setOutcome(x, 1, NOT_BUILT_BLOCKED), "in-progress");
+    return t.status === "in-progress" && notBuiltRows([t]).length === 0;
+  }, () => { const t = handWritten((x) => setOutcome(x, 1, NOT_BUILT_BLOCKED), "in-progress");
+    return { status: t?.status, open: notBuiltRows([t]).length }; });
+
+// ON DISK: the computed word lands in the file too, or the folder disagrees with its own index. Only the
+// `status:` line moves; the body is never re-authored.
+// Everything after the front matter: what must come back byte-identical.
+const afterFrontMatter = (x) => x.split("---").slice(2).join("---");
+const writeBackRun = (name) => {
+  const d = tmp(name);
+  syncTaskDir(d, RUN, OPTS);
+  const f = path.join(d, ADOPTED_FILE);
+  fs.writeFileSync(f, handWrittenText((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED), "done"));
+  const before = fs.readFileSync(f, "utf8");
+  syncTaskDir(d, RUN, OPTS);
+  return { before, after: fs.readFileSync(f, "utf8") };
+};
+check("ENG-99748: the computed word is written back into the hand-written FILE — one line, with the body byte-identical, so the folder and the index cannot disagree about it",
+  () => {
+    const { before, after } = writeBackRun("orch-computed-writeback");
+    return /^status: partial$/m.test(after) && afterFrontMatter(after) === afterFrontMatter(before);
+  }, () => writeBackRun("orch-computed-writeback-d").after.split("\n").slice(0, 12).join("\n"));
+
+console.log("\n===== `declared:` is the agent's field, `status:` is the engine's =====");
+// `declared` holds the agent's two words and nothing else; `status` is output and only the engine writes it.
+const withDeclared = (mutate, declared, status = "todo") => {
+  let text = renderTaskFile(SAMPLE, SET)
+    .replace(/^id: .*$/m, "id: orch-declared")
+    .replace(/^origin: .*$/m, "origin: orchestrator")
+    .replace("status: todo", `status: ${status}`);
+  text = declared === null ? text.replace(/^declared: .*$/m, "") : text.replace(/^declared: .*$/m, `declared: ${declared}`);
+  text = mutate ? mutate(text) : text;
+  return mergeTaskSet(SET, [{ file: "task-orch-declared.md", ...parseTaskFile(text) }])
+    .tasks.find((t) => t.id === "orch-declared");
+};
+
+check("declared: the engine WRITES the field into every task file it renders, empty when nothing is declared - its presence is what makes the two owners visible in the file itself",
+  () => /^declared: *$/m.test(renderTaskFile(SAMPLE, SET)) && /^status: todo$/m.test(renderTaskFile(SAMPLE, SET)),
+  () => renderTaskFile(SAMPLE, SET).split("\n").slice(0, 6).join("\n"));
+
+for (const word of ["blocked", "n/a"]) {
+  check(`declared: \`${word}\` is an INPUT to the derivation, not an exception inside it - it stands over cells that would otherwise compute \`done\``,
+    () => withDeclared((x) => allBuilt(x), word).status === word,
+    () => withDeclared((x) => allBuilt(x), word).status);
+  check(`declared: and the legacy spelling still works - \`status: ${word}\` with no \`declared:\` field is read as that declaration, so folders and agents on the old contract keep working`,
+    () => withDeclared((x) => allBuilt(x), null, word).status === word,
+    () => withDeclared((x) => allBuilt(x), null, word).status);
+}
+
+check("declared: a CLOSING word cannot be declared - `declared: done` is not in the agent's vocabulary, so it is ignored and the cells decide",
+  () => withDeclared((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED), "done", "done").status === "partial",
+  () => withDeclared((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED), "done", "done").status);
+
+check("declared: nor typed into `status:` - a `done` there over a `not-built` cell is not a declaration and does not stand, which is the whole point of the split",
+  () => withDeclared((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED), "", "done").status === "partial",
+  () => withDeclared((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED), "", "done").status);
+
+check("declared: the declaration SURVIVES a re-render - the engine rewrites a plan task's body from the plan on every pass, and the agent's field is carried across like its `## Notes`",
+  () => {
+    const d = tmp("declared-survives");
+    const first = syncTaskDir(d, RUN, OPTS);
+    const tgt = taskAt(first, "child:G1", "Quality gates");
+    editFrontMatter(d, tgt.id, "declared", "blocked");
+    const after = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+    return after.status === "blocked"
+      && /^declared: blocked$/m.test(fs.readFileSync(taskFilePath(d, tgt.id), "utf8"));
+  }, () => {
+    const d = tmp("declared-survives-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    editFrontMatter(d, tgt.id, "declared", "blocked");
+    syncTaskDir(d, RUN, OPTS);
+    return fs.readFileSync(taskFilePath(d, tgt.id), "utf8").split("\n").slice(0, 6).join("\n");
+  });
+
+check("declared: clearing it re-opens the derivation - the halt was an input, so removing it lets the cells answer again",
+  () => {
+    const d = tmp("declared-cleared");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    editFrontMatter(d, tgt.id, "declared", "blocked");
+    const halted = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status;
+    editFrontMatter(d, tgt.id, "declared", "");
+    return halted === "blocked" && syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status === "done";
+  }, "a cleared declaration must let the cells decide again");
+
+console.log("\n===== `statusFrom:` - a status the engine did not write is NAMED =====");
+// A closing word written over a task's front matter changes nothing the word is derived from, so the stamp is
+// what makes the edit visible.
+const editedStatusFolder = (name, word = "done") => {
+  const d = tmp(name);
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  const f = taskFilePath(d, tgt.id);
+  // A real close: every cell filled, one of them not built. The engine derives `partial` and stamps it.
+  fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+  syncTaskDir(d, RUN, OPTS);
+  // ...and then the word somebody wanted, touching nothing it is derived from.
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${word}`));
+  return { d, tgt, set: syncTaskDir(d, RUN, OPTS) };
+};
+
+check("statusFrom: a `status:` edited after the engine wrote it is NAMED on Attention - the cells did not move, so the stamp no longer matches and the edit stops being invisible",
+  () => {
+    const { d, tgt, set } = editedStatusFolder("status-edited");
+    const t = set.tasks.find((x) => x.id === tgt.id);
+    return t.statusEdited === true && t.status === "partial"
+      && /its `status:` was edited after the engine wrote it/.test(readIndex(d));
+  }, () => {
+    const { d, tgt, set } = editedStatusFolder("status-edited-d");
+    return { edited: set.tasks.find((x) => x.id === tgt.id)?.statusEdited,
+      attention: readIndex(d).split("\n").filter((l) => l.includes("status:")).join(" | ").slice(0, 300) };
+  });
+
+check("statusFrom: the word the engine derives still WINS - the edit is reported, never honoured, so naming it costs nothing in correctness",
+  () => {
+    const { d, tgt, set } = editedStatusFolder("status-edited-wins");
+    const t = set.tasks.find((x) => x.id === tgt.id);
+    return t.status === "partial"
+      && /^status: partial$/m.test(fs.readFileSync(taskFilePath(d, tgt.id), "utf8"));
+  }, () => {
+    const { d, tgt } = editedStatusFolder("status-edited-wins-d");
+    return fs.readFileSync(taskFilePath(d, tgt.id), "utf8").split(String.fromCharCode(10)).slice(0, 5).join(" / ");
+  });
+
+check("statusFrom (no false positive): an ordinary re-run names nothing - the engine re-stamps what it writes, so a folder nobody edited is silent however many times it is re-sliced",
+  () => {
+    const d = tmp("status-unedited");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+    syncTaskDir(d, RUN, OPTS);
+    const set = syncTaskDir(d, RUN, OPTS);
+    return set.tasks.every((t) => !t.statusEdited)
+      && !/was edited after the engine wrote it/.test(readIndex(d));
+  }, () => {
+    const d = tmp("status-unedited-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+    syncTaskDir(d, RUN, OPTS);
+    return syncTaskDir(d, RUN, OPTS).tasks.filter((t) => t.statusEdited).map((t) => t.file);
+  });
+
+check("statusFrom (no false positive): a folder written before the stamp existed names nothing either - an absent stamp is not an edit",
+  () => {
+    const d = tmp("status-unstamped");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^statusFrom: .*$/m, "").replace(/^status: .*$/m, "status: done"));
+    const set = syncTaskDir(d, RUN, OPTS);
+    return set.tasks.find((x) => x.id === tgt.id)?.statusEdited !== true;
+  }, "an unstamped file predates the mechanism and must not be reported as edited");
+
+console.log("\n===== minted: the orchestrator declares, the engine writes the file =====");
+// Declared rather than hand-authored, every task carries the engine's `Outcome` table, so the derivation always
+// has cells to read.
+const DECL = { id: "orch-render-blocker", pageKey: "child:G1", group: "Render blocker", order: 3,
+  // The artifact string the engine derives for that page, which is what `--add` validates against.
+  writesTo: taskAt(SET, "child:G1", "Page build").writesTo, deliverables: ["A minimal page proven to render", "The offending wiring named"] };
+const minted = (over = {}, dirName = "mint") => {
+  const d = tmp(dirName);
+  syncTaskDir(d, RUN, OPTS);
+  return { d, res: addTasks(d, RUN, { ...DECL, ...over }, OPTS) };
+};
+
+check("minted: a declared task is WRITTEN by the engine, carrying its `Outcome` table and its declared rows - the orchestrator supplies the judgement, not the file shape",
+  () => {
+    const { d, res } = minted();
+    const text = fs.readFileSync(path.join(d, res.written[0].file), "utf8");
+    return res.refused === false && res.written.length === 1
+      && /\| # \| From \| Deliverable \| Closed by \| Outcome \|/.test(text)
+      && /A minimal page proven to render/.test(text) && /The offending wiring named/.test(text);
+  }, () => { const { d, res } = minted({}, "mint-d");
+    return res.refused ? res.problems : fs.readFileSync(path.join(d, res.written[0].file), "utf8").slice(0, 700); });
+
+check("minted: and its status is DERIVED from that table like any other task's - the point of minting is that the derivation always has cells to read",
+  () => {
+    const { d, res } = minted({}, "mint-derives");
+    const f = path.join(d, res.written[0].file);
+    fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+    const t = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === DECL.id);
+    return t.status === "partial" && notBuiltOpenItems([t]).length === 1;
+  }, () => { const { d, res } = minted({}, "mint-derives-d");
+    const f = path.join(d, res.written[0].file);
+    fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+    return syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === DECL.id)?.status; });
+
+check("minted: it is ADOPTED afterwards, never re-authored - the body is the orchestrator's from the moment it is written, like a repair round's",
+  () => {
+    const { d, res } = minted({}, "mint-adopted");
+    const f = path.join(d, res.written[0].file);
+    const withNotes = fs.readFileSync(f, "utf8") + "\nwhat I actually did\n";
+    fs.writeFileSync(f, withNotes);
+    syncTaskDir(d, RUN, OPTS);
+    return fs.readFileSync(f, "utf8") === withNotes
+      && syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === DECL.id).origin === "orchestrator";
+  }, () => { const { d, res } = minted({}, "mint-adopted-d");
+    return fs.readFileSync(path.join(d, res.written[0].file), "utf8").slice(0, 300); });
+
+check("minted: a `pageKey` the plan does not build is REFUSED - the repair cap buckets on (pageKey, cause), so a key matching no page gets its own bucket and the three-round cap over that page is bypassed",
+  () => {
+    const { res } = minted({ pageKey: "child:NOPE" }, "mint-badpage");
+    return res.refused === true && res.problems.some((x) => /is not a page this plan builds/.test(x));
+  }, () => minted({ pageKey: "child:NOPE" }, "mint-badpage-d").res.problems);
+
+check("minted: a declaration with NO deliverables is refused - a task with no rows has nothing to derive a status from, which is the hole minting exists to close",
+  () => {
+    const { res } = minted({ deliverables: [] }, "mint-norows");
+    return res.refused === true && res.problems.some((x) => /declares no `deliverables`/.test(x));
+  }, () => minted({ deliverables: [] }, "mint-norows-d").res.problems);
+
+check("minted: an `id` already in the folder is refused - two files claiming one id is the state the merge refuses to write over at all",
+  () => {
+    const d = tmp("mint-dupe");
+    const first = syncTaskDir(d, RUN, OPTS);
+    const { res } = { res: addTasks(d, RUN, { ...DECL, id: first.tasks[1].id }, OPTS) };
+    return res.refused === true && res.problems.some((x) => /already claimed/.test(x));
+  }, () => { const d = tmp("mint-dupe-d"); const first = syncTaskDir(d, RUN, OPTS);
+    return addTasks(d, RUN, { ...DECL, id: first.tasks[1].id }, OPTS).problems; });
+
+check("minted: a REFUSED set writes NOTHING - one bad declaration in a batch leaves the folder exactly as it was, because half a set is a judgement with a hole nobody can see",
+  () => {
+    const d = tmp("mint-allornothing");
+    syncTaskDir(d, RUN, OPTS);
+    const before = fs.readdirSync(d).length;
+    const res = addTasks(d, RUN, [DECL, { ...DECL, id: "orch-second", pageKey: "child:NOPE" }], OPTS);
+    return res.refused === true && fs.readdirSync(d).length === before;
+  }, () => addTasks(tmp("mint-allornothing-d"), RUN, [DECL, { ...DECL, id: "orch-second", pageKey: "child:NOPE" }], OPTS).problems);
+
+console.log("\n===== review round: the held-back boundary is reported, and the stamp fires only on an edit =====");
+// A row the ledger settled by decision is not routed. Everything that decides that must also SAY it, or the row
+// is dropped in silence.
+const boundaryFolder = (name) => {
+  const d = tmp(name);
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  clearDepsOf(d, tgt.id, RUN, OPTS);
+  const token = `tok-${tgt.id}`;
+  startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(40));
+  const f = taskFilePath(d, tgt.id);
+  fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, "n-a \u2014 approved boundary, per D1"));
+  editFrontMatter(d, tgt.id, "agentNonce", token);
+  const label = syncTaskDir(d, RUN, { ...OPTS, now: AT(41) }).tasks.find((t) => t.id === tgt.id).rows[0].label;
+  const res = syncRepairDir(d, RUN, { "child:G1": { missing: 1, unverified: 0, complete: false,
+    openRows: [openRow(1, label)] } }, OPTS);
+  return { d, tgt, res };
+};
+
+check("boundary: a verify row on a deliverable the ledger closed `n-a` WITH A REASON opens no repair round",
+  () => { const { res } = boundaryFolder("bnd-noround"); return res.written.length === 0 && res.boundaries.length === 1; },
+  () => { const { res } = boundaryFolder("bnd-noround-d"); return { written: res.written.length, boundaries: res.boundaries.length }; });
+
+check("boundary: and it is NAMED on the index, so the decision is confirmable rather than silently dropped",
+  () => { const { d } = boundaryFolder("bnd-index"); return /a verify run re-opened/.test(readIndex(d)); },
+  () => { const { d } = boundaryFolder("bnd-index-d"); return readIndex(d).split("## Attention")[1]?.slice(0, 400); });
+
+check("boundary: rendering an index that carries one does not throw \u2014 the line is built on the same array as every other Attention line",
+  () => { const { res } = boundaryFolder("bnd-render"); renderTaskIndex(res.set); return true; },
+  () => { try { renderTaskIndex(boundaryFolder("bnd-render-d").res.set); return "no throw"; } catch (e) { return `${e.constructor.name}: ${e.message}`; } });
+
+check("boundary (anti-vacuity): the SAME row recorded `not-built` instead DOES open a round \u2014 the reason is what buys the exemption",
+  () => {
+    const d = tmp("bnd-notbuilt");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    clearDepsOf(d, tgt.id, RUN, OPTS);
+    startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: `tok-${tgt.id}` }, null, AT(40));
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+    editFrontMatter(d, tgt.id, "agentNonce", `tok-${tgt.id}`);
+    syncTaskDir(d, RUN, { ...OPTS, now: AT(41) });
+    const res = syncRepairDir(d, RUN, {}, OPTS);
+    return res.written.length === 1 && (res.boundaries || []).length === 0;
+  }, "a not-built row must still route");
+
+check("statusFrom: an agent filling its `Outcome` column is NOT an edit \u2014 the stamp answers one question, so filling cells and declaring a halt leave it alone",
+  () => {
+    const d = tmp("stamp-honest");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    const first = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+    return first.statusEdited === false && !/was edited after the engine wrote it/.test(readIndex(d));
+  }, () => {
+    const d = tmp("stamp-honest-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    return { edited: syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).statusEdited };
+  });
+
+console.log("\n===== a hand-written table is read on its header, not on its heading =====");
+// `## Notes` is the boundary. Everything before it is the task's body, and a table is a deliverables table when
+// it carries a `#` column and an `Outcome` column - the heading above it decides nothing.
+const HANDWRITTEN = ["---", "id: orch-rowhdr", "status: done", "declared: ", "origin: orchestrator",
+  "pageKey: main", "group: Owner filter", "order: 3", "writesTo: page:main", "---", "",
+  "# Owner filter", "", "| # | Row | Outcome |", "| --- | --- | --- |",
+  "| 1 | The owner filter on the lookup | built |", `| 2 | The escape-dirty handler | ${NOT_BUILT_BLOCKED} |`,
+  "", "## Notes", "", "blocked on a decision"].join("\n");
+const handRead = (body) => {
+  const d = tmp("rowhdr-" + Math.random().toString(16).slice(2));
+  syncTaskDir(d, RUN, OPTS);
+  fs.writeFileSync(path.join(d, "task-orch-rowhdr.md"), body);
+  return syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === "orch-rowhdr");
+};
+
+check("header: a table headed `| # | Row | Outcome |` with NO `## Deliverables` heading is read - its rows parse and its status derives from the cells, rather than the whole file being written off over a heading word",
+  () => {
+    const t = handRead(HANDWRITTEN);
+    return t.rows.length === 2 && t.rows[1].outcomeKind === "not-built" && t.status === "partial";
+  }, () => { const t = handRead(HANDWRITTEN); return { rows: t?.rows.length, status: t?.status, kinds: t?.rows.map((r) => r.outcomeKind) }; });
+
+check("header: and its unbuilt row reaches the gate like any other",
+  () => notBuiltOpenItems([handRead(HANDWRITTEN)]).length === 1,
+  () => notBuiltOpenItems([handRead(HANDWRITTEN)]));
+
+check("header: a PROSE table above the real one does not win - the first header carrying an `Outcome` column is the deliverables table, and a hand-written body leading with `| # | Field | Type |` is read past",
+  () => {
+    const t = handRead(HANDWRITTEN.replace("| # | Row | Outcome |",
+      ["| # | Field | Type |", "| --- | --- | --- |", "| 1 | Owner | Lookup |", "", "| # | Row | Outcome |"].join(String.fromCharCode(10))));
+    return t.rows.length === 2 && t.status === "partial" && unreadableLedger([t]).length === 0;
+  }, () => { const t = handRead(HANDWRITTEN.replace("| # | Row | Outcome |",
+      ["| # | Field | Type |", "| --- | --- | --- |", "| 1 | Owner | Lookup |", "", "| # | Row | Outcome |"].join(String.fromCharCode(10))));
+    return { rows: t?.rows.length, status: t?.status }; });
+
+check("header (the guard it must not break): a table under `## Notes` is still NOT read - Notes are the agent's, and a table written there is not a deliverables table however it is headed",
+  () => {
+    const t = handRead(HANDWRITTEN.replace("# Owner filter\n\n| # | Row | Outcome |", "# Owner filter\n\n## Notes\n\n| # | Row | Outcome |"));
+    return t.rows.length === 0;
+  }, () => handRead(HANDWRITTEN.replace("# Owner filter\n\n| # | Row | Outcome |", "# Owner filter\n\n## Notes\n\n| # | Row | Outcome |")).rows.length);
+
+check("header: a table with NO `Outcome` column is still unreadable - the alias is on the label column alone, and without cells there is nothing to derive",
+  () => {
+    const t = handRead(HANDWRITTEN.replace("| # | Row | Outcome |", "| # | Row | Closed by |")
+      .replace("| --- | --- | --- |", "| --- | --- | --- |"));
+    return t.rows.length === 0 && unreadableLedger([t]).length === 1;
+  }, () => handRead(HANDWRITTEN.replace("| # | Row | Outcome |", "| # | Row | Closed by |")).rows.length);
+
+console.log("\n===== a closing word over a table where NOTHING is accounted for =====");
+// The last way a typed word could stand. `blocked`/`n/a` are declarations and unaffected; a legacy body carries
+// no stamp, so its word still stands; what is refused is a closing word written over a current file whose every
+// cell is empty.
+const typedOverBlank = (word) => {
+  const d = tmp("blank-" + word.replace("/", ""));
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  const f = taskFilePath(d, tgt.id);
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, `status: ${word}`));
+  return syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+};
+
+check("blank: a `done` typed over a table with NO cell filled computes `partial` — an unaccounted row is not a built one, and the stamp says the word did not come from the engine",
+  () => typedOverBlank("done").status === "partial",
+  () => ({ status: typedOverBlank("done").status, edited: typedOverBlank("done").statusEdited }));
+
+check("blank: the run cannot close over it — `partial` counts as open everywhere. The individual rows are NOT named: the collector keeps its own \"nothing recorded anywhere\" guard, so the task blocks the verdict while its deliverables stay unnamed",
+  () => { const t = typedOverBlank("done"); return t.status === "partial" && notBuiltOpenItems([t]).length === 0; },
+  () => { const t = typedOverBlank("done"); return { status: t.status, rows: t.rows.length, named: notBuiltOpenItems([t]).length }; });
+
+check("blank: a LEGACY body (no `declared:`, no `statusFrom:`) with the same empty column keeps its word — a folder written before the column existed is all-blank by nature",
+  () => {
+    const d = tmp("blank-legacy");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, asLegacyBody(fs.readFileSync(f, "utf8")).replace(/^status: .*$/m, "status: done"));
+    return syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status === "done";
+  }, "a legacy file carries no stamp, so nothing says its word was typed");
+
+check("blank: a task nobody has started is untouched — every `todo` task is all-blank, and the rule fires only over a CLOSING word",
+  () => typedOverBlank("todo").status === "todo",
+  () => typedOverBlank("todo").status);
+
+check("blank: a DECLARED halt stands — `declared:` is read before the cells, so a declaration is never computed over",
+  () => ["blocked", "n/a"].every((w) => {
+    const d = tmp("blank-decl-" + w.replace("/", ""));
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    editFrontMatter(d, tgt.id, "declared", w);
+    return syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status === w;
+  }), "a declaration in its own field must stand over an empty column");
+
+check("blank: a declarable word TYPED into `status:` is still read as a declaration — the engine only writes `blocked`/`n/a` there alongside a matching `declared:`, so one that does not match its stamp came from an agent and must keep halting",
+  () => ["blocked", "n/a"].every((w) => typedOverBlank(w).status === w),
+  () => ["blocked", "n/a"].map((w) => `${w}->${typedOverBlank(w).status}`));
+
+check("blank: clearing `declared:` still clears the halt — the engine's own `status: blocked` matches its stamp, so it is not re-read as a fresh declaration",
+  () => {
+    const d = tmp("halt-clear");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    editFrontMatter(d, tgt.id, "declared", "blocked");
+    const halted = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status;
+    editFrontMatter(d, tgt.id, "declared", "");
+    return halted === "blocked" && syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status === "done";
+  }, "clearing the declaration must let the cells decide again");
+
+console.log("\n===== one reader: every path derives the same word for one folder =====");
+// `edited` is the input a caller can silently omit, and two readers that disagree about it derive two words.
+check("one reader: `readTaskDir` and the merged path agree on a typed close over an all-blank table — the flag is derived the same way at every call site, so the folder has one answer",
+  () => {
+    const d = tmp("one-word");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: done"));
+    const read = readTaskDir(d).find((t) => t.id === tgt.id);
+    const merged = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
+    return read.status === "partial" && merged.status === "partial";
+  }, () => {
+    const d = tmp("one-word-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: done"));
+    return { read: readTaskDir(d).find((t) => t.id === tgt.id).status,
+      merged: syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status };
+  });
+
+check("stamp: a file that never had one ACQUIRES it the first time the engine writes its status — without that, the engine keeps writing the word while every edit to it stays undetectable",
+  () => {
+    const d = tmp("stamp-acquire");
+    const body = ["---", "id: orch-nostamp", "status: todo", "origin: orchestrator", "pageKey: main",
+      "group: Legacy note", "order: 3", "writesTo: page:main", "---", "", "# Legacy note", "",
+      "| # | Deliverable | Outcome |", "| --- | --- | --- |", "| 1 | A row | built |", "", "## Notes", "", "x"];
+    syncTaskDir(d, RUN, OPTS);
+    const f = path.join(d, "task-orch-nostamp.md");
+    fs.writeFileSync(f, body.join(String.fromCharCode(10)));
+    syncTaskDir(d, RUN, OPTS);
+    const after = fs.readFileSync(f, "utf8");
+    return /^statusFrom: \S+$/m.test(after) && /^status: done$/m.test(after);
+  }, () => {
+    const d = tmp("stamp-acquire-d");
+    syncTaskDir(d, RUN, OPTS);
+    const f = path.join(d, "task-orch-nostamp.md");
+    fs.writeFileSync(f, ["---", "id: orch-nostamp", "status: todo", "origin: orchestrator", "pageKey: main",
+      "group: Legacy note", "order: 3", "writesTo: page:main", "---", "", "# Legacy note", "",
+      "| # | Deliverable | Outcome |", "| --- | --- | --- |", "| 1 | A row | built |", "", "## Notes", "", "x"].join(String.fromCharCode(10)));
+    syncTaskDir(d, RUN, OPTS);
+    return fs.readFileSync(f, "utf8").split(String.fromCharCode(10)).slice(0, 6).join(" / ");
+  });
+
+check("add: `dependsOn` naming a task the folder does not have is REFUSED — the minted task would sit behind a gate that never closes and `--start` would refuse it for ever",
+  () => {
+    const d = tmp("add-badstep");
+    syncTaskDir(d, RUN, OPTS);
+    const res = addTasks(d, RUN, { ...DECL, dependsOn: ["nosuchtask"] }, OPTS);
+    return res.refused === true && res.problems.some((x) => /no task in this folder has/.test(x));
+  }, () => { const d = tmp("add-badstep-d"); syncTaskDir(d, RUN, OPTS);
+    return addTasks(d, RUN, { ...DECL, dependsOn: ["nosuchtask"] }, OPTS).problems; });
+
+check("add: a valid `dependsOn` is carried into the minted file, so a declared corrective task can be ordered behind a real one",
+  () => {
+    const d = tmp("add-step");
+    const first = syncTaskDir(d, RUN, OPTS);
+    const dep = first.tasks[1].id;
+    const res = addTasks(d, RUN, { ...DECL, dependsOn: [dep] }, OPTS);
+    return !res.refused && res.written[0].dependsOn.includes(dep)
+      && new RegExp(`^dependsOn: .*${dep}`, "m").test(fs.readFileSync(path.join(d, res.written[0].file), "utf8"));
+  }, () => { const d = tmp("add-step-d"); const first = syncTaskDir(d, RUN, OPTS);
+    const res = addTasks(d, RUN, { ...DECL, dependsOn: [first.tasks[1].id] }, OPTS);
+    return res.refused ? res.problems : res.written[0].dependsOn; });
+
+console.log("\n===== a halt survives the pass that honours it =====");
+// A declaration promoted out of `status:` has to be WRITTEN into its own field. The stamp the engine refreshes on
+// that same write is the only evidence the word was typed, so a promotion that is not persisted lasts one pass.
+const haltedRepair = (name, word) => {
+  const d = tmp(name);
+  const first = syncTaskDir(d, RUN, OPTS);
+  const tgt = taskAt(first, "child:G1", "Quality gates");
+  clearDepsOf(d, tgt.id, RUN, OPTS);
+  const token = `tok-${tgt.id}`;
+  startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(40));
+  const f = taskFilePath(d, tgt.id);
+  fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, NOT_BUILT_BLOCKED));
+  editFrontMatter(d, tgt.id, "agentNonce", token);
+  syncTaskDir(d, RUN, { ...OPTS, now: AT(41) });
+  const rep = syncRepairDir(d, RUN, {}, OPTS).written[0];
+  // Its agent ACCOUNTS for every row and then types the halt into the engine's field instead of its own. The
+  // filled cells are what make this reproduce: with them blank the carried word alone would keep the halt.
+  const rf = taskFilePath(d, rep.id);
+  let rtext = fs.readFileSync(rf, "utf8");
+  for (let i = 1; i <= rowCount(rtext); i++) rtext = setOutcome(rtext, i, NOT_BUILT_BLOCKED);
+  fs.writeFileSync(rf, rtext);
+  editFrontMatter(d, rep.id, "status", word);
+  const pass1 = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === rep.id).status;
+  const pass2 = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === rep.id).status;
+  return { d, rep, pass1, pass2, file: fs.readFileSync(taskFilePath(d, rep.id), "utf8") };
+};
+
+for (const word of ["blocked", "n/a"]) {
+  check(`halt: \`status: ${word}\` typed on an ADOPTED file survives the pass that honours it — the promotion is written into \`declared:\`, so the re-stamp that removes the evidence cannot drop the halt`,
+    () => { const r = haltedRepair("halt-" + word.replace("/", ""), word); return r.pass1 === word && r.pass2 === word; },
+    () => { const r = haltedRepair("halt-d-" + word.replace("/", ""), word); return { pass1: r.pass1, pass2: r.pass2 }; });
+}
+
+check("halt: and the word is in `declared:` on disk afterwards — that field is what makes it stick, and the body is otherwise untouched",
+  () => {
+    const r = haltedRepair("halt-ondisk", "blocked");
+    return /^declared: blocked$/m.test(r.file) && /^status: blocked$/m.test(r.file)
+      && /not-built/.test(r.file);
+  }, () => haltedRepair("halt-ondisk-d", "blocked").file.split(String.fromCharCode(10)).slice(0, 8).join(" / "));
+
+check("re-open: the documented remedy raises NO edit warning — clearing the cells and setting `status: todo` resolves to a lifecycle word, which is the engine's own, not a verdict typed over its rows",
+  () => {
+    const d = tmp("reopen-clean");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    syncTaskDir(d, RUN, OPTS);
+    // The remedy SKILL.md prescribes: clear the cells, then re-open.
+    const cleared = fs.readFileSync(f, "utf8").split(String.fromCharCode(10))
+      .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\| built \|$/, "| |") : l)).join(String.fromCharCode(10));
+    fs.writeFileSync(f, cleared.replace(/^status: .*$/m, "status: todo"));
+    const t = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === tgt.id);
+    return t.status === "todo" && !/was edited after the engine wrote it/.test(readIndex(d));
+  }, () => {
+    const d = tmp("reopen-clean-d");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
+    syncTaskDir(d, RUN, OPTS);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: todo"));
+    const t = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === tgt.id);
+    return { status: t.status, warned: /was edited after the engine wrote it/.test(readIndex(d)) };
+  });
+
+check("re-open (anti-vacuity): a CLOSING word typed over the same file IS still warned about",
+  () => {
+    const d = tmp("reopen-closing");
+    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+    const f = taskFilePath(d, tgt.id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: done"));
+    syncTaskDir(d, RUN, OPTS);
+    return /was edited after the engine wrote it/.test(readIndex(d));
+  }, "the warning must still fire where the word is a verdict");
 
 console.log("\n===== `partial` on the index, the progress block and the gates =====");
 {
@@ -2661,7 +3300,7 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       }));
       if (!next) break;
       const started = cliT(["--tasks", dir, "--start", next.id], MANIFEST);
-      editFrontMatter(dir, next.id, "status", "done");
+      closeCells(dir, next.id);
       editFrontMatter(dir, next.id, "agentNonce", /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(started.stdout || "")?.[1] || "");
       cliT(["--tasks", dir], MANIFEST);
     }
@@ -2848,9 +3487,13 @@ check("that reason SURVIVES the re-render — the engine escapes the cell on the
     return twice.tasks[0].rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter";
   }, "the Outcome cell must round-trip a typed pipe");
 
-check("the generated task body names `blocked` and `n/a` as the two statuses the agent still writes — the file otherwise says \"do not set status\", which contradicts execution rule 5",
-  () => /The two exceptions\s+are `blocked` and `n\/a`/.test(SAMPLE_TEXT) && /reason is REQUIRED/.test(SAMPLE_TEXT),
-  () => SAMPLE_TEXT.slice(SAMPLE_TEXT.indexOf("How you close this task"), SAMPLE_TEXT.indexOf("How you close this task") + 700));
+check("the generated task body names `declared:` as the agent's only status input and never instructs a `status:` write — the file IS the sub-agent's prompt, so guidance that names the engine's own field is guidance that loses a halt",
+  () => /Never write `status:`/.test(SAMPLE_TEXT)
+    && /`declared: blocked`/.test(SAMPLE_TEXT) && /`declared: n\/a`/.test(SAMPLE_TEXT)
+    && !/Do \*\*not\*\* set `status:`/.test(SAMPLE_TEXT)
+    && !/those you DO write/.test(SAMPLE_TEXT)
+    && /reason is REQUIRED/.test(SAMPLE_TEXT),
+  () => SAMPLE_TEXT.slice(SAMPLE_TEXT.indexOf("How you close this task"), SAMPLE_TEXT.indexOf("How you close this task") + 900));
 
 
 check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md` — a row nobody built that appears only in a file the user may never open is the shape this whole change exists to prevent, one step over",
@@ -2934,6 +3577,85 @@ const blockRepairsAs = (d, status) => repairIds(d).forEach((id) => {
 });
 const backAt = (set, id) => set.tasks.find((t) => t.id === id);
 
+// THE WRITE PHASE RUNS LAST. A task's word is only true for the coverage it was derived against, and opening the
+// next round changes that coverage.
+const reopenRow = (label) => ({ "child:G1": { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, label)] } });
+check("ENG-99752: a round that RE-OPENS a settled row rewrites the task file too — the file may not keep the `done` it was resolved to while round 1 was the only round",
+  () => {
+    const { d, tgt } = partialFolder("reopen-writes-back");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const resolved = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const onDiskAfterRound1 = parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status;
+    // Round 2 over the same deliverable — the row is open again, so the parent is not `done` any more.
+    syncRepairDir(d, RUN, reopenRow(resolved.rows[0].label), OPTS);
+    const onDiskAfterRound2 = parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status;
+    return resolved.status === "done" && onDiskAfterRound1 === "done" && onDiskAfterRound2 === "partial";
+  }, () => {
+    const { d, tgt } = partialFolder("reopen-writes-back-d");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const resolved = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const r1 = parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status;
+    syncRepairDir(d, RUN, reopenRow(resolved.rows[0].label), OPTS);
+    return { afterRound1: r1, afterRound2: parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status };
+  });
+
+check("ENG-99752: and the file agrees with the index it was written beside — one write phase, so the folder cannot hold two answers to the same question",
+  () => {
+    const { d, tgt } = partialFolder("reopen-file-vs-index");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const resolved = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const set = syncRepairDir(d, RUN, reopenRow(resolved.rows[0].label), OPTS).set;
+    const onDisk = parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status;
+    const row = readIndex(d).split("\n").find((l) => l.includes(`](${backAt(set, tgt.id).file})`));
+    return onDisk === "partial" && /◐ partial/.test(row);
+  }, () => {
+    const { d, tgt } = partialFolder("reopen-file-vs-index-d");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const resolved = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    syncRepairDir(d, RUN, reopenRow(resolved.rows[0].label), OPTS);
+    return { file: parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status,
+      index: readIndex(d).split("\n").filter((l) => l.includes("Quality gates")).join(" | ") };
+  });
+
+// ONE READER. `readTaskDir` (the dispatch preflight, the CLI's own folder read) and the merged path must answer
+// the same question the same way, or a row reads open through one and closed through the other.
+check("ONE READER: `readTaskDir` resolves residuals like the merged path does — a row a repair round settled reads closed through BOTH, so the two views of one folder cannot disagree",
+  () => {
+    const { d, tgt } = partialFolder("one-reader-agree");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const merged = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const read = readTaskDir(d).find((t) => t.id === tgt.id);
+    return merged.status === "done" && read.status === "done"
+      && notBuiltOpenItems(readTaskDir(d)).length === 0;
+  }, () => {
+    const { d, tgt } = partialFolder("one-reader-agree-d");
+    syncRepairDir(d, RUN, {}, OPTS);
+    closeRepairs(d);
+    const merged = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const read = readTaskDir(d).find((t) => t.id === tgt.id);
+    return { merged: merged.status, read: read.status, open: notBuiltOpenItems(readTaskDir(d)).length };
+  });
+
+check("ONE READER (anti-vacuity): before the round closes, BOTH views still read the row as open — the agreement above is not two views that never say anything",
+  () => {
+    const { d, tgt } = partialFolder("one-reader-open");
+    syncRepairDir(d, RUN, {}, OPTS);
+    const merged = backAt(syncTaskDir(d, RUN, OPTS), tgt.id);
+    const read = readTaskDir(d).find((t) => t.id === tgt.id);
+    return merged.status === "partial" && read.status === "partial"
+      && notBuiltOpenItems(readTaskDir(d)).length === 1;
+  }, () => {
+    const { d, tgt } = partialFolder("one-reader-open-d");
+    syncRepairDir(d, RUN, {}, OPTS);
+    const read = readTaskDir(d).find((t) => t.id === tgt.id);
+    return { read: read.status, open: notBuiltOpenItems(readTaskDir(d)).length };
+  });
+
 check("the residual goes through the EXISTING repair machinery — a row the build agent recorded as not built opens a repair task keyed `not-built:<kind>`, on a verify run that found nothing open itself, so the routing is the residual's own and not a side effect of a short build",
   () => {
     const { d } = partialFolder("residual-routed");
@@ -2971,7 +3693,9 @@ check("the task closes to `done` when its residual closes — COMPUTED from the 
     syncRepairDir(d, RUN, {}, OPTS);
     closeRepairs(d);
     const after = syncTaskDir(d, RUN, OPTS);
-    return backAt(after, tgt.id).status === "done" && notBuiltRows(after.tasks).length === 0;
+    // `notBuiltOpenItems`, not the raw collector: the row's Outcome cell keeps reading `not-built` after the
+    // round that fixed it, so "nothing is open" is the list the report and the gate read through.
+    return backAt(after, tgt.id).status === "done" && notBuiltOpenItems(after.tasks).length === 0;
   }, () => { const { d, tgt } = partialFolder("residual-closes-d"); syncRepairDir(d, RUN, {}, OPTS); closeRepairs(d);
     return backAt(syncTaskDir(d, RUN, OPTS), tgt.id).status; });
 
@@ -3019,7 +3743,9 @@ check("a residual closes its task only if SOMEBODY WAS DISPATCHED for it — typ
     }
     const after = syncTaskDir(d, RUN, OPTS);
     const rows = notBuiltRows(after.tasks);
-    return backAt(after, tgt.id).status === "partial" && rows.length === 1 && rows[0].residual === null;
+    // The typed word credits nothing: the parent stays `partial` and the row is still open work. Its residual
+    // reads `open` rather than absent, because the repair task exists and its own blank cells leave it unclosed.
+    return backAt(after, tgt.id).status === "partial" && rows.length === 1 && rows[0].residual === "open";
   }, () => { const { d, tgt } = partialFolder("residual-handedit-d"); syncRepairDir(d, RUN, {}, OPTS);
     for (const f of repairFiles(d)) { const p = path.join(d, f);
       fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(/^status: .*$/m, "status: done")); }
@@ -3045,7 +3771,7 @@ check("a repair file carries an `Outcome` column and says it closes on those cel
     const text = renderTaskFile(t, SET);
     return /\| # \| Deliverable \| What was recorded \| Evidence behind it \| Outcome \|/.test(text)
       && /fill the `Outcome` cell of EVERY row below, exactly as a build task does/.test(text)
-      && /Do \*\*not\*\* set `status:`/.test(text)
+      && /Never write `status:`/.test(text) && /`declared: blocked`/.test(text)
       && !/Status vocabulary/.test(text);
   }, () => renderTaskFile(buildRepairTasks(RUN, VERIFY_PAGES, OPTS, []).tasks[0], SET));
 
@@ -3374,7 +4100,7 @@ check("a RE-SLICE after the residual closed keeps the credit on the row it was e
     const one = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
     const two = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id);
     return one.status === "done" && two.status === "done"
-      && two.rows[0].residual === "closed" && notBuiltRows(syncTaskDir(d, RUN, OPTS).tasks).length === 0;
+      && two.rows[0].residual === "closed" && notBuiltOpenItems(syncTaskDir(d, RUN, OPTS).tasks).length === 0;
   }, () => { const { d, tgt } = closedResidual("covers-reslice-d");
     const t = syncTaskDir(d, RUN, OPTS).tasks.find((x) => x.id === tgt.id);
     return { status: t.status, residuals: t.rows.map((r) => r.residual) }; });

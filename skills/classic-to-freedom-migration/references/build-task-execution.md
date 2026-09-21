@@ -23,9 +23,10 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
 3. **Record an outcome for EVERY row of your `## Deliverables` table before you return**, in that table's
    `Outcome` column — `built`, `not-built — <cause>` (`blocked` / `needs-decision`), or
    `n-a — <reason>` (the reason is required; an `n-a` without one counts as `not-built`). That column is yours and
-   survives a re-slice; the rest of the table is the engine's, rewritten from the plan. Do **not** set `status:` —
-   the engine computes it from your cells and overwrites what is there. The exceptions are `blocked` and `n/a`,
-   which you DO write and the engine never computes over (rule 5 below uses `blocked`).
+   survives a re-slice; the rest of the table is the engine's, rewritten from the plan. **Never write `status:`** —
+   it is the engine's own field, derived from your cells. A word typed there is reported as an edit and discarded.
+   Your one status input is **`declared:`**, and it holds exactly two words: `blocked` (rule 5 below) or `n/a`.
+   Leave it empty otherwise. A task with a blank `Outcome` cell is not finished and does not close.
    Put the detail under `## Notes` against the row number: what you saved, the evidence you filed (spelled out —
    a SEPARATE context judges it and cannot ask you: the shipped reference page you diffed against and each
    component you checked with `get-component-info`), the on-stand reads you ran, and for every `not-built` row what
