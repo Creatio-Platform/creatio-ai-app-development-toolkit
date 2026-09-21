@@ -1040,8 +1040,10 @@ function taskAttention(t) {
   // `adoptedRowCount` counts the body's own ordinals, so the line distinguishes a file with no table from one
   // whose table the scoped parser refused.
   if (t.origin === TASK_ORIGIN_ORCHESTRATOR && !(t.rows || []).length) {
-    out.push(`- \`${t.file}\` — its \`## Deliverables\` table could not be read`
-      + `${t.adoptedRowCount ? ` (the body lists ${t.adoptedRowCount} numbered row(s), but not in the engine's table shape)` : ""},`
+    const shape = t.adoptedRowCount
+      ? ` (the body lists ${t.adoptedRowCount} numbered row(s), but not in the engine's table shape)`
+      : "";
+    out.push(`- \`${t.file}\` — its \`## Deliverables\` table could not be read${shape},`
       + ` so its \`status: ${t.status}\` is a word nobody derived and the run cannot close over it.`
       + " Re-file it with `--tasks <dir> --add`, which writes the table for you.");
   }
@@ -2392,23 +2394,35 @@ function setFrontMatterStatus(dir, file, status, declared = null) {
   if (!fs.existsSync(full)) return false;
   const lines = fs.readFileSync(full, "utf8").split("\n");
   if (lines[0]?.trim() !== "---") return false;
-  let wrote = -1, stamped = -1, decl = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") break;
-    if (lines[i].startsWith("statusFrom:")) { lines[i] = `statusFrom: ${statusStamp(status)}`; stamped = i; continue; }
-    // A DECLARATION PROMOTED OUT OF `status:` IS WRITTEN INTO ITS OWN FIELD. The stamp this write refreshes is
-    // the only evidence the word was typed, so without this the next pass reads no declaration and derives over
-    // a deliberate halt.
-    if (lines[i].startsWith("declared:")) { if (declared) lines[i] = `declared: ${declared}`; decl = i; continue; }
-    if (lines[i].startsWith("status:")) { lines[i] = `status: ${status}`; wrote = i; }
-  }
-  if (wrote < 0) return false;
-  // A file that never had a stamp ACQUIRES one here, or the engine keeps writing its status while its edits stay
-  // undetectable for ever.
-  if (stamped < 0) lines.splice(wrote + 1, 0, `statusFrom: ${statusStamp(status)}`);
-  if (decl < 0 && declared) lines.splice(wrote + 1, 0, `declared: ${declared}`);
+  const at = rewriteFrontMatter(lines, status, declared);
+  if (at.status < 0) return false;
+  // A FIELD THE FILE DOES NOT CARRY IS ADDED. Without the stamp the engine would keep writing this file's status
+  // while every edit to it stayed undetectable; without the declaration a halt promoted out of `status:` would
+  // last exactly one pass, because this same write refreshes the stamp that made it a promotion.
+  if (at.stamp < 0) lines.splice(at.status + 1, 0, `statusFrom: ${statusStamp(status)}`);
+  if (at.declared < 0 && declared) lines.splice(at.status + 1, 0, `declared: ${declared}`);
   fs.writeFileSync(full, lines.join("\n"));
   return true;
+}
+
+// Rewrite the three fields this write owns, in place, and report where each was found. An index of -1 means the
+// file does not carry that line at all.
+function rewriteFrontMatter(lines, status, declared) {
+  const at = { status: -1, stamp: -1, declared: -1 };
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") break;
+    if (lines[i].startsWith("statusFrom:")) {
+      lines[i] = `statusFrom: ${statusStamp(status)}`;
+      at.stamp = i;
+    } else if (lines[i].startsWith("declared:")) {
+      if (declared) lines[i] = `declared: ${declared}`;
+      at.declared = i;
+    } else if (lines[i].startsWith("status:")) {
+      lines[i] = `status: ${status}`;
+      at.status = i;
+    }
+  }
+  return at;
 }
 
 // CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two

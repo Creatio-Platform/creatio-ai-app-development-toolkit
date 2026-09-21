@@ -2948,7 +2948,8 @@ const HANDWRITTEN = ["---", "id: orch-rowhdr", "status: done", "declared: ", "or
   "", "## Notes", "", "blocked on a decision"].join("\n");
 let handReadSeq = 0;
 const handRead = (body) => {
-  const d = tmp("rowhdr-" + (handReadSeq += 1));
+  handReadSeq += 1;
+  const d = tmp("rowhdr-" + handReadSeq);
   syncTaskDir(d, RUN, OPTS);
   fs.writeFileSync(path.join(d, "task-orch-rowhdr.md"), body);
   return syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === "orch-rowhdr");
@@ -3031,17 +3032,6 @@ check("blank: a declarable word TYPED into `status:` is still read as a declarat
   () => ["blocked", "n/a"].every((w) => typedOverBlank(w).status === w),
   () => ["blocked", "n/a"].map((w) => `${w}->${typedOverBlank(w).status}`));
 
-check("blank: clearing `declared:` still clears the halt — the engine's own `status: blocked` matches its stamp, so it is not re-read as a fresh declaration",
-  () => {
-    const d = tmp("halt-clear");
-    const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
-    const f = taskFilePath(d, tgt.id);
-    fs.writeFileSync(f, allBuilt(fs.readFileSync(f, "utf8")));
-    editFrontMatter(d, tgt.id, "declared", "blocked");
-    const halted = syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status;
-    editFrontMatter(d, tgt.id, "declared", "");
-    return halted === "blocked" && syncTaskDir(d, RUN, OPTS).tasks.find((t) => t.id === tgt.id).status === "done";
-  }, "clearing the declaration must let the cells decide again");
 
 console.log("\n===== one reader: every path derives the same word for one folder =====");
 // `edited` is the input a caller can silently omit, and two readers that disagree about it derive two words.

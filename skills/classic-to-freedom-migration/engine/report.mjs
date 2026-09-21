@@ -201,6 +201,15 @@ function splitDecided(notBuilt, boundaries) {
   return { open, decided };
 }
 
+// A LEDGER ENTRY NOBODY CAN DERIVE — distinct from `ledgerRefused` (a file that would not parse at all):
+// this one parses and carries a status with no cells behind it.
+function unreadableLedgerReasons(tasks) {
+  const bad = unreadableLedger(tasks);
+  if (!bad.length) return [];
+  return [`${plural(bad.length, "task")} whose \`## Deliverables\` table could not be read`
+    + ` (${bad.map((t) => esc(t.file)).join(", ")}) — their status is not derived from anything`];
+}
+
 function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
   const R = [];
   if (gaps.length) R.push(`PLAN-level gap — ${gaps.join(" · ")} (fix the manifest and re-plan; no build round closes this)`);
@@ -454,13 +463,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const handLeft = (verifyRes?.rows || []).filter((r) => r.kind === "confirm" && !flaggedLabels.has(`${r.pageKey} ${labelKey(r.deliverable)}`)).length;
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
-  // A LEDGER ENTRY NOBODY CAN DERIVE — distinct from `ledgerRefused` (a file that would not parse at all):
-  // this one parses and carries a status with no cells behind it.
-  const unreadable = unreadableLedger(tasks);
-  if (unreadable.length) {
-    reasons.push(`${plural(unreadable.length, "task")} whose \`## Deliverables\` table could not be read`
-      + ` (${unreadable.map((t) => esc(t.file)).join(", ")}) — their status is not derived from anything`);
-  }
+  reasons.push(...unreadableLedgerReasons(tasks));
   if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
   // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
   // and must not leave plan rows unaccounted while the run reads COMPLETE.
