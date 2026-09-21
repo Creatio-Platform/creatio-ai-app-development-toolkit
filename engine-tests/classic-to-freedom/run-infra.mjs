@@ -888,7 +888,7 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
 }
 
 
-// ENG-99753 — the orchestrator contract says ASK the engine which task to start. That instruction is the whole
+// The orchestrator contract says ASK the engine which task to start. That instruction is the whole
 // point of the `--next` mode: without it the mode exists and nobody calls it, and the run goes back to scheduling
 // off `index.md` — a DERIVED report whose columns have already moved under a caller parsing them. A doc lint,
 // because the thing that can silently regress is a sentence, and the failure is invisible (every gate still
@@ -897,22 +897,22 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
   const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
   const engineReadme = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/README.md", import.meta.url)), "utf8");
   const step7 = skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8."));
-  check("ENG-99753 doc lint (anti-vacuity): step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
+  check("doc lint (anti-vacuity): step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
     () => step7.length > 2000 && /7\.2 The orchestrator contract/.test(step7),
     () => ({ len: step7.length, head: step7.slice(0, 120) }));
-  check("ENG-99753 doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
+  check("doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
     () => /--tasks <migration-folder>\/build-tasks --next/.test(step7),
     () => step7.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
-  check("ENG-99753 doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
+  check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
     () => /do not pick one from `index\.md`/i.test(step7) && /where you pick the next task from/i.test(step7),
     () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
-  check("ENG-99753 doc lint (AC4): step 7 no longer instructs the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+  check("doc lint (AC4): step 7 no longer instructs the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
     () => !/One task at a time, in the `Step` order the index lists/.test(step7),
     () => step7.split("\n").filter((l) => /`Step` order/.test(l)).slice(0, 4));
-  check("ENG-99753 doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
+  check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
     () => /is not a failure/.test(step7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(step7),
     () => step7.split("\n").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
-  check("ENG-99753 doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
+  check("doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
     () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
       && /startBlocker/.test(engineReadme),
     () => engineReadme.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
