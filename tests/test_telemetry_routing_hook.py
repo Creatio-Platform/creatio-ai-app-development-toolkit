@@ -216,11 +216,22 @@ def outcome_files(session: str, kind: str) -> "list[Path]":
 
 
 def await_outcome(session: str, kind: str, timeout: float = 20.0) -> str:
-    """Wait until clio's answer for the most recent dispatch has been written, and return it."""
+    """Wait until clio's answer for the most recent dispatch has been written, and return it.
+
+    Nonces are monotonic per session (see floorNonce/usageNonce), so the LAST file in
+    `outcome_files`'s sorted order is always the newest dispatch's — the one this call actually
+    needs to wait for. Scanning from the earliest and returning on the first non-empty file (as
+    this used to) is satisfied by an EARLIER dispatch's answer, already on disk from a previous
+    call, without ever looking at whether the new dispatch has answered yet. On a slower runner
+    (observed on windows-latest CI, not reproducible on a fast local machine) the detached
+    clio-stub child for the new dispatch can still be starting when that stale match returns, so
+    the caller moves on a call early and the retry loop's step count drifts by one.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        for answer in outcome_files(session, kind):
-            text = answer.read_text(encoding="utf-8")
+        answers = outcome_files(session, kind)
+        if answers:
+            text = answers[-1].read_text(encoding="utf-8")
             if text.strip():
                 return text
         time.sleep(0.05)
