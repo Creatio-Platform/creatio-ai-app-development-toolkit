@@ -584,7 +584,7 @@ function pageIdentities(result) {
 // TWO FIELDS, TWO OWNERS. `declared` is the agent's only status input and holds `blocked` or nothing.
 // `status` is the engine's output; nobody else writes it.
 const FRONT_MATTER_KEYS = ["id", "status", "statusFrom", "declared", "origin", "pageKey", "group", "order",
-  "planVersion", "rowsDigest", "writesTo", "dependsOn", "stopGate", "agentNonce"];
+  "planVersion", "rowsDigest", "writesTo", "dependsOn", "stopGate", "agentNonce", "decisions"];
 // The whole of the agent's status vocabulary. Under ENG-99749 only `blocked` remains — a technical halt the
 // agent hit and cannot compute a way around. A whole-task scope decision (`not-applicable`, `wont-do`,
 // `postponed`) is a PERSON's answer to a question the plan raised: `--decide D<N>` writes it, no agent may.
@@ -631,6 +631,22 @@ const carriedOf = (meta = {}) => meta.status || S_TODO;
 // its bucket closed credits rows nobody looked at. The labels are hashed rather than written out: they are
 // customer captions, up to a paragraph long, and the front matter is read by a person.
 const REPAIR_KEYS = ["kind", "cause", "repairRound", "covers"];
+
+// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>">.
+export const renderDecisionsMap = (m) => {
+  if (!m || (m instanceof Map ? m.size === 0 : Object.keys(m).length === 0)) return "";
+  const entries = m instanceof Map ? [...m.entries()] : Object.entries(m);
+  return entries.map(([n, d]) => `${Number(n)}:${d}`).sort((a, b) => Number(a.split(":")[0]) - Number(b.split(":")[0])).join(" ");
+};
+export const parseDecisionsMap = (s) => {
+  const out = new Map();
+  for (const tok of String(s || "").trim().split(/\s+/).filter(Boolean)) {
+    const [n, d] = tok.split(":");
+    const num = Number(n);
+    if (Number.isFinite(num) && num >= 1 && /^D\d+$/.test(String(d || ""))) out.set(num, d);
+  }
+  return out;
+};
 // ⚠ THE LABEL ALONE, with no occurrence suffix — unlike `rowKeys`, which appends `::n`. Two rows of one task that
 // carry identical `Deliverable` text are ONE key here: they are routed once and they close together.
 const coverKey = (label) => shortHash(String(label || "").trim().toLowerCase().replace(/\s+/g, " "));
@@ -662,6 +678,10 @@ function renderFrontMatter(task, set) {
     // proves the contract held. A nonce the sub-agent mints itself, appearing on two files, is one sub-agent
     // having closed two tasks — the engine sees it without asking either of them.
     agentNonce: task.agentNonce || "",
+    // Row-level provenance: `<row-number>:D<N>` pairs space-separated (`3:D13 5:D19`), naming the cells
+    // `--decide` wrote and under which decision. `--revoke D<N>` reads this to remove EXACTLY the cells
+    // that decision wrote and no others; the analog at cell level of `statusFrom:` at task level.
+    decisions: renderDecisionsMap(task.decisions),
   };
   const keys = [...FRONT_MATTER_KEYS];
   if (task.kind === REPAIR_KIND) {
@@ -1840,6 +1860,10 @@ function carryOver(task, prev) {
     // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
     // engine's, and rewriting it away would erase the one fact that shows a task was closed by a shared session.
     agentNonce: prev.meta.agentNonce || "",
+    // Cell-level provenance, carried like the nonce: `--decide` wrote it and `--revoke` reads it. A re-slice
+    // that keeps a row keeps its decision entry; a re-slice that drops a row drops its entry too (the entry
+    // is invisible to renderFrontMatter once the row is gone from the body).
+    decisions: parseDecisionsMap(prev.meta.decisions),
     recordedDigest: held,
     drifted: held !== task.rowsDigest,
   };
@@ -1891,6 +1915,9 @@ function adoptOrchestrated(e) {
     writesTo: e.meta.writesTo || "",
     dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
     agentNonce: e.meta.agentNonce || "",
+    // Row-level decision provenance (ENG-99749): read off the file so a repair task closed by cascade knows
+    // which decision wrote its cells and `--revoke` can find them.
+    decisions: parseDecisionsMap(e.meta.decisions),
     file: e.file,
   };
 }
@@ -2885,6 +2912,187 @@ export function startableTasks(set, dir) {
   if (candidates.length + held.length + inFlight.length === 0) return { ...base, verdict: NEXT_FINISHED };
   if (inFlight.length) return { ...base, verdict: NEXT_WAITING };
   return { ...base, verdict: NEXT_STUCK };
+}
+
+// ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised (ENG-99749) ---8<---
+//
+// A whole-task scope decision — `wont-do` or `postponed` — is a PERSON's answer, and it reaches the ledger
+// through this ONE mode: `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`.
+// The subject is the decision, because that is the thing the refusal turns on: `--decide` refuses unless
+// `D<N>` already resolves in `decisions.md` or under the plan's `### Adjustments`, and it NEVER creates one.
+// That refusal IS the safeguard — an agent cannot mint the ground it stands on.
+//
+// A cell `--decide` fills carries its provenance in the task's `decisions:` front-matter (`<n>:D<N>` pairs),
+// so `--revoke D<N>` finds exactly what it wrote and removes only that. `postponed` additionally requires a
+// destination (`--to`): an issue key or free text — the report renders a key as a link.
+
+// Find the task addressed by an id or a file basename (with or without `.md`).
+function findTaskByHandle(tasks, handle) {
+  const bare = String(handle || "").replace(/\.md$/, "").trim();
+  return tasks.find((t) => t.id === bare || t.file === bare + ".md" || t.file === bare);
+}
+
+function pickDecideTargets(tasks, opts) {
+  const { pages, taskId, rowRef } = opts;
+  if (rowRef) {
+    const t = findTaskByHandle(tasks, rowRef.taskId);
+    if (!t) return { problems: [`no task with id or file '${rowRef.taskId}' in the folder`], targets: [] };
+    if (t.unread) return { problems: [`task '${rowRef.taskId}' could not be read — its body is malformed; --decide cannot address a row it cannot count`], targets: [] };
+    const n = Number(rowRef.n);
+    if (!Number.isFinite(n) || n < 1 || n > (t.rows || []).length) {
+      return { problems: [`row ${rowRef.n} out of range for task '${t.id}' (1..${(t.rows || []).length})`], targets: [] };
+    }
+    return { targets: [{ task: t, rowIndices: [n - 1] }] };
+  }
+  if (taskId) {
+    const t = findTaskByHandle(tasks, taskId);
+    if (!t) return { problems: [`no task with id or file '${taskId}' in the folder`], targets: [] };
+    if (!(t.rows || []).length) return { problems: [`task '${taskId}' has no readable rows to decide over`], targets: [] };
+    return { targets: [{ task: t, rowIndices: t.rows.map((_, i) => i) }] };
+  }
+  if (pages && pages.length) {
+    const pageSet = new Set(pages);
+    const targets = tasks
+      .filter((t) => !t.unread && pageSet.has(t.pageKey) && (t.rows || []).length)
+      .map((t) => ({ task: t, rowIndices: t.rows.map((_, i) => i) }));
+    if (!targets.length) return { problems: [`no tasks with pageKey in {${pages.join(", ")}} in the folder`], targets: [] };
+    return { targets };
+  }
+  return { problems: ["--decide needs one of --pages, --task or --row to address rows"], targets: [] };
+}
+
+// The literal that lands in the Outcome cell. Pipes in a caption would break the table, so any pipe in the
+// reason or destination is escaped by the same `cell()` writer the row table uses.
+function decideCellText({ mode, decision, title, destination }) {
+  const outcome = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
+  const reason = String(title || "").replace(/\s+/g, " ").trim();
+  const stem = reason ? `${outcome} — ${reason} (${decision})` : `${outcome} — ${decision}`;
+  return mode === "postponed" ? `${stem} → ${String(destination || "").trim()}` : stem;
+}
+
+// Apply `--decide D<N>` to the addressed rows. Refuses on the addressing problems it can see BEFORE touching
+// the folder. `decisions` is the resolved Map<D<N>, title> from readDecisions — caller must have refused on a
+// missing key already; this fn takes the title from it for the cell text.
+// Writes NOTHING when a target row is `built` — the row is already on the stand, and closing a built row as
+// wont-do is a lie about it. A plan-boundary row's own pre-fill (`not-applicable — <plan reason>`) is left
+// alone too: a person's decision does not overturn the plan's own fact.
+export function applyDecision(dir, result, opts = {}) {
+  const { decision, mode, destination, decisions } = opts;
+  if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--decide needs a D<N> (got '${decision || "(none)"}')`] };
+  if (mode !== "wont-do" && mode !== "postponed") return { refused: true, problems: [`--decide needs --wont-do or --postponed (got '${mode || "(none)"}')`] };
+  if (mode === "postponed" && !String(destination || "").trim()) {
+    return { refused: true, problems: ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"] };
+  }
+  if (!decisions?.has || !decisions.has(decision)) {
+    return { refused: true, problems: [`decision '${decision}' does not resolve in decisions.md or the plan's ### Adjustments — nothing was written. Add it there first (a heading '## ${decision} — <title>' in decisions.md, or a numbered item under Adjustments), then re-run.`] };
+  }
+  const fresh = taskSetFor(dir, result, opts, opts.split || null);
+  if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
+  const merged = mergeTaskSet(fresh, readExisting(dir));
+  const picked = pickDecideTargets(merged.tasks, opts);
+  if (picked.problems?.length) return { refused: true, problems: picked.problems };
+
+  const title = decisions.get(decision);
+  const cellText = decideCellText({ mode, decision, title, destination });
+  const outcomeKind = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
+  const outcomeReason = mode === "postponed"
+    ? `${title || ""} (${decision}) → ${String(destination).trim()}`.trim()
+    : `${title || ""} (${decision})`.trim();
+
+  const touched = [];
+  const skipped = [];
+  for (const { task, rowIndices } of picked.targets) {
+    // A repair or orchestrator-adopted task keeps its body byte-for-byte through `persistTaskSet`, so a cell
+    // edit here would be silently dropped. Cascading `--decide` into repair tasks (and standalone `postponed`
+    // on a repair task) lands in a later commit under ENG-99749 point 4; refuse cleanly here so the caller
+    // knows nothing was written for those tasks rather than believing an in-place edit landed.
+    if (task.kind === REPAIR_KIND || task.origin === TASK_ORIGIN_ORCHESTRATOR) {
+      for (const idx of rowIndices) skipped.push({ task, n: idx + 1, why: "adopted task (repair or orchestrator-authored) — cascade / standalone postpone lands in a follow-up commit" });
+      continue;
+    }
+    task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
+    for (const idx of rowIndices) {
+      const row = task.rows[idx];
+      // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
+      // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
+      if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) {
+        skipped.push({ task, n: idx + 1, why: "plan-boundary row (engine-owned Outcome)" });
+        continue;
+      }
+      if (row.outcomeKind === O_BUILT) {
+        skipped.push({ task, n: idx + 1, why: "already built — closing a built row as a decision would lie about it" });
+        continue;
+      }
+      row.outcome = cellText;
+      row.outcomeKind = outcomeKind;
+      row.outcomeCause = null;
+      row.outcomeReason = outcomeReason;
+      row.naNoReason = false;
+      task.decisions.set(idx + 1, decision);
+      touched.push({ task, n: idx + 1 });
+    }
+  }
+  if (!touched.length) return { refused: true, problems: ["--decide touched no rows (every addressed row was already built or is a plan boundary)"], skipped };
+
+  fs.mkdirSync(dir, { recursive: true });
+  attachDispatch(merged, dir);
+  resolvePartials(merged);
+  persistTaskSet(dir, merged);
+  return { refused: false, decision, mode, destination: destination || null, touched, skipped, set: merged };
+}
+
+// Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
+// named in each task's `decisions:` map, so `--revoke` reads that map, clears the Outcome cell for each named
+// row, and drops the entry. Cells written by anything else (an agent-typed `wont-do`, a legacy `n-a`) are
+// invisible to this map and stay put — that is the point of the stamp.
+// A repair task closed by CASCADE keeps its closure (the next `--verify` round measures the page as it then
+// stands and re-opens what still needs work). This mirrors the ticket's note: "repair tasks closed by the
+// cascade are NOT revived, because the next --verify round measures the page as it then stands."
+export function revokeDecision(dir, result, opts = {}) {
+  const { decision } = opts;
+  if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--revoke needs a D<N> (got '${decision || "(none)"}')`] };
+  const fresh = taskSetFor(dir, result, opts, opts.split || null);
+  if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
+  const merged = mergeTaskSet(fresh, readExisting(dir));
+
+  const cleared = [];
+  const heldAdopted = [];
+  for (const t of merged.tasks) {
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    if (!map || !map.size) continue;
+    // A repair or orchestrator task keeps its body byte-for-byte through `persistTaskSet`; the outcome cell
+    // written by an earlier `--decide` (once cascade lands) is inside that body and cannot be revoked from
+    // here without an in-place table-cell editor. Named so the caller learns nothing was cleared for it,
+    // rather than believing the revoke reached the file.
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
+      if ([...map.values()].includes(decision)) heldAdopted.push(t);
+      continue;
+    }
+    let changed = false;
+    for (const [n, d] of [...map.entries()]) {
+      if (d !== decision) continue;
+      const idx = n - 1;
+      const row = t.rows?.[idx];
+      if (row) {
+        row.outcome = "";
+        row.outcomeKind = null;
+        row.outcomeCause = null;
+        row.outcomeReason = "";
+        row.naNoReason = false;
+      }
+      map.delete(n);
+      cleared.push({ task: t, n });
+      changed = true;
+    }
+    if (changed) t.decisions = map;
+  }
+  if (!cleared.length && !heldAdopted.length) return { refused: false, decision, cleared: [], heldAdopted: [], set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
+
+  fs.mkdirSync(dir, { recursive: true });
+  attachDispatch(merged, dir);
+  resolvePartials(merged);
+  persistTaskSet(dir, merged);
+  return { refused: false, decision, cleared, heldAdopted, set: merged };
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {

@@ -78,7 +78,7 @@ function decisionFallback(notes, n) {
 }
 
 // --- decisions.md / plan.md Adjustments: what a reason's `D<N>` / `Adjustment N` points at --------------------
-function readDecisions(migrationDir) {
+export function readDecisions(migrationDir) {
   const out = new Map();
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");

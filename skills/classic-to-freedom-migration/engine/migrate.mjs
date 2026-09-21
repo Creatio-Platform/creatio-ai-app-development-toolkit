@@ -59,11 +59,12 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
-  NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK } from "./tasks.mjs";
+  NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
+  applyDecision, revokeDecision } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
-import { renderFinalReport } from "./report.mjs";
+import { renderFinalReport, readDecisions } from "./report.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -2756,6 +2757,17 @@ const ROUTE_FLAG = "--route";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
+// `--decide D<N>` / `--revoke D<N>` (ENG-99749): the ONE path a PERSON's scope decision reaches the ledger.
+// See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` from
+// `<migration-folder>/decisions.md` and the plan's `### Adjustments`, and refuse when it does not.
+const DECIDE_FLAG = "--decide";
+const REVOKE_FLAG = "--revoke";
+const WONT_DO_FLAG = "--wont-do";
+const POSTPONED_FLAG = "--postponed";
+const TO_FLAG = "--to";
+const PAGES_FLAG = "--pages";
+const TASK_FLAG = "--task";
+const ROW_FLAG = "--row";
 // QUOTING IS PER SHELL, and the printed `--start` command is meant to be pasted into the shell the reader is
 // actually running. `cmd.exe` does not quote with `'` at all and POSIX `sh` keeps `$`, a backtick and `\` alive
 // inside `"`, so one encoder cannot serve both. BOTH branches quote UNCONDITIONALLY: a value with no space can
@@ -2774,12 +2786,14 @@ const READS_FLAG = "--reads";
 // The two flags are one contract — `--reads` writes `reads/index.json`, this reads it back — so they take the
 // same folder.
 const FROM_FLAG = "--from";
-const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, READS_FLAG, FROM_FLAG, ADD_FLAG]);
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, READS_FLAG, FROM_FLAG, ADD_FLAG,
+  DECIDE_FLAG, REVOKE_FLAG, TO_FLAG, PAGES_FLAG, TASK_FLAG, ROW_FLAG]);
 // EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
 // spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
 // not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
 // for, so the flag that produced them has to be the thing that fails.
-const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG, ...VALUE_FLAGS]);
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG,
+  WONT_DO_FLAG, POSTPONED_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
@@ -3277,6 +3291,54 @@ function runRepairMode(result, dir, verifyRes, opts) {
     repair: { written: res.written, pending: res.pending, parked: res.parked } };
 }
 
+// `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>` (ENG-99749)
+// — the one path a person's scope decision reaches the ledger. It refuses unless `D<N>` already resolves in
+// `<migration-folder>/decisions.md` or under the plan's `### Adjustments`; that refusal IS the safeguard
+// (an agent cannot mint the ground it stands on), and the message prints exactly what to add.
+function decidePrintProblems(prefix, problems, addHelp) {
+  const lines = [`migrate.mjs: ⛔ ${prefix}:`];
+  for (const p of problems) lines.push(`  — ${p}`);
+  if (addHelp) lines.push(...addHelp);
+  return lines.join("\n") + "\n";
+}
+function runDecideMode(result, dir, opts) {
+  // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
+  // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
+  // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
+  const migrationDir = path.join(dir, "..");
+  const decisions = readDecisions(migrationDir);
+  const res = applyDecision(dir, result, { ...opts, decisions });
+  if (res.refused) {
+    const help = res.problems.some((p) => /does not resolve in decisions\.md/.test(p))
+      ? ["", "  add it to `" + path.join(migrationDir, "decisions.md") + "` as a heading (`## " + opts.decision
+          + " — <title>`), or under the plan's `### Adjustments` as `N. **<title>**`, then re-run."]
+      : [];
+    return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems, help), ok: false };
+  }
+  const target = opts.rowRef ? `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`
+    : opts.taskId ? `task ${opts.taskId}`
+    : `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
+  const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${target}.`];
+  if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
+  for (const t of res.touched) lines.push(`  · ${t.task.file} row ${t.n} — ${t.task.rows[t.n - 1].label}`);
+  for (const s of res.skipped) lines.push(`  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+  return { note: lines.join("\n") + "\n", ok: true };
+}
+function runRevokeMode(result, dir, opts) {
+  const res = revokeDecision(dir, result, opts);
+  if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
+  if (!res.cleared.length && !(res.heldAdopted || []).length) {
+    return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+  }
+  const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
+  for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
+  for (const t of res.heldAdopted || []) {
+    lines.push(`  ⚠ ${t.file} still records ${opts.decision} in its \`decisions:\` map — that task is adopted (repair or orchestrator-authored) and its Outcome cell is inside a body \`persistTaskSet\` keeps byte-for-byte. In-place cascade edit lands in a follow-up commit; edit the cell by hand if you need it cleared now.`);
+  }
+  return { note: lines.join("\n") + "\n", ok: true };
+}
+
 // The artifact a `--from` run writes when `--out` names nothing: the migration result report under `--tasks`,
 // the bare plan-vs-built table otherwise. Its own function so the two conditions are not one nested ternary.
 function defaultOutFile(fromDir, tasksMode) {
@@ -3395,7 +3457,41 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       .filter(([, on]) => on).map(([name]) => name);
     if (nextMode && moves.length) fail(`\`${NEXT_FLAG}\` cannot be combined with ${moves.join(" / ")} — each of those WRITES the folder before the answer would be printed, so a single call would describe a state you could not identify. Ask \`${NEXT_FLAG}\` first, then run the command it prints.`);
   }
-  if (tasksMode && !verifyMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
+  // `--decide D<N>` / `--revoke D<N>` — ENG-99749 scope-decision mode. Requires `--tasks <dir>` (the folder
+  // whose cells it fills or clears). Refuses to combine with other write modes for the same reason `--next`
+  // does: a single call would describe or dispatch state the reader cannot identify. Argument shape and
+  // resolution live in tasks.mjs / report.mjs (readDecisions).
+  const decideArg = valueFlagArg(argv, DECIDE_FLAG, `${DECIDE_FLAG} D13`, fail);
+  const revokeArg = valueFlagArg(argv, REVOKE_FLAG, `${REVOKE_FLAG} D13`, fail);
+  const wontDoFlag = argv.includes(WONT_DO_FLAG);
+  const postponedFlag = argv.includes(POSTPONED_FLAG);
+  const toArg = valueFlagArg(argv, TO_FLAG, `${TO_FLAG} ENG-12345`, fail);
+  const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
+  const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
+  const rowArg = valueFlagArg(argv, ROW_FLAG, `${ROW_FLAG} <task-id>:<n>`, fail);
+  const decideMode = !!decideArg, revokeMode = !!revokeArg;
+  if ((decideMode || revokeMode) && !tasksMode) fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it writes into that folder.`);
+  if (decideMode && revokeMode) fail(`\`${DECIDE_FLAG}\` and \`${REVOKE_FLAG}\` are opposite operations — run them as separate commands.`);
+  if ((decideMode || revokeMode) && (verifyMode || routeMode || nextMode || !!startId || !!addFile || !!splitFile)) {
+    fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` writes into the folder; every other write / query mode does the same or moves it first, so a single call would describe a state the reader cannot identify. Run them as separate commands.`);
+  }
+  if (decideMode) {
+    if (!/^D\d+$/.test(decideArg)) fail(`\`${DECIDE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${DECIDE_FLAG} D13\`) — got \`${decideArg}\`.`);
+    if (!wontDoFlag && !postponedFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\` or \`${POSTPONED_FLAG}\`. The two words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination.`);
+    if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
+    if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets \"later\" pass for an answer.`);
+    if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
+    const addressings = [!!pagesArg, !!taskArg, !!rowArg].filter(Boolean).length;
+    if (addressings === 0) fail(`\`${DECIDE_FLAG}\` needs one of \`${PAGES_FLAG} <keys>\`, \`${TASK_FLAG} <id>\` or \`${ROW_FLAG} <task-id>:<n>\` — the row addressing this decision covers.`);
+    if (addressings > 1) fail(`\`${PAGES_FLAG}\` / \`${TASK_FLAG}\` / \`${ROW_FLAG}\` are three addressings for ONE decision — pick one.`);
+  }
+  if (revokeMode) {
+    if (!/^D\d+$/.test(revokeArg)) fail(`\`${REVOKE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${REVOKE_FLAG} D13\`) — got \`${revokeArg}\`.`);
+    for (const [flag, val] of [[WONT_DO_FLAG, wontDoFlag], [POSTPONED_FLAG, postponedFlag], [TO_FLAG, !!toArg], [PAGES_FLAG, !!pagesArg], [TASK_FLAG, !!taskArg], [ROW_FLAG, !!rowArg]]) {
+      if (val) fail(`\`${flag}\` does not go with \`${REVOKE_FLAG}\` — the subject is the decision, and the engine removes exactly the cells it wrote (named in each task's \`decisions:\` map). No addressing to give.`);
+    }
+  }
+  if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -3511,6 +3607,29 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         + " \"pipe the same manifest in again\" — pasted bare it would wait on a terminal. Pass the manifest as a"
         + " path to get commands that run exactly as printed.\n";
     }
+  }
+  // `--decide` / `--revoke` (ENG-99749) — writes into the frozen folder. Placed BEFORE the slicing branch
+  // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
+  // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
+  else if (tasksMode && decideMode) {
+    const opts = { ...checklistOpts(manifest), decision: decideArg,
+      mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
+      pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
+      taskId: taskArg || null,
+      rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: NaN }; })() : null };
+    let res;
+    try { res = runDecideMode(result, tasksDir, opts); }
+    catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
+    if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
+    output = res.note;
+  }
+  else if (tasksMode && revokeMode) {
+    const opts = { ...checklistOpts(manifest), decision: revokeArg };
+    let res;
+    try { res = runRevokeMode(result, tasksDir, opts); }
+    catch (e) { fail(`cannot revoke the decision in '${tasksDir}': ${e.message}`); }
+    if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
+    output = res.note;
   }
   // `--route` writes into a folder that is already cut, and re-slicing it here would be a second opinion on
   // seams the folder froze.
