@@ -2759,9 +2759,12 @@ const NEXT_FLAG = "--next";
 // actually running. `cmd.exe` does not quote with `'` at all and POSIX `sh` keeps `$`, a backtick and `\` alive
 // inside `"`, so one encoder cannot serve both. BOTH branches quote UNCONDITIONALLY: a value with no space can
 // still carry `;`, `&`, `|` or `$`, and a wrapper that only fires on whitespace hands those straight to the shell.
+// POSIX has no escape for `'` INSIDE single quotes: the only way is to close the quote, emit an escaped `'`,
+// and reopen — `'\''`. Written with `String.raw` and kept in a named constant so the sequence is readable.
+const POSIX_QUOTED_QUOTE = String.raw`'\''`;
 const shellArg = process.platform === "win32"
   ? (s) => `"${String(s).replaceAll('"', '""')}"`
-  : (s) => `'${String(s).replaceAll("'", `'\\''`)}'`;
+  : (s) => `'${String(s).replaceAll("'", POSIX_QUOTED_QUOTE)}'`;
 // `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
 // `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
 // belong beside the run.
@@ -3101,9 +3104,10 @@ function nextAnswerLines(a, dir, cmdFor) {
   return [`migrate.mjs: ${a.startable.length} task(s) STARTABLE NOW in ${dir} — computed by the same predicate`
     + " `--start` enforces, so each one is a dispatch that gate will accept. Hand each to its OWN sub-agent, in a"
     + " fresh context; no two of them write the same artifact, so they may run at once.",
-  ...a.startable.flatMap((t) => [
-    `   · ${taskLine(t)}${t.writesTo ? ` — writes \`${t.writesTo}\`` : " — read-only"}`,
-    `     ${cmdFor(t.id)}`]),
+  ...a.startable.flatMap((t) => {
+    const writes = t.writesTo ? ` — writes \`${t.writesTo}\`` : " — read-only";
+    return [`   · ${taskLine(t)}${writes}`, `     ${cmdFor(t.id)}`];
+  }),
   ...(a.withheld.length ? [`WITHHELD — ${a.withheld.length} task(s) are NOT yours to pick yet:`,
     ...a.withheld.map(withheldLine)] : []),
   ...(a.held.length ? [`HELD — ${a.held.length} task(s) need a decision:`, ...a.held.map(heldLine)] : [])];
