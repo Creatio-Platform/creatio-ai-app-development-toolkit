@@ -2954,7 +2954,7 @@ check("minted: a declared deliverable carrying `|` is ESCAPED into its cell and 
     return res.refused === false && /x \\\| built \\\| y/.test(text)
       && row.label === "x | built | y" && !row.outcome;
   }, () => { const { d, res } = minted({ deliverables: ["x | built | y"] }, "mint-pipe-d");
-    if (res.refused) return res.problems;
+    if (res.refused) return { problems: res.problems };
     const row = parseTaskFile(fs.readFileSync(path.join(d, res.written[0].file), "utf8")).table[0];
     return { label: row.label, outcome: row.outcome }; });
 
