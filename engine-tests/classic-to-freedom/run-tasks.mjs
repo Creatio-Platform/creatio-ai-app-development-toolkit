@@ -17,7 +17,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD,
+  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
@@ -3955,6 +3955,46 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         return heldAnswer.held.some((h) => h.task.id === target.id && h.cause === HOLD_STATUS)
           && !res.started && res.blockedByStatus === "blocked";
       }, () => ({ startable: idsOf(a.startable) }));
+    // LEDGER DIRECTION — a broken dispatch ledger makes the gate refuse EVERY id, so a per-task cause computed as
+    // if the ledger were healthy publishes a cause the gate would not give. The query used to answer `deps` here
+    // while `--start` on that same id answered with the ledger refusal: two callers of one predicate disagreeing
+    // on one folder, which is precisely the invariant the whole design rests on.
+    check("T2 (R4, refuse): with the dispatch ledger broken, every cause the query publishes is the one `--start` actually gives for that id — the ledger outranks the per-task causes in the answer exactly as it does in the gate",
+      () => {
+        const copy = tmp("next-ledger");
+        fs.cpSync(src, copy, { recursive: true });
+        // Close a TODO task with no dispatch record: that is what the ledger audit fails on, and every task
+        // still open is then refused by the gate for the ledger rather than for its own cause.
+        editFrontMatter(copy, a.startable[0].id, "status", "done");
+        const led = answerOf(copy);
+        if (led.verdict !== NEXT_LEDGER || !led.withheld.length) { fs.rmSync(copy, { recursive: true, force: true }); return false; }
+        const ok = led.withheld.every((w) => {
+          const one = tmp("next-ledger-one");
+          fs.cpSync(copy, one, { recursive: true });
+          const res = startTask(one, w.task.id, RUN, OPTS, null, AT(40));
+          fs.rmSync(one, { recursive: true, force: true });
+          if (res.started) return false;
+          if (w.cause === HOLD_UNREAD) return !!res.unread;
+          if (w.cause === HOLD_STATUS) return !!res.blockedByStatus;
+          // everything else must carry the ledger cause, and the gate must answer with the ledger refusal
+          return w.cause === HOLD_LEDGER && res.blockedByDispatch?.failing.length > 0;
+        });
+        fs.rmSync(copy, { recursive: true, force: true });
+        return ok;
+      },
+      () => "the query must not publish a per-task cause the gate would not give while the ledger is failing");
+    // …and the more specific truth is not thrown away, only demoted: it is what will hold the task once the
+    // books are repaired, which is the next thing the reader needs.
+    check("T2 (R4): the relabelled entry keeps what will hold the task AFTER the ledger is repaired, as `underlying` — demoted, never discarded",
+      () => {
+        const copy = tmp("next-ledger-underlying");
+        fs.cpSync(src, copy, { recursive: true });
+        editFrontMatter(copy, a.startable[0].id, "status", "done");
+        const led = answerOf(copy);
+        const relabelled = led.withheld.filter((w) => w.cause === HOLD_LEDGER);
+        fs.rmSync(copy, { recursive: true, force: true });
+        return relabelled.length > 0 && relabelled.every((w) => HOLD_CAUSES.includes(w.underlying) && w.underlying !== HOLD_LEDGER);
+      }, () => "every ledger-relabelled entry carries its original cause under `underlying`");
     fs.rmSync(src, { recursive: true, force: true });
   }
 

@@ -2150,7 +2150,8 @@ export const HOLD_DEPS = "deps";            // something in `dependsOn` has not 
 export const HOLD_OVERLAP = "overlap";      // another DISPATCHED task is still writing the same artifact
 export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member of THIS answer writes it first
 export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
-export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS];
+export const HOLD_LEDGER = "ledger";        // the dispatch books are broken, so the gate refuses THIS id too
+export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER];
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
@@ -2426,8 +2427,23 @@ export function startableTasks(set, dir) {
     settled: tasks.filter((t) => SETTLED.has(t.status)).length };
   // ONE ANSWER FOR THE FOLDER, and it outranks every per-task answer: while a closure has no dispatch record
   // `--start` refuses EVERY id, so naming a task startable here would advertise a dispatch the gate is about to
-  // refuse. The withheld list is kept for the reader; the startable one is empty because that is the truth.
-  if (dispatch.failing.length) return { ...base, verdict: NEXT_LEDGER, startable: [] };
+  // refuse.
+  //
+  // ⚠ AND THE PER-TASK CAUSES MUST BE RELABELLED WITH IT. Leaving them as computed published a cause the gate
+  // would NOT give: a task with an open dependency read `deps` here while `--start` on that same id answered with
+  // the ledger refusal. `cause` is exported and callers branch on it, so a cause that is merely the more specific
+  // truth is still the wrong answer to "why would the gate refuse this?" — which is the whole promise of one
+  // predicate behind two callers. The relabel follows the GATE's precedence, not the predicate's: `startTask`
+  // answers `unread` and `status` BEFORE it looks at the ledger, and the ledger before everything else, so those
+  // two keep their cause and the rest become `ledger`. The original is kept as `underlying` so the reader still
+  // learns what will hold the task once the books are repaired.
+  if (dispatch.failing.length) {
+    const toLedger = (w) => (w.cause === HOLD_UNREAD || w.cause === HOLD_STATUS
+      ? w
+      : { ...w, cause: HOLD_LEDGER, underlying: w.cause, tasks: [] });
+    return { ...base, verdict: NEXT_LEDGER, startable: [],
+      withheld: withheld.map(toLedger), held: held.map(toLedger) };
+  }
   if (startable.length) return { ...base, verdict: NEXT_STARTABLE };
   if (candidates.length + held.length + inFlight.length === 0) return { ...base, verdict: NEXT_FINISHED };
   if (inFlight.length) return { ...base, verdict: NEXT_WAITING };

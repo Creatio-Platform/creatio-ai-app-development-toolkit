@@ -58,7 +58,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, renderProgress, REPAIR_ROUND_CAP, TASK_INDEX_FILE,
   TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems, readMergedTaskDir,
-  startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED,
+  startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -3051,6 +3051,12 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
+  // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
+  // what will hold the task once the books are repaired — worth printing, but never in place of the real refusal.
+  if (w.cause === HOLD_LEDGER) {
+    return `   · ${taskLine(w.task)} — refused while the dispatch ledger is broken`
+      + (w.underlying ? ` (and then: \`${w.underlying}\`)` : "");
+  }
   return `   · ${taskLine(w.task)} — its file could not be read (${w.file}); repair it by hand`;
 };
 const heldLine = (h) => `   · ${taskLine(h.task)} — status \`${h.task.status}\`: a decision, not a schedule. Read its \`## Notes\`, fix what they name, set it back to \`todo\`.`;
