@@ -2175,7 +2175,12 @@ export function startableNow(set, dir) {
   const state = readTimingsFile(dir);
   const tasks = [...set.tasks].sort((a, b) => Number(a.order) - Number(b.order));
   const open = tasks.filter((t) => t.unread || !SETTLED.has(t.status));
-  const running = tasks.filter((t) => state.running[t.id]);
+  // ⚠ A CLOCK IS NOT A DISPATCH IN FLIGHT. `closeClocks` only deletes the clock of a SETTLED task, so a task a
+  // sub-agent recorded `blocked` — the halt the build contract tells it to write — keeps its clock for the rest of
+  // the run. Reading the raw clock made that folder `waiting` FOREVER: "1 task(s) are IN FLIGHT — re-run when one
+  // of them closes", exit 0, on a run that can never change, which is precisely the silent stall this mode exists
+  // to remove. So the status has to agree: `in-progress` is the only one a dispatch can still be working on.
+  const running = tasks.filter((t) => state.running[t.id] && t.status === S_IN_PROGRESS);
   // Folder-wide, so it is answered ONCE rather than reported against every candidate: with the ledger gate
   // failing, `--start` refuses whichever task is named, and the remedy is the same for all of them.
   if (set.dispatch?.failing.length) {
@@ -2191,15 +2196,26 @@ export function startableNow(set, dir) {
     // `claimed`, not `overlap`: the other writer is not dispatched yet — it is the task ABOVE this one in the
     // very answer being assembled. Same rule, different remedy (dispatch that one, then ask again), so it is a
     // distinct cause rather than a refusal text that names a task with no clock as "still writing it".
-    if (owner) { blocked.push({ task: t, cause: "claimed", conflicts: [owner], refusal: { blockedByOverlap: [owner] } }); continue; }
+    // NO `refusal` FIELD, and that is the point: `startRefusalText` renders `blockedByOverlap` as "a task already
+    // dispatched is still writing it", which is the one sentence this cause must not borrow. It is DEFENCE IN
+    // DEPTH rather than a state the engine writes — `chainMerged` already chains every writer of an artifact onto
+    // the previous one, so two unchained `todo` tasks with equal `writesTo` should not exist — but an answer that
+    // assumed the chain and was handed a folder without it would invite exactly the fan-out `--start` refuses.
+    if (owner) { blocked.push({ task: t, cause: "claimed", conflicts: [owner] }); continue; }
     if (t.writesTo) claimed.set(t.writesTo, t);
     startable.push(t);
   }
-  let verdict = "stalled";
-  if (startable.length) verdict = "startable";
-  else if (!open.length) verdict = "finished";
-  else if (running.length) verdict = "waiting";
-  return { verdict, startable, blocked, open, running };
+  return { verdict: verdictOf(startable, open, running), startable, blocked, open, running };
+}
+
+// The four non-`ledger` verdicts, in one place and in precedence order, so the contract can be read (and tested)
+// without the loop above. `stalled` is the FALL-THROUGH deliberately: a state nobody anticipated is a run that
+// cannot proceed, which is reported and exits 2, rather than one of the two verdicts that read as "carry on".
+function verdictOf(startable, open, running) {
+  if (startable.length) return "startable";
+  if (!open.length) return "finished";
+  if (running.length) return "waiting";
+  return "stalled";
 }
 
 // MARK A TASK STARTED, then regenerate. The orchestrator calls this immediately BEFORE it dispatches the

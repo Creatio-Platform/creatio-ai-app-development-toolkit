@@ -419,7 +419,9 @@ in one context it had one machine check, at the very end. A session that hit a u
    second opinion.
    Skip `--split` entirely and the engine cuts by its own row budget — fine for a plan small enough that the seams
    do not matter, and measured putting a related list and its filter in different tasks on one that was not.
-3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` (re-run after every status change)
+3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` — the first cut. From here on the
+   re-run after every status change is `--next` (7.2 rule 1), which does the same refresh and also says what to
+   dispatch.
 4. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
    buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
    plan changed, and slice then.
@@ -464,8 +466,13 @@ section came out as six tasks and five sub-agents before this, one of them cachi
 
    **An EMPTY answer says which kind of empty it is**, because the three have nothing in common: `finished`
    (every task settled — go to step 8), `waiting` (work is in flight and the rest is behind it — normal; ask
-   again when it closes), or nothing startable with nothing running, which exits 2 and names what is holding each
-   task. A failing dispatch ledger answers once for the whole folder: nothing may be started until it is cleared.
+   again when it closes), or nothing startable with nothing running, which names what is holding each task and
+   fails with `⛔ NOTHING STARTABLE` on stderr. A failing dispatch ledger answers once for the whole folder:
+   nothing may be started until it is cleared.
+
+   **Read the block, not the exit code.** The mode refreshes the whole folder, so it also reports that folder's
+   other gates — an unrouted `not-built` row exits 2 while three tasks are perfectly startable. Both are true and
+   neither cancels the other: act on the gate, and dispatch what the block names.
 
    **The order it hands you is leaf-first and it is a build requirement**, not a preference: a related list's
    Add/Edit opens the child's own form, so the child page exists before the parent list that opens it, and the

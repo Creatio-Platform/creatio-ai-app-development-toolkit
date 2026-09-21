@@ -613,6 +613,28 @@ check("cba workflow: the verdict is computed AFTER the repair round — hoisting
     () => skill.split("\n").filter((l) => /browser/i.test(l)).slice(0, 4));
 }
 
+// ENG-99753 — the orchestrator contract must keep telling the orchestrator to ASK which task to start. The engine
+// can enforce a bad pick (that is what `--start` is for), but it cannot enforce that step 7 still says to ask: a
+// later edit that drops rule 1's `--next` call, or reinstates "pick the next `todo` from the index", breaks
+// nothing and no test. That is precisely how the two PoC runs ended up inventing their own schedulers, so the
+// instruction is linted like the reference above.
+{
+  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
+  const step7 = skill.split("### 7. Implement The Approved Plan")[1]?.split("### 8.")[0] || "";
+  check("ENG-99753 (anti-vacuity): step 7 was actually found in SKILL.md — a heading rename would otherwise make every check below pass over an empty string",
+    () => step7.length > 2000, () => ({ len: step7.length }));
+  check("ENG-99753 doc-lint: step 7 tells the orchestrator to ASK the engine which task to start — the `--next` invocation is the whole of AC4, and prose is the only place it can live",
+    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7),
+    () => step7.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+  check("ENG-99753 doc-lint: …and it tells them NOT to decide from `index.md` — reading the index to pick is the workaround this mode retired, and both PoC runs got there by being left to choose",
+    () => /do not read `index.md` to decide/i.test(step7) || /Do not pick a task from/i.test(step7)
+      || /do not read .index.md. to decide/i.test(step7),
+    () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
+  check("ENG-99753 doc-lint: step 7 still names the DISPATCH TOKEN and `--start` — asking what is startable never replaces marking it started, and a contract that dropped the second would lose the one check the orchestrator cannot make for itself",
+    () => /--start <task-id>/.test(step7) && /DISPATCH TOKEN/.test(step7),
+    () => step7.split("\n").filter((l) => /--start|TOKEN/.test(l)).slice(0, 4));
+}
+
   const docPath = "skills/classic-to-freedom-migration/references/classic-to-freedom-mapping.md";
   const doc = readFileSync(fileURLToPath(new URL("../../" + docPath, import.meta.url)), "utf8");
   const index = vendoredIndex();

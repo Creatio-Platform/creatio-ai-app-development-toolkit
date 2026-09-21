@@ -198,11 +198,23 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   It runs the SAME folder refresh a plain `--tasks` does, so it replaces that call rather than adding one — and it
   has to: `syncTaskDir` closes the clocks of everything that finished since the last pass BEFORE it audits, and a
   read-only answer would report a task whose sub-agent has just closed it as a ledger failure.
-  Four empty answers, because their remedies differ: `finished`, `waiting` (work in flight — normal, exit 0),
-  `stalled` (nothing running and nothing startable — exit 2, because silence plus exit 0 over a run that cannot
-  proceed is what this mode exists to remove), and `ledger` (the dispatch gate is failing; the answer is for the
-  whole folder, not per task). It refuses to combine with `--start`, `--route` or `--verify`: each of those MOVES
-  the folder, so one call would answer about a state the reader cannot identify.
+  Four empty answers, because their remedies differ: `finished`, `waiting` (work in flight — normal), `stalled`
+  (nothing running and nothing startable — its own exit 2 and its own stderr banner, because silence plus exit 0
+  over a run that cannot proceed is what this mode exists to remove), and `ledger` (the dispatch gate is failing;
+  the answer is for the whole folder, not per task).
+  **`waiting` is IN FLIGHT, not merely clocked.** `closeClocks` deletes only a SETTLED task's clock, so a task a
+  sub-agent recorded `blocked` keeps its clock for the rest of the run; reading the raw clock reported that folder
+  `waiting` forever — "re-run when one of them closes", exit 0 — on a run that could never change. The status has
+  to agree (`in-progress`), or it is a stall.
+  **READ THE BLOCK, NOT THE EXIT CODE.** This mode runs the whole `--tasks` body, so it also reports that folder's
+  other gates: an unrouted `not-built` row or a failing dispatch ledger exits 2 on a run with three tasks
+  startable. That is not a contradiction — the gates are about the folder, the block is about what to dispatch
+  next — but only the `⛔ NOTHING STARTABLE` stderr banner means "nothing to do". Suppressing the other gates here
+  would weaken them, so the answer is the block.
+  It refuses to combine with `--start`, `--route` or `--verify`: each of those MOVES the folder, so one call would
+  answer about a state the reader cannot identify. `--split` is not among them — it freezes on first resolve and
+  every later run reads the frozen copy, so it changes the folder's CUT rather than its state, and the `--start`
+  commands printed here stay correct without it.
 
 - **The task FILE is the record; `index.md` is DERIVED.** The index is regenerated from the files on every run and
   carries no fact of its own, so a write killed halfway costs one task's file rather than the run's state. Editing
