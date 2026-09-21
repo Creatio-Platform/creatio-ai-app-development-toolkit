@@ -175,7 +175,7 @@ function isStructuralDiag(d) {
   return IDENTITY_FIELDS.has(seg[2]);
 }
 
-// ENG-95862 — the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
+// the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
 //
 // `engine.mjs` now tags every warning `correctness` (the op targeted an item no lower schema defined, or the seed is
 // not a real body) or `fidelity` (the mapping is RIGHT; an effect of the op is not represented in the item model).
@@ -310,7 +310,7 @@ function typedPageIssue(t) {
   return `typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`;
 }
 
-// ENG-93928 — parse each supplied EMBEDDED PROFILE schema (the little declarative page a profile card renders,
+// parse each supplied EMBEDDED PROFILE schema (the little declarative page a profile card renders,
 // e.g. `AccountProfileSchema`) so the mapper knows the PROFILED entity and which columns the classic card
 // displayed. Same shape as a detail record, minus the detail-only concerns (no child edit page / FK).
 function parseProfileSchemas(manifest, bodyOf) {
@@ -554,7 +554,7 @@ function foldSectionView(sectionSchemas, sectionSeed) {
 
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
 // than one merged array so a caller can hand over (or stage) a single page — the staged-processing direction of
-// ENG-94859 — without re-deriving which method belongs to which schema.
+// without re-deriving which method belongs to which schema.
 function stubScope(role, schema, changeSet, standardMethodsFiltered) {
   const stubs = stubDigestOf(changeSet);
   const members = memberDigestOf(changeSet, schema);
@@ -635,14 +635,14 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
-  // ENG-96534 — the plain-language plan columns (What the item does / Use case). Free prose the step-5.1 analyst
+  // the plain-language plan columns (What the item does / Use case). Free prose the step-5.1 analyst
   // authored on the behaviour card (`whatItDoes` from the card's "What it is"; `useCase` a non-technical step-by-step
   // it writes). Sanitized to a trimmed non-empty string; the renderer escapes it into the cell. Either alone counts
   // as a description, so a row carrying only these still sets `describedIn`.
   const prose = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const whatItDoes = prose(entry.whatItDoes);
   const useCase = prose(entry.useCase);
-  // PR #147 review — a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
+  // a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
   // no `minLength`, so `{ key, card: "", ac: ["AC-1"] }` is schema-valid and is exactly what a merge agent emits
   // for "nowhere to put one". Accepting it on `ac.length` made the two legs disagree about the same entry: the
   // engine counted the row as carrying a behaviour card while the workflow's `hasCard` (helpers.mjs) counted it
@@ -810,7 +810,7 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
 // DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides. `formTemplate` stays
 // required — a genuine multi-way choice (top-area / progress-bar / mini / …).
 const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
@@ -928,7 +928,7 @@ function existingAppIssues(p, target) {
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
   const blank = (v) => v == null || String(v).trim() === "";
-  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
   // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
   // renderers read this normalized `pm`, so the Main-scope/Overview row and the missing-key gate see the default.
   const pm0 = manifest.planMeta || {};
@@ -1060,7 +1060,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // mini template while its OWN design spec recommended the grid one.
   c.hasTabs = (res.changeSet?.viewConfigDiff || []).some(isTabOp);
   c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
+  // a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
   // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the related-list
   // rows; the body is only an attribute lookup-filter + column-render methods). Distinguished from a skeletal / bad
   // bundle by whether it carries behaviour. Marked so the plan does not mislabel it `Rebuild (child) → form page`
@@ -1104,7 +1104,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    // ENG-96327 (e5350b5) — `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
+    // `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
     // the List-page block: a typed page is NOT its own section; the ONE list page is rendered once by the base fold.
     const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
@@ -1202,7 +1202,7 @@ function addModeGuidance(am) {
   else if (openCardIsTheWholeStory(am)) g.push("Reproduce the overridden add-card flow with a CUSTOM add request-handler that performs the same open-card logic; do not fall back to the default related-list add.");
   else if (am.addDisabled && !am.customAction) g.push("There is no add flow to reproduce: build it as a read-only / attach-only related list, with no add button.");
   if (am.service) g.push("VERIFY that service is deployed on-stand (else port its logic to a process/service).");
-  // ENG-96327 (81305bd) — no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
+  // no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
   // property, resolved via get-component-info) is builder mechanics, not plan content. The human fact (this detail
   // is inline-editable, and WHICH columns) is already stated by `describeAddMode`.
   return g;
@@ -1228,7 +1228,7 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const parts = describeAddMode(am);
     const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    // ENG-96327 — an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
+    // an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
     // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
     // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
     // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
@@ -2240,7 +2240,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
   const enginePositioned = new Set();
   for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
   for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
-  // ENG-96327 — a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
+  // a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
   // ALREADY a row in the Layout table ("template-provided" / "native"), and that these features are composite
   // (built via their recipe, not dragged from a toolbar) is general Creatio knowledge the skill already carries.
   // Re-stating it as a per-plan ⚠ Confirm just duplicates the Layout, so skip a composite-only advisory whose type
@@ -2311,7 +2311,7 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
     const verdict = f.kind === "unknown-component"
       ? "the component registry carries NO component of that name"
       : `it is ABSENT in ${f.version}`;
-    // ENG-95683 — carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
+    // carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
     // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
     changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
       reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
@@ -2390,7 +2390,7 @@ export function runMigration(manifest, opts = {}) {
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionData = sectionInput(manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
-  // ENG-94714 — the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
+  // the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
   // digest below and the list-page mapping further down. See `foldSectionView`.
   const sectionSeed = parse(sectionData.seed);
   const sectionEff = foldSectionView(sectionSchemas, sectionSeed);
@@ -2401,7 +2401,7 @@ export function runMigration(manifest, opts = {}) {
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
-  // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
+  // the embedded profile schemas a profile card renders (profiled entity + displayed columns).
   const profileSchemas = parseProfileSchemas(manifest, bodyOf);
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
@@ -2426,10 +2426,10 @@ export function runMigration(manifest, opts = {}) {
   const behaviourIndex = applyBehaviourIndex(changeSet, behaviourIndexInput, opts.scopeSchema);
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
-    // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
+    // a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
     // page silently resolve to null while the plan stays green. Its error was captured per-detail above.
     ...Object.entries(detailSchemas).filter(([, d]) => d.error).map(([name, d]) => ({ pkg: `detail:${name}`, error: d.error })),
-    // ENG-93928 — same rule for a profile-schema body: if it failed to parse, the card's entity/columns are
+    // same rule for a profile-schema body: if it failed to parse, the card's entity/columns are
     // silently null while the plan stays green. Gate it.
     ...Object.entries(profileSchemas).filter(([, p]) => p.error).map(([name, p]) => ({ pkg: `profile:${name}`, error: p.error })),
   ];
@@ -2444,7 +2444,7 @@ export function runMigration(manifest, opts = {}) {
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
   const parseDiagnostics = collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors);
-  // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
+  // a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
   // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
@@ -2667,7 +2667,7 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  // ENG-96327 (e5350b5) — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
+  // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
@@ -3534,7 +3534,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
     if (tasksMode) {
-      // ENG-99126 — an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
+      // an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
       // The table's verdict reads only the built pages; the task ledger records what the build agents did NOT
       // build (needs-decision, blocked, agent-asserted boundaries) and which tasks never closed. Measured: the
       // table said "2 machine row(s) not confirmed" while the ledger held 5 open tasks, 3 partial and three
@@ -3662,7 +3662,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // nobody could read it, and those are different jobs — a repair versus a re-read. The table cannot tell them
   // apart (an omitted key reads ⚠ like any other unconfirmed row), so this is where the difference is said.
   if (readProblems.length) process.stderr.write(problemLines(readProblems, fromDir).join("\n") + "\n");
-  // ENG-99126 — the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
+  // the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
   // while the task folder still holds open work. The dispatch and not-built lines above already name their own
   // rows; this line fires for what they do not cover (tasks still todo / in-progress / partial) and names the
   // report as the place to read it, so an orchestrator reading stderr alone cannot mistake a green table for a

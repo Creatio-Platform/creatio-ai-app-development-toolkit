@@ -870,7 +870,7 @@ function mergeDeathLine(attempt, error, willRetry) {
 // PARTIAL object is dead by this test, because the only thing lost is a claim
 // that the missing field was verified — which is the claim there is no evidence
 // for.
-// PR #147 review — "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
+// "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
 // `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
 // that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
 // truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
@@ -996,7 +996,7 @@ function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 //
-// PR #147 review — the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
+// the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
 //
 // The round: both rounds order scopes by rows descending (`planBatches`/`packBatches`), so the largest scope leads
 // a batch in each and the repair round was handed round 1's file. A repair agent writing it fresh dropped round
@@ -1215,7 +1215,7 @@ Return the schema. The cards live in the FILE; the return carries the inventory,
 }
 
 function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
-  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
   // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
   // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
   // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
@@ -1249,7 +1249,7 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
+  // the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
   // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
   // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
   // restate cards that are already in the deliverable.
@@ -1601,7 +1601,7 @@ function* run(rawInput, io = {}) {
   // to reduce to an empty `scopes` array and take the "empty worklist is DONE" exit below, reporting a complete
   // zero-row analysis for a digest that may be full — the one outcome this workflow exists to make impossible.
   //
-  // PR #147 review — narrowed through `isCensusShape`, not a bare truthiness test. A truthy value that is not a
+  // narrowed through `isCensusShape`, not a bare truthiness test. A truthy value that is not a
   // census (`{}`, `[]`, a `scopes` of the wrong type) reached `normalizeScopes`, was coerced to an empty scope
   // list and took that same forbidden exit; `submit`'s shallow required-key check does not stop it. The same
   // narrowing `isCritiqueShape` applies one phase later, on the phase whose failure costs the most.
@@ -1646,14 +1646,14 @@ function* run(rawInput, io = {}) {
   // The part file each dispatched item was ASKED for, by item id. Read back by `acceptParts` below.
   const askedPart = new Map()
 
-  // PR #147 review — an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
+  // an answer whose `reportPart` is not the path the item was handed is NAMED, not waved through.
   // The core used to accept whatever path came back, so an agent writing round 1's file from the repair round left
   // no trace at all; this line is what makes a recurrence, or any other path drift, visible in the run log.
   //
   // Deliberately a WARNING, not a rejection: the returned path is the one Merge folds in (`inputFiles`), so the
   // cards are still merged and the coverage arithmetic still describes what the report contains. Dropping the
   // answer would discard real analysis over a path string, which is a worse failure than reporting the mismatch.
-  // PR #147 review — the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
+  // the parts to READ, deduplicated. `described` is round 1 plus the repair round, so a part
   // path returned by an item in each round listed the same file twice; the round marker in `partFile` stops that
   // arising from the rounds, and this stops it arising at all. A duplicate input file is never useful — it either
   // reads the same cards twice or hides that two items claimed one file.
@@ -1770,7 +1770,7 @@ function* run(rawInput, io = {}) {
   // --- One repair round, and only when there is something to repair ----------
   // Scoped to the SCOPES that own the uncovered rows — never to a bare row list, which is the per-row split the
   // analysis contract forbids.
-  // PR #147 review — resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
+  // resolved through `digestKeyOf`, the same normaliser `coveredKeys` and
   // `wiringOnlyMixinKeys` use, NOT a strict `allKeys.has`. ENG-96529 made `normalizeScopes` requalify every scope
   // key, so bare method keys no longer exist in `allKeys`; the Critique is an analysis agent and may legitimately
   // answer with either form. Under the strict test a Critique answering `onSaved` was DROPPED, and the dropped
@@ -1784,7 +1784,7 @@ function* run(rawInput, io = {}) {
   // attributed to one row. A critique key that resolves to nothing is an adversarial finding this run is about to
   // lose, so it is said out loud rather than swallowed by the filter.
   //
-  // PR #147 review — SPLIT BY REASON, and carried on the result. AMBIGUOUS (several inventory rows end in
+  // Unresolved keys are SPLIT BY REASON, and carried on the result. AMBIGUOUS (several inventory rows end in
   // `::<key>`) is a real row the critique could not be pinned to; UNKNOWN (none does) names no row on this
   // surface, so it is a stale, copied or invented key. The remedies are opposite — re-key the answer versus
   // discard it — and merged they were indistinguishable both in the log and to a consumer. `resolveKey` is the
@@ -1879,7 +1879,7 @@ function* run(rawInput, io = {}) {
     // unchecked (not verified-empty), and coverage.complete is arithmetic-only — no pass verified that
     // cited cards actually describe their rows.
     critiqueRan,
-    // PR #147 review — the critique keys this run could NOT place, on the result and not only in the log. Same
+    // the critique keys this run could NOT place, on the result and not only in the log. Same
     // class of claim as `critiqueRan` above: a machine consumer (the engine re-reads this as `behaviourIndex`,
     // and `cli.mjs status` serialises it as the state document) has to know the adversarial pass produced a
     // finding the run could not attribute, and stderr does not reach it.
@@ -1904,7 +1904,7 @@ function* run(rawInput, io = {}) {
     // What the caller does next: merge indexPath into the manifest as `behaviourIndex` and re-run `--plan --out`.
     // The plan's own worklist headers then report the same coverage from the engine's side.
     //
-    // PR #147 review — CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
+    // CONDITIONAL on `mergeOk`. `reportPath`/`indexPath` above fall back to their default names so
     // a caller that checks `complete` still learns where the deliverable would have gone; `next` was unconditional,
     // so a run whose Merge died twice told the operator to fold an index file that was never written.
     next: mergeOk

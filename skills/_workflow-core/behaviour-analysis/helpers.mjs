@@ -217,7 +217,7 @@ export function mergeDeathLine(attempt, error, willRetry) {
 // PARTIAL object is dead by this test, because the only thing lost is a claim
 // that the missing field was verified — which is the claim there is no evidence
 // for.
-// PR #147 review — "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
+// "RETURNED SOMETHING" AND "RETURNED A CENSUS" ARE DIFFERENT QUESTIONS, the same distinction
 // `isCritiqueShape` below exists for, applied to the phase whose failure is the most expensive. A truthy value
 // that is not a census — `{}`, `[]`, an object whose `scopes` is not an array — used to pass the core's bare
 // truthiness guard and reach `normalizeScopes`, which coerces it to an EMPTY scope list via `(rawScopes || [])`.
@@ -343,7 +343,7 @@ export function itemId(phase, ...parts) {
 // The file a Describe agent writes its part to. Kept beside the batch logic
 // because the prompt and the Merge phase must name the SAME path.
 //
-// PR #147 review — the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
+// the ROUND and the BATCH INDEX are both part of the path, because both axes collided.
 //
 // The round: both rounds order scopes by rows descending (`planBatches`/`packBatches`), so the largest scope leads
 // a batch in each and the repair round was handed round 1's file. A repair agent writing it fresh dropped round

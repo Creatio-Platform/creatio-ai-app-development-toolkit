@@ -232,7 +232,7 @@ const pickMeta = (m) => {
 // cognitive-complexity ceiling (S3776, 22 against 15) — a fair signal, since the caller only has to decide WHICH of
 // its three source kinds it is looking at, and this is the whole of one of them.
 function indexFromRegistryFileRef(src, manifest, readFile) {
-  // ENG-96483 review (Blocker) — PARSE, then apply the SAME shape guard `resolveRunIndex`'s inline `components`
+  // PARSE, then apply the SAME shape guard `resolveRunIndex`'s inline `components`
   // branch applies, then convert. Accepting anything that merely parses as JSON made this the fail-open path inside fail-closed code:
   // `indexFromRegistryExport` defaults `components` to `[]`, so a manifest.json, a package.json, a truncated or
   // simply wrong download yielded an index with `componentCount: 0` reported as `source: "stand-export"` — the

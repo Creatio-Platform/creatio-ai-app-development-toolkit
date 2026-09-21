@@ -89,7 +89,7 @@ DOT_STYLE_APPLICATION_TOOL_DOCS = [
     ROOT / "context/essentials.md",
 ]
 
-# ENG-91276: native MCP tool-calls are preferred over the mcp_client.py stdio wrapper.
+# native MCP tool-calls are preferred over the mcp_client.py stdio wrapper.
 NATIVE_MCP_FIRST_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "context/INDEX.md",
@@ -98,33 +98,33 @@ NATIVE_MCP_FIRST_DOCS = [
     ROOT / "runbooks/01-environment-setup.md",
 ]
 
-# ENG-91276: native MCP and the wrapper must share one clio config / environment list.
+# native MCP and the wrapper must share one clio config / environment list.
 SINGLE_CLIO_CONTEXT_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "runbooks/01-environment-setup.md",
 ]
 
-# ENG-91276: a writable package context must be resolved before schema/page edits.
+# a writable package context must be resolved before schema/page edits.
 WRITABLE_PACKAGE_CONTEXT_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "runbooks/01-environment-setup.md",
     ROOT / "skills/creatio-app-orchestrator/SKILL.md",
 ]
 
-# ENG-91558: a prompt URL with no matching environment is auto-registered with
+# a prompt URL with no matching environment is auto-registered with
 # default Supervisor/Supervisor credentials, no confirmation turn; auth failure stops.
 AUTO_REGISTER_PROMPT_URL_DOCS = [
     ROOT / "AGENTS.md",
     ROOT / "runbooks/01-environment-setup.md",
 ]
 
-# ENG-91558: adding a section for a named entity creates the app without an extra
+# adding a section for a named entity creates the app without an extra
 # confirmation turn when no custom app exists yet.
 DEFAULT_APP_CREATION_DOCS = [
     ROOT / "AGENTS.md",
 ]
 
-# ENG-92985: run a clio MCP availability preflight before the first clio operation
+# run a clio MCP availability preflight before the first clio operation
 # and fail fast with a prerequisites blocker when clio MCP is unavailable — never
 # self-bootstrap the environment or silently degrade to the Python wrapper.
 CLIO_MCP_PREFLIGHT_DOCS = [
@@ -133,7 +133,7 @@ CLIO_MCP_PREFLIGHT_DOCS = [
     ROOT / "runbooks/01-environment-setup.md",
 ]
 
-# ENG-92985: the mcp_client.py wrapper is an explicit opt-in escape hatch, not the
+# the mcp_client.py wrapper is an explicit opt-in escape hatch, not the
 # default degraded path. Every transport-aware doc must frame it that way.
 OPT_IN_ESCAPE_HATCH_DOCS = [
     ROOT / "AGENTS.md",
@@ -369,7 +369,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertRegex(essentials, r"(?i)default to web")
 
     def test_docs_prefer_native_mcp_over_stdio_wrapper(self):
-        # ENG-91276: every transport-aware doc must prefer native MCP and treat
+        # every transport-aware doc must prefer native MCP and treat
         # runtime/scripts/mcp_client.py as the stdio fallback, not the default.
         for path in NATIVE_MCP_FIRST_DOCS:
             content = read_text(path).lower()
@@ -378,7 +378,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("mcp_client.py", content, str(path))
 
     def test_docs_require_single_clio_context(self):
-        # ENG-91276: native MCP and the wrapper must resolve the same clio
+        # native MCP and the wrapper must resolve the same clio
         # (one config / one registered-environments list) — no split-brain.
         for path in SINGLE_CLIO_CONTEXT_DOCS:
             content = read_text(path).lower()
@@ -386,7 +386,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("split-brain", content, str(path))
 
     def test_docs_require_writable_package_context_up_front(self):
-        # ENG-91276: a writable package context must be resolved before the first
+        # a writable package context must be resolved before the first
         # schema/page edit, not discovered as a mid-run write rejection.
         for path in WRITABLE_PACKAGE_CONTEXT_DOCS:
             content = read_text(path).lower()
@@ -395,7 +395,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("mid-run", content, str(path))
 
     def test_docs_auto_register_unregistered_prompt_url(self):
-        # ENG-91558: a Creatio URL in the prompt with no matching environment is
+        # a Creatio URL in the prompt with no matching environment is
         # auto-registered with default Supervisor/Supervisor credentials and no
         # confirmation turn; an auth/registration failure stops with a clear error.
         for path in AUTO_REGISTER_PROMPT_URL_DOCS:
@@ -429,7 +429,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("authority", content, str(path))
             self.assertIn("creatio.com.attacker", content, str(path))
             self.assertIn("creatio.com@", content, str(path))
-            # ENG-91558 (review minor): AC2 "do not retry with guessed credentials"
+            # AC2 "do not retry with guessed credentials"
             self.assertIn("do not retry", content, str(path))
             # ENG-91558 (review RC-17): cloud *.creatio.com is NOT in the
             # zero-confirmation tier — it requires a confirmation turn because the
@@ -478,7 +478,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         self.assertIn("password", content)
 
     def test_docs_default_app_creation_without_confirmation(self):
-        # ENG-91558: adding a section for a named entity creates the app named after
+        # adding a section for a named entity creates the app named after
         # that entity without an extra confirmation turn when no custom app exists.
         for path in DEFAULT_APP_CREATION_DOCS:
             content = read_text(path).lower()
@@ -489,7 +489,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("ambiguous", content, str(path))
 
     def test_docs_require_clio_mcp_availability_preflight_and_fail_fast(self):
-        # ENG-92985: before the first clio operation, run an availability preflight;
+        # before the first clio operation, run an availability preflight;
         # when clio MCP is unavailable, stop with a prerequisites blocker (install
         # .NET, install clio, reg-web-app) and do NOT self-bootstrap the environment.
         for path in CLIO_MCP_PREFLIGHT_DOCS:
@@ -530,7 +530,7 @@ class DefaultContractDocsTests(unittest.TestCase):
             self.assertIn("not automatically a blocker", content, str(path))
 
     def test_docs_state_preflight_probe_timeout_matches_script(self):
-        # ENG-92985 (M1): the "default 20s" probe bound stated in the docs is bound to
+        # the "default 20s" probe bound stated in the docs is bound to
         # the script constant, so changing DEFAULT_PROBE_TIMEOUT flags the stale docs.
         timeout_token = f"{pf.DEFAULT_PROBE_TIMEOUT}s"
         for path in [ROOT / "AGENTS.md", ROOT / "runbooks/01-environment-setup.md"]:

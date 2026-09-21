@@ -113,12 +113,12 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
             self.assertEqual(result.reason, pf.REASON_UNRESPONSIVE, empty)
 
     def test_probe_timeout_is_bounded_and_short(self):
-        # ENG-92985: a dead/missing server must be diagnosed in seconds, never the
+        # a dead/missing server must be diagnosed in seconds, never the
         # 664s/964s hangs of the original session.
         self.assertLessEqual(pf.DEFAULT_PROBE_TIMEOUT, 30)
 
     def test_default_prober_watchdog_force_kills_a_hung_probe(self):
-        # ENG-92985 core guarantee: even if mcp_client's read loop blocks past the
+        # core guarantee: even if mcp_client's read loop blocks past the
         # timeout (silent child / undrained stderr), the gate must not hang — the
         # watchdog force-kills the child and raises within the wall-clock bound.
         blocked = threading.Event()
@@ -246,7 +246,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
                 window, pf._INITIALIZE_CAP_SECONDS + timeout + pf.PROBE_WATCHDOG_GRACE,
                 "watchdog window must be initialize cap + call timeout + grace",
             )
-        # PR #55 R3 (unguarded mirrored constant): the preflight's cap must stay bound to
+        # R3 (unguarded mirrored constant): the preflight's cap must stay bound to
         # mcp_client's real cap, or a change to one silently under/over-sizes the window.
         self.assertEqual(pf._INITIALIZE_CAP_SECONDS, mcp_client.INITIALIZE_TIMEOUT_CAP)
 
@@ -314,7 +314,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertIn("ts1-core-dev04", scrubbed)  # host preserved; only credentials redacted
 
     def test_truncate_detail_scrubs_connection_string_and_token_secrets(self):
-        # PR #55 R2-2: redaction must also cover connection-string secrets, auth tokens,
+        # R2-2: redaction must also cover connection-string secrets, auth tokens,
         # and bare user:pass@host — not just scheme://user:pass@ URLs.
         cs = pf._truncate_detail("login failed: Server=db;Password=Sup3rSecret;Trusted=false")
         self.assertNotIn("Sup3rSecret", cs)
@@ -331,7 +331,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertIn("***:***@dbhost", bare)
 
     def test_truncate_detail_scrubs_compound_and_header_secrets(self):
-        # PR #55 R3: compound/prefixed keys (the \b gap), JSON colon form, and auth headers.
+        # compound/prefixed keys (the \b gap), JSON colon form, and auth headers.
         for text, secret in (
             ("client_secret=abc123XYZ", "abc123XYZ"),
             ("refresh_token=eyJhbGciExample", "eyJhbGciExample"),
@@ -348,7 +348,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
                          "count=5 content=hello status=ok")
 
     def test_classify_redacts_secret_in_resolver_and_probe_failure_detail(self):
-        # PR #55 R3 (Alexandr + m-dymytrova): redaction must hold at the PUBLIC classify()
+        # R3 (Alexandr + m-dymytrova): redaction must hold at the PUBLIC classify()
         # boundary, not only the private helper — a future refactor that bypassed
         # _truncate_detail on one branch would leak a credential into result.detail.
         leaky = RuntimeError("cannot reach https://admin:s3cr3t@ts1-core-dev04/api; Password=hunter2")
@@ -364,13 +364,13 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertNotIn("AKIA", probe_result.detail)
 
     def test_truncate_detail_bounds_length(self):
-        # PR #55 R3: the flood-protection half of _truncate_detail (redact then cap at 800).
+        # the flood-protection half of _truncate_detail (redact then cap at 800).
         result = pf._truncate_detail("x" * 1000)
         self.assertTrue(result.endswith("… [truncated]"))
         self.assertLessEqual(len(result), pf.MAX_DETAIL_CHARS + len("… [truncated]"))
 
     def test_probe_is_healthy_accepts_real_tools_and_index_shapes(self):
-        # PR #55 R3: production get-tool-contract returns an `index`-keyed payload (verified
+        # production get-tool-contract returns an `index`-keyed payload (verified
         # live), but _probe_is_healthy also accepts the `tools` shape — cover BOTH positives
         # and the empty-payload negative so a regression on either branch is caught.
         self.assertTrue(pf._probe_is_healthy({"success": True, "data": {"index": {"get-tool-contract": {}}}}))
@@ -379,7 +379,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertFalse(pf._probe_is_healthy({"success": True, "data": {"index": {}}}))
 
     def test_classify_bad_clio_cmd_maps_to_not_resolvable_without_probing(self):
-        # PR #55 R3 (m-dymytrova) + my own review: the CLIO_CMD verify branch — the fix for
+        # R3 (m-dymytrova) + my own review: the CLIO_CMD verify branch — the fix for
         # the ENG-92985 root cause (installed-but-not-on-PATH / typo'd CLIO_CMD) — had ZERO
         # coverage. A bogus CLIO_CMD must classify clio-not-resolvable and never probe.
         orig_env = os.environ.get("CLIO_CMD")
@@ -402,7 +402,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
                 os.environ["CLIO_CMD"] = orig_env
 
     def test_classify_clio_cmd_missing_dll_maps_to_not_resolvable(self):
-        # PR #55 R3: the separate `.dll` token check in _verify_clio_cmd_exists.
+        # the separate `.dll` token check in _verify_clio_cmd_exists.
         orig_env = os.environ.get("CLIO_CMD")
         try:
             os.environ["CLIO_CMD"] = f"{sys.executable} C:/nope/clio.dll"
@@ -416,7 +416,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
                 os.environ["CLIO_CMD"] = orig_env
 
     def test_default_resolver_accepts_runnable_clio_cmd(self):
-        # PR #55 R3: guard against over-eager rejection — a real, runnable CLIO_CMD passes.
+        # guard against over-eager rejection — a real, runnable CLIO_CMD passes.
         orig_env = os.environ.get("CLIO_CMD")
         try:
             os.environ["CLIO_CMD"] = sys.executable  # a real file on every platform

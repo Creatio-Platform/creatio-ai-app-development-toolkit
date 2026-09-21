@@ -227,7 +227,7 @@ function missingRequired(schema, value) {
 const capabilityStopText = (e) =>
   `\nSTOPPED — this host cannot honour a guarantee this phase depends on:\n${explainMissing(e.missing)}\n\nNothing was executed. Re-run on a host that provides it, or declare the capability if the host does have it.\n`
 
-// PR #147 review — `onCapabilityStop` is the CALLER's decision, and the default is the mutating one.
+// `onCapabilityStop` is the CALLER's decision, and the default is the mutating one.
 // `next` and `submit` were ASKED to perform work, so a capability stop is a failure of the command and
 // exits 3. `status` was asked to DESCRIBE state, and exiting before its document reached stdout made the
 // one non-mutating command in the published surface print nothing on the single condition an operator, or

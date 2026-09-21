@@ -316,7 +316,7 @@ function taskOf(chunk, order) {
   const { artifact, pageKey, label, anchor, identityKey, srcRows, reviewsArtifacts } = chunk;
   const rows = srcRows.map((r) => ({
     label: r.label,
-    // ENG-99740 — the ROW's own page, not the task's. A collapsed whole-run task (pageKey "run") merges several
+    // the ROW's own page, not the task's. A collapsed whole-run task (pageKey "run") merges several
     // pages' rows; without the source page the report joins them by label alone and a not-built / boundary state
     // bleeds across identically-labeled rows on different pages (e.g. `Handler — init` on two pages).
     pageKey: r.pageKey || pageKey,
@@ -1741,7 +1741,7 @@ const REPAIR_KIND = "repair";
 // WHAT THE CAP COUNTS, which is not what the cause SAYS. A cause carries WHY a row is open as well as what kind
 // of row it is, and the why moves between rounds: a row `--verify` could not confirm (`unverified:…`) comes back
 // from the round that failed it recorded as `not-built:…`. Keyed on the whole cause that is a fresh bucket at
-// round 1 and the cap never fires. The KIND is what holds, so the cap and the one-round-at-a-time rule are per
+// and the cap never fires. The KIND is what holds, so the cap and the one-round-at-a-time rule are per
 // (page, kind); the cause on the file still says where this round's rows came from.
 const capKey = (pageKey, cause) => `${pageKey} ${String(cause || "").split(":").pop()}`;
 

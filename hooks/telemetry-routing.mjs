@@ -321,7 +321,7 @@ function routeClioCall(payload, sessionId) {
 	// already reminded.
 	//
 	// This is a real, ongoing token cost for the life of a long session — raised again in review of
-	// PR #96 — traded deliberately against the measured failure above rather than left unconsidered.
+	// traded deliberately against the measured failure above rather than left unconsidered.
 	// `'turn'` is cleared once per `UserPromptSubmit` (see `main()`), so the reminder's actual cadence
 	// is "at most once per assistant turn that calls clio, plus once more on that turn's first write",
 	// never literally per prompt regardless of clio use. Bounding it further (e.g. stop reminding after

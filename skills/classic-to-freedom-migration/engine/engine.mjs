@@ -226,7 +226,7 @@ export const DATA_VALUE_TYPE = {
   FILE_LOCATOR: 41, PHONE_TEXT: 42, RICH_TEXT: 43, WEB_TEXT: 44, EMAIL_TEXT: 45, COMPOSITE_OBJECT: 46,
   FLOAT0: 47, MONEY0: 48, MONEY1: 49, MONEY3: 50,
 };
-// ENG-95806 — the friendly label of the page top area, and the fallback region for a card widget whose host
+// the friendly label of the page top area, and the fallback region for a card widget whose host
 // chain does not resolve. ONE source shared by the mapper (which EMITS it as the fallback) and the design spec
 // (which maps it to its friendly label / orders regions by it) so the sentinel can never drift across the module
 // boundary — a rename here reaches both sides at once.
@@ -1334,7 +1334,7 @@ function normalizeDiffOp(op, i) {
     // These are the CONTROL end of a method's trigger: without them a button's click handler could only be
     // guessed at from its name, which `04-units.md` explicitly rules out as evidence.
     handlers: handlerBindings(v),
-    // ENG-95543 item 3 — PER-KIND CONFIG CAPTURE. A RADIO_GROUP binds its selection through a NESTED
+    // item 3 — PER-KIND CONFIG CAPTURE. A RADIO_GROUP binds its selection through a NESTED
     // `value: { bindTo: "<col>" }`, not through the top-level `bindTo` a field uses, and each of its options is a
     // CHILD item carrying a literal `value` plus its own caption. Both are captured here together with the mapping
     // row that consumes them: capturing the binding alone builds a plain input and silently drops the option
@@ -1432,7 +1432,7 @@ function normalizeModules(m) {
       // `dashboardConfig`, never on `viewModelConfig` itself. Recording the key lets the mapper exclude that
       // shape instead of mistaking every dashboard for a profile card.
       hasDashboardConfig: vmc.dashboardConfig != null && typeof vmc.dashboardConfig === "object",
-      // ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart stored in SysWidgetDashboard, e.g. the
+      // a record-scoped CARD WIDGET (a small indicator/chart stored in SysWidgetDashboard, e.g. the
       // KPI charts on a Campaign page) carries the two coordinates the migrator needs to convert it: `recordId`
       // (the SysWidgetDashboard record) and `widgetKey` (which widget in it). normalizeModules dropped both as
       // non-boolean values, leaving the widget an unconvertible generic `component`. Keep them so mapWidgets can
@@ -1641,7 +1641,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
     return;
   }
   mergeIdentityProps(op, cur, pkg, warnings);
-  // ENG-94714 — a MERGE is the op that most often carries configuration this engine models nowhere (a section's
+  // a MERGE is the op that most often carries configuration this engine models nowhere (a section's
   // `merge DataGrid` sets `controlColumnName` / `applyControlConfig` / `controlCellClass`). ACCUMULATE rather than
   // replace: two layers may each add their own unmodelled key to the same element, and the last one to run is not
   // the only one that took effect.
@@ -2144,7 +2144,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what ENG-95543's tier B is defined in terms of.
       handlers: i.handlers || {}, valueBindTo: i.valueBindTo || null, optionValue: i.optionValue ?? null,
-      // ENG-94714 — the `values` keys the body declared on this element that the engine models on no field, SORTED
+      // the `values` keys the body declared on this element that the engine models on no field, SORTED
       // so two folds of the same input produce byte-identical output. Empty on almost every element; non-empty is
       // the signal that real classic configuration exists here which no mapping can represent yet, and which the
       // consumer must NAME rather than drop (a section's `merge DataGrid` controlColumnName is the founding case).

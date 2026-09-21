@@ -30,7 +30,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CORE = path.join(ROOT, 'skills', '_workflow-core')
 
 // The workflow IDENTITY manifest: the one structured place a consumer reads `{name, script, phases}` from.
-// PR #147 review (architecture) — the installer used to recover `meta.name` by lexing the generated JavaScript
+// review (architecture) — the installer used to recover `meta.name` by lexing the generated JavaScript
 // with a hand-written sub-lexer in Python, so the consumer parsed the producer's output language and the producer
 // published nothing structured, while `TARGETS` below held the same data in structured form at emit time. That is
 // what AGENTS.md forbids: a generated artifact is a verification tool, never a source to reverse-engineer format
@@ -72,7 +72,7 @@ const TARGETS = [
 
 // Drop `import` statements (single- and multi-line) and turn `export X` into `X`.
 // Nothing else is rewritten: the inlined text is the module's own source, so a
-// reviewer diffing the generated file against the core sees only these removals.
+// er diffing the generated file against the core sees only these removals.
 // Is this line an `import` (single- or multi-line) or a RE-EXPORT? Both are dropped: the inlined modules share one
 // scope, so every name is already in it. Split out so `inlineOne` stays a loop over lines.
 const isImportStart = (line) => /^import\s/.test(line)
@@ -232,7 +232,7 @@ export function buildManifest(targets = TARGETS) {
 // Only when run as a program. Importing this module (the offline suite does, to reach
 // `stripImports`) must not write the shipped files or call `process.exit`.
 //
-// ENG-96483 review (Major) — COMPARE AGAINST THE REAL PATH. Node resolves the ESM main entry to its REAL path for
+// COMPARE AGAINST THE REAL PATH. Node resolves the ESM main entry to its REAL path for
 // `import.meta.url` (symlinks resolved, unless `--preserve-symlinks-main`), while `process.argv[1]` keeps the path
 // as it was invoked. Any checkout reached through a symlinked path component — a macOS `/tmp`, a symlinked home, a
 // container image that links the workspace, a pnpm/worktree layout, a bin shim — made the two hrefs differ, so this

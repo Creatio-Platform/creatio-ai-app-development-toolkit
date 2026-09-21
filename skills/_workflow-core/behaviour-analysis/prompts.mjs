@@ -42,7 +42,7 @@ Return the schema. The cards live in the FILE; the return carries the inventory,
 }
 
 export function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
-  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
   // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
   // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
   // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
@@ -76,7 +76,7 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 export function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
+  // the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
   // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
   // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
   // restate cards that are already in the deliverable.

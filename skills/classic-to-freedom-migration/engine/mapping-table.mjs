@@ -285,7 +285,7 @@ const feature = (suffix, { feature: name, freedom, componentType = null, uiShape
 // the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
 // `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
 const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
-// ENG-96327 — the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
+// the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
 // read get-component-info, do NOT downgrade to a plain grid over ContactCommunication, etc.) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
 // PREREQUISITE / decision, which the short note keeps.
@@ -365,7 +365,7 @@ const FEATURE_ENTITY_ROWS = [
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-// ENG-96327 — SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
+// SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
 // flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed.
 const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
@@ -378,7 +378,7 @@ const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; au
 // plan always has a definite answer here.
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
 const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
-// ENG-95543 — the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
+// the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
 // `mapWidgets` consumes them directly, and rewriting that builder was not part of giving the data one home.
 // `verify.componentType` is stated wherever the Freedom component type is KNOWN and registry-resolvable — the DCM
 // pair and the Feed. It was prose-only before, so a fabricated type there could never have been caught.
@@ -503,7 +503,7 @@ export function featureVerifyType(featureName) {
   return r?.verify.componentType || null;
 }
 
-// ENG-95859 — a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
+// a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
 // approval MODULE/widget placed ABOVE the profile island (`crt.Approval`) PLUS the approval LIST
 // (`crt.ApprovalList`, already gated by `featureVerifyType` above) — the FEATURE_ROWS note for Approvals has said
 // so in prose since ENG-95254, and the build recipe repeats it, but

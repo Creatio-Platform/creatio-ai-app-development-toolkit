@@ -583,7 +583,7 @@ class ParamValidationTests(unittest.TestCase):
 
 
 class ForceKillSharedClientTests(unittest.TestCase):
-    # PR #55 R2-5: pin the sanctioned kill API's kill-and-swallow contract directly (the
+    # R2-5: pin the sanctioned kill API's kill-and-swallow contract directly (the
     # preflight only exercises it indirectly), so a refactor can't silently break it.
 
     def test_kills_captured_proc(self):
@@ -603,7 +603,7 @@ class ForceKillSharedClientTests(unittest.TestCase):
         proc.kill.assert_called_once()
 
     def test_propagates_unexpected_error(self):
-        # PR #55 R2-4: an unexpected kill failure must NOT be swallowed (else an orphaned
+        # R2-4: an unexpected kill failure must NOT be swallowed (else an orphaned
         # clio child is indistinguishable from the normal no-op).
         proc = Mock()
         proc.kill.side_effect = RuntimeError("unexpected")
@@ -618,7 +618,7 @@ class ForceKillSharedClientTests(unittest.TestCase):
 
 
 class EnsureStartedEncodingTests(unittest.TestCase):
-    # PR #55 R2-3: _ensure_started uses Popen(encoding="utf-8", errors="replace"); prove a
+    # R2-3: _ensure_started uses Popen(encoding="utf-8", errors="replace"); prove a
     # malformed-byte stream from the clio child is decoded with replacement chars instead
     # of raising mid-readline (so a corrupt response is classified, not a masked crash).
     def test_ensure_started_replaces_invalid_utf8_without_raising(self):
@@ -644,7 +644,7 @@ class EnsureStartedEncodingTests(unittest.TestCase):
 
 
 class ForceKillRealSubprocessTests(unittest.TestCase):
-    # PR #55 R3: prove the FULL chain — real Popen + real _shared_client + the real
+    # prove the FULL chain — real Popen + real _shared_client + the real
     # force_kill_shared_client() — actually terminates a genuinely blocked child (not a
     # mock). This is the PR's core no-orphan safety guarantee; mocks can't falsify it.
     def test_force_kill_terminates_a_real_blocked_child(self):
@@ -669,7 +669,7 @@ class ForceKillRealSubprocessTests(unittest.TestCase):
 
 
 class InitializeOnceValidationTests(unittest.TestCase):
-    # PR #55 R3: _initialize_once must NOT mark itself initialized when the handshake
+    # _initialize_once must NOT mark itself initialized when the handshake
     # response never arrived (child killed mid-initialize / EOF) — it must raise, so
     # call_method aborts instead of writing to a dead pipe and triggering call_mcp_tool's
     # retry-driven re-spawn.

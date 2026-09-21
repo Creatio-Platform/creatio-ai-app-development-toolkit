@@ -149,7 +149,7 @@ const CLIO_TYPE_ALIAS = {
 // ONE normalization for both the control choice and the reader-facing type label — they diverged before on the
 // numeric codes, and a label reading `Currency2` next to a control chosen for `money` is the same class of bug.
 const normalizeDvt = (t) => CLIO_TYPE_ALIAS[t] || DATAVALUETYPE_CODE[t] || t;
-// ENG-96483 review (Blocker) — the two types whose VALUE must never reach an editable cleartext field. They are
+// the two types whose VALUE must never reach an editable cleartext field. They are
 // IDENTIFIED precisely (DVT_TYPE_NAME has entries for HASH_TEXT / SECURE_TEXT), so the generic `field-control`
 // bucket — whose reason says the type "was not recognized" — was factually wrong about them AND truncated its
 // column list at 12 entries, so on a dense page the secret column could be the one that is not named. Their own
@@ -245,7 +245,7 @@ function control(dataType, contentType, ref) {
 // the branching carried no information. The arms that DO need the control, or the column name, stay as branches
 // below, where the condition is the point.
 //
-// ENG-96483 review (Blocker) — the two SECRET types are in here. `scalarControl` withholds a control for them on
+// the two SECRET types are in here. `scalarControl` withholds a control for them on
 // purpose, but the label fell through to plain `Text`, so the Layout table in `plan.md` — the verbatim operator
 // deliverable — rendered an encrypted or hashed column indistinguishably from any other text column. The Type cell
 // must never be able to read `Text` for one of these.
@@ -336,7 +336,7 @@ export const FEATURE_CATALOG = Object.fromEntries(MAPPING_ROWS
 function featureView(r) {
   return { feature: r.meta.feature, freedom: r.meta.freedom, uiShape: r.meta.uiShape || r.uiShape || "list",
     templateProvided: !!r.meta.templateProvided, note: r.notes || null, componentType: r.verify?.componentType || null,
-    // ENG-95683 — the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
+    // the structured {kind,id} gate intent, surfaced verbatim from the row so a caller resolves a
     // package/feature prerequisite BY KIND instead of parsing it out of `note`/`freedom`. null when the row gates
     // nothing (a plain component).
     gate: r.gate || null };
@@ -375,7 +375,7 @@ function isProfileCardModule(c) {
   if (!c.masterColumnName || c.hasDashboardConfig) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
-// ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
+// a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
 // STRUCTURALLY by the two coordinates the migrator needs to convert it: BOTH `recordId` (the SysWidgetDashboard
 // record) and `widgetKey` (which widget in it) must be present. A module missing EITHER cannot be converted, so
 // it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
@@ -431,7 +431,7 @@ export function mapToFreedom(eff, opts = {}) {
   // Produce a Freedom caption VALUE from a classic caption reference: the resolved literal text if the
   // manifest carries the string, else the `$`-binding as-is, else a synthesized key from the fallback
   // name. `resolved` gates whether the caller still flags it for manual resolution (#5/#13).
-  // Major 4 — user-visible text on the page must be a LOCALIZABLE BINDING, never an inline literal (clio
+  // user-visible text on the page must be a LOCALIZABLE BINDING, never an inline literal (clio
   // rejects hardcoded page text; AGENTS.md). So a caption returns the `$Resources.Strings.<key>` BINDING for
   // the page body, plus the display `text` for the PLAN ONLY, registered in `resourceStrings` so the agent
   // knows what to author. `key` = the ORIGINAL classic resource key when the schema had one, else a
@@ -449,7 +449,7 @@ export function mapToFreedom(eff, opts = {}) {
   // #11(ii)/B2 — parsed detail-schema info { name: { entity, columns } } from the manifest, so a detail's
   // real child entity + list columns are known (and auto-named SchemaNDetail details get resolved).
   const detailSchemas = opts.detailSchemas || {};
-  // ENG-93928 — parsed EMBEDDED PROFILE schemas { "AccountProfileSchema": { entity, columns } } from the
+  // parsed EMBEDDED PROFILE schemas { "AccountProfileSchema": { entity, columns } } from the
   // manifest, so a profile card's profiled entity and the columns it displayed are known facts, not guesses.
   const profileSchemas = opts.profileSchemas || {};
   // #5/#13 (fields) — entity column TITLES { column: "Mobile phone" } from get-entity-schema-properties, so a field's
@@ -584,7 +584,7 @@ export function mapToFreedom(eff, opts = {}) {
     modelConfigDiff: [{ operation: "merge", path: ["dataSources", "PDS", "config", "attributes"], values: F.pdsColumns }],
     pageBusinessRules, entityBusinessRules, details: D.details, handlerStubs, standardMethodsFiltered, needsDecision,
     ruleSourceCount: payloadRules.length, // # of declarative page/entity rule DEFINITIONS considered (before mapping) — lets a caller detect "rules existed but none mapped into Logic"
-    // Major 4 — resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
+    // resource strings the page bindings reference (`$Resources.Strings.<key>` → default text): the
     // map the agent registers at build time. viewConfigDiff carries only bindings, never inline user text.
     resources: resourceStrings,
     // standard Creatio features replaced by their Freedom analog (A3) — NOT generic details.
@@ -597,7 +597,7 @@ export function mapToFreedom(eff, opts = {}) {
     // DCM present for THIS page's entity (scoped: a child edit page does not inherit the parent's case) — the
     // coverage builder gates the case-bar / Next-steps deliverable rows on this, not on the raw inherited signal.
     dcmActive,
-    // ENG-95806 — record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
+    // record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
     // recordId) and resolved region: the agent groups them by recordId and converts each group via the migrator's
     // ConvertCardWidgetsProcess, placing the returned Freedom element — never hand-building a chart.
     cardWidgets,
@@ -612,7 +612,7 @@ export function mapToFreedom(eff, opts = {}) {
     headerLayout: F.headerLayout,
     // card actions / ACTIONS-menu items to wire as Freedom card actions (B7).
     cardActions,
-    // ENG-95543 tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
+    // tier B — a table-emitted element's `clicked` request and the classic method behind it. The element
     // IS built; this is the wiring a build agent still has to author, published rather than left implicit.
     requestHandlers: F.requestHandlers,
     // The elements the shared mapping table emitted, so the design spec, the published `componentTypes` and the
@@ -805,7 +805,7 @@ function foldFieldSummaries(acc) {
     out.push({ kind: "field-control", item: `(${fieldControlCols.length} fields)`,
       reason: `${fieldControlCols.length} field(s): the entity column exists but its TYPE was not recognized (an unmapped/exotic DataValueType code that get-entity-schema-properties returned as a number), OR no \`manifest.entityColumns\` was supplied to resolve types — defaulted to \`crt.Input\`. Confirm the control on-stand: ${shown}` });
   }
-  // ENG-96483 review (Blocker) — the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
+  // the secret columns, named IN FULL and with an accurate reason. No 12-entry cap
   // here on purpose: the whole point is that the operator can see every column whose value the classic page put
   // on screen and that this migration is NOT carrying over.
   if (secretCols.length) {
@@ -923,7 +923,7 @@ function mapFields(ctx, containers) {
       ...(c.image ? { value: "$" + col } : { control: "$" + col }),
       labelPosition: c.type === "crt.Checkbox" ? "beside" : "above", visible: vis, layoutConfig,
     };
-    // Major 4 — a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
+    // a column-bound field AUTO-labels from the entity column's (localized) title, so we do NOT write
     // an inline label/caption (clio rejects hardcoded page text). `titleText`/`typeLabel` are PLAN-only metadata.
     if (lbl != null) values.titleText = lbl;
     values.typeLabel = fieldTypeLabel(col, meta, c);
@@ -975,7 +975,7 @@ function mapFields(ctx, containers) {
     // the nearest existing columns only as a secondary hint for the rarer renamed/typo case.
     const nearMissing = missingColumn ? nearestColumns(col, cols) : [];
     const ctl = control(meta.type, f.contentType, meta.ref);
-    // ENG-96483 review (Blocker) — a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
+    // a HASH_TEXT / SECURE_TEXT column is FAIL-CLOSED here. `scalarControl` withheld
     // the control deliberately, and the caller used to undo that one line later by defaulting to an editable
     // cleartext `crt.Input`, so the ChangeSet bound a hashed or encrypted column to a live editable field. Emitted
     // read-only instead (`applyFieldTypeMeta` reads `c.readOnly`), and reported under its own decision kind rather
@@ -1077,7 +1077,7 @@ function mapFields(ctx, containers) {
     attributes[col] = { modelConfig: { path: "PDS." + col } };
     pdsColumns[col] = { path: col };
   }
-  // ---- ENG-95543: the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
+  // ---- the kinds the SHARED MAPPING TABLE emits itself (tier A and tier B first wave) -------------
   // Placement deliberately goes through the SAME `routeField` / `computeLayout` closures the fields above use:
   // a second placement path would compute its own rows and overlap the fields already claiming those grid cells.
   // Emission order is the classic layout order (`order`), like the field pass, so a radio group between two
@@ -1254,7 +1254,7 @@ function mapFields(ctx, containers) {
   // title). This is the signal that the Freedom target should be the top-area template (area on top), so the
   // header elements land in TopAreaProfileContainer rather than being crammed into the narrow left profile.
   return { viewConfigDiff, attributes, pdsColumns, needsDecision, accountedFor, profileRegion,
-    // ENG-95543 — tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
+    // tier-B wiring (an emitted element's `clicked` request) and the per-element reasons a
     // table-emitted kind could NOT be built, which the drop sweep quotes instead of a generic "no mapping".
     requestHandlers, configGaps, tableElements,
     headerLayout: headerIsWide ? "wide" : null };
@@ -1270,7 +1270,7 @@ function mapFields(ctx, containers) {
 function detectDetailAddMechanism(dinfo) {
   const am = dinfo?.addMode;
   if (!am?.editableGrid) return null;
-  // ENG-96327 (81305bd) — no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
+  // no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
   // editable/itemsCreation properties, resolved via get-component-info) is builder mechanics the build step owns —
   // the plan states the human fact (this detail is inline-editable, and WHICH columns), not the component wiring.
   return {
@@ -2156,7 +2156,7 @@ function profileCardTarget(c, entity, info) {
   };
 }
 
-// ENG-93928 — embedded profile cards (linked-record blocks) → the Freedom side profile. Runs as its OWN phase
+// embedded profile cards (linked-record blocks) → the Freedom side profile. Runs as its OWN phase
 // (not through the name-keyed widget catalog) and, critically, marks each module key as accounted for: the host
 // diff item shares that name, so this is what stops mapUnmappedDrop reporting the card as an "unknown embedded
 // module" — the exact failure this rule exists to fix. Returns profileCards[] + needsDecision[]/accountedFor[].
@@ -2200,7 +2200,7 @@ function mapProfileCards(ctx) {
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
-// ENG-95806 — ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
+// This moment ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
 // runs BEFORE the base-chrome catalog and bypasses its `seenWidget` dedup / evidence gating entirely (a card
 // widget is genuine page content keyed by coordinates, not inherited chrome). `opts.index` (the layout tree) +
 // `opts.profileAnchors` let it resolve each widget's region the same way mapProfileCards does.
@@ -2273,7 +2273,7 @@ function mapWidgets(eff, opts = {}) {
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
-  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
+  // a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
   // and the base-chrome evidence gate. It must NOT leak an inherited one, though: a module carried in from a base /
   // seed layer (`fromTemplate`) is base-template chrome, and the dispatch loop below gates on `!c.fromTemplate` so
   // it never emits a per-page card-widget decision — that gate replaces the base-chrome evidence gate this branch
@@ -2569,7 +2569,7 @@ export const LIST_DECISION_KIND = {
   commandBar: "list-command-bar",
   rowAction: "list-row-action",
   process: "list-process",
-  // ENG-94714 — the two questions a folded section `diff` raises that no other surface absorbs.
+  // the two questions a folded section `diff` raises that no other surface absorbs.
   // `gridConfig`: the element declares configuration keys this engine models on no field. The founding case is the
   // section's `merge DataGrid` carrying `controlColumnName` / `applyControlConfig` / `controlCellClass`, which has
   // no obvious Freedom analog — so it is ASKED, never guessed at and never dropped.
@@ -2687,7 +2687,7 @@ function listRowActionDecisions(rowActions) {
       reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` };
   });
 }
-// ENG-94714 — one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
+// one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
 // `OpportunitySectionV2` grid declares twenty such keys, and twenty rows would bury the two that carry a real
 // question (`controlColumnName`, `applyControlConfig`) under eighteen restatements of base grid wiring. The
 // element name is the stable half of the evidence id, so it is the `item`; the keys live in the reason.

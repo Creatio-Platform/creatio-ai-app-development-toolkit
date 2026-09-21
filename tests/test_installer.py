@@ -131,7 +131,6 @@ class ConstantsTests(unittest.TestCase):
             "register_claude_known_marketplace",
             "register_claude_installed_plugin",
             "prune_directory_entries",
-            # ENG-90514 removed these along with the file-copy install path.
             "write_codex_marketplace_catalog",
             "merge_codex_marketplace_config",
             "merge_personal_marketplace_catalog",
@@ -687,7 +686,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
                 installer.provision_named_workflows(source_root, claude_home)
 
     def test_reads_the_name_from_the_manifest_not_from_the_script_text(self):
-        # PR #147 review — the identity comes from the generated manifest, so a line beginning
+        # the identity comes from the generated manifest, so a line beginning
         # `name:` anywhere in the inlined prompt text or core modules cannot supply the destination
         # filename, and no JavaScript is parsed to find out. The script here declares one name in
         # its own `meta` and a decoy further down; only the manifest decides.

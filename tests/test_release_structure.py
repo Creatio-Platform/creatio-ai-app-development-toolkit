@@ -29,7 +29,6 @@ MAX_SKILL_DESCRIPTION_BYTES = 1024
 # Exact substrings a skill's description MUST keep so keyword/substring routers
 # (some agents) still auto-load it. This pins the LOWER bound the byte cap does
 # not: trimming under the cap must not silently drop a load-bearing trigger.
-# ENG-92957 dropped these during trimming and they were caught by hand, not CI.
 LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
     # The orchestrator is the ENTRYPOINT, so its description is the only thing that can attract a
     # cold "create an app" request. It previously named only the toolkit's own artifacts ("Business

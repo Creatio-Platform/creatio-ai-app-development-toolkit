@@ -441,7 +441,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const gaps = planGaps(result);
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
-  // ENG-99740 — key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
+  // key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
   // taskRows' lookup join on (page, label) and state cannot bleed across same-labeled rows on different pages.
   const keyOf = (it) => `${it.row.pageKey || it.task.pageKey} ${labelKey(it.row.label)}`;
   const withLabels = (items) => { const ks = new Set(items.map(keyOf)); ks.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return ks; };
