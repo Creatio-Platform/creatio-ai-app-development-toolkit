@@ -2946,6 +2946,18 @@ check("minted (anti-vacuity): the same declaration WITHOUT the line break is acc
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control").refused === false,
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control-d").problems);
 
+check("minted: a declared deliverable carrying `|` is ESCAPED into its cell and read back whole — a label shaped like `x | built | y` cannot shift the Outcome column, so it arrives as text rather than as a mark nobody recorded",
+  () => {
+    const { d, res } = minted({ deliverables: ["x | built | y"] }, "mint-pipe");
+    const text = fs.readFileSync(path.join(d, res.written[0].file), "utf8");
+    const row = parseTaskFile(text).table[0];
+    return res.refused === false && /x \\\| built \\\| y/.test(text)
+      && row.label === "x | built | y" && !row.outcome;
+  }, () => { const { d, res } = minted({ deliverables: ["x | built | y"] }, "mint-pipe-d");
+    if (res.refused) return res.problems;
+    const row = parseTaskFile(fs.readFileSync(path.join(d, res.written[0].file), "utf8")).table[0];
+    return { label: row.label, outcome: row.outcome }; });
+
 check("minted: a declared task is WRITTEN by the engine, carrying its `Outcome` table and its declared rows - the orchestrator supplies the judgement, not the file shape",
   () => {
     const { d, res } = minted();
