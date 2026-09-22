@@ -29,7 +29,12 @@ MARKERS = (
         "review_round",
         re.compile(
             r"\b\d+(?:st|nd|rd|th)[\s-]?review\b|\bre-?review\b|\breviewers?\b"
-            r"|\breview\s+round\s+\d+\b|\bround\s+\d+\s+review\b",
+            r"|\breview\s+round\s+\d+\b|\bround\s+\d+\s+review\b"
+            # A review numbered by its pass: "(review #1)", "review deep #5".
+            r"|\breview\b[\s-]*(?:deep[\s-]*)?#\s*\d+"
+            # A count of passes ("four review rounds") and the first-person
+            # form ("my own review") narrate who looked, not what the rule is.
+            r"|\breview\s+rounds\b|\bmy\s+own\s+review\b",
             re.IGNORECASE,
         ),
     ),
@@ -48,9 +53,19 @@ MARKERS = (
     ),
     # An attribution, not any hyphenated name that happens to end in "creatio":
     # ``gdpr-for-creatio`` is an app slug, ``reported by a-b-creatio`` is a person.
+    # A review marker crediting a person - ``R3 (Alexandr + m-dymytrova)`` - is
+    # an attribution too, and needs no ``-creatio`` suffix to be one, so the
+    # second alternative reads the parentheses a marker opens directly. It
+    # demands a person shape there (a capitalized given name, or a ``first-last``
+    # handle), so a marker qualified by a condition, such as ``R4 (unread)``,
+    # states a rule and is left alone.
     (
         "person_handle",
-        re.compile(r"(?:\b(?:by|from|per|to)\s+|@)[a-z0-9]+-[a-z0-9]+-creatio\b", re.IGNORECASE),
+        re.compile(
+            r"(?i:(?:\b(?:by|from|per|to)\s+|@)[a-z0-9]+-[a-z0-9]+-creatio\b)"
+            r"|\bR\d+\s*\([^)\n]*"
+            r"(?:[A-Z][a-z]{2,}|\b[a-z]{1,12}-[a-z]{2,}\b)[^)\n]*\)"
+        ),
     ),
     # "used to" is history only in the active voice: "X used to be Y". The passive
     # "a wrapper is used to justify" names a purpose. "Regression" likewise names a

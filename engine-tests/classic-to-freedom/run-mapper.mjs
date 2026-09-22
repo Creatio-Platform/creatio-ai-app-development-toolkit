@@ -4170,18 +4170,18 @@ check("Blocker1(part1): an unresolved construct AT a structural key (diff via a 
   b1call.gate.blocked === true && b1call.gate.reasons.some((r) => /structural field/.test(r) && /diff/.test(r)));
 check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
   !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
-// locker (this round): an alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`)
-// must NOT resolve to a silent hole. The lazy-node alias eval flags `diff.0.values` in the real sink → the
-// gate blocks, instead of the old green pass with 0 fields and the field mislabelled unmapped-component.
+// An alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`) must NOT resolve to a
+// silent hole: the lazy-node alias eval flags `diff.0.values` in the real sink, so the gate BLOCKS rather than
+// passing green with 0 fields and the field mislabelled unmapped-component.
 const b1aliasDyn = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values: makeValues()}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
-check("locker (alias): an aliased diff item with a dynamic values object is diagnosed (diff.N.values) and BLOCKS the gate",
+check("alias (structural): an aliased diff item with a dynamic values object is diagnosed (diff.N.values) and BLOCKS the gate",
   b1aliasDyn.gate.blocked === true && b1aliasDyn.gate.reasons.some((r) => /structural field/.test(r) && /diff\.0\.values/.test(r)),
   () => ({ blocked: b1aliasDyn.gate.blocked, reasons: b1aliasDyn.gate.reasons, diags: b1aliasDyn.parseDiagnostics }));
 // and the sibling advisory boundary via an alias: a dynamic CAPTION deep in an aliased item stays advisory.
 const b1aliasCap = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F",caption:makeCaption()}}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
-check("locker (alias): a dynamic caption inside an aliased item stays ADVISORY (surfaced, not a structural block)",
+check("alias (boundary): a dynamic caption inside an aliased item stays ADVISORY (surfaced, not a structural block)",
   b1aliasCap.parseDiagnostics.some((d) => /diff\.0\.values\.caption/.test(d.path)) && !b1aliasCap.gate.reasons.some((r) => /structural field/.test(r)),
   () => ({ diags: b1aliasCap.parseDiagnostics, reasons: b1aliasCap.gate.reasons }));
 
@@ -4421,7 +4421,7 @@ check("vendor-integrity: provenance.json pins acorn with a 64-hex SHA-256 (the g
 // (`from "acorn"`) would make Node resolve node_modules — an UNPINNED parser that silently bypasses this
 // integrity gate. Scan every engine source and fail on any non-vendor acorn import.
 const engineSrcs = fs.readdirSync(ENGINE_DIR).filter((f) => f.endsWith(".mjs")).map((f) => path.join(ENGINE_DIR, f));
-// catch BOTH `from "acorn"` AND the side-effect `import "acorn"` (review deep #5) — the specifier is exactly `acorn`.
+// catch BOTH `from "acorn"` AND the side-effect `import "acorn"` — the specifier is exactly `acorn`.
 const bareAcornRe = /(?:from|import)\s+["']acorn["']/;
 const bareAcorn = engineSrcs.filter((f) => bareAcornRe.test(fs.readFileSync(f, "utf8")));
 check("vendor-integrity: no engine source imports acorn by BARE specifier — `from \"acorn\"` OR side-effect `import \"acorn\"` (only ./vendor/acorn.cjs is allowed)",
@@ -9853,9 +9853,9 @@ try {
   // THE PARSED-BUT-NOT-A-REGISTRY-EXPORT CASES. The `file` branch must not accept
   // anything whose bytes parse as JSON and report it as `stand-export`, the strongest of the three evidence
   // levels, while `indexFromRegistryExport` defaults `components` to `[]`. Every emitted `crt.*` type would then read as
-  // `unknown-component` and the operator was told "your stand does not carry crt.Input" instead of "that file is
-  // not a registry export". The only negative the suite had was `readFile` throwing, which is why this survived
-  // four review rounds — nothing here threw.
+  // `unknown-component`, and the operator would be told "your stand does not carry crt.Input" instead of "that
+  // file is not a registry export". A negative that only makes `readFile` throw does not cover the
+  // parses-but-is-not-a-registry-export case, so each of those payload shapes is asserted explicitly.
   const asFile = (payload) => strip(resolveRunIndex(
     { componentRegistry: { file: "/x.json" } }, { readFile: () => payload }));
   check("a file that PARSES but carries no `components` array never resolves to `stand-export` — it is `unreadable-export`, and the reason says the file is not a registry export rather than accusing the stand",

@@ -348,9 +348,9 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
                          "count=5 content=hello status=ok")
 
     def test_classify_redacts_secret_in_resolver_and_probe_failure_detail(self):
-        # R3 (Alexandr + m-dymytrova): redaction must hold at the PUBLIC classify()
-        # boundary, not only the private helper — a future refactor that bypassed
-        # _truncate_detail on one branch would leak a credential into result.detail.
+        # redaction must hold at the PUBLIC classify() boundary, not only the private
+        # helper — a refactor that bypasses _truncate_detail on one branch would leak
+        # a credential into result.detail.
         leaky = RuntimeError("cannot reach https://admin:s3cr3t@ts1-core-dev04/api; Password=hunter2")
         resolver_result = pf.classify(resolver=lambda: (_ for _ in ()).throw(leaky),
                                       prober=lambda t: {"success": True})
@@ -379,9 +379,9 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertFalse(pf._probe_is_healthy({"success": True, "data": {"index": {}}}))
 
     def test_classify_bad_clio_cmd_maps_to_not_resolvable_without_probing(self):
-        # R3 (m-dymytrova) + my own review: the CLIO_CMD verify branch — the fix for
-        # the root cause (installed-but-not-on-PATH / typo'd CLIO_CMD) — had ZERO
-        # coverage. A bogus CLIO_CMD must classify clio-not-resolvable and never probe.
+        # the CLIO_CMD verify branch covers the root cause an unresolvable clio has
+        # (installed-but-not-on-PATH / typo'd CLIO_CMD): a bogus CLIO_CMD must classify
+        # clio-not-resolvable and never probe.
         orig_env = os.environ.get("CLIO_CMD")
         probed = {"called": False}
 

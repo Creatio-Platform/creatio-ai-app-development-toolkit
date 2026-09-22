@@ -619,14 +619,14 @@ const e2p = parseSchema('define("E2",[],function(){var cfg={items:[{operation:"i
 check("E2: member access on a local-object alias is FLAGGED (member-on-local-object), not silent null",
   e2p.astDiagnostics.some(d => d.kind === "member-on-local-object") && e2p.diff.length === 0);
 
-/* ---- extractFnBody: a brace inside a string/comment must not truncate the method scan (review #1) ---- */
+/* ---- extractFnBody: a brace inside a string/comment must not truncate the method scan ---- */
 console.log("\n===== extractFnBody string safety + move-order fidelity =====");
 const braceBody = 'define("X", [], function() { return { entitySchemaName: "X", diff: [], getActions: function() { var s = "a } b { c"; return [ { "Tag": "runEscalation", "Click": "navigateToEscalation" } ]; } }; });';
 const braceRes = parseSchema(braceBody, "X");
 check("extractFnBody: a `{`/`}` inside a string does not truncate the getActions scan",
   braceRes.actionHints.includes("runEscalation") && braceRes.actionHints.includes("navigateToEscalation"));
 
-/* ---- move op must apply the new order/index, not just the parent (review #2) ---- */
+/* ---- move op must apply the new order/index, not just the parent ---- */
 const mvBase = parseSchema('define("Base", [], function() { return { entitySchemaName: "E", diff: [ { operation: "insert", name: "A", parentName: "P", index: 0, values: { bindTo: "A" } }, { operation: "insert", name: "B", parentName: "P", index: 1, values: { bindTo: "B" } } ] }; });', "Base");
 const mvTop = parseSchema('define("Top", [], function() { return { entitySchemaName: "E", diff: [ { operation: "move", name: "A", parentName: "P", index: 9 } ] }; });', "Top");
 const mvA = mergeHierarchy([mvBase, mvTop]).items.find((i) => i.name === "A");

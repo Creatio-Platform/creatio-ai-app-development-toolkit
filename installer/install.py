@@ -400,12 +400,12 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
-    Recovering this by lexing the generated JavaScript needs a hand-written JS sub-lexer in
-    Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
-    generator already held in structured form. It needed comment, string, unterminated-literal and
-    decoy-name hardening across four review rounds, and the constructs it still could not handle are
+    Recovering this by lexing the generated JavaScript instead needs a hand-written JS sub-lexer in
+    Python whose only job is to pull ``name`` out of an ``export const meta = {...}`` literal the
+    generator already holds in structured form. Such a lexer needs comment, string,
+    unterminated-literal and decoy-name hardening, and still cannot handle constructs that are
     ordinary in generated JS - a template literal with ``${...}``, a regex literal carrying a brace
-    or a quote, the regex-versus-division ambiguity. Its failures were quiet: a wrong name written
+    or a quote, the regex-versus-division ambiguity. Its failures are quiet: a wrong name written
     to ``~/.claude/workflows/`` so ``Workflow({ name })`` resolves to nothing while the install
     reports success, or a hard abort on a language path the generator's own goldens never exercise.
     It is also what AGENTS.md forbids twice over - a generated artifact is a verification tool, not
@@ -413,8 +413,8 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     that returns the same data as fields.
 
     Fails CLOSED: a tree with no manifest, or an unreadable one, raises rather than falling back to
-    a parser. There is deliberately no fallback - one that no test exercises would preserve exactly
-    the coupling this replaced and re-introduce the silent mis-parse.
+    a parser. There is deliberately no fallback - one that no test exercises would carry exactly
+    that coupling and its silent mis-parse.
     """
     manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
     if not manifest_path.is_file():
