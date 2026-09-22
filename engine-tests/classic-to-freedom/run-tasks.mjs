@@ -2379,23 +2379,21 @@ console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CL
 // The exit code is what an orchestrator reads to tell an approvable folder from one the engine declined to touch:
 // the ⛔ banner is prose a machine does not parse. A refusal writes nothing and names no task, so exiting like an
 // answer would have the run schedule sub-agents against a folder that was never cut.
-{
-  // Each refusal KIND gets its own pin, because they are indistinguishable to a caller and share the one banner.
-  for (const [kind, split, said] of [
-    ["a row claimed TWICE", DUP_SPLIT(), /is claimed 2 times/],
-    ["a row the plan does not have", BOGUS_SPLIT(), /claims a row the plan does not have/],
-  ]) {
-    const base = tmp("cli-refusal-kind");
-    const dir = path.join(base, "build-tasks");
-    const splitPath = path.join(base, "split.json");
-    fs.writeFileSync(splitPath, JSON.stringify(split, null, 2));
-    const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
-    check(`migrate.mjs --tasks: a split refused for ${kind} exits 2 and writes nothing — the banner and the exit code are one verdict, not two`,
-      () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
-        && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
-      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 400), exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
+// Each refusal KIND gets its own pin, because they are indistinguishable to a caller and share the one banner.
+for (const { kind, split, said } of [
+  { kind: "a row claimed TWICE", split: DUP_SPLIT(), said: /is claimed 2 times/ },
+  { kind: "a row the plan does not have", split: BOGUS_SPLIT(), said: /claims a row the plan does not have/ },
+]) {
+  const base = tmp("cli-refusal-kind");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify(split, null, 2));
+  const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check(`migrate.mjs --tasks: a split refused for ${kind} exits 2 and writes nothing — the banner and the exit code are one verdict, not two`,
+    () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
+      && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 400), exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
+  fs.rmSync(base, { recursive: true, force: true });
 }
 {
   // `--start` is the command the orchestrator runs before EVERY dispatch, so a refusal it exits 0 on is the most
