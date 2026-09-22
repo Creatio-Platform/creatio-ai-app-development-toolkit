@@ -586,6 +586,10 @@ const declaredOf = (meta = {}) => {
 // reopening the task, and it retires the declaration. A CLOSING word does not: that is the claim this derivation
 // refuses. The engine writes `status: blocked` beside `declared: blocked` itself, matching its stamp, so its own
 // word never reads as a re-open.
+// A FILE WRITTEN BEFORE `declared:` AND `statusFrom:` EXISTED. Read off the shape, by every reader, so the
+// dispatch gate reaches one verdict whether the folder was just written or is only being read.
+const legacyShapeOf = (meta = {}) => meta.declared === undefined && meta.statusFrom === undefined;
+
 const declaredNow = (meta = {}) => {
   const declared = declaredOf(meta);
   if (!declared) return "";
@@ -1769,8 +1773,7 @@ function adoptOrchestrated(e) {
     status: computeStatus({ rows }, declared, e.outcomes, carriedOf(e.meta), adoptedEdited),
     declared,
     statusEdited: adoptedEdited,
-    // Neither field present: written before either existed. `classifyUndispatched` exempts that shape.
-    legacyShape: e.meta.declared === undefined && e.meta.statusFrom === undefined,
+    legacyShape: legacyShapeOf(e.meta),
     rows, gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
     // The FALL-BACK count, for a file whose table the engine could not read: every leading ordinal in the body,
     // so it also sees a table the scoped parser ignores. Null when there is none — the index shows `—`, never `0`.
@@ -2429,7 +2432,9 @@ function rewriteFrontMatter(lines, status, declared) {
       lines[i] = `statusFrom: ${statusStamp(status)}`;
       at.stamp = i;
     } else if (lines[i].startsWith("declared:")) {
-      if (declared) lines[i] = `declared: ${declared}`;
+      // `null` leaves the line alone; the EMPTY STRING clears it. A retired declaration has to reach the file, or
+      // the re-open lasts until the next read and the word snaps back.
+      if (declared !== null) lines[i] = `declared: ${declared}`;
       at.declared = i;
     } else if (lines[i].startsWith("status:")) {
       lines[i] = `status: ${status}`;
@@ -2477,7 +2482,7 @@ export function readTaskDir(dir) {
         statusEditedIn(e.meta));
       return {
         id: e.meta.id, file: e.file, status, recordedStatus: recorded, declared: declaredNow(e.meta),
-        statusEdited: statusEditedIn(e.meta), rows, origin,
+        statusEdited: statusEditedIn(e.meta), rows, origin, legacyShape: legacyShapeOf(e.meta),
         agentNonce: e.meta.agentNonce || "", writesTo: e.meta.writesTo || "",
         dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
         notes: e.notes || "",
@@ -2596,7 +2601,7 @@ function persistTaskSet(dir, merged) {
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
     if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      setFrontMatterStatus(dir, t.file, t.status, t.declared || null);
+      setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "");
       continue;
     }
     writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));

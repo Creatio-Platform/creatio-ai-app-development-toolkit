@@ -2910,6 +2910,26 @@ check("dispatch gate (anti-vacuity): the SAME closure in a file that DOES carry 
   () => { const { task, failing } = adoptedClosure("dispatch-current-d", false);
     return { status: task?.status, failing: failing.map((t) => t.id) }; });
 
+// THE TWO READERS ANSWER THE SAME. `readTaskDir` and the merged read parse the same bytes, so the dispatch gate
+// has to reach the same verdict through either — a folder must not pass `--verify` and fail a re-slice.
+// Read WITHOUT syncing first: the write phase adds the stamp a legacy file lacks, which is itself the precondition.
+const legacyUnsynced = (name) => {
+  const d = tmp(name);
+  syncTaskDir(d, RUN, OPTS);
+  fs.writeFileSync(path.join(d, `task-${LEGACY_ID}.md`),
+    asLegacyBody(handWrittenText(allBuilt, "done", LEGACY_ID)));
+  const failing = (tasks) => dispatchAudit(tasks, d).failing.map((t) => t.id).sort();
+  return { plain: failing(readTaskDir(d)), merged: failing(readMergedTaskDir(d, RUN, OPTS).tasks) };
+};
+
+check("dispatch gate: `readTaskDir` and the merged read reach the SAME verdict over one unsynced legacy folder — the gate is one predicate over the parsed files, so a folder that passes `--verify` cannot fail a re-slice",
+  () => {
+    const { plain, merged } = legacyUnsynced("readers-agree");
+    // The exemption has to be doing something here, or the two readers agree trivially.
+    return !merged.includes(LEGACY_ID) && JSON.stringify(plain) === JSON.stringify(merged);
+  }, () => { const { plain, merged } = legacyUnsynced("readers-agree-d");
+    return { readTaskDir: plain, merged, divergence: plain.filter((x) => !merged.includes(x)) }; });
+
 console.log("\n===== minted: the orchestrator declares, the engine writes the file =====");
 
 // Declared rather than hand-authored, every task carries the engine's `Outcome` table, so the derivation always
@@ -2945,6 +2965,35 @@ check("minted: the same rule covers a declared DELIVERABLE, which the engine int
 check("minted (anti-vacuity): the same declaration WITHOUT the line break is accepted — the refusal is about the break, not about the text around it",
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control").refused === false,
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control-d").problems);
+
+// THE RE-OPEN RULE HOLDS ON BOTH WRITE PATHS. A plan task is re-rendered, so its `declared:` line is rewritten
+// from the derived task; an adopted file keeps its body and takes its `status:` line alone, so the same write has
+// to clear the declaration there too, or the recovery lasts exactly one read.
+const mintedHalt = (name) => {
+  const { d, res } = minted({}, name);
+  const f = path.join(d, res.written[0].file);
+  const id = res.written[0].id ?? DECL.id;
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: ?.*$/m, "declared: blocked"));
+  syncTaskDir(d, RUN, OPTS);
+  const halted = readTaskDir(d).find((t) => t.id === id);
+  // The documented recovery, followed literally: clear the Outcome cells, set `status: todo`.
+  let text = fs.readFileSync(f, "utf8").split("\n")
+    .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+  fs.writeFileSync(f, text.replace(/^status: .*$/m, "status: todo"));
+  syncTaskDir(d, RUN, OPTS);
+  const once = readTaskDir(d).find((t) => t.id === id);
+  syncTaskDir(d, RUN, OPTS);
+  return { halted, once, twice: readTaskDir(d).find((t) => t.id === id) };
+};
+
+check("re-open (adopted file): the documented recovery survives the WRITE, not just the read — an adopted file takes only its `status:` line, so the write has to clear `declared:` there as well or the next pass re-halts it for ever",
+  () => {
+    const { halted, once, twice } = mintedHalt("adopted-reopen");
+    // The halt has to have been real first, and the recovery has to still hold on a SECOND pass.
+    return halted.status === "blocked" && once.status === "todo" && twice.status === "todo";
+  }, () => { const { halted, once, twice } = mintedHalt("adopted-reopen-d");
+    return { halted: halted.status, afterWrite: once.status, afterSecondPass: twice.status,
+      declaredNow: twice.declared }; });
 
 check("minted: a declared deliverable carrying `|` is ESCAPED into its cell and read back whole — a label shaped like `x | built | y` cannot shift the Outcome column, so it arrives as text rather than as a mark nobody recorded",
   () => {
