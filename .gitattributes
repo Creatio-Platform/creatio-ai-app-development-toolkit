@@ -17,7 +17,7 @@
 *.mjs text eol=lf
 *.js text eol=lf
 
-# Review (m-dymytrova) — the captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
+# The captured Classic schema fixtures are EXEMPT. This is data integrity, not style.
 # Seven of them (contract/ContractInInvoice, ContractInOrder, CoreContracts, DocumentInContract, SalesContracts,
 # WorkCompliance, WorkOverride) are stored with DOUBLE-CR line endings (CR CR LF) — genuinely what the stand
 # emitted. Git classifies them `i/-text`, because the lone CRs defeat its text detection, so until the `*.js` rule

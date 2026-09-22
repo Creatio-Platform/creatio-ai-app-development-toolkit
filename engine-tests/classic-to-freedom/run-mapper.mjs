@@ -7309,7 +7309,7 @@ check("the Tabs row names the count it actually found, not a 0 against a type no
   () => /Tabs[^|]*\|\s*✅ Done\s*\|\s*2 crt\.TabContainer built/.test(vTabsReal.markdown),
   () => vTabsReal.markdown.split("\n").filter((l) => /Tabs/.test(l)));
 
-/* ---- session review (Applicant): three defects ---- */
+/* ---- Applicant-shaped runs: three ways a block goes missing or mistyped ---- */
 // #1 — List page block must NOT silently vanish when the section chain wasn't gathered (bundle returned
 // sectionLayerCount:0 because it derives the section name from the entity, not the page prefix).
 // A section migration (mini page present) still renders the List page block, flagging the un-gathered section.

@@ -76,6 +76,14 @@ MARKERS = (
             # must OPEN on the name and CLOSE on ``review``, so an aside that
             # merely mentions one ("(the review step runs last)") is left alone.
             r"|\(\s*[A-Z][a-z]{2,}(?:\s*[+&,]\s*[A-Za-z][\w.-]*)*\s+review\s*\)"
+            # The mirrored ordering, where the word leads and the handle
+            # closes the parenthesis - ``Review (m-dymytrova)``. Only the
+            # initial-and-surname shape counts here: that slot also carries
+            # the SCENARIO a check covers ("review (anti-vacuity)"), an
+            # entity name ("review (Applicant)") or a plain qualifier
+            # ("review (alias)"), each of which states a rule.
+            r"|(?i:\breview)\s*\(\s*[a-z]{1,2}-[a-z]{3,}"
+            r"(?:\s*[+&,]\s*[A-Za-z][\w.-]*)*\s*\)"
         ),
     ),
     # "used to" is history only in the active voice: "X used to be Y". The passive
@@ -415,6 +423,7 @@ class CommentHygieneTests(unittest.TestCase):
                 "// Raised by KAMIL-MIKOSZ-CREATIO on the parity run.",
                 "// CI jobs (Alexandr review): the ustar reader.",
                 "// The gate (Alexandr + m-dymytrova review) reads the rows.",
+                "# Review (m-dymytrova) - the fixtures are exempt.",
             ],
             "history_narrative": [
                 "// Before the fix the label-only fallback matched.",
