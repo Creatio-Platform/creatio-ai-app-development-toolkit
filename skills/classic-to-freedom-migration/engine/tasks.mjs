@@ -2176,14 +2176,16 @@ function closedByDecision(meta, rows, outcomes) {
   const map = parseDecisionsMap(meta?.decisions);
   if (!map || !map.size) return false;
   const keys = rowKeys(rows.map((r) => r.label));
-  let accounted = 0;
+  if (!rows.length) return false;
   for (let i = 0; i < rows.length; i++) {
     const mark = outcomes?.get(keys[i]);
-    if (!mark) continue;
-    accounted++;
+    // EVERY row must be accounted for, blanks included. A round where a decision closed one row and the agent
+    // recorded nothing on the rest is a HALF-RECORDED round, not a decided one: its remaining rows are still
+    // somebody's work, and treating it as decided would exempt a round that was in fact attempted.
+    if (!mark) return false;
     if (mark.outcome === O_BUILT || !map.has(i + 1)) return false;
   }
-  return accounted > 0;
+  return true;
 }
 function repairRounds(existing) {
   const rounds = new Map(), openRounds = new Map();
@@ -2195,19 +2197,27 @@ function repairRounds(existing) {
     // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
     const status = computeStatus({ rows }, declaredNow(e.meta), e.outcomes,
       carriedOf(e.meta), statusEditedIn(e.meta));
-    // The two maps answer different questions, so a decision-closed round belongs in exactly one of them.
-    // `rounds` is the CAP counter — how many tries this page has spent on this KIND of row — and a round nobody
-    // ran spent nothing; leaving it in costs the page one of its three tries and parks it early, which is what
-    // AC 10 forbids. `openRounds` answers "is the previous round still somebody's work?", and a decision-closed
-    // round IS finished, so it must stay there (and in ROUND_ATTEMPTED) — taking it out would hold the cause
-    // pending forever, the trap the comment on `partial` below already records.
+    // `rounds` carries TWO facts that must not be conflated: the highest round NUMBER this (page, kind) has
+    // reached, which is what the next file is named and identified by, and how many ATTEMPTS have been spent
+    // against `REPAIR_ROUND_CAP`. A decision-closed round is not an attempt — nobody ran it — but it did take
+    // its number, and a repair task's id is derived from `(page, cause, round, chunk)` with no reference to its
+    // rows. Dropping the entry to spare the cap therefore re-issued round 1, minted the id of the file already
+    // on disk, and `syncRepairDir` skipped the write: the page's still-open rows were never routed again. So the
+    // number always advances and only `attempts` is withheld.
+    // `openRounds` answers a third question — "is the previous round still somebody's work?" — and a
+    // decision-closed round IS finished, so it stays there (and `wont-do` stays in ROUND_ATTEMPTED). Taking it
+    // out would hold the cause pending for ever, the trap the comment on `partial` below already records.
     const decisionClosed = closedByDecision(e.meta, rows, e.outcomes);
-    for (const [map, key] of [[rounds, capKey(e.meta.pageKey, e.meta.cause)],
-      [openRounds, `${e.meta.pageKey} ${e.meta.cause || ""}`]]) {
-      if (map === rounds && decisionClosed) continue;
-      const prev = map.get(key);
-      if (!prev || n >= prev.round) map.set(key, { round: n, status });
-    }
+    const capk = capKey(e.meta.pageKey, e.meta.cause);
+    const prevCap = rounds.get(capk);
+    rounds.set(capk, {
+      round: Math.max(prevCap?.round || 0, n),
+      attempts: (prevCap?.attempts || 0) + (decisionClosed ? 0 : 1),
+      status: !prevCap || n >= prevCap.round ? status : prevCap.status,
+    });
+    const ownKey = `${e.meta.pageKey} ${e.meta.cause || ""}`;
+    const prevOwn = openRounds.get(ownKey);
+    if (!prevOwn || n >= prevOwn.round) openRounds.set(ownKey, { round: n, status });
   }
   return { rounds, openRounds };
 }
@@ -2231,8 +2241,10 @@ const ROUND_ATTEMPTED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_PARTIAL]
 // hold a cause pending — its rows are the work of a round that is still somebody's.
 function nextRound(cap, own) {
   if (own && !ROUND_ATTEMPTED.has(own.status)) return { hold: "pending", round: own.round, status: own.status };
+  // The NUMBER always continues from the highest one used, so a new file can never collide with one on disk.
+  // The CAP counts attempts only, so a round a person closed by decision does not spend one of the three.
   const round = (cap?.round || 0) + 1;
-  return round > REPAIR_ROUND_CAP ? { hold: "parked", round } : { hold: null, round };
+  return (cap?.attempts || 0) >= REPAIR_ROUND_CAP ? { hold: "parked", round } : { hold: null, round };
 }
 
 export function buildRepairTasks(result, verifyPages = {}, opts = {}, existing = []) {
