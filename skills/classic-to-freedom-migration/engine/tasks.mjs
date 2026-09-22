@@ -39,7 +39,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY } from "./designspec.mjs";
-import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "./split.mjs";
+import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit, rowKey } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -55,6 +55,21 @@ export const TASK_ORIGIN_ORCHESTRATOR = "orchestrator";
 // The two origins a task file may declare: the engine authored it from the plan, or the orchestrator added it.
 export const TASK_ORIGINS = [TASK_ORIGIN_ENGINE, TASK_ORIGIN_ORCHESTRATOR];
 export const TASK_INDEX_FILE = "index.md";
+
+// WHY a task set was refused, because the remedies differ and an operator acts on the remedy, not on the banner.
+// The split could not be READ (fix its syntax); it reads but does not RESOLVE, naming work the plan lacks or
+// claiming a row twice (fix the offending entry); it resolves but does not COVER the plan (place the named rows,
+// or stop supplying the file at all); the engine's own cut does not cover the plan (a defect in the slicer, which
+// no file the operator holds can correct).
+export const REFUSED_UNREADABLE = "split-unreadable";
+export const REFUSED_UNRESOLVED = "split-unresolved";
+export const REFUSED_COVERAGE = "split-coverage";
+export const REFUSED_CUT = "engine-cut";
+
+// WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
+// frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
+export const SPLIT_HANDED = "handed";
+export const SPLIT_FROZEN = "frozen";
 const OPEN_STATUSES = new Set([S_TODO, S_IN_PROGRESS, S_BLOCKED]);
 // The two words the engine writes as a task moves through the queue, as opposed to a verdict about its rows.
 const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
@@ -381,8 +396,9 @@ function artifactRows(groups, B) {
 
 // THE TASK SET. `planVersion` is the engine's own plan version — the string a `decisions.md` approval names — so a
 // task folder can always be matched against the plan that was approved rather than the plan that exists now.
-export function buildTaskSet(result, opts = {}) {
-  const groups = checklistGroups(result, opts);
+// `groups` is a parameter so a caller that already derived them — `taskSetFor`, which then checks the cut
+// against them — does not walk the plan twice for one answer.
+export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
   const B = budgetOf(opts);
@@ -1205,9 +1221,8 @@ function attentionLines(set) {
   // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
   // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
   out.push(...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch));
-  // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
-  // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
-  // is exactly the judgement the split file records.
+  // An item whose work has left the plan: a FROZEN split met by a plan that moved, and not the engine's to
+  // resolve — whether anything that item built is still needed is a judgement only its author can make.
   for (const p of set.problems || []) out.push(`- ${p}`);
   for (const b of set.blocked || []) {
     out.push(`- \`${b.file}\` — NOT READ and NOT WRITTEN: ${b.reason}. Its task got no file this run, and this file was`
@@ -1810,11 +1825,24 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   const identity = pageIdentities(result);
   const B = budgetOf(opts);
   const resolved = resolveSplit(split, groups, identity);
-  const { emptied, added } = reconcile(resolved);
+  const { emptied } = reconcile(resolved);
   const problems = splitProblems({ errors: resolved.errors, unplaced: resolved.unplaced, emptied });
   // A split that does not resolve is REFUSED, not partially honoured: a folder built from half a split schedules
   // some of the plan and silently drops the rest, which is the failure the coverage check exists to prevent.
-  if (resolved.errors.length) return { refused: true, problems, tasks: [], planVersion: result.planVersion || null };
+  // A row claimed by NO item refuses on the same terms — it is work nobody is scheduled to do, and the engine
+  // picks no owner for it: which item a row belongs to is the judgement the split records.
+  //
+  // FATAL MID-BUILD TOO, DELIBERATELY. A plan that gains a row under a frozen split stops an in-flight folder:
+  // `--next`, `--start`, the sync and the repair rounds all refuse until the row is placed. Nothing is written
+  // and no file is touched, so the recorded work survives — and a queue that keeps handing out tasks while part
+  // of the plan is scheduled to nobody is the state this check exists to end. An item EMPTIED by the same drift
+  // is not fatal: it names work already done, not work still owed.
+  if (resolved.errors.length || resolved.unplaced.length) {
+    // Split by REMEDY: a malformed entry is fixed in the file it came from, an unclaimed row is placed. Only the
+    // second is new here, and only it wants the coverage wording.
+    const refusal = resolved.errors.length ? REFUSED_UNRESOLVED : REFUSED_COVERAGE;
+    return { refused: true, refusal, problems, tasks: [], planVersion: result.planVersion || null };
+  }
 
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
@@ -1866,7 +1894,6 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
-    added,
     emptied,
     tasks: withDependencies([...refsChunk, ...tasks]),
   };
@@ -2148,17 +2175,72 @@ export function freezeSplit(dir, text) {
   fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
 }
 
+// EVERY PLAN ROW IS CLAIMED BY EXACTLY ONE TASK ROW. Matching is scoped PER PAGE, the way `planIndex` scopes the
+// split's: two pages each carry a `Quality gates` row worded identically, so a global count would let a row
+// placed under the wrong page cancel out against the page it was taken from and pass the check. The row's OWN
+// page is what is keyed — a collapsed whole-run task is `pageKey: "run"` while its rows keep their groups'.
+// `REFS_GROUP` rows are engine-authored rather than plan deliverables, and a collapsed run drops them
+// altogether, so they are counted on neither side. Occurrences are matched as a multiset: a label the plan
+// carries twice needs two task rows, not one.
+export function unclaimedPlanRows(tasks, groups) {
+  const slotKey = (pageKey, label) => `${pageKey}|${rowKey(label)}`;
+  // Slots hold the ROW, not a count: what is left over has to be reportable as the row a reader saw in the plan.
+  const held = new Map();
+  for (const t of tasks) {
+    for (const r of t.rows || []) {
+      if (r.group === REFS_GROUP) continue;
+      const row = { pageKey: r.pageKey || t.pageKey, label: r.label };
+      const k = slotKey(row.pageKey, row.label);
+      if (!held.has(k)) held.set(k, []);
+      held.get(k).push(row);
+    }
+  }
+  const unplaced = [];
+  for (const g of groups) {
+    for (const r of g.rows) {
+      const slot = held.get(slotKey(g.pageKey, r.label));
+      if (slot?.length) slot.pop();
+      else unplaced.push({ pageKey: g.pageKey, label: r.label });
+    }
+  }
+  // What is left over is a task row backed by no plan row — the other half of "exactly one", and the same defect
+  // seen from the other side.
+  return { unplaced, surplus: [...held.values()].flat() };
+}
+
+// The mechanical cut answers to the same rule as a split file, but a row it drops is a defect in the slicer
+// rather than a file anybody can correct, so it is named as one.
+function cutProblems({ unplaced, surplus }) {
+  const say = (r) => `\`${r.pageKey}\`: ${JSON.stringify(String(r.label).slice(0, 90))}`;
+  const out = unplaced.map((u) => `plan row on ${say(u)} reached no task`
+    + " — the mechanical cut dropped it; nobody is scheduled to build it.");
+  for (const s of surplus) out.push(`task row on ${say(s)} is backed by no plan row — the mechanical cut invented it.`);
+  return out;
+}
+
 // The cut this run uses: the one just handed in, else the one frozen in the folder, else none — and none means
 // the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
 // fall does not matter.
 export function taskSetFor(dir, result, opts = {}, split = null) {
   const frozen = split ? null : readFrozenSplit(dir);
   if (frozen?.errors?.length) {
-    return { refused: true, planVersion: result.planVersion || null, tasks: [],
+    return { refused: true, refusal: REFUSED_UNREADABLE, planVersion: result.planVersion || null, tasks: [],
       problems: frozen.errors.map((e) => `${SPLIT_FILE} ${e}`) };
   }
   const use = split || frozen?.split || null;
-  return use ? buildTaskSetFromSplit(result, use, opts) : buildTaskSet(result, opts);
+  if (use) {
+    const set = buildTaskSetFromSplit(result, use, opts);
+    // Only this frame knows WHICH file the cut came from: below it the two collapse into one argument, and a
+    // refusal has to name the file the operator can actually open.
+    return set.refused ? { ...set, splitSource: split ? SPLIT_HANDED : SPLIT_FROZEN } : set;
+  }
+  // ONE derivation of the groups, shared with the slicer: `taskSetFor` sits on the sync, read, start, repair and
+  // report paths, and the check compares against exactly the rows the cut was made from.
+  const groups = checklistGroups(result, opts);
+  const set = buildTaskSet(result, opts, groups);
+  const problems = cutProblems(unclaimedPlanRows(set.tasks, groups));
+  if (problems.length) return { ...set, refused: true, refusal: REFUSED_CUT, tasks: [], problems };
+  return set;
 }
 
 // ---8<--- THE CLOCK: what has started, what it cost, and what the next one will cost ---8<---

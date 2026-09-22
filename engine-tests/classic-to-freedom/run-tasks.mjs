@@ -19,7 +19,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, REFUSED_COVERAGE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1080,21 +1080,21 @@ check("split: a row the plan does NOT have is REFUSED — a split naming work th
     const set = buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /claims a row the plan does not have/.test(p));
   }, () => buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS).problems);
-check("split: a plan row in NO item is REPORTED by name and the engine picks no owner — which item a row belongs to is exactly the judgement the split records, so guessing would undo the point of having one",
+check("split: a plan row in NO item is REFUSED and named, and the engine picks no owner — a row nobody claims is work nobody is scheduled to do, and which item it belongs to is exactly the judgement the split records",
   () => {
     const set = buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS);
-    return !set.refused && set.added.length === 1
+    return set.refused && set.tasks.length === 0
       && set.problems.some((p) => /is in NO item/.test(p) && /will not pick an owner/.test(p));
   }, () => buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS).problems);
-check("split: the unplaced row reaches the INDEX too — a caller who reads the folder rather than the command output must meet the same gap",
+check("split (anti-vacuity): the SAME split with that row restored resolves and builds — the refusal above is the unclaimed row, not the fixture",
   () => {
-    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), []));
-    return /## Attention/.test(idx) && /is in NO item/.test(idx);
-  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), [])));
+    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
+    return !set.refused && set.tasks.length > 0;
+  }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems);
 check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
   () => {
     const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
-    return !set3.refused && set3.added.length === 0
+    return !set3.refused && set3.problems.length === 0
       && rowKey("Fields — 19 expected") === rowKey("Fields — 20 expected");
   }, () => buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems);
 check("split: an item left with NO rows by a changed plan is reported and KEPT, never deleted — its file may hold the only record of work already done on a stand",
@@ -1313,6 +1313,28 @@ check("split: NO split file falls back to the engine's own budget slicer — a p
     fs.rmSync(dir, { recursive: true, force: true });
     return !set.split && set.tasks.length === SET.tasks.length;
   });
+// The reference cache is engine-authored and counted on neither side, so the fault is injected into a task that
+// holds PLAN rows.
+const planCarrier = SET.tasks.findIndex((t) => t.artifact !== ARTIFACT_REFS && t.rows.length);
+const dropOneRow = () => SET.tasks.map((t, i) => i === planCarrier ? { ...t, rows: t.rows.slice(1) } : t);
+const addOneRow = () => SET.tasks.map((t, i) => i === planCarrier
+  ? { ...t, rows: [...t.rows, { label: "Build the thing the plan forgot", group: t.rows[0].group }] } : t);
+check("the engine's own cut answers to the SAME rule as a split file: every plan row is claimed by exactly one task row, so a row the slicer drops refuses the run instead of going unbuilt",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(dropOneRow(), GROUPS);
+    return unplaced.length === 1 && surplus.length === 0
+      && unplaced[0].label === SET.tasks[planCarrier].rows[0].label;
+  }, () => unclaimedPlanRows(dropOneRow(), GROUPS));
+check("the same check names a task row NO plan row backs — the other half of `exactly one`, and the same defect seen from the other side",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(addOneRow(), GROUPS);
+    return unplaced.length === 0 && surplus.length === 1;
+  }, () => unclaimedPlanRows(addOneRow(), GROUPS));
+check("(anti-vacuity) the REAL cut of the real plan is clean under that check — the two refusals above are the injected fault, not a check that fires on everything",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(SET.tasks, GROUPS);
+    return unplaced.length === 0 && surplus.length === 0 && GROUPS.flatMap((g) => g.rows).length > 30;
+  }, () => unclaimedPlanRows(SET.tasks, GROUPS));
 
 console.log("\n===== a review waits for the page it judges, and may not precede a writer of it =====");
 // A late scaffolding item is legitimate; a review before a writer of its page never is — it would file a verdict
@@ -1529,6 +1551,36 @@ check("repair: with a FROZEN split in the folder, syncRepairDir regenerates the 
     fs.rmSync(dir, { recursive: true, force: true });
     return out;
   });
+// A frozen split meeting a plan that GAINED rows — the drift case, mid-build. Fatal by design, so what has to
+// hold is that it is fatal WITHOUT COST: the recorded work is still on disk and the refusal says what clears it.
+const driftedFolder = () => {
+  const dir = tmp("split-drift");
+  freezeSplit(dir, JSON.stringify(FULL_SPLIT));
+  syncTaskDir(dir, RUN, OPTS);
+  editFrontMatter(dir, FULL_SPLIT.items[0].id, "status", "done");
+  const before = fs.readdirSync(dir).sort();
+  // RUN5 adds handler rows and changes no existing label, so the split still RESOLVES and only its coverage
+  // falls short — the drift case proper, kept clear of the `claims a row the plan does not have` path.
+  const read = readMergedTaskDir(dir, RUN5, OPTS5);
+  const repair = syncRepairDir(dir, RUN5, VERIFY_PAGES, OPTS5);
+  const after = fs.readdirSync(dir).sort();
+  const kept = readTaskDir(dir).find((t) => t.id === FULL_SPLIT.items[0].id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { before, after, read, repair, kept };
+};
+check("frozen split + a plan that GAINED a row: an in-flight folder REFUSES until the row is placed — a queue that keeps handing out tasks while part of the plan is scheduled to nobody is the state this check exists to end",
+  () => {
+    const { read, repair } = driftedFolder();
+    return read.refused === true && read.tasks.length === 0
+      && read.refusal === REFUSED_COVERAGE
+      && read.problems.some((p) => /is in NO item/.test(p))
+      && repair.refused === true && repair.written.length === 0;
+  }, () => { const { read, repair } = driftedFolder(); return { read: read.problems, repair: repair.problems }; });
+check("…and that refusal costs NOTHING already recorded: every file survives and a task whose front matter said `done` still says `done`, so the drift is cleared by editing the split rather than by rebuilding the run",
+  () => {
+    const { before, after, kept } = driftedFolder();
+    return JSON.stringify(before) === JSON.stringify(after) && kept?.recordedStatus === "done";
+  }, () => { const { before, after, kept } = driftedFolder(); return { before, after, status: kept?.recordedStatus }; });
 check("repair: an UNREADABLE frozen split writes nothing at all — a folder repaired against a cut that cannot be parsed would be renumbered wholesale, which is the same reason a build run refuses it",
   () => {
     const dir = tmp("repair-bad-split");
@@ -2340,10 +2392,17 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
   const short = FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i);
   fs.writeFileSync(splitPath, JSON.stringify({ planVersion: RUN.planVersion, items: short }, null, 2));
   const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
-  check("migrate.mjs --split: an unplaced plan row does NOT block the folder but IS said on stdout — the work is schedulable, one row of it simply has no owner, and that has to be loud rather than fatal",
-    () => run.status === 0 && /are in NO item/.test(run.stdout || "")
-      && /will not pick an owner/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8")),
-    () => ({ stdout: run.stdout, idx: fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-500) }));
+  check("migrate.mjs --split: a row claimed by NOBODY writes NOTHING at all — a folder that schedules every row but one still leaves that row unbuilt, and nothing downstream measures a row no task holds",
+    () => /NOTHING WRITTEN/.test(run.stdout || "") && /is in NO item/.test(run.stdout || "")
+      && /will not pick an owner/.test(run.stdout || "")
+      && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: run.status, stdout: run.stdout, exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
+  check("migrate.mjs --split: that refusal names the file the operator PASSED, not a frozen one — nothing is frozen on a first cut and the folder does not exist yet, so `the frozen split in <dir>` would send them to edit a file that is not there",
+    () => /the split passed with --split does not cover this plan/.test(run.stdout || "")
+      && !/frozen split/.test(run.stdout || "")
+      && /drop --split to fall back/.test(run.stdout || "")
+      && !/Expected shape/.test(run.stdout || ""),   // it parsed and resolved; its coverage is short, not its shape
+    () => run.stdout);
   // A row claimed twice: refused, and NOTHING is written.
   const base2 = tmp("cli-split-dup");
   const dir2 = path.join(base2, "build-tasks");
@@ -2356,6 +2415,25 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
     () => /NOTHING WRITTEN/.test(bad.stdout || "") && /is claimed 2 times/.test(bad.stdout || "")
       && !fs.existsSync(path.join(dir2, TASK_INDEX_FILE)),
     () => ({ stdout: bad.stdout, exists: fs.existsSync(dir2) ? fs.readdirSync(dir2) : null }));
+  check("migrate.mjs --split: that refusal's remedy NAMES the file to fix — its cause line is the generic 'does not resolve', which mentions no file, so a bare `that file` would refer to nothing the reader has been shown",
+    () => /Fix the file you passed with --split and re-run/.test(bad.stdout || "")
+      && !/Fix that file/.test(bad.stdout || ""),
+    () => bad.stdout);
+  // A folder cut against one plan, met by a plan that GAINED rows. The split still PARSES — it simply no longer
+  // covers the plan — and the refusal has to say that, because the two are cleared by different edits.
+  const baseD = tmp("cli-split-drift");
+  const dirD = path.join(baseD, "build-tasks");
+  const splitD = path.join(baseD, "split.json");
+  fs.writeFileSync(splitD, JSON.stringify(FULL_SPLIT, null, 2));
+  cliTasks(["--tasks", dirD, "--split", splitD], MANIFEST);        // built against plan A
+  const drift = cliTasks(["--tasks", dirD], MANIFEST5);            // plan B gained handler rows
+  check("migrate.mjs: a frozen split met by a plan that GAINED rows names THAT as the cause and offers both remedies — 'could not be read' would send the operator to fix a file whose syntax is fine",
+    () => /NOTHING WRITTEN/.test(drift.stdout || "") && /no longer covers this plan/.test(drift.stdout || "")
+      && !/could not be read/.test(drift.stdout || "")
+      && /Place the named rows/.test(drift.stdout || "")
+      && /delete `?split\.json`? to fall back/.test(drift.stdout || ""),
+    () => drift.stdout);
+  fs.rmSync(baseD, { recursive: true, force: true });
   // A split cut against a DIFFERENT plan version.
   const base3 = tmp("cli-split-ver");
   const dir3 = path.join(base3, "build-tasks");

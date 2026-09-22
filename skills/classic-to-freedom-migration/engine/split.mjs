@@ -85,8 +85,8 @@ export function parseSplit(text) {
 // AND IT CAN REPEAT WITHIN ONE PAGE. `Quality gates` emits its row twice per page by design, and a split simply
 // CANNOT distinguish two rows whose text is identical — refusing the ambiguity made a correct split impossible to
 // write. So occurrences are SLOTS: an entry consumes the next unclaimed occurrence, and an item that means both
-// names the row twice. Naming it once claims one and leaves the other unplaced, which the coverage report then
-// says out loud — the row is not lost, it is reported as belonging to nobody.
+// names the row twice. Naming it once claims one and leaves the other unplaced, which refuses the run by name —
+// an occurrence belonging to nobody is a deliverable nobody is scheduled to build.
 function planIndex(groups) {
   const byPage = new Map();
   const byGroup = new Map();            // "page|group" -> rows in plan order
@@ -156,10 +156,10 @@ function claimRow(entry, pageKey, itemId, index) {
   return { row: free };
 }
 
-// RESOLVE the split against the plan as it is NOW. Two failures are refused and one is reported-but-survivable:
-//   - an entry matching NO plan row                  → refused: the split describes work the plan does not
-//   - a row claimed more often than the plan has it  → refused: the extra claim sends a second sub-agent
-//   - a plan row claimed by NO item                  → reported as `unplaced`; see `reconcile`
+// RESOLVE the split against the plan as it is NOW. Three failures, all refused:
+//   - an entry matching NO plan row                  → the split describes work the plan does not
+//   - a row claimed more often than the plan has it  → the extra claim sends a second sub-agent
+//   - a plan row claimed by NO item                  → collected as `unplaced`: work nobody is scheduled to do
 // Consume up to `take` rows of one group that no item has claimed yet. Walking the group in PLAN ORDER is what
 // makes `[50]` repeatable and predictable: the second claim continues where the first stopped, so a long group
 // cuts into consecutive chunks rather than an arbitrary selection.
@@ -334,17 +334,11 @@ const resolveWritesTo = (declared, identity) => {
 
 // A SPLIT FROZEN AGAINST ONE PLAN, MET BY A LATER ONE. Rows that left the plan simply stop resolving and the item
 // shrinks; an item left with NOTHING is reported rather than deleted, because its file may record work already
-// done on a stand. A row the plan has GAINED belongs to no item and is reported by name: the engine will not
-// choose an owner for it, because choosing is the judgement the split exists to record. Until someone places it,
-// it is work nobody is scheduled to do — which is exactly what has to be loud.
+// done on a stand — it names work behind the run, not work still owed. A row the plan has GAINED is the opposite
+// and refuses the run: see `unconsumed`.
 export function reconcile(resolved) {
   const emptied = resolved.items.filter((it) => !it.rows.length).map((it) => ({ id: it.id, title: it.title }));
-  const added = resolved.unplaced.map((u) => ({
-    pageKey: u.pageKey,
-    labels: u.rows.map((r) => r.label),
-    group: u.rows[0]?.group || "",
-  }));
-  return { emptied, added };
+  return { emptied };
 }
 
 // The message a caller acts on. Deliberately one text for the CLI and the index: a split refused on stdout and a

@@ -107,8 +107,10 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   report. A row budget cannot see any of it, and measured against a real plan it split a folded handler chain across
   two sub-agents. So the cut is made once, written down, validated and FROZEN into the folder: a row claimed twice,
   a row the plan does not have, or an item `id` that is not a slug of lower-case letters, digits and dashes within
-  49 characters is refused with nothing written; a plan row in no item is reported by name and the
-  engine picks no owner. Items sharing a `writesTo` are chained automatically. Three seams are checked rather than
+  49 characters, or a plan row left in no item, is refused with nothing written — and an unclaimed row is named by
+  page, with no owner picked for it. The mechanical cut answers to the same rule against its own output, where a
+  dropped row is a defect in the slicer rather than a file anybody can correct. Items sharing a `writesTo` are
+  chained automatically. Three seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
