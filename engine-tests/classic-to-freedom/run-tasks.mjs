@@ -5442,27 +5442,56 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
     fs.rmSync(base, { recursive: true, force: true });
   }
 
-  // ---- an old `declared: n/a` folder reads as UNRECOGNISED (loud fail, not silent coercion) ----------------
   {
     const base = tmp("legacy-na");
     const dir = path.join(base, "build-tasks");
     syncTaskDir(dir, RUN, OPTS);
-    // Find one plan task and edit its `declared:` line to the retired token.
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE);
+    check("ENG-99749 (AC 16) fixture: a task file was found to plant the retired token in",
+      () => files.length > 0, () => ({ files: files.length }));
     if (files.length) {
+      // `status:`, not `declared:`. The engine's loud path is `taskAttention`'s "unrecognised status" line and it
+      // fires on `status:` — the replaced check edited `declared:`, so it could not reach the behaviour AC 16
+      // names. It then asserted `!TASK_STATUSES.includes("n/a")`, which is a statement about an imported constant
+      // array that holds no matter what the engine does to the folder, plus the ABSENCE of a string, which passes
+      // equally if the value was reported, coerced, or silently dropped. Neither could fail for the reason the AC
+      // cares about. All three positive facts are asserted here instead.
       const f = path.join(dir, files[0]);
-      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared:.*$/m, "declared: n/a"));
-      const set = syncTaskDir(dir, RUN, OPTS);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status:.*$/m, "status: n/a"));
+      syncTaskDir(dir, RUN, OPTS);
       const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
-      check("ENG-99749 (AC 16) a folder still carrying `declared: n/a` reads as UNRECOGNISED — the word is no longer in DECLARABLE, so `declared:` is treated as empty and the file's raw `status:` word (whatever it holds) may land as unrecognised on the index — nothing is silently coerced",
-        () => {
-          const t = set.tasks.find((x) => x.file === files[0]);
-          // `n/a` in `declared:` is no longer honoured; task recomputes from its cells (all blank → carried),
-          // and the sub-agent facing prompt no longer offers `n/a` as an option.
-          return t && !TASK_STATUSES.includes("n/a")
-            && !/`declared: n\/a`/.test(idx);
-        },
-        () => ({ status: set.tasks[0]?.status, hasNaInIdx: /declared: n\/a/.test(idx) }));
+      const onDisk = fs.readFileSync(f, "utf8");
+      check("ENG-99749 (AC 16) a folder still carrying `status: n/a` FAILS LOUDLY — the index names the file under Attention with `unrecognised status `n/a``, prints the vocabulary it must use instead, and the word is left on disk verbatim rather than coerced to anything the engine would act on",
+        () => /## Attention/.test(idx)
+          && idx.includes("unrecognised status `n/a`")
+          && idx.includes(TASK_STATUSES.join(" / "))
+          && /^status: n\/a$/m.test(onDisk),
+        () => ({ attention: /## Attention/.test(idx), named: idx.includes("unrecognised status `n/a`"),
+          verbatim: /^status: n\/a$/m.test(onDisk),
+          attentionBlock: idx.split("## Attention")[1]?.slice(0, 300) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // The ROW-level half of AC 16, which had no check at all: `parseOutcome` no longer recognises `n-a`, so such a
+  // cell must read as UNACCOUNTED — it cannot close its row, and the task cannot compute a closed word over it.
+  // "Unaccounted" and "loudly rejected" look identical to a reader of a green suite unless this is pinned.
+  {
+    const base = tmp("legacy-na-row");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length >= 1 && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    check("ENG-99749 (AC 16) fixture: a plan task was found to plant the retired row token in",
+      () => !!t, () => ({ tasks: set.tasks.length }));
+    if (t) {
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "n-a — the old token"));
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 (AC 16) an Outcome cell still reading `n-a — <reason>` parses as UNACCOUNTED, never as a settled outcome — the retired token cannot close a row, and the task cannot read `done` or `not-applicable` over it",
+        () => !rr?.rows?.[0]?.outcomeKind
+          && !["done", "not-applicable", "wont-do"].includes(rr?.status),
+        () => ({ kind: rr?.rows?.[0]?.outcomeKind, cell: rr?.rows?.[0]?.outcome, status: rr?.status }));
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
