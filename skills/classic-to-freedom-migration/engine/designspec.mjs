@@ -218,6 +218,10 @@ function guidedSource(formTemplate) {
   return `⚠ resolve on-stand — read ${named}'s merged bundle (\`get-page\`) before writing:`
     + ` present → MERGE onto it, never a second element of the same name; absent → INSERT${GUIDANCE_ROUTE}`;
 }
+function nativeFeatureSource(guided, templateProvided, formTemplate) {
+  if (guided) return guidedSource(formTemplate);
+  return templateProvided ? "template-provided" : "native — confirm component on-stand";
+}
 function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
@@ -226,8 +230,7 @@ function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
     // the template supplies the container, the page still owes the configuration, and the cell has to say where
     // that is defined. For a guided feature the cell also has to stop asserting WHICH of the two paths applies.
     const guided = isList ? null : featureGuidanceId(s.feature);
-    const nativeSrc = guided ? guidedSource(formTemplate)
-      : (s.templateProvided ? "template-provided" : "native — confirm component on-stand");
+    const nativeSrc = nativeFeatureSource(guided, s.templateProvided, formTemplate);
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
