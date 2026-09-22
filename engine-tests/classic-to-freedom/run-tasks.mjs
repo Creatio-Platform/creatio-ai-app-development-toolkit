@@ -4903,7 +4903,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
       () => {
         const copy = tmp("next-ledger");
         fs.cpSync(src, copy, { recursive: true });
-        // Close a TODO task with no dispatch record: that is what the ledger audit fails on, and every task
+        // Close a still-open task with no dispatch record: that is what the ledger audit fails on, and every task
         // still open is then refused by the gate for the ledger rather than for its own cause.
         editFrontMatter(copy, a.startable[0].id, "status", "done");
         const led = answerOf(copy);
