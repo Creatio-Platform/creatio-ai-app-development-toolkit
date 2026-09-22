@@ -5244,6 +5244,29 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
 // coloured; and a folder still carrying the retired `n/a` reads as unrecognised and lands on Attention.
 // ============================================================================================================
 console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict =====");
+// The blocks below repeated two fixture shapes verbatim — a fresh folder plus the first plan task that suits the
+// block — which is also what the duplication gate reports over this file's new code. The PREDICATES are carried
+// across unchanged on purpose: they decide which task a block runs against, so tightening or merging them here
+// would quietly re-point assertions at a different task.
+const decideFixtureA = (label, minRows = 1) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.rows && x.rows.length >= minRows && !x.unread
+    && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+  return { base, dir, set, t };
+};
+const decideFixtureB = (label, md = null) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  return { base, dir, set, t };
+};
+
 {
   const decisionsMap = () => new Map([["D13", "descope the typed forms — Marharyta 2026-09-21"],
     ["D19", "defer dashboards to the next phase — Kateryna 2026-09-22"]]);
@@ -5311,11 +5334,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
 
   // ---- --decide --task closes every row of a task; the task computes wont-do -------------------------------
   {
-    const base = tmp("decide-task");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, t } = decideFixtureA("decide-task");
     if (t) {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         taskId: t.id, decisions: decisionsMap() });
@@ -5330,11 +5349,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
 
   // ---- --decide --postponed writes the destination into the cell -------------------------------------------
   {
-    const base = tmp("decide-postponed");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, t } = decideFixtureA("decide-postponed");
     if (t) {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
         destination: "ENG-12345", taskId: t.id, decisions: decisionsMap() });
@@ -5350,11 +5365,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
 
   // ---- --revoke undoes exactly the cells that D<N> wrote ---------------------------------------------------
   {
-    const base = tmp("revoke");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, t } = decideFixtureA("revoke");
     if (t) {
       applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         taskId: t.id, decisions: decisionsMap() });
@@ -5374,11 +5385,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
   // "every row is blank" both hold for an implementation that blanks the whole folder, which is the very
   // failure the `decisions:` provenance map exists to prevent.
   {
-    const base = tmp("revoke-identity");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length >= 3 && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, set, t } = decideFixtureA("revoke-identity", 3);
     // Without this, a finder that stops resolving turns every assertion below into a silent skip and the suite
     // still reports green.
     check("ENG-99749 (review RC-6) fixture: a task with three or more rows was found to revoke against",
@@ -5415,11 +5422,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
   // other mark by label, so one inserted or dropped row upstream is all it takes to produce this state — and a
   // revoke that trusted the number would destroy a `built` record to undo a decision that never wrote it.
   {
-    const base = tmp("revoke-stale-map");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length >= 2 && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, set, t } = decideFixtureA("revoke-stale-map", 2);
     check("ENG-99749 (review RC-6) fixture: a task with two or more rows was found for the stale-map check",
       () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
     if (t) {
@@ -5477,11 +5480,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
   // cell must read as UNACCOUNTED — it cannot close its row, and the task cannot compute a closed word over it.
   // "Unaccounted" and "loudly rejected" look identical to a reader of a green suite unless this is pinned.
   {
-    const base = tmp("legacy-na-row");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.rows && x.rows.length >= 1 && !x.unread
-      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    const { base, dir, set, t } = decideFixtureA("legacy-na-row", 1);
     check("ENG-99749 (AC 16) fixture: a plan task was found to plant the retired row token in",
       () => !!t, () => ({ tasks: set.tasks.length }));
     if (t) {
@@ -5562,12 +5561,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
     const { parseTaskFile: parse, readTaskDir: rtd } = { parseTaskFile, readTaskDir };
     // Guard A: a plain "wont-do — I don't feel like building this" cell (no parens, no D<N>).
     // parseOutcome must downgrade it to `not-built — needs-decision`, keeping the row open.
-    const base = tmp("m1-handtyped-bare");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    const { base, dir, t } = decideFixtureB("m1-handtyped-bare");
     if (t) {
       const fp = path.join(dir, t.file);
       // Hand-edit: put an unauthorised closure in row 1's Outcome cell (no D<N> marker).
@@ -5594,12 +5588,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
     // engine writes both together through `--decide`, so the missing map entry is the tell). parseOutcome
     // accepts it as `wont-do`, but the Attention pass names the file and decidedRowKeys keeps the row in
     // the verify list — the second guard behind the first.
-    const base = tmp("m1-handtyped-spoof");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    const { base, dir, t } = decideFixtureB("m1-handtyped-spoof");
     if (t) {
       const fp = path.join(dir, t.file);
       // Hand-edit: write a plausible closure with fake D<N> — but never run --decide, so `decisions:` stays empty.
@@ -5622,17 +5611,7 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
   // A row the registry has closed by decision must not appear in --verify's table, its verdict, or its
   // pages map — even if the built payload is empty (so the plan walk alone would report it MISSING).
   {
-    const base = tmp("verify-from-registry");
-    const dir = path.join(base, "build-tasks");
-    const set = syncTaskDir(dir, RUN, OPTS);
-    // Address every non-boundary row of a chosen page. --pages descope is the ticket's headline case
-    // (D13 dropped 14 typed forms in the recorded ENG-99135 run), so it also exercises the intended
-    // addressing mode end-to-end.
-    // A plan task, not the engine's own reference-cache task (whose rows are internal and never verified
-    // against the stand). Boundary rows are also excluded — the plan already pre-fills them.
-    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    const { base, dir, t } = decideFixtureB("verify-from-registry");
     if (t) {
       const closedLabel = t.rows[0].label;
       const decisions = new Map([["D42", "descoped for AC 12 test"]]);
