@@ -2182,9 +2182,11 @@ export function freezeSplit(dir, text) {
 // `REFS_GROUP` rows are engine-authored rather than plan deliverables, and a collapsed run drops them
 // altogether, so they are counted on neither side. Occurrences are matched as a multiset: a label the plan
 // carries twice needs two task rows, not one.
-export function unclaimedPlanRows(tasks, groups) {
-  const slotKey = (pageKey, label) => `${pageKey}|${rowKey(label)}`;
-  // Slots hold the ROW, not a count: what is left over has to be reportable as the row a reader saw in the plan.
+const slotKey = (pageKey, label) => `${pageKey}|${rowKey(label)}`;
+
+// The task side as SLOTS, holding the row rather than a count: what is left unmatched has to be reportable as
+// the row a reader saw in the plan, not as a key they would have to decode.
+function claimedSlots(tasks) {
   const held = new Map();
   for (const t of tasks) {
     for (const r of t.rows || []) {
@@ -2195,6 +2197,11 @@ export function unclaimedPlanRows(tasks, groups) {
       held.get(k).push(row);
     }
   }
+  return held;
+}
+
+export function unclaimedPlanRows(tasks, groups) {
+  const held = claimedSlots(tasks);
   const unplaced = [];
   for (const g of groups) {
     for (const r of g.rows) {

@@ -60,7 +60,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3000,7 +3000,8 @@ function refusalRemedy(set) {
   }
   // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
   if (set.refusal === REFUSED_UNRESOLVED) {
-    return ` Fix ${handedIn(set) ? `the file you passed with ${SPLIT_FLAG}` : SPLIT_FILE} and re-run.`;
+    const which = handedIn(set) ? `the file you passed with ${SPLIT_FLAG}` : SPLIT_FILE;
+    return ` Fix ${which} and re-run.`;
   }
   return ` Fix or remove ${SPLIT_FILE}.`;
 }
