@@ -78,13 +78,32 @@ function decisionFallback(notes, n) {
 }
 
 // --- decisions.md / plan.md Adjustments: what a reason's `D<N>` / `Adjustment N` points at --------------------
+// A decision title from whatever cell/line carried it: prefer a bold lead (`**Section boundary — …**`), else the
+// text up to its first sentence; markdown emphasis and leading separators stripped, capped so a whole table cell
+// does not become the title.
+function decisionTitle(raw) {
+  let t = String(raw || "").trim();
+  const bold = /\*\*(.+?)\*\*/.exec(t);
+  if (bold) t = bold[1];
+  t = t.replace(/\*\*/g, "").replace(/`/g, "").replace(/^[\s—–:.|-]+/, "").replace(/\s+/g, " ").trim();
+  const dot = t.search(/\.(\s|$)/);
+  if (dot >= 15) t = t.slice(0, dot);
+  return t.trim().slice(0, 120).trim();
+}
 function readDecisions(migrationDir) {
   const out = new Map();
+  const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
+    // The three shapes `references/migration-documentation.md` sanctions, in priority per line (F13 — the parser
+    // used to accept only the heading, so a decision written as a table row or a plain dated line read as "not
+    // found" and its boundary was wrongly reported unbacked): a markdown HEADING (`## D1 — …`), a TABLE ROW
+    // (`| D1 | **title** | … |`, the shape the doc's own example uses), or a plain LINE (`D1 — …` / `D1: …`).
     for (const dl of text.split(/\r?\n/)) {
-      const dm = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
-      if (dm) out.set(`D${dm[1]}`, dm[2].replace(/^[\s—–:.-]+/, "").trim());
+      let m = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl)             // heading
+        || /^\s*\|\s*D(\d+)\s*\|\s*([^|]+?)\s*\|/.exec(dl)   // table row — second cell is the title
+        || /^\s*D(\d+)\b\s*[—–:.)-]?\s*(.+)$/.exec(dl);      // plain line
+      if (m) add(m[1], m[2]);
     }
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {

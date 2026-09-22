@@ -3835,7 +3835,7 @@ export function resolveVmAttrVk(vk, ctx) {
   // with a virtual attribute whose payload predates the reads contract — a false hard block, not a false green.
   if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
   if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
-  if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  if (ctx.ops.some((o) => o.name === vk.name || o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
   return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
 }
 // The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
@@ -3916,7 +3916,12 @@ function resolveLayoutTab(vk, ctx, judge) {
     .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
   const tab = cand[0]?.c;
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabList}`, "unverified"];
+  // No word match is NON-gating (F17): a built tab's caption is usually an unresolved `#ResourceString(<key>)#`
+  // macro (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template
+  // renames tabs ("Basic information" → `GeneralInfoTab`). The page-wide Fields / Related-lists rows already gate
+  // the CONTENT; which tab holds it is a placement fact to confirm on the stand, never a machine failure that
+  // spawns a repair task against a correctly built page.
+  if (!tab) return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words (tab captions are often localized \`#ResourceString#\` macros or renamed by the Freedom template) — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
   ctx.claimedContainers.add(tab.name);
   return judge(tab, `in tab \`${esc(tab.name)}\``);
 }
@@ -4002,7 +4007,16 @@ function walkViewConfig(node, out = []) {
     const attr = boundAttributeOf(node);
     out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
   }
-  return walkViewConfig(node.items, out);
+  // Recurse into EVERY nested array/object child, not only `items`. Native controls — menu items, toolbar buttons,
+  // card actions — live under other keys (`menuItems`, `menu`, `actions`, …); walking `items` alone made them
+  // invisible (F15: `resolveCardNativeVk` could not see `ReloadDataMenuItem`, so a built Reload control read as
+  // missing). `columns` is skipped: it is grid DATA read separately (columnsOf / findGridNodes), not page components.
+  for (const k of Object.keys(node)) {
+    if (k === "columns") continue;
+    const v = node[k];
+    if (v && typeof v === "object") walkViewConfig(v, out);
+  }
+  return out;
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
 // DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
@@ -4081,7 +4095,7 @@ function reachabilityValue(root, key) {
   const v = root?.reachability?.[key];
   return v === undefined ? root?.[key] : v;
 }
-const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|PhoneInput|EmailInput)$/;
 // ONE ctx per page (D8). It carries BOTH this page's record and the payload ROOT: `placement` and every
 // count/structural check read the PAGE (so a child's field count can never be closed by the parent's
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
@@ -4090,7 +4104,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
 // what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
 // matched loosely by the caption words the plan published.
-const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput|PhoneInput|EmailInput)$/;
 const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
 function collectLayout(node, acc) {
   if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
