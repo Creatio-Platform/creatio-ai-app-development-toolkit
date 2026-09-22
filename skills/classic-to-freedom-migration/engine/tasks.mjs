@@ -56,6 +56,8 @@ export const TASK_ORIGIN_ORCHESTRATOR = "orchestrator";
 export const TASK_ORIGINS = [TASK_ORIGIN_ENGINE, TASK_ORIGIN_ORCHESTRATOR];
 export const TASK_INDEX_FILE = "index.md";
 const OPEN_STATUSES = new Set([S_TODO, S_IN_PROGRESS, S_BLOCKED]);
+// The two words the engine writes as a task moves through the queue, as opposed to a verdict about its rows.
+const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
 // The outcome of ONE deliverable, written by the agent into its row; this is what the status is computed from.
 // A cause is required on `not-built` and is a fixed token — prose goes under `## Notes`, which a table cell
 // cannot hold without breaking.
@@ -558,8 +560,50 @@ function pageIdentities(result) {
 
 // ---8<--- THE TASK FILE ---8<---
 
-const FRONT_MATTER_KEYS = ["id", "status", "origin", "pageKey", "group", "order", "planVersion", "rowsDigest",
-  "writesTo", "dependsOn", "stopGate", "agentNonce"];
+// TWO FIELDS, TWO OWNERS. `declared` is the agent's only status input and holds `blocked`, `n/a` or nothing.
+// `status` is the engine's output; nobody else writes it.
+const FRONT_MATTER_KEYS = ["id", "status", "statusFrom", "declared", "origin", "pageKey", "group", "order",
+  "planVersion", "rowsDigest", "writesTo", "dependsOn", "stopGate", "agentNonce"];
+// The whole of the agent's status vocabulary. `n/a` closes a task with no builder and is earned by the reason
+// under `## Notes` the dispatch gate reads. `blocked` halts dependents; nothing is ever derived over either.
+const DECLARABLE = new Set([S_BLOCKED, S_NA]);
+// What the agent declared.
+const declaredOf = (meta = {}) => {
+  const d = String(meta.declared ?? "").trim();
+  if (DECLARABLE.has(d)) return d;
+  // A DECLARABLE WORD IN `status:` IS STILL A DECLARATION WHEN THE ENGINE DID NOT PUT IT THERE. Two shapes:
+  // a file with no `declared:` field at all (a folder written before it existed), and one whose `status:` no
+  // longer matches its stamp, which means somebody typed that word. Losing this reads a halt as a partial and
+  // walks the queue past a deliberate stop.
+  // The stamp is what keeps clearing a halt working: when `declared:` is emptied the engine's own
+  // `status: blocked` still MATCHES its stamp, so it is not re-read as a fresh declaration.
+  if (!DECLARABLE.has(meta.status)) return "";
+  return meta.declared === undefined || statusEditedIn(meta) ? meta.status : "";
+};
+
+// A RE-OPEN RETIRES A STALE DECLARATION. `declared:` outranks the cells, so nothing else retires it and the next
+// write puts the caller's `status: todo` back to `blocked`. A LIFECYCLE word edited into `status:` is the caller
+// reopening the task, and it retires the declaration. A CLOSING word does not: that is the claim this derivation
+// refuses. The engine writes `status: blocked` beside `declared: blocked` itself, matching its stamp, so its own
+// word never reads as a re-open.
+// A FILE WRITTEN BEFORE `declared:` AND `statusFrom:` EXISTED. Read off the shape, by every reader, so the
+// dispatch gate reaches one verdict whether the folder was just written or is only being read.
+const legacyShapeOf = (meta = {}) => meta.declared === undefined && meta.statusFrom === undefined;
+
+const declaredNow = (meta = {}) => {
+  const declared = declaredOf(meta);
+  if (!declared) return "";
+  return statusEditedIn(meta) && OPEN_LIFECYCLE.has(meta.status) ? "" : declared;
+};
+
+// `status:` was written after the engine last derived a word: the stamp it left does not match the word.
+// An unstamped file (written before the stamp existed) is never "edited" - there is nothing to compare against.
+const statusEditedIn = (meta = {}) =>
+  !!(meta.statusFrom && meta.statusFrom !== statusStamp(meta.status || S_TODO));
+// The word the engine last wrote, which stands wherever the cells cannot answer — the lifecycle states
+// (`todo`, `in-progress`) among them. An unrecognised word is carried, not folded into `todo`: re-opening a task
+// on a typo re-dispatches a sub-agent onto a page that is already built. It is reported on `## Attention`.
+const carriedOf = (meta = {}) => meta.status || S_TODO;
 // A repair task carries two more, and they are what the NEXT verify run reads: which cause it was opened for and
 // which round of it this is. Both live in the file because the folder is the state — counting rounds from a
 // session's memory is how a capped cause quietly gets a fourth sub-agent.
@@ -574,7 +618,13 @@ const coverKey = (label) => shortHash(String(label || "").trim().toLowerCase().r
 
 function renderFrontMatter(task, set) {
   const v = {
-    id: task.id, status: task.status, origin: task.origin, pageKey: task.pageKey,
+    id: task.id, status: task.status,
+    // Over the status this render is about to write, so the stamp and the word always leave here agreeing.
+    statusFrom: statusStamp(task.status),
+    // The agent's field. Written back empty rather than omitted: its presence is what makes `status:` on this
+    // file the engine's own (see `declaredOf`).
+    declared: task.declared || "",
+    origin: task.origin, pageKey: task.pageKey,
     group: task.group, order: String(task.step ?? task.order), planVersion: set.planVersion || "",
     // The digest the STATUS was recorded against, not necessarily the current rows — see `carryOver`. Writing the
     // current one here would erase the drift warning on the first re-slice after the plan changed, which is the
@@ -695,13 +745,24 @@ function markersBlock() {
   ];
 }
 function outcomeBlock(repair = false) {
+  // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:` is
+  // the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only status
+  // input, and it holds nothing but `blocked` or `n/a`.
+  const statusRule = [
+    "- **Never write `status:`.** That field is the engine's, derived from the cells below. A closing word typed"
+      + " there is discarded and named on the index as an edit; `blocked` or `n/a` is honoured ONCE and then moved"
+      + " into `declared:` for you. Write it there yourself and it sticks. `declared:` takes exactly two words:",
+    "  - `declared: blocked` — halt the run. It stops the tasks that depend on this one, so it is the one word"
+      + " that must not be inferred from cells. Put the reason under `## Notes`.",
+    "  - `declared: n/a` — the whole task does not apply. The reason under `## Notes` is what earns it.",
+    "  - Leave it empty otherwise. Nothing else belongs in it.",
+  ];
   if (repair) {
     return [
-      "- **How you close this task:** fill the `Outcome` cell of EVERY row below, exactly as a build task does."
-        + " Do **not** set `status:` — the engine computes it from those cells. The two exceptions are `blocked`"
-        + " and `n/a`: those you DO write, and the engine never computes over them.",
+      "- **How you close this task:** fill the `Outcome` cell of EVERY row below, exactly as a build task does.",
+      ...statusRule,
       `  - \`${O_BUILT}\` — the row is on the stand now.`,
-      `  - \`${O_NOT_BUILT} — <cause>\`, cause being one of ${NOT_BUILT_CAUSES.map((c) => "`" + c + "`").join(" · ")}`
+      `  - \`${O_NOT_BUILT} — <cause>\`, cause being one of ${NOT_BUILT_CAUSES.map((c) => "`" + c + "`").join(" \u00b7 ")}`
         + " — you could not fix it. Say what it is waiting on under `## Notes`, against the row number.",
       `  - \`${O_NA} — <reason>\` — an approved boundary, and the reason says who approved it. It is not yours to`
         + " assert: a row open because the PLAN is wrong is a proposal under `## Notes`, not a row you close here.",
@@ -711,13 +772,10 @@ function outcomeBlock(repair = false) {
     ];
   }
   return [
-    "- **How you close this task:** fill the `Outcome` cell of EVERY row below. Do **not** set `status:` — the"
-      + " engine computes it from those cells and overwrites whatever the front matter says. The two exceptions"
-      + " are `blocked` and `n/a`: those you DO write, and the engine never computes over them. Use `blocked` to"
-      + " halt the run (it stops the tasks that depend on this one) and `n/a` when the whole task does not apply,"
-      + " each with the reason under `## Notes`.",
+    "- **How you close this task:** fill the `Outcome` cell of EVERY row below.",
+    ...statusRule,
     `  - \`${O_BUILT}\` — it is on the stand.`,
-    `  - \`${O_NOT_BUILT} — <cause>\`, cause being one of ${NOT_BUILT_CAUSES.map((c) => "`" + c + "`").join(" · ")}`
+    `  - \`${O_NOT_BUILT} — <cause>\`, cause being one of ${NOT_BUILT_CAUSES.map((c) => "`" + c + "`").join(" \u00b7 ")}`
       + " (`blocked` = the stand or a service was unreachable and a re-run may clear it; `needs-decision` ="
       + " anything only a person can settle — no Freedom equivalent, a scope question, a check you cannot run)."
       + " Put the reason under `## Notes` against the row number — the cell takes the token only, because a reason"
@@ -836,31 +894,48 @@ const tableCells = (line) => line.split(/(?<!\\)\|/);
 // table they land on the wrong column so nothing parses as a mark and that file stands on its recorded status
 // too. Neither shape reads a mark out of the wrong cell.
 const PLAN_LABEL_COL = 3, PLAN_OUTCOME_COL = 5;
-function headerColumns(lines) {
-  for (const line of lines) {
+function headerColumns(lines, headed = true) {
+  for (const [at_, line] of lines.entries()) {
     const cells = tableCells(line);
     if (cells.length < 3 || cells[1].trim() !== "#") continue;
     const at = (name) => cells.findIndex((c, i) => i > 1 && c.trim().toLowerCase() === name);
-    return { label: at("deliverable"), outcome: at("outcome") };
+    // THE FIRST HEADER THAT CARRIES AN `Outcome` COLUMN, not the first that starts with `#`. A body the engine
+    // did not write may lead with a prose table of its own (`| # | Field | Type |`), and stopping there reports
+    // no outcome column for a file whose real table sits below it.
+    if (at("outcome") < 0) continue;
+    // READ-SIDE LENIENCY on the label column only. The engine writes `Deliverable`; a hand-written table that
+    // names the same column `Row` carries readable `Outcome` cells behind it, and refusing the whole table over
+    // the header word derives nothing from them. `Outcome` has no alias: without that column there is nothing to
+    // read either way, and such a file is named as an unreadable ledger.
+    const label = at("deliverable");
+    return { label: label < 0 ? at("row") : label, outcome: at("outcome"), at: at_ };
   }
-  return { label: PLAN_LABEL_COL, outcome: PLAN_OUTCOME_COL };
+  return headed ? { label: PLAN_LABEL_COL, outcome: PLAN_OUTCOME_COL, at: -1 } : { label: -1, outcome: -1, at: -1 };
 }
 
 // The rendered table read back in ORDER, so the read-only path (`--verify`) sees the same rows and numbers the
 // sub-agent saw and can name the unbuilt deliverable.
 function tableRows(bodyLines) {
   const out = [];
-  // Scoped to the Deliverables section. `## Notes` is the agent's, and agents write tables in it whose rows carry
-  // enough cells to look like a deliverables row; reading those would compute a status from a table the engine
-  // never wrote. A body carrying neither heading yields nothing.
+  // `## Notes` IS THE BOUNDARY THAT MATTERS. Notes are the agent's, and agents write tables in them whose rows
+  // carry enough cells to look like a deliverables row; reading those would derive a status from a table nobody
+  // meant as one. Everything BEFORE Notes is the task's own body.
+  // A body with no `## Deliverables` heading is read from its start: the table is still required to carry a `#`
+  // column and an `Outcome` column, which a prose table does not, so the filter is the header and not the
+  // heading. Without both columns this yields nothing and the file is named as an unreadable ledger.
   const from = bodyLines.findIndex((l) => l.trim() === ENGINE_BODY_HEADING);
-  if (from < 0) return out;
   const rest = bodyLines.slice(from + 1);
+  const headed = from >= 0;
   const to = rest.findIndex((l) => l.trim() === NOTES_HEADING);
   const lines = to < 0 ? rest : rest.slice(0, to);
-  const col = headerColumns(lines);
+  // THE PLAN POSITIONS ARE A FALLBACK FOR THE ENGINE'S OWN BODY, never for one it did not write. Applied to a
+  // headingless body they read columns 3 and 5 of whatever table is there, so a prose table parses as
+  // deliverables and derives a word from cells nobody meant as outcomes.
+  const col = headerColumns(lines, headed);
   if (col.label < 0 || col.outcome < 0) return out;
-  for (const line of lines) {
+  // ROWS BELOW THE HEADER THAT NAMED THE COLUMNS. A prose table above it has its own columns, and reading its
+  // rows through these indices turns `| 1 | Owner | Lookup |` into a deliverable nobody accounted for.
+  for (const line of lines.slice(col.at + 1)) {
     // Five cells, the first a bare ordinal.
     const cells = tableCells(line);
     if (cells.length <= col.outcome + 1 || !/^\s*\d+\s*$/.test(cells[1])) continue;
@@ -959,10 +1034,10 @@ function indexRows(tasks) {
   const L = ["| Step | Task | Page | Writes | Status | Dispatched | Rows | File |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const t of tasks) {
     const gatedNote = t.gatedRows ? ` (${t.gatedRows} gated)` : "";
-    // An adopted file's rows are counted off the file, because the engine never parsed them into `t.rows`.
-    const rows = t.origin === TASK_ORIGIN_ORCHESTRATOR
-      ? (t.adoptedRowCount ?? "—")
-      : `${t.rows.length}${gatedNote}`;
+    // An adopted file's rows are parsed, so they count like any other task's. `adoptedRowCount` is the fall-back
+    // for one whose table the engine could not read — `—` there, never `0`.
+    const unparsed = t.origin === TASK_ORIGIN_ORCHESTRATOR && !t.rows.length;
+    const rows = unparsed ? (t.adoptedRowCount ?? "—") : `${t.rows.length}${gatedNote}`;
     const mark = t.unread ? "⚠ unread" : statusMark(t.status);
     const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
     const gate = t.stopGate ? " ⏸ stop-gate" : "";
@@ -975,6 +1050,26 @@ function indexRows(tasks) {
 function taskAttention(t) {
   const out = [];
   if (t.unread) return out;   // its own refusal line already names the file; nothing here was recorded by anyone
+  // A `status:` THAT DID NOT COME FROM HERE: the stamp does not match, so the word was written after the
+  // engine last derived one. Reported, never honoured.
+  // THE SAME PREDICATE the report reads, called rather than restated: two copies of it drift apart in silence.
+  // `adoptedRowCount` counts the body's own ordinals, so the line distinguishes a file with no table from one
+  // whose table the scoped parser refused.
+  if (unreadableLedger([t]).length) {
+    const shape = t.adoptedRowCount
+      ? ` (the body lists ${t.adoptedRowCount} numbered row(s), but not in the engine's table shape)`
+      : "";
+    out.push(`- \`${t.file}\` — its \`## Deliverables\` table could not be read${shape},`
+      + ` so its \`status: ${t.status}\` is a word nobody derived and the run cannot close over it.`
+      + " Re-file it with `--tasks <dir> --add`, which writes the table for you.");
+  }
+  // A RE-OPEN IS THE DOCUMENTED REMEDY, not a word to warn about: `todo` / `in-progress` are lifecycle states
+  // the engine itself writes, and the derivation carries them through untouched.
+  if (t.statusEdited && !OPEN_LIFECYCLE.has(t.status)) {
+    out.push(`- \`${t.file}\` — its \`status:\` was edited after the engine wrote it; the engine derives`
+      + ` \`${t.status}\` from its \`Outcome\` cells and that is what stands. Record an outcome per row, or`
+      + " declare `blocked` / `n/a` in `declared:` — `status:` is not a field to write.");
+  }
   if (!TASK_STATUSES.includes(t.status)) {
     out.push(`- \`${t.file}\` — unrecognised status \`${t.status}\`: use one of ${TASK_STATUSES.join(" / ")}`);
   } else if (t.drifted) {
@@ -1090,6 +1185,11 @@ function attentionLines(set) {
     out.push(`- \`${it.task.file}\` row ${it.n} — recorded \`n-a\` on a row the plan did NOT mark N/A:`
       + ` ${it.row.label} (reason given: ${it.row.outcomeReason}). Nothing was built for it; confirm the boundary.`);
   }
+  for (const it of set.boundariesHeldBack || []) {
+    out.push(`- \`${it.task.file}\` — a verify run re-opened **${brief(it.row.deliverable)}**, which this run closed as`
+      + ` \`n-a\` with a reason: ${brief(it.reason, 160)}. NOT routed to a repair round — the decision stands unless`
+      + " you disagree with it. Confirm the boundary, or record the row as `not-built` to schedule the work.");
+  }
   for (const it of notBuiltOpenItems(set.tasks)) {
     let why;
     if (it.row?.naNoReason) why = "recorded `n-a` with NO reason — a row closed without building it needs one, so it counts as not built";
@@ -1152,14 +1252,38 @@ export function assertedBoundaryRows(tasks) {
   return out;
 }
 
+// THE ROWS A TASK STILL OWES — and the one place these guards live, so the collector and the residual
+// resolver cannot disagree about which rows are open.
+// SETTLED, not `partial`: a `done` owes its rows the same way, and filtering on `partial` hides every admission
+// inside a task whose word is wrong.
+// A task still OPEN is left alone: its cells are being filled as the agent goes, so a `not-built` recorded
+// halfway through is not yet its verdict and routing it would send a second agent at a row somebody holds.
+// `n/a` and `blocked` are out entirely, as they are in `computeStatus`.
+function owedRows(t) {
+  if (t.unread || t.status === S_NA || t.status === S_BLOCKED) return [];
+  if (!SETTLED.has(t.status)) return [];
+  const rows = t.rows || [];
+  // The same "nothing recorded anywhere" guard `computeStatus` applies: a task nobody marked at all says nothing
+  // about its rows either way.
+  if (!rows.some((r) => r.outcome)) return [];
+  const out = [];
+  rows.forEach((r, i) => {
+    if (r.outcomeKind === O_NOT_BUILT) out.push({ row: r, n: i + 1, cause: r.outcomeCause });
+    else if (!r.outcome) out.push({ row: r, n: i + 1, cause: null });
+  });
+  return out;
+}
+
+// A BODY THE ENGINE CANNOT READ: an adopted file whose `## Deliverables` table does not parse has no cells, so
+// its word is derived from nothing. The run cannot close while one is in the folder. A plan task is never this
+// — it always carries the engine's own table.
+export const unreadableLedger = (tasks) => (tasks || []).filter(
+  (t) => !t.unread && t.origin === TASK_ORIGIN_ORCHESTRATOR && !(t.rows || []).length);
+
 export function notBuiltRows(tasks) {
   const out = [];
   for (const t of tasks || []) {
-    if (t.unread || t.status !== S_PARTIAL) continue;
-    (t.rows || []).forEach((r, i) => {
-      if (r.outcomeKind === O_NOT_BUILT) out.push({ task: t, row: r, n: i + 1, cause: r.outcomeCause, residual: r.residual || null });
-      else if (!r.outcome) out.push({ task: t, row: r, n: i + 1, cause: null, residual: r.residual || null });
-    });
+    for (const o of owedRows(t)) out.push({ task: t, row: o.row, n: o.n, cause: o.cause, residual: o.row.residual || null });
   }
   return out;
 }
@@ -1212,6 +1336,22 @@ export function notBuiltOpenRows(tasks) {
 // that nothing is on the stand, which a row nobody built implies anyway. It also decides the lineage sentence the
 // repair file opens with, and a row somebody tried and stopped at calls for a different first move than one the
 // verifier could not find. Taken as named legs rather than argument order, which is not a place to put a rule.
+// A REASONED `n-a` IS A DECISION, NOT OPEN WORK. A verifier cannot see the reasoning and reports the row as
+// missing or unconfirmed, which is the expected reading of a deliverable nobody was meant to build — so routing
+// it opens a round whose only honest close is the same `n-a` again. The row is listed for confirmation instead.
+// THE REASON IS WHAT BUYS IT: an `n-a` without one is already downgraded to `not-built` by `parseOutcome`.
+function settledBoundaries(tasks) {
+  const out = new Map();
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    for (const r of t.rows || []) {
+      if (r.outcomeKind !== O_NA || !String(r.outcomeReason || "").trim()) continue;
+      out.set(`${t.pageKey} ${coverKey(r.label)}`, { task: t, row: r });
+    }
+  }
+  return out;
+}
+
 const mergePages = ({ residual = {}, verified = {} }) => {
   const out = {};
   for (const [k, v] of [...Object.entries(residual), ...Object.entries(verified)]) {
@@ -1330,15 +1470,17 @@ function resolvePartials(set) {
     // A REPAIR round is resolved too: its unfixed rows open the NEXT round, and its own cells keep reading
     // `not-built` after that round fixes them, so it closes on its residual like any other task.
     // `REPAIR_ROUND_CAP` bounds the chain; a row it never reaches is PARKED and goes to the user.
-    if (t.status !== S_PARTIAL || t.unread) continue;
-    let residuals = 0, settled = 0;
-    for (const r of t.rows || []) {
-      if (r.outcomeKind !== O_NOT_BUILT && r.outcome) continue;
-      r.residual = residualOf(`${t.pageKey} ${coverKey(r.label)}`);
-      residuals++;
-      if (r.residual === "closed") settled++;
+    // EVERY task holding an owed row is resolved, not only a `partial` one: a row a round has settled must read
+    // `closed` wherever it is collected from, or it comes back as open work somebody has already rebuilt.
+    const owed = owedRows(t);
+    if (!owed.length) continue;
+    let settled = 0;
+    for (const o of owed) {
+      o.row.residual = residualOf(`${t.pageKey} ${coverKey(o.row.label)}`);
+      if (o.row.residual === "closed") settled++;
     }
-    if (residuals && residuals === settled) t.status = S_DONE;
+    // Only a `partial` is CLOSED by its residual; any other word was not held open by these rows.
+    if (t.status === S_PARTIAL && settled === owed.length) t.status = S_DONE;
   }
   return set;
 }
@@ -1537,33 +1679,34 @@ function triageExisting(existing) {
   return { usable, blocked };
 }
 
-// The status is computed from the rows. `recorded` is what the file says, and wins only where the rows cannot
-// answer.
-// NO OUTCOME RECORDED ANYWHERE MEANS NO CHANGE: a folder written before this column existed, and any task nobody
-// has started, must read exactly as before. Hence a guard on "nothing recorded at all", never an inference from
-// "nothing says built".
-function computeStatus(task, recorded, outcomes) {
-  // The two states an agent chooses deliberately are never computed over; everything else here derives from row
-  // accounting.
-  // `n/a` is the one closure with no builder, earned by the reason under `## Notes` that the dispatch gate reads.
-  // `blocked` is the only halt an agent can reach (`build-task-execution.md` rule 5). It must keep halting:
-  // `partial` releases dependents, so computing it over `blocked` would walk the queue past a deliberate stop.
-  if (recorded === S_NA || recorded === S_BLOCKED) return recorded;
-  // A REPAIR task is computed like any other: the engine wrote its table, so the cells mean what they mean
-  // everywhere else. Only a HAND-WRITTEN orchestrator task stands on its recorded word — the engine never
-  // authored that body and cannot say what its cells are.
-  if (task.kind !== REPAIR_KIND && task.origin !== TASK_ORIGIN_ENGINE) return recorded;
+// IS `status:` THE WORD THE ENGINE LAST WROTE? That is the whole question, so the stamp hashes the status word
+// and nothing else. Hashing the cells or the declaration too would make an agent doing its job — filling an
+// `Outcome` column, declaring a halt — indistinguishable from someone typing a status.
+// REPORTING ONLY: the derivation runs on every read regardless.
+const statusStamp = (status) => shortHash(String(status || ""));
+
+// THE ONE DERIVATION, and the only one — a pure function of three facts about the task's own file, not of who
+// filed it. Same inputs, same word.
+//   `declared` — the agent's input: `blocked`, `n/a` or nothing.
+//   `outcomes` — the `Outcome` cells, one per row.
+//   `carried`  — the word the engine last wrote, which stands wherever the cells cannot answer.
+function computeStatus(task, declared, outcomes, carried, edited = false) {
+  // `edited` is the ONE input a caller must not forget, so every caller derives it the same way: through
+  // `statusEditedIn(meta)`. Two readers of one file that disagree about it derive two different words.
+  // A DECLARATION IS AN INPUT, not an exception. It is the agent's answer and the engine does not compute over it.
+  if (DECLARABLE.has(declared)) return declared;
   const rows = task.rows || [];
-  if (!rows.length || !outcomes?.size) return recorded;
+  // Nothing to read: no `## Deliverables` table the parser recognises. The engine has no basis for a word here.
+  if (!rows.length) return carried;
   const keys = rowKeys(rows.map((r) => r.label));
-  const marks = rows.map((_, i) => outcomes.get(keys[i]) || null);
-  if (marks.every((m) => !m)) return recorded;
-  // A BLANK ROW IS CHECKED FIRST, because a task with one is not finished and no other verdict applies to it yet.
-  // The agent fills cells as it goes, so a `not-built` recorded halfway through sits beside rows it has simply not
-  // reached; reading that as `partial` would settle a task whose sub-agent is still running — stopping its clock,
-  // releasing its dependents and demanding a dispatch record from it.
-  // A blank row counts only where a CLOSING status is claimed over it; otherwise the recorded status stands.
-  if (marks.some((m) => !m)) return CLOSED.has(recorded) ? S_PARTIAL : recorded;
+  const marks = rows.map((_, i) => outcomes?.get(keys[i]) || null);
+  // NOTHING RECORDED ANYWHERE MEANS NO CHANGE. A folder written before the column existed is all-blank by
+  // nature, as is every task nobody has started; one filled cell and the rule below takes over.
+  if (marks.every((m) => !m)) return edited && CLOSED.has(carried) ? S_PARTIAL : carried;
+  // AN UNACCOUNTED ROW IS NOT A BUILT ONE. A task with a blank cell is not finished: it keeps the lifecycle word
+  // and the run cannot close over it. A CLOSING word above a blank cell is not one the engine wrote, and it
+  // cannot stand.
+  if (marks.some((m) => !m)) return CLOSED.has(carried) ? S_PARTIAL : carried;
   if (marks.some((m) => m?.outcome === O_NOT_BUILT)) return S_PARTIAL;
   return S_DONE;
 }
@@ -1579,8 +1722,9 @@ function carryOver(task, prev) {
     return m ? { ...r, outcome: m.text, outcomeKind: m.outcome, outcomeCause: m.cause,
       outcomeReason: m.reason || "", naNoReason: !!m.naNoReason } : r;
   }) };
-  const recorded = prev.meta.status || task.status;
-  const status = computeStatus(task, recorded, outcomes);
+  const declared = declaredNow(prev.meta);
+  const stamped = statusEditedIn(prev.meta);
+  const status = computeStatus(task, declared, outcomes, carriedOf(prev.meta), stamped);
   // A status recorded against an older row set must not be trusted silently — the deliverables it was recorded
   // for are not the deliverables now in the file. The digest the status was recorded against is therefore KEPT in
   // the file for as long as that status stands, and only a status back at `todo` (the task re-opened) adopts the
@@ -1589,6 +1733,10 @@ function carryOver(task, prev) {
   return {
     ...task,
     status,
+    declared,
+    // Only ever true on a file the engine had already stamped: the absence of a stamp is a folder written before
+    // this existed, which is not an edit.
+    statusEdited: stamped,
     notes: prev.notes || "",
     file: prev.file || task.file,        // a file the caller renamed keeps its name; the id is the identity
     // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
@@ -1612,22 +1760,23 @@ const rowsFromTable = (table) => (table || []).map((r) => ({
 function adoptOrchestrated(e) {
   const n = Number(e.meta.order);
   const label = e.meta.group || "(orchestrator task)";
-  // A REPAIR file's body IS the engine's, so its rows are read and its status computed from them. A hand-written
-  // orchestrator file is adopted on its recorded word alone. The discriminator is `kind:` in the front matter,
-  // which a caller can type — SKILL.md forbids hand-writing a repair file, and the dispatch gate still refuses to
-  // credit the rows of one nobody was sent out for.
-  const repair = e.meta.kind === REPAIR_KIND;
-  const rows = repair ? rowsFromTable(e.table) : [];
-  const recorded = e.meta.status || S_TODO;
+  // AN ADOPTED BODY IS READ, whoever wrote it: adoption means the engine does not RE-AUTHOR the file, not that
+  // it cannot parse it. Its table is read like any other and the status derived from those cells. A body with no
+  // such table parses to no rows, the one case `computeStatus` answers with the carried word.
+  const rows = rowsFromTable(e.table);
+  const declared = declaredNow(e.meta);
+  const adoptedEdited = statusEditedIn(e.meta);
   return {
     id: e.meta.id, pageKey: e.meta.pageKey || "?", group: label, title: label,
     order: Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER,
     phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR,
-    status: repair ? computeStatus({ origin: TASK_ORIGIN_ENGINE, kind: REPAIR_KIND, rows }, recorded, e.outcomes) : recorded,
+    status: computeStatus({ rows }, declared, e.outcomes, carriedOf(e.meta), adoptedEdited),
+    declared,
+    statusEdited: adoptedEdited,
+    legacyShape: legacyShapeOf(e.meta),
     rows, gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
-    // The engine does not own this body, so `rows` stays empty — but the index still has to say how many
-    // deliverables the file lists. Null when the file carries no readable table: the index shows `—` for that,
-    // never `0`.
+    // The FALL-BACK count, for a file whose table the engine could not read: every leading ordinal in the body,
+    // so it also sees a table the scoped parser ignores. Null when there is none — the index shows `—`, never `0`.
     adoptedRowCount: e.rowCount ?? null,
     // An orchestrator task declares its own artifact and its own nonce. Both are READ, never authored here: a
     // repair task the orchestrator added writes a page like any other task, and it must take part in the same
@@ -1805,8 +1954,8 @@ function repairRounds(existing) {
     const n = Number(e.meta.repairRound) || 1;
     // COMPUTED, not read off the front matter: a round is closed by its `Outcome` cells, so a file whose agent
     // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
-    const status = computeStatus({ origin: TASK_ORIGIN_ENGINE, kind: REPAIR_KIND, rows: rowsFromTable(e.table) },
-      e.meta.status || S_TODO, e.outcomes);
+    const status = computeStatus({ rows: rowsFromTable(e.table) }, declaredNow(e.meta), e.outcomes,
+      carriedOf(e.meta), statusEditedIn(e.meta));
     for (const [map, key] of [[rounds, capKey(e.meta.pageKey, e.meta.cause)],
       [openRounds, `${e.meta.pageKey} ${e.meta.cause || ""}`]]) {
       const prev = map.get(key);
@@ -1928,8 +2077,23 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // The rows a BUILD agent recorded as not built are routed here too, and only here: one trigger, one grouping,
   // one round cap for both kinds of open row. Read off the merged set because the Outcome cells live in the
   // files, and a task is only `partial` once those cells have been parsed back.
-  const residual = notBuiltOpenRows(resolvePartials(attachDispatch(mergeTaskSet(fresh, existing), dir)).tasks);
-  const { tasks, parked, pending } = buildRepairTasks(result, mergePages({ residual, verified: verifyPages }), opts, existing);
+  const mergedForResidual = resolvePartials(attachDispatch(mergeTaskSet(fresh, existing), dir));
+  const residual = notBuiltOpenRows(mergedForResidual.tasks);
+  // Filtered against what the ledger has already settled by decision. Nothing is dropped silently: every row
+  // held back is returned as `boundaries` and named on the index.
+  const settled = settledBoundaries(mergedForResidual.tasks);
+  const boundaries = [];
+  const gated = {};
+  for (const [pageKey, page] of Object.entries(mergePages({ residual, verified: verifyPages }))) {
+    const keep = [];
+    for (const row of page.openRows || []) {
+      const hit = settled.get(`${pageKey} ${coverKey(row.deliverable)}`);
+      if (hit) { boundaries.push({ pageKey, row, task: hit.task, reason: hit.row.outcomeReason }); continue; }
+      keep.push(row);
+    }
+    gated[pageKey] = { ...page, openRows: keep };
+  }
+  const { tasks, parked, pending } = buildRepairTasks(result, gated, opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
   fs.mkdirSync(dir, { recursive: true });
   const written = [];
@@ -1940,15 +2104,19 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
     fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, { planVersion: result.planVersion || null }));
     written.push(t);
   }
-  // The index is derived from the FILES, so re-deriving it now picks the new repair files up with everything else.
+  // Re-derived from the FILES, so the new repair files are in it with everything else.
   const merged = mergeTaskSet(fresh, readExisting(dir));
   // The Dispatched column is folder-derived like the rest of the index: without this every row would render as
   // "not known" and a repair round would quietly erase what the build rounds recorded. It also feeds
   // `resolvePartials`, which only lets a DISPATCHED closure resolve a residual.
   attachDispatch(merged, dir);
   resolvePartials(merged);
-  fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
-  return { written, parked, pending, set: merged };
+  // Opening a round changes the residual coverage of every task whose rows it covers, so their files are
+  // re-written here too and not only the index.
+  // ATTACHED BEFORE THE WRITE, or the index on disk carries none of the held-back rows.
+  merged.boundariesHeldBack = boundaries;
+  persistTaskSet(dir, merged);
+  return { written, parked, pending, boundaries, set: merged };
 }
 
 // THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY. The final report reads the ledger
@@ -2225,20 +2393,11 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   const token = opts.dispatchToken || `${t.id}-${randomBytes(6).toString("hex")}`;
   state.running[t.id] = { startedAt: now, token };
   writeTimings(dir, state);
-  // The SAME guard set `syncTaskDir` applies on its write. An adopted file (`origin: orchestrator`, which every
-  // repair task carries) has a body the engine never authored: its Deliverables come from the file, not from
-  // `t.rows`, which `adoptOrchestrated` leaves empty. Re-rendering it emptied the table and flipped the origin,
-  // so the sub-agent was dispatched with no deliverables. Only the `status:` line moves here.
-  const untouchable = new Set((merged.blocked || []).map((b) => b.file));
-  if (t.origin === TASK_ORIGIN_ORCHESTRATOR || untouchable.has(t.file)) {
-    setFrontMatterStatus(dir, t.file, S_IN_PROGRESS);
-  } else {
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
-  }
   // Re-read the clocks AFTER this task's own was stamped, so the index it writes shows the task it just started
   // as started rather than as never dispatched.
   attachDispatch(merged, dir);
-  fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+  // `in-progress` is a derived status like any other, so it is persisted by the one writer.
+  persistTaskSet(dir, merged);
   return { ...merged, started: t, dispatchToken: token };
 }
 
@@ -2246,20 +2405,43 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
 // a Deliverables table the engine never parsed, the `## Notes` — is byte-identical afterwards. Only the first
 // `status:` line inside the opening front-matter block is replaced; a `status:` in prose further down is not
 // front matter and is left alone.
-function setFrontMatterStatus(dir, file, status) {
+function setFrontMatterStatus(dir, file, status, declared = null) {
+  // The stamp moves with the word, or every adopted file reads as hand-edited.
   const full = path.join(dir, file);
   if (!fs.existsSync(full)) return false;
   const lines = fs.readFileSync(full, "utf8").split("\n");
   if (lines[0]?.trim() !== "---") return false;
+  const at = rewriteFrontMatter(lines, status, declared);
+  if (at.status < 0) return false;
+  // A FIELD THE FILE DOES NOT CARRY IS ADDED. Without the stamp the engine would keep writing this file's status
+  // while every edit to it stayed undetectable; without the declaration a halt promoted out of `status:` would
+  // last exactly one pass, because this same write refreshes the stamp that made it a promotion.
+  if (at.stamp < 0) lines.splice(at.status + 1, 0, `statusFrom: ${statusStamp(status)}`);
+  if (at.declared < 0 && declared) lines.splice(at.status + 1, 0, `declared: ${declared}`);
+  writeIfChanged(full, lines.join("\n"));
+  return true;
+}
+
+// Rewrite the three fields this write owns, in place, and report where each was found. An index of -1 means the
+// file does not carry that line at all.
+function rewriteFrontMatter(lines, status, declared) {
+  const at = { status: -1, stamp: -1, declared: -1 };
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") break;
-    if (lines[i].startsWith("status:")) {
+    if (lines[i].startsWith("statusFrom:")) {
+      lines[i] = `statusFrom: ${statusStamp(status)}`;
+      at.stamp = i;
+    } else if (lines[i].startsWith("declared:")) {
+      // `null` leaves the line alone; the EMPTY STRING clears it. A retired declaration has to reach the file, or
+      // the re-open lasts until the next read and the word snaps back.
+      if (declared !== null) lines[i] = `declared: ${declared}`;
+      at.declared = i;
+    } else if (lines[i].startsWith("status:")) {
       lines[i] = `status: ${status}`;
-      fs.writeFileSync(full, lines.join("\n"));
-      return true;
+      at.status = i;
     }
   }
-  return false;
+  return at;
 }
 
 // CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two
@@ -2288,25 +2470,39 @@ function setFrontMatterStatus(dir, file, status) {
 // built on it (`unroutedNotBuilt`) must be called on an assembled set — `syncTaskDir` / `syncRepairDir` output —
 // never on this. Use it for what it says: the folder as recorded.
 export function readTaskDir(dir) {
-  return readExisting(dir)
+  const tasks = readExisting(dir)
     .filter((e) => !e.malformed && e.meta?.id)
     .map((e) => {
       const origin = TASK_ORIGINS.includes(e.meta.origin) ? e.meta.origin : TASK_ORIGIN_ENGINE;
       const rows = rowsFromTable(e.table);
       const recorded = e.meta.status || S_TODO;
-      // Re-computed off the file's own cells. `--tasks` writes the computed value into the front matter; a status
-      // edited by hand afterwards must not turn a `partial` back into a `done`.
-      const status = computeStatus({ origin, kind: e.meta.kind || null, rows }, recorded, e.outcomes);
+      // Re-computed off the file's own cells. The write phase puts the computed value into the front matter; a
+      // status edited by hand afterwards must not turn a `partial` back into a `done`.
+      const status = computeStatus({ rows }, declaredNow(e.meta), e.outcomes, carriedOf(e.meta),
+        statusEditedIn(e.meta));
       return {
-        id: e.meta.id, file: e.file, status, recordedStatus: recorded, rows, origin,
+        id: e.meta.id, file: e.file, status, recordedStatus: recorded, declared: declaredNow(e.meta),
+        statusEdited: statusEditedIn(e.meta), rows, origin, legacyShape: legacyShapeOf(e.meta),
         agentNonce: e.meta.agentNonce || "", writesTo: e.meta.writesTo || "",
         dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
         notes: e.notes || "",
         // Read off the file, not re-derived from the plan: the read-only path must name the unbuilt deliverable
         // without depending on a manifest that has since moved.
         pageKey: e.meta.pageKey || "?",
+        // The repair coordinates, read off the front matter. Without them this path could not tell a repair round
+        // from any other task, and could not resolve one row's residual against another file's round.
+        kind: e.meta.kind || null,
+        cause: e.meta.cause || null,
+        repairRound: Number(e.meta.repairRound) || 0,
+        covers: (e.meta.covers || "").split(/\s+/).filter(Boolean),
       };
     });
+  // ONE READER. This path resolves residuals exactly as the merged path does, so a row a round has settled reads
+  // closed through both. The clocks come first: a closed round credits its rows only if somebody was dispatched.
+  const set = { tasks };
+  attachDispatch(set, dir);
+  resolvePartials(set);
+  return set.tasks;
 }
 
 // CLOSED WITH NO CLOCK AT ALL. An orchestrator-authored file is not the engine's to schedule, so it is not held
@@ -2315,7 +2511,12 @@ export function readTaskDir(dir) {
 // nothing under `## Notes` is a task closed with neither a builder nor a justification, and it is the cheapest
 // way to write off every remaining row at once.
 function classifyUndispatched(t, out) {
-  if (t.origin !== TASK_ORIGIN_ENGINE) return;
+  // EVERY CLOSURE IS HELD TO A DISPATCH RECORD, whoever filed the task and whether or not it writes: a verdict
+  // filed by the context that did the work is the failure this gate exists for, and a review is no exception.
+  // `n/a` with a reason under `## Notes` is the one closure that needs no builder.
+  // ONE EXEMPTION, FOR A FOLDER THAT PREDATES THE GATE: an adopted file carrying neither `declared:` nor
+  // `statusFrom:` closed under the rule in force when it was written. It retires as folders turn over.
+  if (t.origin !== TASK_ORIGIN_ENGINE && t.legacyShape) return;
   if (t.status !== S_NA) { out.never.push(t); return; }
   ((t.notes || "").trim() ? out.naUndispatched : out.naNoReason).push(t);
 }
@@ -2367,16 +2568,149 @@ function attachDispatch(set, dir) {
     // NO CLOCK MEANS TWO DIFFERENT THINGS, and only one of them is a warning. A task still OPEN has simply not
     // had its turn yet; a CLOSED one was finished with nobody dispatched for it. Marking both the same way puts a
     // warning on every row of a healthy queue, and the one row that matters then reads like the other sixteen.
-    // THE COLUMN AGREES WITH THE GATE: `⚠ never` only where the gate would fail the row. `classifyUndispatched`
-    // exempts a non-engine-origin (orchestrator/repair) closure, so it reads `—` here too rather than a warning
-    // nothing else echoes. `SETTLED` rather than `CLOSED`: a `partial` task owes a dispatch record like a `done` one.
-    else t.dispatched = SETTLED.has(t.status) && t.origin === TASK_ORIGIN_ENGINE ? "never" : "pending";
+    // THE COLUMN AGREES WITH THE GATE by READING it: `audit.never` is the gate's own answer, so restating the
+    // rule here cannot let the two drift.
+    else t.dispatched = audit.never.some((x) => x.id === t.id) ? "never" : "pending";
   }
   set.dispatch = audit;
   // Kept under its old name: the Attention section and every caller that reads "closed but never dispatched"
   // already spell it this way, and the gate reads `set.dispatch` for the rest.
   set.undispatched = [...audit.never, ...audit.naUndispatched];
   return set;
+}
+
+// THE ONE WRITE PHASE. Every command that can change a derived status ends here and nothing writes a status
+// anywhere else, so the folder and its index always answer the same question.
+// IT RUNS LAST: after the merge, the clocks, the dispatch read, any repair round this command opened and the
+// residual resolution. A status written before the routing step describes coverage that step has since changed.
+// WHAT EACH FILE GETS is decided by who owns its BODY. A plan task is re-rendered from the plan, with the agent's
+// `Outcome` cells carried back in by `carryOver` first. An adopted file — repair or declared — keeps its body
+// byte-for-byte and takes the computed `status:` line alone.
+// WRITTEN ONLY WHEN THE BYTES CHANGE. Every command ends in this phase, so an unconditional write rewrites the
+// whole folder on every call. A read to compare costs less than the write it saves.
+function writeIfChanged(full, next) {
+  if (fs.existsSync(full) && fs.readFileSync(full, "utf8") === next) return false;
+  fs.writeFileSync(full, next);
+  return true;
+}
+
+function persistTaskSet(dir, merged) {
+  const untouchable = new Set((merged.blocked || []).map((b) => b.file));
+  for (const t of merged.tasks) {
+    // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
+    // would let a fresh `todo` be written beside the record that is still on disk.
+    if (untouchable.has(t.file) || t.unread) continue;
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
+      setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "");
+      continue;
+    }
+    writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
+  }
+  writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+}
+
+// ---8<--- MINTED: the orchestrator declares deliverables, the engine writes the file ---8<---
+//
+// THE ENGINE WRITES EVERY TASK FILE, so every task carries an `Outcome` table and the derivation always has
+// cells to read.
+// WHAT THE ORCHESTRATOR OWNS is the judgement: that this work exists, what it covers, which page it touches and
+// where it sits in the queue. It declares those; it does not lay out a file.
+// The body is the orchestrator's from then on — an ADOPTED file like a repair round, never re-authored.
+export const DECL_SHAPE = '{ "id": "<slug>", "pageKey": "<a page key from the plan>", "group": "<title>",'
+  + ' "order": <n>, "writesTo": "<the artifact it writes>" | "readOnly": true, "deliverables": ["<row>", ...],'
+  + ' "dependsOn": ["<task id>", ...] (optional), "stopGate": true (optional) }';
+
+// WHERE THE TASK GOES. The repair cap buckets on (pageKey, cause), so a key matching no page gets its own bucket
+// and the three-round cap over that page is bypassed; and read-only is DECLARED, never inferred from an omission,
+// because a `writesTo` nothing else writes chains the task behind nothing.
+// Every declared value the renderer interpolates into front matter or a table cell.
+function* declaredStrings(decl) {
+  for (const f of ["id", "pageKey", "group", "writesTo"]) yield [f, String(decl?.[f] ?? "")];
+  const rows = Array.isArray(decl?.deliverables) ? decl.deliverables : [];
+  for (let i = 0; i < rows.length; i++) yield [`deliverables[${i + 1}]`, String(rows[i] ?? "")];
+  for (const d of Array.isArray(decl?.dependsOn) ? decl.dependsOn : []) yield ["dependsOn", String(d ?? "")];
+}
+
+function declPlacementProblems(decl, at, identities) {
+  const out = [];
+  // A LINE BREAK IN A DECLARED STRING FORGES FRONT MATTER. `group` is interpolated into the `group:` line
+  // and a row label into a table cell, so an embedded newline adds a line of its own — and a second
+  // `status:` there is read as the task's status, overriding the engine's. Rejected before anything is written.
+  for (const [field, value] of declaredStrings(decl)) {
+    if (/[\r\n]/.test(value)) {
+      out.push(`${at}: \`${field}\` contains a line break, which would forge a front-matter line`);
+    }
+  }
+  const pageKey = String(decl?.pageKey ?? "").trim();
+  if (!identities.has(pageKey)) {
+    out.push(`${at}: \`pageKey\` \`${pageKey || "(none)"}\` is not a page this plan builds — one of: ${[...identities.keys()].join(" / ")}`);
+  }
+  if (!String(decl?.group ?? "").trim()) out.push(`${at} has no \`group\` (the title the queue shows)`);
+  const writesTo = String(decl?.writesTo ?? "").trim();
+  const artifacts = new Set([...identities.values()].map((k) => `page:${k}`));
+  if (decl?.readOnly === true && writesTo) out.push(`${at} declares BOTH \`readOnly\` and \`writesTo\``);
+  else if (decl?.readOnly !== true && !writesTo) out.push(`${at} has no \`writesTo\`: name the artifact it writes, or declare \`"readOnly": true\``);
+  else if (writesTo && !artifacts.has(writesTo)) {
+    out.push(`${at}: \`writesTo\` \`${writesTo}\` is not an artifact this plan builds — one of: ${[...artifacts].join(" / ")}`);
+  }
+  return out;
+}
+
+// WHAT IT CARRIES AND WHAT IT WAITS ON. A `dependsOn` id nothing in the folder claims puts the task behind a gate
+// that never closes, and `--start` would refuse it for ever; no deliverables means nothing to derive a status from.
+function declContentProblems(decl, at, taken) {
+  const out = [];
+  for (const dep of Array.isArray(decl?.dependsOn) ? decl.dependsOn : []) {
+    if (!taken.has(String(dep).trim())) out.push(`${at}: \`dependsOn\` names \`${dep}\`, which no task in this folder has`);
+  }
+  const rows = Array.isArray(decl?.deliverables) ? decl.deliverables : [];
+  if (!rows.length) out.push(`${at} declares no \`deliverables\` — a task with no rows has nothing to derive a status from`);
+  if (rows.some((r) => !String(r ?? "").trim())) out.push(`${at} has an empty deliverable`);
+  return out;
+}
+
+// The identity checks come first and answer alone: without a usable `id` nothing else about the declaration can
+// be reported against it.
+function declProblems(decl, i, identities, taken) {
+  const at = `declaration ${i + 1}`;
+  const id = String(decl?.id ?? "").trim();
+  if (!id) return [`${at} has no \`id\``];
+  if (id !== slugify(id)) return [`${at}: \`id\` \`${id}\` is not a slug — lower-case letters, digits and dashes, at most 48 characters`];
+  if (taken.has(id)) return [`${at}: \`id\` \`${id}\` is already claimed in this folder`];
+  return [...declPlacementProblems(decl, at, identities), ...declContentProblems(decl, at, taken)];
+}
+
+// Mint one task per declaration. REFUSES THE WHOLE SET on any problem, as `--split` does: half a set written is
+// a folder holding part of a judgement, with the dropped part invisible.
+export function addTasks(dir, result, declarations, opts = {}) {
+  const decls = Array.isArray(declarations) ? declarations : [declarations];
+  const identities = pageIdentities(result);
+  const taken = new Set(readExisting(dir).map((e) => e.meta?.id).filter(Boolean));
+  const problems = [];
+  for (const [i, d] of decls.entries()) {
+    problems.push(...declProblems(d, i, identities, taken));
+    if (d?.id) taken.add(String(d.id).trim());
+  }
+  if (problems.length) return { refused: true, problems, shape: DECL_SHAPE, written: [] };
+  const written = [];
+  fs.mkdirSync(dir, { recursive: true });
+  for (const d of decls) {
+    const n = Number(d.order);
+    const rows = d.deliverables.map((label) => ({ label: String(label).trim(), group: d.group, vk: null, na: null }));
+    const task = {
+      id: String(d.id).trim(), pageKey: String(d.pageKey).trim(), group: d.group, title: d.group,
+      order: Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER, step: Number.isFinite(n) ? n : undefined,
+      phase: DEFAULT_PHASE, origin: TASK_ORIGIN_ORCHESTRATOR, status: S_TODO, declared: "",
+      rows, gatedRows: 0, naRows: 0, rowsDigest: rowsDigest(rows), notes: "",
+      dependsOn: (Array.isArray(d.dependsOn) ? d.dependsOn : []).map((x) => String(x).trim()).filter(Boolean),
+      writesTo: String(d.writesTo ?? "").trim(), stopGate: !!d.stopGate, kind: null,
+    };
+    task.file = taskFileName(task);
+    fs.writeFileSync(path.join(dir, task.file), renderTaskFile(task, { planVersion: result.planVersion || null }));
+    written.push(task);
+  }
+  // Back through the ordinary pass, so minted files are merged, ordered and indexed like any other.
+  return { refused: false, problems: [], written, set: syncTaskDir(dir, result, opts) };
 }
 
 // ---8<--- WHAT IS STARTABLE NOW ---8<---
@@ -2456,7 +2790,6 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   // failure the coverage check exists to prevent.
   if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
-  const untouchable = new Set(merged.blocked.map((b) => b.file));
   fs.mkdirSync(dir, { recursive: true });
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());
@@ -2465,17 +2798,6 @@ export function syncTaskDir(dir, result, opts = {}, split = null) {
   // reads off the clocks. The parent's own clock is untouched — `partial` already settled it, and `done` is the
   // same side of `SETTLED`.
   resolvePartials(merged);
-  for (const t of merged.tasks) {
-    // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
-    // would let a fresh `todo` be written beside the record that is still on disk.
-    if (untouchable.has(t.file) || t.unread) continue;
-    // A REPAIR FILE IS THE RECORD OF ITS ROUND and is never re-authored — its rows are one verify run's, not the
-    // plan's. Its `status` is computed from the cells, so that ONE line is written back: the file is what a
-    // resumed orchestrator reads, and it must not disagree with the index, the progress block and the gate.
-    if (t.kind === REPAIR_KIND) { setFrontMatterStatus(dir, t.file, t.status); continue; }
-    if (t.origin === TASK_ORIGIN_ORCHESTRATOR) continue;
-    fs.writeFileSync(path.join(dir, t.file), renderTaskFile(t, merged));
-  }
-  fs.writeFileSync(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+  persistTaskSet(dir, merged);
   return merged;
 }
