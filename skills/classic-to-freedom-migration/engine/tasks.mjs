@@ -1312,58 +1312,51 @@ export function undecidedDecisionCells(tasks) {
   return out;
 }
 
-function attentionLines(set) {
-  const out = set.tasks.flatMap(taskAttention);
-  // review M1: hand-typed `wont-do` / `postponed` cells that slipped past parseOutcome (they
-  // carry a plausible `(D<N>)`) but whose row is not in the task's own `decisions:` map. Named here so a
-  // reader sees exactly which cell the engine did not write.
-  for (const it of undecidedDecisionCells(set.tasks)) {
-    out.push(`- \`${it.task.file}\` row ${it.n} — recorded \`${it.row.outcomeKind}\` but the row is NOT in`
-      + ` this task's \`decisions:\` map: ${brief(it.row.label)} (cell: ${brief(it.row.outcome, 120)}).`
-      + " The engine writes cell + decisions map together through `--decide D<N>`; a cell present without"
-      + " its map entry is a hand edit. Re-open the row (clear its Outcome cell) and run"
-      + " `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed [--to <dest>] --row"
-      + ` ${it.task.id}:${it.n}` + "` if the decision actually holds.");
-  }
-  // Reported per DELIVERABLE, not per task: the row and its cause are the fact a reader needs.
-  // A `not-applicable` the agent typed on a row the PLAN did not mark as a boundary — the engine pre-fills
-  // plan boundaries, so anything else in this shape is a hand edit. It closes the row without building it
-  // and without the plan's backing, so it is named even though the task computes `done`.
-  for (const it of assertedBoundaryRows(set.tasks)) {
-    out.push(`- \`${it.task.file}\` row ${it.n} — recorded \`not-applicable\` on a row the plan did NOT mark`
-      + ` as a boundary: ${it.row.label} (reason given: ${it.row.outcomeReason}). Nothing was built for it;`
-      + " confirm the boundary, or replace the cell with `not-built — needs-decision` and run `--decide`.");
-  }
-  for (const it of set.boundariesHeldBack || []) {
-    out.push(`- \`${it.task.file}\` — a verify run re-opened **${brief(it.row.deliverable)}**, which this run`
-      + ` closed as \`not-applicable\` with a reason: ${brief(it.reason, 160)}. NOT routed to a repair round`
-      + " — the decision stands unless you disagree with it. Confirm the boundary, or record the row as"
-      + " `not-built` to schedule the work.");
-  }
-  for (const it of set.boundariesHeldBack || []) {
-    out.push(`- \`${it.task.file}\` — a verify run re-opened **${brief(it.row.deliverable)}**, which this run closed as`
-      + ` \`n-a\` with a reason: ${brief(it.reason, 160)}. NOT routed to a repair round — the decision stands unless`
-      + " you disagree with it. Confirm the boundary, or record the row as `not-built` to schedule the work.");
-  }
-  for (const it of notBuiltOpenItems(set.tasks)) {
+// A cell carrying a plausible `(D<N>)` whose row is NOT in the task's own `decisions:` map. The engine writes
+// cell and map together through `--decide`, so a cell present without its entry is a hand edit.
+function attnUndecidedCells(tasks) {
+  return undecidedDecisionCells(tasks).map((it) =>
+    `- \`${it.task.file}\` row ${it.n} — recorded \`${it.row.outcomeKind}\` but the row is NOT in`
+    + ` this task's \`decisions:\` map: ${brief(it.row.label)} (cell: ${brief(it.row.outcome, 120)}).`
+    + " The engine writes cell + decisions map together through `--decide D<N>`; a cell present without"
+    + " its map entry is a hand edit. Re-open the row (clear its Outcome cell) and run"
+    + " `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed [--to <dest>] --row"
+    + ` ${it.task.id}:${it.n}` + "` if the decision actually holds.");
+}
+// A `not-applicable` the agent typed on a row the PLAN did not mark as a boundary. The engine pre-fills plan
+// boundaries, so anything else in this shape closes the row without building it and without the plan's
+// backing — named even though the task computes `done`.
+function attnAssertedBoundaries(tasks) {
+  return assertedBoundaryRows(tasks).map((it) =>
+    `- \`${it.task.file}\` row ${it.n} — recorded \`not-applicable\` on a row the plan did NOT mark`
+    + ` as a boundary: ${it.row.label} (reason given: ${it.row.outcomeReason}). Nothing was built for it;`
+    + " confirm the boundary, or replace the cell with `not-built — needs-decision` and run `--decide`.");
+}
+function attnHeldBackBoundaries(set) {
+  return (set.boundariesHeldBack || []).map((it) =>
+    `- \`${it.task.file}\` — a verify run re-opened **${brief(it.row.deliverable)}**, which this run`
+    + ` closed as \`not-applicable\` with a reason: ${brief(it.reason, 160)}. NOT routed to a repair round`
+    + " — the decision stands unless you disagree with it. Confirm the boundary, or record the row as"
+    + " `not-built` to schedule the work.");
+}
+// The reason belongs under `## Notes` against the row number; a `not-built` row on a task with empty notes has
+// recorded the fact and not the reason.
+function attnNotBuilt(tasks) {
+  return notBuiltOpenItems(tasks).map((it) => {
     let why;
     if (it.row?.naNoReason) why = "recorded `not-applicable` with NO reason — a row closed without building it needs one, so it counts as not built";
     else if (it.cause) why = `cause \`${it.cause}\`${RETRYABLE_CAUSES.has(it.cause) ? " — a re-run may clear it" : " — a decision settles it, not a re-run; route it once that decision exists"}`;
     else why = "NOT ACCOUNTED FOR — the task recorded a closing status without marking this row either way";
-    // The reason belongs under `## Notes` against the row number; a `not-built` row on a task with empty notes
-    // has recorded the fact and not the reason. Same shape as the `not-applicable`-with-no-reason line the
-    // dispatch gate raises.
     const where = (it.task.notes || "").trim()
       ? "The detail is under that file's `## Notes`."
       : "⚠ That file's `## Notes` is EMPTY — the row is recorded as not built with no reason written anywhere.";
-    out.push(`- \`${it.task.file}\` row ${it.n} — **not built**: ${it.row.label} (${why}). ${where}`);
-  }
-  // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
-  // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
-  out.push(...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch));
-  // An item whose work has left the plan: a FROZEN split met by a plan that moved, and not the engine's to
-  // resolve — whether anything that item built is still needed is a judgement only its author can make.
-  for (const p of set.problems || []) out.push(`- ${p}`);
+    return `- \`${it.task.file}\` row ${it.n} — **not built**: ${it.row.label} (${why}). ${where}`;
+  });
+}
+// A frozen split met by a plan that moved is not the engine's to resolve: whether anything that item built is
+// still needed is a judgement only its author can make.
+function attnFolderProblems(set) {
+  const out = (set.problems || []).map((p) => `- ${p}`);
   for (const b of set.blocked || []) {
     out.push(`- \`${b.file}\` — NOT READ and NOT WRITTEN: ${b.reason}. Its task got no file this run, and this file was`
       + " left exactly as it is — it may hold the only record of work already done on the stand. Fix its front matter"
@@ -1373,6 +1366,19 @@ function attentionLines(set) {
     out.push(`- \`${s.file}\` — no longer in the plan (kept, not deleted: it may record work already done on the stand)`);
   }
   return out;
+}
+function attentionLines(set) {
+  return [
+    ...set.tasks.flatMap(taskAttention),
+    ...attnUndecidedCells(set.tasks),
+    ...attnAssertedBoundaries(set.tasks),
+    ...attnHeldBackBoundaries(set),
+    ...attnNotBuilt(set.tasks),
+    // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see
+    // that nobody asked it to start one. Reported, never coerced: the status stands as recorded.
+    ...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch),
+    ...attnFolderProblems(set),
+  ];
 }
 
 export function countStatuses(tasks) {
@@ -2989,6 +2995,33 @@ function writeIfChanged(full, next) {
   return true;
 }
 
+// An adopted body is kept byte-for-byte, so a decision's cells are written IN PLACE before the front-matter
+// update: the front matter carries the `decisions:` map naming exactly the cells the body now holds, and the
+// two have to land together. `null` is passed when the run touched no cells here, so `decisions:` is never
+// added to a file that never carried it.
+function persistAdoptedTask(dir, t, unplaced) {
+  const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+  const wanted = new Map();
+  for (const idx of dirty) {
+    const row = t.rows?.[idx];
+    if (row) wanted.set(idx, row.outcome || "—");
+  }
+  const missed = wanted.size ? setAdoptedRowOutcomes(dir, t.file, wanted) : new Set();
+  // A row whose cell could NOT be placed must not leave a `decisions:` entry behind: the pair is the whole
+  // provenance contract, and a folder carrying the stamp without the cell is one the engine cannot reconcile —
+  // the next read recomputes a different status from the untouched cell, and `--revoke` then finds a map entry
+  // pointing at a cell nobody wrote. The caller is told, so it can refuse rather than print a success line
+  // over a body it did not change.
+  for (const idx of missed) {
+    unplaced.push({ task: t, n: idx + 1 });
+    if (t.decisions instanceof Map) t.decisions.delete(idx + 1);
+  }
+  const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
+  // `?? ""` not `|| null`: under the front-matter rule `null` LEAVES the `declared:` line alone and the empty
+  // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
+  // the task for ever.
+  setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
+}
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
   const unplaced = [];
@@ -2996,35 +3029,8 @@ function persistTaskSet(dir, merged) {
     // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
-    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      // cascade may have modified the Outcome cell of an adopted task's row. Write those cells
-      // in place BEFORE the front-matter update — the front matter carries the `decisions:` map that names
-      // exactly the cells the body now holds, so the two must land together. Passed null when the run
-      // touched no cells here, so `decisions:` is not spuriously added to a file that never carried it.
-      const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
-      const wanted = new Map();
-      for (const idx of dirty) {
-        const row = t.rows?.[idx];
-        if (row) wanted.set(idx, row.outcome || "—");
-      }
-      const missed = wanted.size ? setAdoptedRowOutcomes(dir, t.file, wanted) : new Set();
-      // A row whose cell could NOT be placed must not leave a `decisions:` entry behind: the pair is the whole
-      // provenance contract, and a folder carrying the stamp without the cell is one the engine cannot
-      // reconcile — the next read recomputes a different status from the untouched cell, and `--revoke` then
-      // finds a map entry pointing at a cell nobody wrote. The caller is told, so it can refuse rather than
-      // print a success line over a body it did not change.
-      for (const idx of missed) {
-        unplaced.push({ task: t, n: idx + 1 });
-        if (t.decisions instanceof Map) t.decisions.delete(idx + 1);
-      }
-      const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
-      // `?? ""` not `|| null`: under the rewritten front-matter rule `null` LEAVES the line alone and the empty
-      // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
-      // the task for ever. `|| null` was written when the rule was a plain truthiness test.
-      setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
-      continue;
-    }
-    writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
+    if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) persistAdoptedTask(dir, t, unplaced);
+    else writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { unplaced };

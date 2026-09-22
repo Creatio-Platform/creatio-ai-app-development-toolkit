@@ -174,26 +174,21 @@ function isPostponedDerivedPartial(t) {
     || r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED)
     && rows.some((r) => r.outcomeKind === O_POSTPONED);
 }
+const COUNT_BUCKET = new Map([
+  [S_DONE, "done"], [S_NOT_APPLICABLE, "na"], [S_WONT_DO, "wontDo"], [S_POSTPONED, "postponed"],
+  [S_IN_PROGRESS, "inProgress"], [S_TODO, "todo"], [S_BLOCKED, "blocked"],
+]);
+// A partial task whose debt is postponed rows counts as a postponed-derived task, not as open work.
+function countBucket(t) {
+  if (t.unread) return "unread";
+  if (t.status === S_PARTIAL) return isPostponedDerivedPartial(t) ? "postponed" : "partial";
+  return COUNT_BUCKET.get(t.status) || "other";
+}
 function taskCounts(tasks) {
   const c = { total: tasks.length, done: 0, na: 0, wontDo: 0, postponed: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
-  for (const t of tasks) {
-    if (t.unread) { c.unread++; continue; }
-    if (t.status === S_DONE) c.done++;
-    else if (t.status === S_NOT_APPLICABLE) c.na++;
-    else if (t.status === S_WONT_DO) c.wontDo++;
-    else if (t.status === S_POSTPONED) c.postponed++;
-    else if (t.status === S_PARTIAL) {
-      // A partial task whose debt is postponed rows counts as a postponed-derived task, not as open work.
-      if (isPostponedDerivedPartial(t)) c.postponed++; else c.partial++;
-    }
-    else if (t.status === S_IN_PROGRESS) c.inProgress++;
-    else if (t.status === S_TODO) c.todo++;
-    else if (t.status === S_BLOCKED) c.blocked++;
-    else c.other++;
-  }
+  for (const t of tasks) c[countBucket(t)]++;
   // `postponed` is not open work — it is a debt with a destination — so it does not count against a run's
-  // open total the way `partial` does. The verdict logic (three-colour, point 6) treats it as
-  // scheduled elsewhere.
+  // open total the way `partial` does. The three-colour verdict treats it as scheduled elsewhere.
   c.open = c.partial + c.inProgress + c.todo + c.blocked + c.unread + c.other;
   return c;
 }
@@ -381,6 +376,20 @@ function openMachineSection(rows, pageName) {
 // States: machine / judge (confirmed) · hand (a plan item only a person can confirm) · extra (a row that is not a
 // plan item — an orchestrator-authored repair task's own checklist; recorded by its agent, nothing verifies it) ·
 // not-built / decided / boundary / na · open (no outcome yet, or the machine could not confirm it).
+const DECIDED_ROW_KINDS = new Set([O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED]);
+// ORDER IS THE RULE HERE: a row can satisfy several of these at once, and the earlier answer is the more
+// specific one. A decided row reported as merely `na` would lose the person's decision from the report.
+function rowReportState(r, hv, inSet, keys) {
+  if (inSet(keys.notBuilt) && r.outcomeKind === O_NOT_BUILT) return "not-built";
+  if (inSet(keys.decided) && DECIDED_ROW_KINDS.has(r.outcomeKind)) return "decided";
+  if (r.outcomeKind === O_NOT_APPLICABLE) return inSet(keys.unbacked) ? "boundary" : "na";
+  if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) return "decided";
+  if (r.na || r.info || hv.how === "na") return "na";
+  if (!r.outcomeKind) return "open";
+  if (hv.how === "hand") return "hand";
+  if (hv.how === "unknown") return "extra";
+  return hv.ok ? hv.how : "open";
+}
 function taskRows(t, vidx, keys) {
   return (t.rows || []).map((r, i) => {
     const lk = labelKey(r.label);
@@ -391,18 +400,9 @@ function taskRows(t, vidx, keys) {
     const wholeRun = (r.pageKey || t.pageKey) === "run";
     const v = vidx.byKey.get(key) || (wholeRun ? vidx.byLabel.get(lk) : undefined);
     const hv = howVerified(v);
-    let state;
     const inSet = (set) => set.has(key) || (wholeRun && !!set.hasLabel?.has(lk));
-    if (inSet(keys.notBuilt) && r.outcomeKind === O_NOT_BUILT) state = "not-built";
-    else if (inSet(keys.decided) && (r.outcomeKind === O_NOT_BUILT || r.outcomeKind === O_NOT_APPLICABLE || r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED)) state = "decided";
-    else if (r.outcomeKind === O_NOT_APPLICABLE) state = inSet(keys.unbacked) ? "boundary" : "na";
-    else if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) state = "decided";
-    else if (r.na || r.info || hv.how === "na") state = "na";
-    else if (!r.outcomeKind) state = "open";
-    else if (hv.how === "hand") state = "hand";
-    else if (hv.how === "unknown") state = "extra";
-    else state = hv.ok ? hv.how : "open";
-    return { n: i + 1, label: r.label, outcome: r.outcome || "—", v, hv, state };
+    return { n: i + 1, label: r.label, outcome: r.outcome || "—", v, hv,
+      state: rowReportState(r, hv, inSet, keys) };
   });
 }
 const num = (secNo, title) => `## ${secNo}. ${title}`;
@@ -544,6 +544,44 @@ function ledgerReason(set) {
     + " and re-verified";
 }
 
+// The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read
+// from `result`, the dispatch gate passed in from migrate.mjs — so the report can never read COMPLETE on a
+// rejected run.
+function gateReasons(result, gates) {
+  const out = [];
+  if (result?.gate?.blocked) out.push("the build gate is BLOCKED — the plan is not approvable");
+  if (result?.structure && !result.structure.complete) out.push("the plan STRUCTURE is incomplete — not ready to build");
+  if (result?.coverage && !result.coverage.complete) out.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
+  if (result?.listGate?.blocked) out.push("the LIST page gate is BLOCKED — the list page is not approvable");
+  if (gates?.dispatchFailed) out.push("the DISPATCH gate failed — a task was closed with no dispatch token");
+  return out;
+}
+// A task computed `not-applicable` is the plan's own boundary: every row of it is a plan-boundary row, and the
+// engine writes that outcome only from `r.na`. One with rows the plan did NOT mark that way is a person's
+// decision written as a plan fact, so it has to cite a recorded decision and must not leave plan rows
+// unaccounted while the run reads COMPLETE.
+function naUnbackedReasons(tasks, decisions) {
+  const naUnbacked = tasks.filter((t) => t.status === S_NOT_APPLICABLE
+    && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
+  return naUnbacked.length
+    ? [`${plural(naUnbacked.length, "task")} closed not-applicable with no recorded decision (or with rows left unaccounted)`]
+    : [];
+}
+// AC 13 — 🟡 IS GRANTED ONLY OVER DECISIONS THAT STILL RESOLVE. `collectPostponedRows` parses the cell TEXT,
+// so it accepts a `(D<N>)` naming a decision renamed or deleted from decisions.md after the cell was written,
+// and a cell carrying no destination at all. Neither is a person's answer: one points at nothing, the other
+// names no debt to carry. Routing them here is what makes the verdict compute RED through the path every other
+// shortfall already takes — and, because an unbacked row always lands on `reasons`, `complete` implies EVERY
+// postponed row carries a resolvable decision and a destination, which is what makes the headline safe to
+// interpolate without a guard.
+function postponedUnbackedReasons(postponedRows, decisions) {
+  const unbacked = postponedRows.filter((p) => !p.decision || !decisions.has(p.decision) || !p.destination);
+  if (!unbacked.length) return [];
+  const where = unbacked.map((p) => `\`${esc(p.task.file)}\` row ${p.n}`).join(", ");
+  return [`${plural(unbacked.length, "row")} postponed without a resolvable \`D<N>\` and a destination`
+    + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
+    + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`];
+}
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
   const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
@@ -571,41 +609,11 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(ledgerRefused);
-  // A task computed `not-applicable` is the plan's own boundary (every row of the task is a plan-boundary
-  // row). Under the engine writes that outcome only from `r.na`, so a `not-applicable` task with
-  // rows the plan did NOT mark that way is the same defect this rename fixes — a person's decision written
-  // as a plan fact. It must cite a recorded decision and must not leave plan rows unaccounted while the run
-  // reads COMPLETE.
-  const naUnbacked = tasks.filter((t) => t.status === S_NOT_APPLICABLE
-    && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
-  if (naUnbacked.length) reasons.push(`${plural(naUnbacked.length, "task")} closed not-applicable with no recorded decision (or with rows left unaccounted)`);
-  // The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read from
-  // `result`, the dispatch gate passed in from migrate.mjs — so the report can never read ✅ COMPLETE on a rejected run.
-  if (result?.gate?.blocked) reasons.push("the build gate is BLOCKED — the plan is not approvable");
-  if (result?.structure && !result.structure.complete) reasons.push("the plan STRUCTURE is incomplete — not ready to build");
-  if (result?.coverage && !result.coverage.complete) reasons.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
-  if (result?.listGate?.blocked) reasons.push("the LIST page gate is BLOCKED — the list page is not approvable");
-  if (gates?.dispatchFailed) reasons.push("the DISPATCH gate failed — a task was closed with no dispatch token");
-  // point 6: THREE-COLOUR VERDICT. Postponed items (row cells marked `postponed` through
-  // --decide) are a DEBT with a destination — not a real miss and not a done row. Collected here from the
-  // merged tasks so the verdict can distinguish "the machine has nothing left to do, the person has a debt"
-  // (🟡) from "someone still has work here" (🔴).
+  reasons.push(...naUnbackedReasons(tasks, decisions), ...gateReasons(result, gates));
+  // Postponed rows are a DEBT with a destination — not a real miss and not a done row — so the verdict can tell
+  // "the machine has nothing left to do, the person has a debt" from "someone still has work here".
   const postponedRows = collectPostponedRows(tasks);
-  // AC 13 — 🟡 IS GRANTED ONLY OVER DECISIONS THAT STILL RESOLVE. `collectPostponedRows` parses the cell TEXT, so
-  // it accepts a `(D<N>)` naming a decision renamed or deleted from decisions.md after the cell was written, and a
-  // cell carrying no `→ <destination>` at all. Neither is a person's answer: one points at nothing, the other names
-  // no debt to carry. They are unbacked closures and belong on `reasons`, so the verdict computes RED through the
-  // path every other shortfall already takes. Without this split a `D999` that resolved nowhere still bought 🟡,
-  // and the single-group headline below interpolated a literal `null` destination. Because an unbacked row always
-  // lands on `reasons`, `complete` implies EVERY postponed row carries a resolvable decision and a destination —
-  // which is what makes the headline's `grouped[0]` fields safe to interpolate without a guard.
-  const postponedUnbacked = postponedRows.filter((p) => !p.decision || !decisions.has(p.decision) || !p.destination);
-  if (postponedUnbacked.length) {
-    const where = postponedUnbacked.map((p) => `\`${esc(p.task.file)}\` row ${p.n}`).join(", ");
-    reasons.push(`${plural(postponedUnbacked.length, "row")} postponed without a resolvable \`D<N>\` and a destination`
-      + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
-      + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`);
-  }
+  reasons.push(...postponedUnbackedReasons(postponedRows, decisions));
   const complete = reasons.length === 0;
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
