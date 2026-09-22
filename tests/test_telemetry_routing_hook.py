@@ -216,15 +216,26 @@ def outcome_files(session: str, kind: str) -> "list[Path]":
 
 
 def await_outcome(session: str, kind: str, timeout: float = 20.0) -> str:
-    """Wait until clio's answer for the most recent dispatch has been written, and return it."""
+    """Wait until clio's answer for the most recent dispatch has been written, and return it.
+
+    EVERY answer file has to be non-empty, not just one of them. `dispatch` creates the file for a
+    dispatch before the hook returns and the child fills it afterwards, so a caller in a loop that
+    stopped at the first non-empty file was reading the PREVIOUS call's answer and continuing while
+    this call's refusal was still in flight. The hook then saw one attempt slot fewer than the test
+    counted, which on a slow runner slid the exhaustion diagnostic a call later than asserted.
+    """
     deadline = time.monotonic() + timeout
+    latest = ""
     while time.monotonic() < deadline:
-        for answer in outcome_files(session, kind):
-            text = answer.read_text(encoding="utf-8")
-            if text.strip():
-                return text
+        answers = [(a, a.read_text(encoding="utf-8")) for a in outcome_files(session, kind)]
+        settled = [(a, text) for a, text in answers if text.strip()]
+        if settled:
+            latest = max(settled, key=lambda pair: pair[0].stat().st_mtime)[1]
+        if answers and len(settled) == len(answers):
+            return latest
         time.sleep(0.05)
-    return ""
+    # Timed out with a dispatch still unanswered: the newest answer that did arrive, as before.
+    return latest
 
 
 def age_out_outcome(session: str, kind: str) -> None:
