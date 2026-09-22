@@ -79,7 +79,7 @@ assert set(ALL_TARGETS) == set(NATIVE_TARGETS) | set(COPY_TARGETS)
 # socket or an interactive prompt would hang the updater with no exit code.
 _STEP_TIMEOUT_SECONDS = 600
 
-# The installer script delegated to for Cursor/Codex and used to locate the release root.
+# The installer script delegated to for Cursor/Codex, and the anchor for locating the release root.
 _INSTALL_SCRIPT_NAME = "install.py"
 
 

@@ -46,8 +46,8 @@ actually running.
 | A targeted, implementation-ready edit to an existing app | `app-maintenance` | No |
 
 **Being exempt from Gate P/R is not being exempt from telemetry.** That exemption is exactly why those
-flows used to report nothing: the old event names hung off the app-creation gates, so a flow that
-skipped those gates emitted nothing at all, no matter how the instructions were worded. Their
+flows would report nothing if the event names hung off the app-creation gates: a flow that
+skipped those gates would emit nothing at all, no matter how the instructions were worded. Their
 emission points are their own gates instead, listed below.
 
 ## Where each flow's stages land

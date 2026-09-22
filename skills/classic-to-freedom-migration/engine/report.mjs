@@ -1,4 +1,4 @@
-// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on (ENG-99126).
+// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on.
 //
 // Before this module the run ended on two files that disagreed. `--verify` printed the plan-vs-built table and a
 // verdict computed from its machine rows alone ("2 machine row(s) not confirmed"); `build-tasks/index.md` — the
@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
-  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED,
+  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
   O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
@@ -225,7 +225,7 @@ function splitDecided(notBuilt, boundaries) {
   return { open, decided };
 }
 
-// A SETTLED TASK WHOSE ROWS DRIFTED: its cells were recorded against deliverables the plan no longer carries, so
+// A SETTLED TASK WHOSE ROWS DRIFTED: its cells were recorded against deliverables the plan has since dropped, so
 // no mark re-attaches and the collector sees no owed row. Its word stands over rows nobody accounted for.
 function driftedSettledReasons(tasks) {
   const bad = (tasks || []).filter((t) => t.drifted && !t.unread && (t.status === S_DONE || t.status === S_PARTIAL));
@@ -533,8 +533,19 @@ function carryOverSection(items, pageName) {
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
+// WHY THE LEDGER YIELDED NOTHING, matched to the refusal's own reason. "Could not be read" is the narrowest of
+// them: a cut that parses perfectly well but does not cover the plan refuses here too, and calling that a read
+// failure sends the reader to check a file whose syntax is fine. `null` when the ledger was readable.
+function ledgerReason(set) {
+  if (!set?.refused) return null;
+  const detail = (set.problems || []).join("; ") || "the task folder could not be read";
+  const how = !set.refusal || set.refusal === REFUSED_UNREADABLE ? "could not be read" : "yielded no tasks";
+  return `the task ledger ${how} (${esc(detail)}) — the run cannot be called complete until the folder is fixed`
+    + " and re-verified";
+}
+
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
-  const ledgerRefused = set?.refused ? (set.problems || []).join("; ") || "the task folder could not be read" : null;
+  const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
   const decisions = readDecisions(path.join(dir || ".", ".."));
@@ -545,7 +556,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const gaps = planGaps(result);
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
-  // ENG-99740 — key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
+  // key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
   // taskRows' lookup join on (page, label) and state cannot bleed across same-labeled rows on different pages.
   const keyOf = (it) => `${it.row.pageKey || it.task.pageKey} ${labelKey(it.row.label)}`;
   const withLabels = (items) => { const ks = new Set(items.map(keyOf)); ks.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return ks; };
@@ -559,7 +570,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
-  if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
+  if (ledgerRefused) reasons.unshift(ledgerRefused);
   // A task computed `not-applicable` is the plan's own boundary (every row of the task is a plan-boundary
   // row). Under ENG-99749 the engine writes that outcome only from `r.na`, so a `not-applicable` task with
   // rows the plan did NOT mark that way is the same defect this rename fixes — a person's decision written

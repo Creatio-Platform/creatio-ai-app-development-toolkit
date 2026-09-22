@@ -77,7 +77,7 @@ def bullet(text, head):
 class ClassicSkillSafetyDocTests(unittest.TestCase):
     """Pin the normative phrases of prose-only safety guarantees.
 
-    Each guarantee below regressed at least once during ENG-94529 review — raw-value
+    Each guarantee below is fragile in the same way — raw-value
     logging (bf31563), the toggle fail-safe (7944948), the card contract's closed set
     (65266ce), and the Evidence rule closing on the instruction it supersedes. Prose
     review caught each one late; these locks catch the next one at commit time.
@@ -118,7 +118,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-AC evidence rule incomplete; missing {missing}")
 
     def test_evidence_placement_never_accepts_the_card_citation(self):
-        # The regression this replaces: the paragraph used to close on "copy from there"
+        # A paragraph closing on "copy from there" is what this replaces:
         # / "It goes in the Evidence column", whose referent is the card+AC *citation* —
         # the weaker rule the per-AC rule supersedes.
         content = read_text(MIGRATION_SKILL)
@@ -199,7 +199,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
 
     def test_feature_flag_gates_get_a_procedure_not_a_refusal(self):
         # Feature toggles outnumber system-setting gates on a customized stand (156 vs 106
-        # schemas, ENG-94529 census), so refusing to exercise them costs more coverage than
+        # schemas, a workspace census), so refusing to exercise them costs more coverage than
         # the secret-exposure risk it avoids. Same four steps, different tools.
         para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
         missing = missing_markers(
@@ -356,8 +356,8 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
 
     def test_message_counterpart_search_is_run_once_and_widened(self):
-        # Two failures to hold apart. Deferring the search left 18 of 30 threads open
-        # (ENG-94529), so it must actually run; re-running it per scope is unbounded on a
+        # Two failures to hold apart. A deferred search leaves counterpart threads
+        # open, so it must actually run; re-running it per scope is unbounded on a
         # customer stand, so it runs ONCE and the caller owns it when there is one.
         content = read_text(REFERENCE_FOLLOWING)
         missing = missing_markers(
@@ -429,7 +429,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"per-audience read must redact literals; missing {missing}")
 
     def test_classic_dashboards_go_through_the_migrator_not_a_rebuild(self):
-        # A section's Classic dashboards used to be invisible to the skill, so a run
+        # A section's Classic dashboards must not be invisible to the skill, or a run
         # either redrew them as a Freedom page or dropped them silently. The install is a
         # destructive clio tool (configuration build + restart), so the route and the hand-off
         # to the user are pinned, not only the tool name.

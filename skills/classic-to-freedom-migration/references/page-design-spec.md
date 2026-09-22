@@ -111,11 +111,11 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **[list-filter-attributes]** `<Items>.filterAttributes` — a `merge` REPLACES the array, so re-list every entry the
   starter list page already registers alongside this ChangeSet's contribution …
 - **[list-command-bar]** command-bar buttons: `<set>` — the set the run resolved, from BOTH surfaces: the
-  `getSectionActions()` menu and the buttons the section inserts through its own view `diff` (ENG-94714). What the
+  `getSectionActions()` menu and the buttons the section inserts through its own view `diff`. What the
   item still asks is where each one belongs on the Freedom command bar …
 - **[list-row-action]** row action: `<DataGridActiveRow…>` — its enablement condition must become Freedom state …
 - **[list-grid-config]** element config: `<Element>` — the element declares configuration keys the engine models on
-  no field, read off the section's own view `diff` and carried here rather than dropped (ENG-94714). The founding
+  no field, read off the section's own view `diff` and carried here rather than dropped. The founding
   case is the section's `merge DataGrid` setting `controlColumnName` / `applyControlConfig` / `controlCellClass`,
   which renders a control inside a grid cell and has no obvious Freedom analog. ONE item per element, listing its
   keys — the real `OpportunitySectionV2` grid declares twenty of them, and twenty separate rows would bury the two
@@ -123,7 +123,7 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 - **[list-section-element]** section element: `<Element>` — the section declares this element in its own view
   `diff` and the list vocabulary has no reading for it, or its ancestry reaches no recognised list container
   (usually because `section.seed` was not supplied). Published so it is not silently dropped, which is what
-  happened to every section-declared element before ENG-94714 …
+  happens to every section-declared element a run does not carry here …
 - **[list-process]** section process: `<names>` — the Classic section launches it; wire it as a list-page
   run-process action …
 
@@ -134,7 +134,8 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
 | Tab · <name> | <field label> | … | PDS.<col> | … | … |
 | Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
-| Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template-provided / native — confirm component on-stand | — | — |
+| Tab · <name> | <feature> | Approvals (component) | template-provided / native — confirm component on-stand | — | — |
+| Tab · <name> | <feature> | Attachments / Feed (component) | ⚠ resolve on-stand — read `<form template>`'s merged bundle (`get-page`) before writing: present → MERGE onto it, never a second element of the same name; absent → INSERT · configure it from `get-guidance name=page-modification-standard-components` … | — | — |
 | Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
@@ -206,7 +207,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
 | Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
 | Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
-| Tab · Basic information | Attachments | Attachments | template-provided | — | — |
+| Tab · Basic information | Attachments | Attachments | ⚠ resolve on-stand — read `PageWithTabsFreedomTemplate`'s merged bundle (`get-page`) before writing: present → MERGE onto it, never a second element of the same name; absent → INSERT · configure it from `get-guidance name=page-modification-standard-components` … | — | — |
 | Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
 | Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
 | Tab · History | Activities | Related list | Activity · native | — | — |

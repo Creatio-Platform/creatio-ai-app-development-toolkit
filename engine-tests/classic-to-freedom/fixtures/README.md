@@ -8,8 +8,7 @@ Provenance (important):
 - `supportunitemployee/` — **synthetic**, hand-written. Compact bodies for `SupportUnitEmployeePage`
   (entity `SupportUnit`): base `SupportCalendar_base.js` (8 profile fields, 3 tabs, 3 details, 4 rules,
   a method, two base-tab merges) + override `SupportService.js` (one analytics widget module). This
-  directory used to hold verbatim stand exports with module dumps / `recordId`s; those were replaced
-  with synthetic bodies.
+  directory holds synthetic bodies rather than verbatim stand exports with module dumps / `recordId`s.
 - `contract/` — **real client-schema layers** of the `ContractPageV2` page (entity `Contract`) from the
   Creatio product: these are Creatio's own configuration metadata, taken from **this same public,
   MIT-licensed toolkit repo**, and include **real method bodies** (`getActions`, `onEntityInitialized`,

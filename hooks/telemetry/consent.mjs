@@ -9,11 +9,11 @@ import path from 'node:path';
 // latency on every session that opted out.
 //
 // ClioRuntimePaths.Home is documented as `%LOCALAPPDATA%\creatio\clio` on Windows, `~/creatio/clio`
-// on macOS/Linux — NOT a LOCALAPPDATA-shaped path on every platform. The fallback below used to join
-// `creatio/clio/telemetry` onto a Windows-style `.../AppData/Local` path unconditionally, which does
+// on macOS/Linux — NOT a LOCALAPPDATA-shaped path on every platform. A fallback that joined
+// `creatio/clio/telemetry` onto a Windows-style `.../AppData/Local` path unconditionally does
 // not exist on macOS/Linux when neither CLIO_TELEMETRY_HOME nor CLIO_HOME is set: `consentGranted()`
-// then silently and permanently returned `false` on such a host, with nothing anywhere to say why —
-// the deterministic-floor guarantee this PR exists to provide never fired there at all.
+// then silently and permanently returns `false` on such a host, with nothing anywhere to say why —
+// and the deterministic-floor guarantee never fires there at all.
 export function telemetryHome() {
 	if (process.env.CLIO_TELEMETRY_HOME) {
 		return process.env.CLIO_TELEMETRY_HOME;
@@ -30,10 +30,10 @@ export function telemetryHome() {
 // A read that fails because there is nothing to read is the expected, silent case: no consent
 // decision has been made yet, which `consentGranted()` correctly reports as `false` without saying
 // anything. Anything else reading this file can throw for — a permission error, a parse error, a
-// clio-side storage-shape change this file's assumptions no longer match — looks IDENTICAL to that
-// from the caller's side, and used to be swallowed the same way. One process-lifetime diagnostic
+// clio-side storage-shape change this file's assumptions do not match — looks IDENTICAL to that
+// from the caller's side, and would be swallowed the same way. One process-lifetime diagnostic
 // line (this hook is a fresh process per invocation, so "once" here already means once per hook
-// call) is what distinguishes "nothing decided yet" from "this hook can no longer read consent for
+// call) is what distinguishes "nothing decided yet" from "this hook cannot read consent for
 // an unrelated reason" during support, the same gap `noteFloorExhausted` closes for the floor.
 function noteConsentReadFailure(error) {
 	try {

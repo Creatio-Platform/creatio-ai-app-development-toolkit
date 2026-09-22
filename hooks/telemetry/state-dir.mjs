@@ -134,7 +134,7 @@ export function markerPath(sessionId, suffix) {
 	return path.join(stateDirPath(), `${safeId}.${suffix}`);
 }
 
-// Removes one dispatch's request/outcome file pair once its outcome is no longer needed — resolved
+// Removes one dispatch's request/outcome file pair once its outcome is not needed — resolved
 // (recorded, unknown, or a promoted/abandoned refusal) rather than still pending. Best-effort: a
 // failed unlink costs nothing but leaving the pair for the once-a-week sweep, never a lost reading, so
 // it is never allowed to throw.

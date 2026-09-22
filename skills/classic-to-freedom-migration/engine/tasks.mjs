@@ -39,7 +39,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
-import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "./split.mjs";
+import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
+  slotIndex, takeSlot, coverageProblem } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -65,6 +66,21 @@ export const TASK_ORIGIN_ORCHESTRATOR = "orchestrator";
 // The two origins a task file may declare: the engine authored it from the plan, or the orchestrator added it.
 export const TASK_ORIGINS = [TASK_ORIGIN_ENGINE, TASK_ORIGIN_ORCHESTRATOR];
 export const TASK_INDEX_FILE = "index.md";
+
+// WHY a task set was refused, because the remedies differ and an operator acts on the remedy, not on the banner.
+// The split could not be READ (fix its syntax); it reads but does not RESOLVE, naming work the plan lacks or
+// claiming a row twice (fix the offending entry); it resolves but does not COVER the plan (place the named rows,
+// or stop supplying the file at all); the engine's own cut does not cover the plan (a defect in the slicer, which
+// no file the operator holds can correct).
+export const REFUSED_UNREADABLE = "split-unreadable";
+export const REFUSED_UNRESOLVED = "split-unresolved";
+export const REFUSED_COVERAGE = "split-coverage";
+export const REFUSED_CUT = "engine-cut";
+
+// WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
+// frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
+export const SPLIT_HANDED = "handed";
+export const SPLIT_FROZEN = "frozen";
 const OPEN_STATUSES = new Set([S_TODO, S_IN_PROGRESS, S_BLOCKED]);
 // The two words the engine writes as a task moves through the queue, as opposed to a verdict about its rows.
 const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
@@ -210,7 +226,7 @@ export const TASK_BUDGET = {
   confirm: 2,       // one on-stand question answered before the build
   row: 2,           // anything else
   // MINUTES PER UNIT OF WEIGHT — the only figure here that is a measurement rather than a judgement, and the one
-  // the progress block forecasts from. Median of the five sub-agents of one live run (ENG-98351, opus 4.8 at
+  // the progress block forecasts from. Median of the five sub-agents of one live run (opus 4.8 at
   // medium effort): refs 12→7.0 min, scaffolding 10→10.0, form page 36→28.3, list page 14→6.8, review 8→6.5.
   // The spread is 0.49–1.00, so a single number is not honest on its own: `forecastMinutes` reports a RANGE, and
   // once this run has closed tasks of its own it forecasts from those instead of from this constant. One run, one
@@ -343,7 +359,7 @@ function taskOf(chunk, order) {
   const { artifact, pageKey, label, anchor, identityKey, srcRows, reviewsArtifacts } = chunk;
   const rows = srcRows.map((r) => ({
     label: r.label,
-    // ENG-99740 — the ROW's own page, not the task's. A collapsed whole-run task (pageKey "run") merges several
+    // the ROW's own page, not the task's. A collapsed whole-run task (pageKey "run") merges several
     // pages' rows; without the source page the report joins them by label alone and a not-built / boundary state
     // bleeds across identically-labeled rows on different pages (e.g. `Handler — init` on two pages).
     pageKey: r.pageKey || pageKey,
@@ -406,8 +422,9 @@ function artifactRows(groups, B) {
 
 // THE TASK SET. `planVersion` is the engine's own plan version — the string a `decisions.md` approval names — so a
 // task folder can always be matched against the plan that was approved rather than the plan that exists now.
-export function buildTaskSet(result, opts = {}) {
-  const groups = checklistGroups(result, opts);
+// `groups` is a parameter so a caller that already derived them — `taskSetFor`, which then checks the cut
+// against them — does not walk the plan twice for one answer.
+export function buildTaskSet(result, opts = {}, groups = checklistGroups(result, opts)) {
   const order = pageOrder(result);
   const identity = pageIdentities(result);
   const B = budgetOf(opts);
@@ -613,13 +630,17 @@ const declaredOf = (meta = {}) => {
 // reopening the task, and it retires the declaration. A CLOSING word does not: that is the claim this derivation
 // refuses. The engine writes `status: blocked` beside `declared: blocked` itself, matching its stamp, so its own
 // word never reads as a re-open.
+// A FILE WRITTEN BEFORE `declared:` AND `statusFrom:` EXISTED. Read off the shape, by every reader, so the
+// dispatch gate reaches one verdict whether the folder was just written or is only being read.
+const legacyShapeOf = (meta = {}) => meta.declared === undefined && meta.statusFrom === undefined;
+
 const declaredNow = (meta = {}) => {
   const declared = declaredOf(meta);
   if (!declared) return "";
   return statusEditedIn(meta) && OPEN_LIFECYCLE.has(meta.status) ? "" : declared;
 };
 
-// `status:` was written after the engine last derived a word: the stamp it left no longer describes it.
+// `status:` was written after the engine last derived a word: the stamp it left does not match the word.
 // An unstamped file (written before the stamp existed) is never "edited" - there is nothing to compare against.
 const statusEditedIn = (meta = {}) =>
   !!(meta.statusFrom && meta.statusFrom !== statusStamp(meta.status || S_TODO));
@@ -716,7 +737,7 @@ function closedByOf(row) {
 const boundaryOutcome = (r) => (r.na && !r.outcome) ? `${O_NOT_APPLICABLE} — ${r.na}` : (r.outcome || "");
 
 // The `From` column names the plan group each deliverable was read from. A task now spans several groups (they
-// write one artifact between them), so without it the file would no longer say which part of the plan a row is.
+// write one artifact between them), so without it the file could not say which part of the plan a row is.
 function renderRowTable(rows, repair = false) {
   // A repair row is shown with what was RECORDED against it and the EVIDENCE behind that, verbatim. A sub-agent
   // sent to fix a row needs what was actually observed; re-describing it in the engine's own words is how a repair
@@ -789,7 +810,7 @@ function oneAgentBlock(task) {
 // N deliverables cannot record a partial build, and a word the agent never writes cannot be overwritten.
 // A REPAIR task closes the same way — its rows are one verify round's rather than the plan's, but they are rows
 // with an outcome each, and the sub-agent reading both kinds of file is held to ONE closing contract.
-// THE TWO LINES THE FINAL REPORT READS OFF `## Notes` (ENG-99126). Free prose under the row number is still
+// THE TWO LINES THE FINAL REPORT READS OFF `## Notes`. Free prose under the row number is still
 // yours; these two are the sentences the migration result report quotes VERBATIM to the person who owns the
 // migration, so they are fixed in shape. Without them the report can only say "the agent did not state the
 // question", which is true and unhelpful.
@@ -1141,7 +1162,7 @@ function indexRows(tasks) {
 function taskAttention(t) {
   const out = [];
   if (t.unread) return out;   // its own refusal line already names the file; nothing here was recorded by anyone
-  // A `status:` THAT DID NOT COME FROM HERE: the stamp no longer matches, so the word was written after the
+  // A `status:` THAT DID NOT COME FROM HERE: the stamp does not match, so the word was written after the
   // engine last derived one. Reported, never honoured.
   // THE SAME PREDICATE the report reads, called rather than restated: two copies of it drift apart in silence.
   // `adoptedRowCount` counts the body's own ordinals, so the line distinguishes a file with no table from one
@@ -1319,6 +1340,11 @@ function attentionLines(set) {
       + " — the decision stands unless you disagree with it. Confirm the boundary, or record the row as"
       + " `not-built` to schedule the work.");
   }
+  for (const it of set.boundariesHeldBack || []) {
+    out.push(`- \`${it.task.file}\` — a verify run re-opened **${brief(it.row.deliverable)}**, which this run closed as`
+      + ` \`n-a\` with a reason: ${brief(it.reason, 160)}. NOT routed to a repair round — the decision stands unless`
+      + " you disagree with it. Confirm the boundary, or record the row as `not-built` to schedule the work.");
+  }
   for (const it of notBuiltOpenItems(set.tasks)) {
     let why;
     if (it.row?.naNoReason) why = "recorded `not-applicable` with NO reason — a row closed without building it needs one, so it counts as not built";
@@ -1335,9 +1361,8 @@ function attentionLines(set) {
   // CLOSED WITHOUT EVER BEING DISPATCHED. The engine cannot see WHICH context closed a task, but it can see that
   // nobody asked it to start one. Reported, never coerced: the status stands as recorded.
   out.push(...nonceAttention(set.tasks), ...dispatchAttention(set.dispatch));
-  // A plan row nobody is scheduled to build, and an item whose work has left the plan. Both come from meeting a
-  // FROZEN split with a plan that moved, and neither is the engine's to resolve — which item a new row belongs to
-  // is exactly the judgement the split file records.
+  // An item whose work has left the plan: a FROZEN split met by a plan that moved, and not the engine's to
+  // resolve — whether anything that item built is still needed is a judgement only its author can make.
   for (const p of set.problems || []) out.push(`- ${p}`);
   for (const b of set.blocked || []) {
     out.push(`- \`${b.file}\` — NOT READ and NOT WRITTEN: ${b.reason}. Its task got no file this run, and this file was`
@@ -1727,7 +1752,7 @@ export function mergeTaskSet(fresh, existing = []) {
   const tasks = fresh.tasks.map((t) => carryOver(t, matchFor(byId, t)));
   const claimed = new Set(fresh.tasks.map((t) => t.id));
   // An orchestrator file whose `id` an engine task also claims cannot become that task's record (`matchFor`), and
-  // it is not `extra` either — so it used to fall out of the index entirely: no queue row, no `## Attention` line.
+  // it is not `extra` either — so without this it falls out of the index entirely: no queue row, no `## Attention` line.
   // Worse, when its name equalled the engine task's computed file name, `syncTaskDir` wrote the engine task over
   // it and destroyed its `## Notes`. It is refused instead: named on Attention and never written to.
   const malformedId = new Set();
@@ -1953,7 +1978,7 @@ function adoptOrchestrated(e) {
     declared,
     statusEdited: adoptedEdited,
     // Neither field present: written before either existed. `classifyUndispatched` exempts that shape.
-    legacyShape: e.meta.declared === undefined && e.meta.statusFrom === undefined,
+    legacyShape: legacyShapeOf(e.meta),
     rows, gatedRows: 0, naRows: 0, rowsDigest: e.meta.rowsDigest || "", notes: e.notes || "",
     // The FALL-BACK count, for a file whose table the engine could not read: every leading ordinal in the body,
     // so it also sees a table the scoped parser ignores. Null when there is none — the index shows `—`, never `0`.
@@ -1993,11 +2018,24 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   const identity = pageIdentities(result);
   const B = budgetOf(opts);
   const resolved = resolveSplit(split, groups, identity);
-  const { emptied, added } = reconcile(resolved);
+  const { emptied } = reconcile(resolved);
   const problems = splitProblems({ errors: resolved.errors, unplaced: resolved.unplaced, emptied });
   // A split that does not resolve is REFUSED, not partially honoured: a folder built from half a split schedules
   // some of the plan and silently drops the rest, which is the failure the coverage check exists to prevent.
-  if (resolved.errors.length) return { refused: true, problems, tasks: [], planVersion: result.planVersion || null };
+  // A row claimed by NO item refuses on the same terms — it is work nobody is scheduled to do, and the engine
+  // picks no owner for it: which item a row belongs to is the judgement the split records.
+  //
+  // FATAL MID-BUILD TOO, DELIBERATELY. A plan that gains a row under a frozen split stops an in-flight folder:
+  // `--next`, `--start`, the sync and the repair rounds all refuse until the row is placed. Nothing is written
+  // and no file is touched, so the recorded work survives — and a queue that keeps handing out tasks while part
+  // of the plan is scheduled to nobody is the state this check exists to end. An item EMPTIED by the same drift
+  // is not fatal: it names work already done, not work still owed.
+  if (resolved.errors.length || resolved.unplaced.length) {
+    // Split by REMEDY: a malformed entry is fixed in the file it came from, an unclaimed row is placed. Only the
+    // second is new here, and only it wants the coverage wording.
+    const refusal = resolved.errors.length ? REFUSED_UNRESOLVED : REFUSED_COVERAGE;
+    return { refused: true, refusal, problems, tasks: [], planVersion: result.planVersion || null };
+  }
 
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
@@ -2049,7 +2087,6 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     budget: B,
     split: { source: "file", items: resolved.items.length },
     problems,
-    added,
     emptied,
     tasks: withDependencies([...refsChunk, ...tasks]),
   };
@@ -2073,7 +2110,7 @@ const REPAIR_KIND = "repair";
 // WHAT THE CAP COUNTS, which is not what the cause SAYS. A cause carries WHY a row is open as well as what kind
 // of row it is, and the why moves between rounds: a row `--verify` could not confirm (`unverified:…`) comes back
 // from the round that failed it recorded as `not-built:…`. Keyed on the whole cause that is a fresh bucket at
-// round 1 and the cap never fires. The KIND is what holds, so the cap and the one-round-at-a-time rule are per
+// and the cap never fires. The KIND is what holds, so the cap and the one-round-at-a-time rule are per
 // (page, kind); the cause on the file still says where this round's rows came from.
 const capKey = (pageKey, cause) => `${pageKey} ${String(cause || "").split(":").pop()}`;
 
@@ -2332,7 +2369,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   return { written, parked, pending, boundaries, set: merged };
 }
 
-// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY (ENG-99126). The final report reads the ledger
+// THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY. The final report reads the ledger
 // through this — the same merge `syncRepairDir` makes (plan rows carry `na`, so an agent-asserted boundary is
 // tellable from an approved one; dispatch and residuals resolved), minus every write. It exists for the paths
 // where the repair leg wrote nothing (a dispatch-gate refusal, a plan-level gap) and the report still has to say
@@ -2348,7 +2385,7 @@ export function readMergedTaskDir(dir, result, opts = {}) {
 
 // THE SPLIT IS FROZEN IN THE FOLDER. Handed one, the engine validates it and copies it in; from then on every
 // re-slice reads the copy. That is what makes a later run a RECONCILIATION rather than a second opinion: the cut
-// is not re-decided, so a recorded `done` cannot move to a task that no longer exists.
+// is not re-decided, so a recorded `done` cannot move to a task that does not exist.
 export function readFrozenSplit(dir) {
   const p = path.join(dir, SPLIT_FILE);
   if (!fs.existsSync(p)) return null;
@@ -2361,17 +2398,79 @@ export function freezeSplit(dir, text) {
   fs.writeFileSync(path.join(dir, SPLIT_FILE), text);
 }
 
+// EVERY PLAN ROW IS CLAIMED BY EXACTLY ONE TASK ROW. Matching is scoped PER PAGE, the way `planIndex` scopes the
+// split's: two pages each carry a `Quality gates` row worded identically, so a global count would let a row
+// placed under the wrong page cancel out against the page it was taken from and pass the check. The row's OWN
+// page is what is keyed — a collapsed whole-run task is `pageKey: "run"` while its rows keep their groups'.
+// `REFS_GROUP` rows are engine-authored rather than plan deliverables, and a collapsed run drops them
+// altogether, so they are counted on neither side. Occurrences are matched as a multiset: a label the plan
+// carries twice needs two task rows, not one.
+// What this side contributes is WHICH rows to feed in: the row's own page, not the task's, and never a
+// `REFS_GROUP` row, which is engine-authored rather than a plan deliverable and is dropped outright by a
+// collapsed run. The occurrence rule itself belongs to `split.mjs`.
+const planRowsOf = (tasks) => tasks.flatMap((t) => (t.rows || [])
+  .filter((r) => r.group !== REFS_GROUP)
+  .map((r) => ({ pageKey: r.pageKey || t.pageKey, label: r.label })));
+
+export function unclaimedPlanRows(tasks, groups) {
+  const held = slotIndex(planRowsOf(tasks));
+  const unplaced = [];
+  for (const g of groups) {
+    for (const r of g.rows) {
+      if (!takeSlot(held, g.pageKey, r.label)) unplaced.push({ pageKey: g.pageKey, label: r.label });
+    }
+  }
+  // What is left over is a task row backed by no plan row — the other half of "exactly one", and the same defect
+  // seen from the other side.
+  return { unplaced, surplus: [...held.values()].flat() };
+}
+
+// The mechanical cut has no file anybody can correct, so it carries its own remedy into the shared sentence —
+// and it names the escape that exists, because a refusal with no way forward stops a folder on every path.
+const CUT_REMEDY = "The mechanical cut dropped it, which is a defect in the slicer: report it with the manifest"
+  + " that produced it. To proceed meanwhile, supply a `--split` covering this plan.";
+
+export function cutProblems({ unplaced, surplus }) {
+  const out = unplaced.map((u) => coverageProblem(u, CUT_REMEDY));
+  for (const s of surplus) {
+    out.push(`task row on \`${s.pageKey}\`: ${JSON.stringify(String(s.label).slice(0, 90))} is backed by no plan`
+      + " row — the mechanical cut invented it.");
+  }
+  return out;
+}
+
 // The cut this run uses: the one just handed in, else the one frozen in the folder, else none — and none means
 // the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
 // fall does not matter.
 export function taskSetFor(dir, result, opts = {}, split = null) {
   const frozen = split ? null : readFrozenSplit(dir);
   if (frozen?.errors?.length) {
-    return { refused: true, planVersion: result.planVersion || null, tasks: [],
+    return { refused: true, refusal: REFUSED_UNREADABLE, planVersion: result.planVersion || null, tasks: [],
       problems: frozen.errors.map((e) => `${SPLIT_FILE} ${e}`) };
   }
   const use = split || frozen?.split || null;
-  return use ? buildTaskSetFromSplit(result, use, opts) : buildTaskSet(result, opts);
+  if (use) {
+    const set = buildTaskSetFromSplit(result, use, opts);
+    // Only this frame knows WHICH file the cut came from, and whether the folder holds one of its own: below it
+    // the two collapse into one argument. A refusal has to name the file the operator can open, and what
+    // dropping a handed-in flag would actually fall back to — which is the frozen cut when the folder has one.
+    if (!set.refused) return set;
+    return { ...set,
+      splitSource: split ? SPLIT_HANDED : SPLIT_FROZEN,
+      frozenPresent: !!(split && readFrozenSplit(dir)?.split) };
+  }
+  // ONE derivation of the groups, shared with the slicer: `taskSetFor` sits on the sync, read, start, repair and
+  // report paths, and the check compares against exactly the rows the cut was made from.
+  const groups = checklistGroups(result, opts);
+  const set = buildTaskSet(result, opts, groups);
+  return cutRefusal(set, groups) || set;
+}
+
+// The refusal a failed coverage check produces, as its own frame so the shape a caller branches on is reachable
+// without a slicer defect to trigger it. `null` means the cut covers the plan.
+export function cutRefusal(set, groups) {
+  const problems = cutProblems(unclaimedPlanRows(set.tasks, groups));
+  return problems.length ? { ...set, refused: true, refusal: REFUSED_CUT, tasks: [], problems } : null;
 }
 
 // ---8<--- THE CLOCK: what has started, what it cost, and what the next one will cost ---8<---
@@ -2580,7 +2679,7 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // refusal SHAPES are unchanged: every caller reads `unread` / `blockedByDispatch` / `blockedByDeps` /
   // `blockedByOverlap` off the returned object exactly as before, in the same precedence.
   const blocker = startBlocker(t, merged.tasks, state.running);
-  // A file the engine REFUSED to read is not started. `--start` used to re-render it, which is exactly what
+  // A file the engine REFUSED to read is not started. Re-rendering it in `--start` is exactly what
   // the merge refusal exists to prevent: the `## Notes` on that file are the only record of work already done
   // on the stand, and the front matter the engine could not parse is the thing a human has to repair.
   if (blocker?.cause === HOLD_UNREAD) {
@@ -2652,7 +2751,9 @@ function rewriteFrontMatter(lines, status, declared, decisions = null) {
       lines[i] = `statusFrom: ${statusStamp(status)}`;
       at.stamp = i;
     } else if (lines[i].startsWith("declared:")) {
-      if (declared) lines[i] = `declared: ${declared}`;
+      // `null` leaves the line alone; the EMPTY STRING clears it. A retired declaration has to reach the file, or
+      // the re-open lasts until the next read and the word snaps back.
+      if (declared !== null) lines[i] = `declared: ${declared}`;
       at.declared = i;
     } else if (lines[i].startsWith("decisions:")) {
       if (decisions !== null) lines[i] = `decisions: ${decisions}`;
@@ -2764,7 +2865,7 @@ export function readTaskDir(dir) {
         statusEditedIn(e.meta));
       return {
         id: e.meta.id, file: e.file, status, recordedStatus: recorded, declared: declaredNow(e.meta),
-        statusEdited: statusEditedIn(e.meta), rows, origin,
+        statusEdited: statusEditedIn(e.meta), rows, origin, legacyShape: legacyShapeOf(e.meta),
         agentNonce: e.meta.agentNonce || "", writesTo: e.meta.writesTo || "",
         dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
         notes: e.notes || "",
@@ -2905,7 +3006,10 @@ function persistTaskSet(dir, merged) {
         if (t.decisions instanceof Map) t.decisions.delete(idx + 1);
       }
       const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
-      setFrontMatterStatus(dir, t.file, t.status, t.declared || null, decisionsArg);
+      // `?? ""` not `|| null`: under the rewritten front-matter rule `null` LEAVES the line alone and the empty
+      // string CLEARS it, so a retired `declared: blocked` has to reach the file as "" or the next read re-halts
+      // the task for ever. `|| null` was written when the rule was a plain truthiness test.
+      setFrontMatterStatus(dir, t.file, t.status, t.declared ?? "", decisionsArg);
       continue;
     }
     writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
@@ -2997,6 +3101,13 @@ export function addTasks(dir, result, declarations, opts = {}) {
     if (d?.id) taken.add(String(d.id).trim());
   }
   if (problems.length) return { refused: true, problems, shape: DECL_SHAPE, written: [] };
+  // THE CUT IS CHECKED BEFORE A FILE IS MINTED. A refusal touches nothing, and minting first would leave a
+  // declared file on disk beside an index that was never regenerated — the one path that reports success on a
+  // folder every other command refuses.
+  const cut = taskSetFor(dir, result, opts);
+  if (cut.refused) {
+    return { refused: true, refusal: cut.refusal, splitSource: cut.splitSource, problems: cut.problems, written: [] };
+  }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   for (const d of decls) {

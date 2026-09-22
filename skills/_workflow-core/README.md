@@ -1,8 +1,8 @@
 # `_workflow-core` — the host-neutral migration workflow core
 
-The Classic→Freedom migration's orchestration used to be written directly against
+Writing the Classic→Freedom migration's orchestration directly against
 the Claude Code Workflow runtime: `agent()`, `parallel()`, `phase()` and `args`
-injected as globals into a `.workflow.js` file. That made the migration *logic*
+injected as globals into a `.workflow.js` file — makes the migration *logic*
 portable — `migrate.mjs`, the manifests, the plans, the artifacts are all plain
 files — while the *orchestration* ran on exactly one host. Codex and other coding
 agents could perform individual operations but could not reproduce the workflow's

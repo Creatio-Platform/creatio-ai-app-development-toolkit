@@ -19,10 +19,11 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir,
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
+  cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
-import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -52,7 +53,7 @@ const check = (name, cond, detail) => {
             + a section with resolved list columns             → the `list` page gets its own gated unit
 
    `seed` carries 8 method bodies on purpose: the correctness gate rejects a hand-typed base template
-   with fewer than 5 as skeletal (#19), and a BLOCKED plan is exactly what `--tasks` refuses to slice —
+   with fewer than 5 as skeletal, and a BLOCKED plan is exactly what `--tasks` refuses to slice —
    so a skeletal seed would make every CLI check below test the refusal path instead of the happy one.
    ================================================================================================ */
 const SEED_METHODS = ["init", "getActions", "onSaved", "setColumns", "loadValues", "onRender", "onEntry", "onExit"]
@@ -277,7 +278,7 @@ check("buildTaskSet: EVERY plan row lands in exactly one task — bucketing by a
     return planRows.length === taskRows.length && planRows.every((k, i) => k === taskRows[i]);
   }, () => ({ plan: GROUPS.flatMap((g) => g.rows.map((r) => `${g.pageKey}·${g.baseTitle}·${r.label}`)).length,
     tasks: pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey}·${r.group}·${r.label}`)).length }));
-check("buildTaskSet: a row keeps the plan GROUP it was read from — a task now spans several groups, so without it the file would no longer say which part of the plan a deliverable belongs to",
+check("buildTaskSet: a row keeps the plan GROUP it was read from — a task can span several groups, so without it the file could not say which part of the plan a deliverable belongs to",
   () => pageTasks(SET).every((t) => t.rows.every((r) => GROUPS.some((g) => g.pageKey === t.pageKey && g.baseTitle === r.group
     && g.rows.some((x) => x.label === r.label)))),
   () => pageTasks(SET).flatMap((t) => t.rows.map((r) => `${t.pageKey}·${r.group}`)));
@@ -647,7 +648,7 @@ check("unreadable file: it counts as `Other`, not as an OPEN task — the queue 
     const idx = renderTaskIndex(mergeTaskSet(SET, [{ file: t.file, notes: "x", malformed: "front matter is not terminated", meta: { id: t.id } }]));
     return /\*\*Other:\*\* 1/.test(idx) && new RegExp(String.raw`\*\*Open:\*\* ${SET.tasks.length - 1}`).test(idx);
   }, () => renderTaskIndex(mergeTaskSet(SET, [{ file: taskAt(SET, "main", SCAFFOLD_LABEL).file, notes: "x", malformed: "front matter is not terminated", meta: { id: taskAt(SET, "main", SCAFFOLD_LABEL).id } }])).split("\n")[2]);
-check("duplicate id: when two files claim one `id` the engine can no longer tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
+check("duplicate id: when two files claim one `id` the engine cannot tell whose record it holds, so BOTH are refused and named — never a coin flip on `readdir` order that overwrites one of them",
   () => {
     const t = taskAt(SET, "main", SCAFFOLD_LABEL);
     const m = mergeTaskSet(SET, [asExisting(t, { status: "done" }), { ...asExisting(t, { status: "in-progress" }), file: "task-copy.md" }]);
@@ -865,7 +866,7 @@ check("merged chain: no task depends on itself and every link points BACKWARDS i
 
 console.log("\n===== an engine task that left the plan becomes stale, and is NOT deleted =====");
 const GONE = mergeTaskSet(SET, [asExisting(taskAt(SET2, "child:C2", "Page build"), { status: "done" }, "built on the stand already")]);
-check("stale: an engine task that is no longer in the plan is reported as `stale` rather than being dropped silently",
+check("stale: an engine task absent from the plan is reported as `stale` rather than being dropped silently",
   () => (GONE.stale || []).length === 1 && GONE.stale[0].file === taskAt(SET2, "child:C2", "Page build").file
     && !GONE.tasks.some((t) => t.id === taskAt(SET2, "child:C2", "Page build").id),
   () => GONE.stale);
@@ -991,7 +992,7 @@ n/a
         && parseTaskFile(fs.readFileSync(dp, "utf8")).meta.rowsDigest === taskAt(SET3, "main", DRIFT_GROUP).rowsDigest;
     }, () => readIndex(dir));
   syncTaskDir(dir, RUN, OPTS);   // back to plan A before the grow/shrink pair below
-  // Grow the plan (manifest B), then shrink it back: `child:C2`'s files are on disk while the plan no longer has them.
+  // Grow the plan (manifest B), then shrink it back: `child:C2`'s files are on disk while the plan omits them.
   const grown = syncTaskDir(dir, RUN2, OPTS2);
   const c2File = taskAt(SET2, "child:C2", "Page build").file;
   check("syncTaskDir: a RENAMED corrupted file gets no duplicate written beside it — the fresh `todo` file the engine would otherwise emit is a second record for one task, and the queue would schedule the wrong one",
@@ -1042,7 +1043,7 @@ check("split (anti-vacuity): the fixture split really covers EVERY plan row acro
     const inPlan = GROUPS.flatMap((g) => g.rows).length;
     return inSplit === inPlan && inPlan > 30;
   }, () => ({ split: FULL_SPLIT.items.flatMap((i) => i.rows).length, plan: GROUPS.flatMap((g) => g.rows).length }));
-check("split: a complete cut builds a task per ITEM — the seams are the file's, and the engine's own budget no longer decides them",
+check("split: a complete cut builds a task per ITEM — the seams are the file's, and the engine's own budget does not decide them",
   () => {
     const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
     const build = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
@@ -1076,21 +1077,21 @@ check("split: a row the plan does NOT have is REFUSED — a split naming work th
     const set = buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS);
     return set.refused && set.problems.some((p) => /claims a row the plan does not have/.test(p));
   }, () => buildTaskSetFromSplit(RUN, BOGUS_SPLIT(), OPTS).problems);
-check("split: a plan row in NO item is REPORTED by name and the engine picks no owner — which item a row belongs to is exactly the judgement the split records, so guessing would undo the point of having one",
+check("split: a plan row in NO item is REFUSED and named, and the engine picks no owner — a row nobody claims is work nobody is scheduled to do, and which item it belongs to is exactly the judgement the split records",
   () => {
     const set = buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS);
-    return !set.refused && set.added.length === 1
+    return set.refused && set.tasks.length === 0
       && set.problems.some((p) => /is in NO item/.test(p) && /will not pick an owner/.test(p));
   }, () => buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS).problems);
-check("split: the unplaced row reaches the INDEX too — a caller who reads the folder rather than the command output must meet the same gap",
+check("split (anti-vacuity): the SAME split with that row restored resolves and builds — the refusal above is the unclaimed row, not the fixture",
   () => {
-    const idx = renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), []));
-    return /## Attention/.test(idx) && /is in NO item/.test(idx);
-  }, () => renderTaskIndex(mergeTaskSet(buildTaskSetFromSplit(RUN, SHORT_SPLIT(), OPTS), [])));
+    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
+    return !set.refused && set.tasks.length > 0;
+  }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems);
 check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
   () => {
     const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
-    return !set3.refused && set3.added.length === 0
+    return !set3.refused && set3.problems.length === 0
       && rowKey("Fields — 19 expected") === rowKey("Fields — 20 expected");
   }, () => buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems);
 check("split: an item left with NO rows by a changed plan is reported and KEPT, never deleted — its file may hold the only record of work already done on a stand",
@@ -1309,6 +1310,82 @@ check("split: NO split file falls back to the engine's own budget slicer — a p
     fs.rmSync(dir, { recursive: true, force: true });
     return !set.split && set.tasks.length === SET.tasks.length;
   });
+// The reference cache is engine-authored and counted on neither side, so the fault is injected into a task that
+// holds PLAN rows.
+const planCarrier = SET.tasks.findIndex((t) => t.artifact !== ARTIFACT_REFS && t.rows.length);
+const dropOneRow = () => SET.tasks.map((t, i) => i === planCarrier ? { ...t, rows: t.rows.slice(1) } : t);
+const addOneRow = () => SET.tasks.map((t, i) => i === planCarrier
+  ? { ...t, rows: [...t.rows, { label: "Build the thing the plan forgot", group: t.rows[0].group }] } : t);
+check("the engine's own cut answers to the SAME rule as a split file: every plan row is claimed by exactly one task row, so a row the slicer drops refuses the run instead of going unbuilt",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(dropOneRow(), GROUPS);
+    return unplaced.length === 1 && surplus.length === 0
+      && unplaced[0].label === SET.tasks[planCarrier].rows[0].label;
+  }, () => unclaimedPlanRows(dropOneRow(), GROUPS));
+check("the same check names a task row NO plan row backs — the other half of `exactly one`, and the same defect seen from the other side",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(addOneRow(), GROUPS);
+    return unplaced.length === 0 && surplus.length === 1;
+  }, () => unclaimedPlanRows(addOneRow(), GROUPS));
+check("(anti-vacuity) the REAL cut of the real plan is clean under that check — the two refusals above are the injected fault, not a check that fires on everything",
+  () => {
+    const { unplaced, surplus } = unclaimedPlanRows(SET.tasks, GROUPS);
+    return unplaced.length === 0 && surplus.length === 0 && GROUPS.flatMap((g) => g.rows).length > 30;
+  }, () => unclaimedPlanRows(SET.tasks, GROUPS));
+// The COLLAPSED cut is the shape that makes per-row keying load-bearing: the whole-run task's own `pageKey` is
+// the literal `run`, while its rows keep their source pages. Keying on the task would report every row of it as
+// unplaced and refuse a correct run outright.
+check("the same check is clean over a COLLAPSED whole-run task, whose own `pageKey` is `run` while its rows keep their source pages",
+  () => {
+    const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+    const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const { unplaced, surplus } = unclaimedPlanRows(collapsed.tasks, GROUPS);
+    return unplaced.length === 0 && surplus.length === 0
+      && whole?.pageKey === "run" && whole.rows.some((r) => r.pageKey && r.pageKey !== "run");
+  }, () => {
+    const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+    return { problems: unclaimedPlanRows(collapsed.tasks, GROUPS),
+      whole: collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE)?.rows.map((r) => r.pageKey) };
+  });
+// What the engine's own cut SAYS when it finds a row on either side. The remedy is the operator's only signal
+// that no file of theirs is at fault, so it is asserted rather than assumed from the helper's return.
+check("a row the mechanical cut drops reads as the SAME finding a split file's does — one sentence for one condition — while carrying its own remedy: a slicer defect, and the `--split` escape that lets the folder move meanwhile",
+  () => {
+    const dropped = cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS));
+    const viaSplit = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "x" }], unclaimed: 1 }] });
+    return dropped.length === 1
+      && /is in NO item/.test(dropped[0]) && /is in NO item/.test(viaSplit[0])   // one sentence, both paths
+      && /defect in the slicer/.test(dropped[0]) && /supply a `--split`/.test(dropped[0])
+      && !/Add it to an item in the split file/.test(dropped[0]);                // that remedy is the split path's
+  }, () => cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS)));
+check("the refusal the cut produces carries the shape every caller branches on — refused, `engine-cut`, and NO tasks, so half a plan is never handed out beside the banner",
+  () => {
+    const dropped = cutRefusal({ tasks: dropOneRow(), planVersion: RUN.planVersion }, GROUPS);
+    const clean = cutRefusal({ tasks: SET.tasks, planVersion: RUN.planVersion }, GROUPS);
+    return dropped?.refused === true && dropped.refusal === REFUSED_CUT
+      && dropped.tasks.length === 0 && dropped.problems.length === 1
+      && clean === null;
+  }, () => ({ dropped: cutRefusal({ tasks: dropOneRow() }, GROUPS), clean: cutRefusal({ tasks: SET.tasks }, GROUPS) }));
+check("the CHUNKED plan reaches `taskSetFor` and is clean — the fixture whose pages the budget actually slices across several tasks is where a dropped or duplicated row would come from",
+  () => {
+    const dir = tmp("cut-chunked");
+    const set5 = taskSetFor(dir, RUN5, OPTS5, null);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const { unplaced, surplus } = unclaimedPlanRows(SET5.tasks, checklistGroups(RUN5, OPTS5));
+    return !set5.refused && set5.tasks.length > 1 && unplaced.length === 0 && surplus.length === 0;
+  }, () => unclaimedPlanRows(SET5.tasks, checklistGroups(RUN5, OPTS5)));
+check("a task row backed by no plan row is named with its own page and text — the other half of `exactly one`",
+  () => {
+    const invented = cutProblems(unclaimedPlanRows(addOneRow(), GROUPS));
+    return invented.length === 1 && /backed by no plan/.test(invented[0])
+      && /the mechanical cut invented it/.test(invented[0]);
+  }, () => cutProblems(unclaimedPlanRows(addOneRow(), GROUPS)));
+check("a label the plan carries twice and the split claims once names the COUNT still owed — without it the operator places one, re-runs, and meets a byte-identical refusal",
+  () => {
+    const two = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 2 }] });
+    const one = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 1 }] });
+    return /\(2 occurrences unclaimed\)/.test(two[0]) && !/occurrences unclaimed/.test(one[0]);
+  }, () => splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 2 }] }));
 
 console.log("\n===== a review waits for the page it judges, and may not precede a writer of it =====");
 // A late scaffolding item is legitimate; a review before a writer of its page never is — it would file a verdict
@@ -1525,6 +1602,36 @@ check("repair: with a FROZEN split in the folder, syncRepairDir regenerates the 
     fs.rmSync(dir, { recursive: true, force: true });
     return out;
   });
+// A frozen split meeting a plan that GAINED rows — the drift case, mid-build. Fatal by design, so what has to
+// hold is that it is fatal WITHOUT COST: the recorded work is still on disk and the refusal says what clears it.
+const driftedFolder = () => {
+  const dir = tmp("split-drift");
+  freezeSplit(dir, JSON.stringify(FULL_SPLIT));
+  syncTaskDir(dir, RUN, OPTS);
+  editFrontMatter(dir, FULL_SPLIT.items[0].id, "status", "done");
+  const before = fs.readdirSync(dir).sort();
+  // RUN5 adds handler rows and changes no existing label, so the split still RESOLVES and only its coverage
+  // falls short — the drift case proper, kept clear of the `claims a row the plan does not have` path.
+  const read = readMergedTaskDir(dir, RUN5, OPTS5);
+  const repair = syncRepairDir(dir, RUN5, VERIFY_PAGES, OPTS5);
+  const after = fs.readdirSync(dir).sort();
+  const kept = readTaskDir(dir).find((t) => t.id === FULL_SPLIT.items[0].id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { before, after, read, repair, kept };
+};
+check("frozen split + a plan that GAINED a row: an in-flight folder REFUSES until the row is placed — a queue that keeps handing out tasks while part of the plan is scheduled to nobody is the state this check exists to end",
+  () => {
+    const { read, repair } = driftedFolder();
+    return read.refused === true && read.tasks.length === 0
+      && read.refusal === REFUSED_COVERAGE
+      && read.problems.some((p) => /is in NO item/.test(p))
+      && repair.refused === true && repair.written.length === 0;
+  }, () => { const { read, repair } = driftedFolder(); return { read: read.problems, repair: repair.problems }; });
+check("…and that refusal costs NOTHING already recorded: every file survives and a task whose front matter said `done` still says `done`, so the drift is cleared by editing the split rather than by rebuilding the run",
+  () => {
+    const { before, after, kept } = driftedFolder();
+    return JSON.stringify(before) === JSON.stringify(after) && kept?.recordedStatus === "done";
+  }, () => { const { before, after, kept } = driftedFolder(); return { before, after, status: kept?.recordedStatus }; });
 check("repair: an UNREADABLE frozen split writes nothing at all — a folder repaired against a cut that cannot be parsed would be renumbered wholesale, which is the same reason a build run refuses it",
   () => {
     const dir = tmp("repair-bad-split");
@@ -1588,10 +1695,10 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
       return JSON.stringify(rowsOf(small)) === JSON.stringify(rowsOf(buildTaskSet(RUN, OPTS)));
     },
     () => ({ small: small.tasks.flatMap((t) => t.rows.length), full: buildTaskSet(RUN, OPTS).tasks.length }));
-  // ENG-99740 (Alexandr-Kravchuk minor): the collapse fix must be exercised through the REAL pipeline, not only a
+  // The collapse must be exercised through the REAL pipeline, not only a
   // hand-built set. `buildTaskSet` → `collapseSmallRun` → `chunksOf` → `taskOf` (rows[].pageKey = r.pageKey || pageKey)
   // over `artifactRows` (pageKey: g.pageKey) must give the whole-run task rows that carry their SOURCE page, not "run".
-  check("ENG-99740 (collapsed run, real pipeline): the whole-run task's rows each carry their source page key (not the task's `run`), spanning ≥2 pages — buildTaskSet/artifactRows/taskOf actually propagate pageKey",
+  check("(collapsed run, real pipeline): the whole-run task's rows each carry their source page key (not the task's `run`), spanning ≥2 pages — buildTaskSet/artifactRows/taskOf actually propagate pageKey",
     () => { const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
       return whole.pageKey === "run" && whole.rows.length > 0
         && whole.rows.every((r) => r.pageKey && r.pageKey !== "run")
@@ -1774,9 +1881,9 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
   }
 
   /* ============================================================================================
-     THE DISPATCH GATE (ENG-98562). Three mechanisms were advisory and a run walked past all three:
-     it dispatched one sub-agent per PAGE, closed the chunk tasks of that page from the one context
-     and closed the four `Quality gates` tasks from the orchestrator itself. Every check below is
+     THE DISPATCH GATE. Three mechanisms left advisory let a run walk past all three:
+     dispatching one sub-agent per PAGE, closing the chunk tasks of that page from the one context
+     and closing the four `Quality gates` tasks from the orchestrator itself. Every check below is
      about making an already-written rule FAIL rather than warn.
 
      The two recorded folders are the reference shapes and are NOT copied in — they hold customer
@@ -1841,7 +1948,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => ({ dependent: dependent?.id, dep: dep?.id, depStatus: dep?.status }));
       if (dependent && dep) {
         const res = startTask(d, dependent.id, RUN, OPTS, null, at(0));
-        check("order: `--start` REFUSES a task whose `dependsOn` has not closed, and names each one with its status — a task built before its dependency reads answers that do not exist yet, and the queue order was previously the caller's to honour",
+        check("order: `--start` REFUSES a task whose `dependsOn` has not closed, and names each one with its status — a task built before its dependency reads answers that do not exist yet, so the queue order is not the caller's to honour",
           () => res.started === null && res.blockedByDeps?.some((x) => x.id === dep.id)
             && !readTimingsFile(d).running[dependent.id],
           () => ({ blocked: res.blockedByDeps?.map((x) => x.id), running: Object.keys(readTimingsFile(d).running) }));
@@ -2105,7 +2212,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => (runS.stderr || "").slice(0, 400));
 
       // Dispatch every task in DEPENDENCY ORDER, the way the orchestrator must: `--start` refuses a task whose
-      // `dependsOn` is still open, so picking files in directory order no longer works.
+      // `dependsOn` is still open, so picking files in directory order does not work.
       const dispatchAll = (dir) => {
         for (let i = 0; i < 20; i++) {
           const tasks = readTaskDir(dir);
@@ -2233,7 +2340,7 @@ const CLI_SET = buildTaskSet(RUN, checklistOpts(MANIFEST));
   const base = tmp("cli");
   const dir = path.join(base, "build-tasks");   // deliberately NOT pre-created: the mode must create it
   const run = cliTasks(["--tasks", dir], MANIFEST);
-  // The note no longer tells the caller to pick the next task off the index's `Step` column. That
+  // The note does not tell the caller to pick the next task off the index's `Step` column. That
   // instruction and the `--next` mode are two answers to one question printed on one stream, and the index is a
   // DERIVED report whose shape has already moved under a caller parsing it.
   check("migrate.mjs --tasks: a gate-clean plan exits 0, creates the directory, writes one file per task plus the index, and prints a note naming the count, the index to present and the mode that answers WHICH task to start",
@@ -2305,7 +2412,7 @@ console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then fro
     () => fs.existsSync(path.join(dir, SPLIT_FILE))
       && JSON.parse(fs.readFileSync(path.join(dir, SPLIT_FILE), "utf8")).items.length === FULL_SPLIT.items.length,
     () => fs.readdirSync(dir));
-  check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy and produces the same tasks — the cut does not get re-decided, so a recorded `done` cannot move to a task that no longer exists",
+check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy and produces the same tasks — the cut does not get re-decided, so a recorded `done` cannot move to a task that does not exist",
     () => {
       const ids = () => fs.readdirSync(dir).filter((f) => f.startsWith("task-")).sort().join(",");
       const before = ids();
@@ -2322,10 +2429,17 @@ console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then fro
   const short = FULL_SPLIT.items.map((i) => i.pageKey === "main" ? { ...i, rows: i.rows.slice(1) } : i);
   fs.writeFileSync(splitPath, JSON.stringify({ planVersion: RUN.planVersion, items: short }, null, 2));
   const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
-  check("migrate.mjs --split: an unplaced plan row does NOT block the folder but IS said on stdout — the work is schedulable, one row of it simply has no owner, and that has to be loud rather than fatal",
-    () => run.status === 0 && /are in NO item/.test(run.stdout || "")
-      && /will not pick an owner/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8")),
-    () => ({ stdout: run.stdout, idx: fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-500) }));
+  check("migrate.mjs --split: a row claimed by NOBODY writes NOTHING at all — a folder that schedules every row but one still leaves that row unbuilt, and nothing downstream measures a row no task holds",
+    () => /NOTHING WRITTEN/.test(run.stdout || "") && /is in NO item/.test(run.stdout || "")
+      && /will not pick an owner/.test(run.stdout || "")
+      && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: run.status, stdout: run.stdout, exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
+  check("migrate.mjs --split: that refusal names the file the operator PASSED, not a frozen one — nothing is frozen on a first cut and the folder does not exist yet, so `the frozen split in <dir>` would send them to edit a file that is not there",
+    () => /the split passed with --split does not cover this plan/.test(run.stdout || "")
+      && !/frozen split/.test(run.stdout || "")
+      && /drop --split to fall back/.test(run.stdout || "")
+      && !/Expected shape/.test(run.stdout || ""),   // it parsed and resolved; its coverage is short, not its shape
+    () => run.stdout);
   // A row claimed twice: refused, and NOTHING is written.
   const base2 = tmp("cli-split-dup");
   const dir2 = path.join(base2, "build-tasks");
@@ -2338,6 +2452,42 @@ console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then fro
     () => /NOTHING WRITTEN/.test(bad.stdout || "") && /is claimed 2 times/.test(bad.stdout || "")
       && !fs.existsSync(path.join(dir2, TASK_INDEX_FILE)),
     () => ({ stdout: bad.stdout, exists: fs.existsSync(dir2) ? fs.readdirSync(dir2) : null }));
+  check("migrate.mjs --split: that refusal's remedy NAMES the file to fix — its cause line is the generic 'does not resolve', which mentions no file, so a bare `that file` would refer to nothing the reader has been shown",
+    () => /Fix the file you passed with --split and re-run/.test(bad.stdout || "")
+      && !/Fix that file/.test(bad.stdout || ""),
+    () => bad.stdout);
+  // A folder cut against one plan, met by a plan that GAINED rows. The split still PARSES and its coverage falls
+  // short, and the refusal has to say which, because the two are cleared by different edits.
+  const baseD = tmp("cli-split-drift");
+  const dirD = path.join(baseD, "build-tasks");
+  const splitD = path.join(baseD, "split.json");
+  fs.writeFileSync(splitD, JSON.stringify(FULL_SPLIT, null, 2));
+  cliTasks(["--tasks", dirD, "--split", splitD], MANIFEST);        // built against plan A
+  const drift = cliTasks(["--tasks", dirD], MANIFEST5);            // plan B gained handler rows
+  const driftRoute = cliTasks(["--tasks", dirD, "--route"], MANIFEST5);
+  const builtD = path.join(baseD, "built.json");
+  fs.writeFileSync(builtD, JSON.stringify({ pages: { main: false } }));
+  const driftVerify = cliTasks(["--verify", "--built", builtD, "--tasks", dirD], MANIFEST5);
+  check("migrate.mjs: a frozen split met by a plan that GAINED rows names THAT as the cause and offers both remedies — 'could not be read' would send the operator to fix a file whose syntax is fine",
+    () => /NOTHING WRITTEN/.test(drift.stdout || "") && /no longer covers this plan/.test(drift.stdout || "")
+      && !/could not be read/.test(drift.stdout || "")
+      && /Place the named rows/.test(drift.stdout || "")
+      && /delete `?split\.json`? to fall back/.test(drift.stdout || ""),
+    () => drift.stdout);
+  check("--route names the SAME cause and remedy for that folder — a repair round reads the cut the build leg reads, so one state cannot be a coverage shortfall on one command and an unreadable file on the other",
+    () => /NO REPAIR TASKS WRITTEN/.test(driftRoute.stdout || "")
+      && /no longer covers this plan/.test(driftRoute.stdout || "")
+      && !/could not be read/.test(driftRoute.stdout || "")
+      && /Place the named rows/.test(driftRoute.stdout || ""),
+    () => driftRoute.stdout);
+  check("--verify's repair leg answers that folder the same way — the two legs share one cause writer, so a reader cannot be told the file is unreadable on one and short on coverage on the other",
+    () => {
+      const out = (driftVerify.stdout || "") + (driftVerify.stderr || "");
+      return /yielded no tasks/.test(out) && /is in NO item/.test(out) && !/could not be read/.test(out);
+    },
+    () => ({ banner: ((driftVerify.stdout || "") + (driftVerify.stderr || ""))
+      .split(/\r?\n/).filter((l) => /REPAIR|covers|could not be read/.test(l)).join(" | ").slice(0, 700) }));
+  fs.rmSync(baseD, { recursive: true, force: true });
   // A split cut against a DIFFERENT plan version.
   const base3 = tmp("cli-split-ver");
   const dir3 = path.join(base3, "build-tasks");
@@ -2355,6 +2505,78 @@ console.log("\n===== migrate.mjs --tasks --split (CLI): validated once, then fro
   fs.rmSync(base, { recursive: true, force: true });
   fs.rmSync(base2, { recursive: true, force: true });
   fs.rmSync(base3, { recursive: true, force: true });
+}
+
+console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CLI) =====");
+// The exit code is what an orchestrator reads to tell an approvable folder from one the engine declined to touch:
+// the ⛔ banner is prose a machine does not parse. A refusal writes nothing and names no task, so exiting like an
+// answer would have the run schedule sub-agents against a folder that was never cut.
+// Each refusal KIND gets its own pin, because they are indistinguishable to a caller and share the one banner.
+for (const { kind, split, said } of [
+  { kind: "a row claimed TWICE", split: DUP_SPLIT(), said: /is claimed 2 times/ },
+  { kind: "a row the plan does not have", split: BOGUS_SPLIT(), said: /claims a row the plan does not have/ },
+]) {
+  const base = tmp("cli-refusal-kind");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify(split, null, 2));
+  const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check(`migrate.mjs --tasks: a split refused for ${kind} exits 2 and writes nothing — the banner and the exit code are one verdict, not two`,
+    () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
+      && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 400), exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // `--start` is the command the orchestrator runs before EVERY dispatch, so a refusal it exits 0 on is the most
+  // expensive one to misread: the caller hands the named task to a sub-agent while no clock was opened for it and
+  // the folder records nothing started.
+  const base = tmp("cli-start-refusal");
+  const dir = path.join(base, "build-tasks");
+  const cut = cliTasks(["--tasks", dir], MANIFEST);
+  check("start-refusal fixture (anti-vacuity): the folder is really cut and clean, so the refusals below are the id and the unreadable file rather than a missing folder",
+    () => cut.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 300) }));
+  const ghost = cliTasks(["--tasks", dir, "--start", "no-such-task-id"], MANIFEST);
+  check("migrate.mjs --start: an id the folder does not hold is refused with an exit of 2 — nothing was marked started, and a caller reading that as success dispatches a sub-agent onto a task with no clock",
+    () => ghost.status === 2 && /⛔ no task `no-such-task-id`/.test(ghost.stdout || ""),
+    () => ({ status: ghost.status, stdout: (ghost.stdout || "").slice(0, 300) }));
+  // A file the engine cannot parse is left untouched rather than rewritten, so the id it holds can never be started.
+  const victim = fs.readdirSync(dir).find((f) => f.startsWith("task-"));
+  const startId = /^id:\s*(\S+)/m.exec(fs.readFileSync(path.join(dir, victim), "utf8"))?.[1];
+  fs.writeFileSync(path.join(dir, victim), "---\nid: " + startId + "\nstatus: todo\n");
+  const unread = cliTasks(["--tasks", dir, "--start", startId], MANIFEST);
+  check("migrate.mjs --start: a task whose file cannot be read is refused with an exit of 2 — the engine will not rewrite that file, so the task it names cannot be started and the run must not continue as though it were",
+    () => unread.status === 2 && /⛔/.test(unread.stdout || "") && /could not be read/.test(unread.stdout || ""),
+    () => ({ status: unread.status, stdout: (unread.stdout || "").slice(0, 400) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // ONE folder state, read by every mode that can refuse it. A code that differs per mode makes the same folder
+  // approvable or not depending on which command happened to ask, which is the contradiction the parity closes.
+  const base = tmp("cli-refusal-parity");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify(FULL_SPLIT, null, 2));
+  const cut = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check("refusal parity (anti-vacuity): the folder is really CUT and clean first, so the three modes below refuse over a folder that exists rather than over a missing one",
+    () => cut.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && fs.existsSync(path.join(dir, SPLIT_FILE)),
+    () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 300), stderr: (cut.stderr || "").slice(0, 300) }));
+  // The frozen copy is what every later run reconciles against, so replacing it with a cut that does not resolve
+  // puts the SAME refusal in front of each mode without any of them being handed a different input.
+  fs.writeFileSync(path.join(dir, SPLIT_FILE), JSON.stringify(DUP_SPLIT(), null, 2));
+  const MODES = [["--tasks", ["--tasks", dir]], ["--tasks --next", ["--tasks", dir, "--next"]],
+    ["--tasks --route", ["--tasks", dir, "--route"]]];
+  const runs = MODES.map(([label, args]) => [label, cliTasks(args, MANIFEST)]);
+  for (const [label, r] of runs) {
+    check(`migrate.mjs \`${label}\`: a folder whose frozen cut does not resolve against the plan is refused with an exit of 2 — every mode that prints the banner owes the caller the same verdict the banner states`,
+      () => r.status === 2 && /⛔/.test((r.stdout || "") + (r.stderr || "")),
+      () => ({ status: r.status, stdout: (r.stdout || "").slice(0, 400), stderr: (r.stderr || "").slice(0, 400) }));
+  }
+  check("migrate.mjs: every refusing mode answers 2 for one folder state — a caller must not have to remember which command it asked with to know whether the folder is approvable",
+    () => runs.every(([, r]) => r.status === 2),
+    () => runs.map(([label, r]) => `${label}: ${r.status}`).join(" | "));
+  fs.rmSync(base, { recursive: true, force: true });
 }
 
 console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round =====");
@@ -2569,7 +2791,7 @@ check("notBuiltRows names the DELIVERABLE and its cause, not just the task — `
       && items[0].row.label === SAMPLE.rows[1].label;
   }, () => notBuiltRows([reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED))]));
 
-console.log("\n===== ENG-99748: a hand-written task is computed from its own cells, like every other =====");
+console.log("\n===== a hand-written task is computed from its own cells, like every other =====");
 // An ADOPTED file: read, never re-authored. Built from the engine's own rendering so the table is in the shape a
 // declared task carries, and re-keyed to an id no plan task claims (`matchFor` would otherwise match it).
 const ADOPTED_ID = "orch-hand-written";
@@ -2585,14 +2807,14 @@ const handWritten = (mutate, status = "done") =>
   mergeTaskSet(SET, [{ file: ADOPTED_FILE, ...parseTaskFile(handWrittenText(mutate, status)) }])
     .tasks.find((t) => t.id === ADOPTED_ID);
 
-check("ENG-99748: a hand-written task whose table parses and carries a `not-built` row computes `partial` — a typed `done` does not stand, because the word would be the verdict of the party that did the work",
+check("hand-written: a table that parses and carries a `not-built` row computes `partial` — a typed `done` does not stand, because the word would be the verdict of the party that did the work",
   () => {
     const t = handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED));
     return t.origin === "orchestrator" && t.status === "partial";
   }, () => { const t = handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED));
     return { origin: t?.origin, status: t?.status, rows: t?.rows.map((r) => r.outcome) }; });
 
-check("ENG-99748: its rows are READ, so the unbuilt deliverable is NAMED — an adopted file used to be carried with no rows at all, which hid the admission from the report and the gate even where the word was right",
+check("hand-written: its rows are READ, so the unbuilt deliverable is NAMED — an adopted file carries its rows into the report and the gate, so the admission is visible even where the recorded word is right",
   () => {
     const t = handWritten((x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED));
     const items = notBuiltRows([t]);
@@ -2600,31 +2822,31 @@ check("ENG-99748: its rows are READ, so the unbuilt deliverable is NAMED — an 
       && items[0].row.label === SAMPLE.rows[1].label;
   }, () => notBuiltRows([handWritten((x) => setOutcome(allBuilt(x), 2, NOT_BUILT_BLOCKED))]));
 
-check("ENG-99748: the row reaches the OPEN list too — the report, the index attention list and the exit-2 unrouted count all read through it",
+check("hand-written: the row reaches the OPEN list too — the report, the index attention list and the exit-2 unrouted count all read through it",
   () => notBuiltOpenItems([handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED))]).length === 1,
   () => notBuiltOpenItems([handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED))]));
 
-check("ENG-99748: all rows `built` computes `done` on a hand-written task as well — the rule is symmetric, not a way of failing adopted files",
+check("hand-written: all rows `built` computes `done` as well — the rule is symmetric, not a way of failing adopted files",
   () => handWritten((x) => allBuilt(x), "todo").status === "done",
   () => handWritten((x) => allBuilt(x), "todo"));
 
-check("ENG-99748: a hand-written body with NO parseable deliverables table keeps its recorded word — unchanged behaviour, and the one case the engine genuinely cannot say anything about",
+check("hand-written: a body with NO parseable deliverables table keeps its recorded word — the one case the engine genuinely cannot say anything about",
   () => {
     const t = handWritten((x) => x.slice(0, x.indexOf("## Deliverables")) + "## Notes\n\nfreeform body\n", "done");
     return t.rows.length === 0 && t.status === "done";
   }, () => { const t = handWritten((x) => x.slice(0, x.indexOf("## Deliverables")) + "## Notes\n\nfreeform body\n", "done");
     return { rows: t?.rows.length, status: t?.status }; });
 
-check("ENG-99748: `not built` as PROSE under `## Notes` computes nothing — the table parser is scoped to the Deliverables section, so an agent explaining itself cannot move its own status",
+check("hand-written: `not built` as PROSE under `## Notes` computes nothing — the table parser is scoped to the Deliverables section, so an agent explaining itself cannot move its own status",
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done").status === "done",
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done"));
 
-check("ENG-99748: `blocked` and `n/a` are still never computed over on a hand-written task — the two words an agent chooses deliberately keep meaning what they say",
+check("hand-written: `blocked` is never computed over — it is the ONE word an agent chooses deliberately, and it keeps meaning what it says. ENG-99749 retired `n/a` from this list: a whole-task scope decision is a person's answer, recorded through `--decide`, and a folder still declaring it reads as unrecognised.",
   () => ["blocked"].every((w) =>
     handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status === w),
   () => ["blocked"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
 
-check("ENG-99748: a task still OPEN is left alone — a `not-built` recorded while its sub-agent is still filling cells is not yet a verdict, and routing a round at it would send a second agent at a row somebody is holding",
+check("hand-written: a task still OPEN is left alone — a `not-built` recorded while its sub-agent is still filling cells is not yet a verdict, and routing a round at it would send a second agent at a row somebody is holding",
   () => {
     const t = handWritten((x) => setOutcome(x, 1, NOT_BUILT_BLOCKED), "in-progress");
     return t.status === "in-progress" && notBuiltRows([t]).length === 0;
@@ -2644,7 +2866,7 @@ const writeBackRun = (name) => {
   syncTaskDir(d, RUN, OPTS);
   return { before, after: fs.readFileSync(f, "utf8") };
 };
-check("ENG-99748: the computed word is written back into the hand-written FILE — one line, with the body byte-identical, so the folder and the index cannot disagree about it",
+check("hand-written: the computed word is written back into the FILE — one line, with the body byte-identical, so the folder and the index cannot disagree about it",
   () => {
     const { before, after } = writeBackRun("orch-computed-writeback");
     return /^status: partial$/m.test(after) && afterFrontMatter(after) === afterFrontMatter(before);
@@ -2728,7 +2950,7 @@ const editedStatusFolder = (name, word = "done") => {
   return { d, tgt, set: syncTaskDir(d, RUN, OPTS) };
 };
 
-check("statusFrom: a `status:` edited after the engine wrote it is NAMED on Attention - the cells did not move, so the stamp no longer matches and the edit stops being invisible",
+check("statusFrom: a `status:` edited after the engine wrote it is NAMED on Attention - the cells did not move, so the stamp does not match it and the edit is visible",
   () => {
     const { d, tgt, set } = editedStatusFolder("status-edited");
     const t = set.tasks.find((x) => x.id === tgt.id);
@@ -2888,6 +3110,27 @@ check("dispatch gate (anti-vacuity): the SAME closure in a file that DOES carry 
   () => { const { task, failing } = adoptedClosure("dispatch-current-d", false);
     return { status: task?.status, failing: failing.map((t) => t.id) }; });
 
+// THE TWO READERS ANSWER THE SAME. `readTaskDir` and the merged read parse the same bytes, so the dispatch gate
+// has to reach the same verdict through either — a folder must not pass `--verify` and fail a re-slice.
+// Read WITHOUT syncing first: the write phase adds the stamp a legacy file lacks, which is itself the precondition.
+const legacyUnsynced = (name) => {
+  const d = tmp(name);
+  syncTaskDir(d, RUN, OPTS);
+  fs.writeFileSync(path.join(d, `task-${LEGACY_ID}.md`),
+    asLegacyBody(handWrittenText(allBuilt, "done", LEGACY_ID)));
+  const failing = (tasks) => dispatchAudit(tasks, d).failing.map((t) => t.id)
+    .sort((a, b) => a.localeCompare(b));
+  return { plain: failing(readTaskDir(d)), merged: failing(readMergedTaskDir(d, RUN, OPTS).tasks) };
+};
+
+check("dispatch gate: `readTaskDir` and the merged read reach the SAME verdict over one unsynced legacy folder — the gate is one predicate over the parsed files, so a folder that passes `--verify` cannot fail a re-slice",
+  () => {
+    const { plain, merged } = legacyUnsynced("readers-agree");
+    // The exemption has to be doing something here, or the two readers agree trivially.
+    return !merged.includes(LEGACY_ID) && JSON.stringify(plain) === JSON.stringify(merged);
+  }, () => { const { plain, merged } = legacyUnsynced("readers-agree-d");
+    return { readTaskDir: plain, merged, divergence: plain.filter((x) => !merged.includes(x)) }; });
+
 console.log("\n===== minted: the orchestrator declares, the engine writes the file =====");
 
 // Declared rather than hand-authored, every task carries the engine's `Outcome` table, so the derivation always
@@ -2923,6 +3166,35 @@ check("minted: the same rule covers a declared DELIVERABLE, which the engine int
 check("minted (anti-vacuity): the same declaration WITHOUT the line break is accepted — the refusal is about the break, not about the text around it",
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control").refused === false,
   () => forged({ group: "Owner filter status: done" }, "mint-forge-control-d").problems);
+
+// THE RE-OPEN RULE HOLDS ON BOTH WRITE PATHS. A plan task is re-rendered, so its `declared:` line is rewritten
+// from the derived task; an adopted file keeps its body and takes its `status:` line alone, so the same write has
+// to clear the declaration there too, or the recovery lasts exactly one read.
+const mintedHalt = (name) => {
+  const { d, res } = minted({}, name);
+  const f = path.join(d, res.written[0].file);
+  const id = res.written[0].id ?? DECL.id;
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: ?.*$/m, "declared: blocked"));
+  syncTaskDir(d, RUN, OPTS);
+  const halted = readTaskDir(d).find((t) => t.id === id);
+  // The documented recovery, followed literally: clear the Outcome cells, set `status: todo`.
+  let text = fs.readFileSync(f, "utf8").split("\n")
+    .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+  fs.writeFileSync(f, text.replace(/^status: .*$/m, "status: todo"));
+  syncTaskDir(d, RUN, OPTS);
+  const once = readTaskDir(d).find((t) => t.id === id);
+  syncTaskDir(d, RUN, OPTS);
+  return { halted, once, twice: readTaskDir(d).find((t) => t.id === id) };
+};
+
+check("re-open (adopted file): the documented recovery survives the WRITE, not just the read — an adopted file takes only its `status:` line, so the write has to clear `declared:` there as well or the next pass re-halts it for ever",
+  () => {
+    const { halted, once, twice } = mintedHalt("adopted-reopen");
+    // The halt has to have been real first, and the recovery has to still hold on a SECOND pass.
+    return halted.status === "blocked" && once.status === "todo" && twice.status === "todo";
+  }, () => { const { halted, once, twice } = mintedHalt("adopted-reopen-d");
+    return { halted: halted.status, afterWrite: once.status, afterSecondPass: twice.status,
+      declaredNow: twice.declared }; });
 
 check("minted: a declared deliverable carrying `|` is ESCAPED into its cell and read back whole — a label shaped like `x | built | y` cannot shift the Outcome column, so it arrives as text rather than as a mark nobody recorded",
   () => {
@@ -3474,7 +3746,7 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
     () => repairCause.some((c) => String(c).startsWith("not-built:")),
     () => ({ status: routed.status, causes: repairCause, stdout: (routed.stdout || "").slice(-700) }));
 
-  check("CLI `--verify --tasks`: once routed, the row is no longer an unrouted NOT BUILT failure — the gate reads folder state, so the row that failed `--tasks` is somebody's open work here instead of a second identical refusal. This is the only test that drives `runRepairMode`'s gate wiring end to end",
+  check("CLI `--verify --tasks`: once routed, the row is NOT an unrouted NOT BUILT failure — the gate reads folder state, so the row that failed `--tasks` is somebody's open work here instead of a second identical refusal. This is the only test that drives `runRepairMode`'s gate wiring end to end",
     () => !/⛔ NOT BUILT/.test(routed.stderr || ""),
     () => (routed.stderr || "").slice(-700));
 
@@ -3727,7 +3999,7 @@ const backAt = (set, id) => set.tasks.find((t) => t.id === id);
 // THE WRITE PHASE RUNS LAST. A task's word is only true for the coverage it was derived against, and opening the
 // next round changes that coverage.
 const reopenRow = (label) => ({ "child:G1": { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, label)] } });
-check("ENG-99752: a round that RE-OPENS a settled row rewrites the task file too — the file may not keep the `done` it was resolved to while round 1 was the only round",
+check("reopen: a round that RE-OPENS a settled row rewrites the task file too — the file may not keep the `done` it was resolved to while round 1 was the only round",
   () => {
     const { d, tgt } = partialFolder("reopen-writes-back");
     syncRepairDir(d, RUN, {}, OPTS);
@@ -3748,7 +4020,7 @@ check("ENG-99752: a round that RE-OPENS a settled row rewrites the task file too
     return { afterRound1: r1, afterRound2: parseTaskFile(fs.readFileSync(taskFilePath(d, tgt.id), "utf8")).meta.status };
   });
 
-check("ENG-99752: and the file agrees with the index it was written beside — one write phase, so the folder cannot hold two answers to the same question",
+check("reopen: and the file agrees with the index it was written beside — one write phase, so the folder cannot hold two answers to the same question",
   () => {
     const { d, tgt } = partialFolder("reopen-file-vs-index");
     syncRepairDir(d, RUN, {}, OPTS);
@@ -3820,7 +4092,7 @@ check("the repair file carries what the BUILD agent wrote in the Outcome cell an
   }, () => { const { d } = partialFolder("residual-evidence-d"); syncRepairDir(d, RUN, {}, OPTS);
     return fs.readFileSync(path.join(d, repairFiles(d)[0]), "utf8"); });
 
-check("a row with an OPEN repair round is no longer a gate failure — it is somebody's scheduled work, and a gate that keeps failing over a row already routed is a gate that can never be cleared by doing the work",
+check("a row with an OPEN repair round is NOT a gate failure — it is somebody's scheduled work, and a gate that keeps failing over a row already routed is a gate that can never be cleared by doing the work",
   () => {
     const { d } = partialFolder("residual-gate-open");
     const res = syncRepairDir(d, RUN, {}, OPTS);
@@ -4290,12 +4562,12 @@ check("a `--verify` repair file still says its rows came from `--verify` — the
   }, () => { const dir = tmp("verify-blockquote-d");
     return fs.readFileSync(path.join(dir, syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written[0].file), "utf8"); });
 /* ================================================================================================
-   ENG-99126 — THE MIGRATION RESULT REPORT. An orchestrated run used to end on two files that disagreed: the
+   THE MIGRATION RESULT REPORT. An orchestrated run must not end on two files that disagree: the
    `--verify` table ("2 machine row(s) not confirmed") and `build-tasks/index.md` (5 open, 3 partial, three handlers
-   recorded NOT BUILT). The agent presented the first. `--verify --built <f> --tasks <dir>` now prints ONE report
+   recorded NOT BUILT), with the agent presenting the first. `--verify --built <f> --tasks <dir>` prints ONE report
    computed from both, and its verdict is their conjunction. Measured on the Applicants run, 2026-09-17.
    ================================================================================================ */
-console.log("\n===== ENG-99126: the migration result report — one artifact, computed from the ledger AND the built pages =====");
+console.log("\n===== the migration result report — one artifact, computed from the ledger AND the built pages =====");
 {
   const cliR = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
   const closeAll = (dir) => {
@@ -4332,55 +4604,55 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const run = cliR(["--verify", "--built", built, "--tasks", dir], MANIFEST);
   const out = run.stdout || "";
 
-  check("ENG-99126 CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
+  check("CLI: `--verify --built --tasks` prints the MIGRATION RESULT REPORT and nothing else — the plan-vs-built table is neither appended nor written beside it, because nothing reads it and the report already carries what it says",
     () => out.startsWith("# Migration result") && /\*\*Verdict:\*\* ⛔ \*\*NOT COMPLETE\*\*/.test(out)
       && !/Plan-vs-Done — VERIFIED against the built page/.test(out) && !/## Appendix/.test(out)
       && /## \d+\. Task details/.test(out),
     () => out.slice(0, 600));
-  check("ENG-99126 CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
+  check("CLI: the verdict line names EVERY reason in the order a person acts on them — the plan item recorded NOT BUILT (needs a decision) BEFORE the machine rows the payload could not confirm; the word is `plan item`, never `deliverable`",
     () => { const v = out.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
       // The verify leg WRITES a repair round into the folder, so the ledger the report reads now also holds that
       // round's queued tasks — open work, counted as such in the same line.
       return /1 plan item recorded NOT BUILT \(1 needs a decision\)/.test(v) && /tasks? not closed \(◐ partial 1/.test(v)
         && /machine-checked plan items? MISSING/.test(v) && v.indexOf("NOT BUILT") < v.indexOf("MISSING") && !/deliverable/i.test(out.slice(0, out.indexOf("## 1."))); },
     () => out.split("\n").find((l) => l.startsWith("**Verdict:**")));
-  check("ENG-99126 CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",
+  check("CLI: section 1 names the not-built plan item, WHICH decision is needed (or that the agent did not state it), and where it was recorded — the fact the old table never carried",
     () => { const s1 = out.slice(out.indexOf("## 1."), out.indexOf("## 2."));
       return /## 1\. Needs a decision \(1\)/.test(s1) && s1.includes(victim.rows[rowN - 1].label)
         && /did not state the question/.test(s1) && s1.includes(`](${victim.file}), row ${rowN}`); },
     () => out.slice(out.indexOf("## 1."), out.indexOf("## 2.")));
-  check("ENG-99126 CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
+  check("CLI: the Tasks section is the ledger with HOW each task was verified — Confirmed / To confirm manually columns, the partial task naming the plan item it did not build; no dispatch column, no reference-cache row",
     () => { const s4 = out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/));
       const line = s4.split("\n").find((l) => l.includes(`](${victim.file})`)) || "";
       return /\| Step \| Task \| Page \| Status \| Confirmed \| To confirm manually \| Not built \|/.test(s4)
         && /◐ partial/.test(line) && line.includes(victim.rows[rowN - 1].label) && /needs a decision/.test(line)
         && !/Dispatch/i.test(s4) && !/Reference cache/.test(s4) && /Form page|Child page|List page|Whole run/.test(line) && !/\| `?(main|run)`? \|/.test(line); },
     () => out.slice(out.search(/## \d+\. Tasks \(/), out.search(/## \d+\. Task details/)).split("\n").slice(0, 8));
-  check("ENG-99126 CLI: the summary carries the counts a reader takes away — tasks by status, open questions, one confirmed count, the manual remainder — and nothing about dispatch",
+  check("CLI: the summary carries the counts a reader takes away — tasks by status, open questions, one confirmed count, the manual remainder — and nothing about dispatch",
     () => /\| Tasks \| \d+ — ✅ done \d+ · ◐ partial 1( · ☐ queued \d+)? \|/.test(out) && /\| Open questions \(plan items recorded NOT BUILT, no decision yet\) \| 1 \|/.test(out)
       && /\| Plan items confirmed \(on the built page, or by review\) \| \d+\/\d+ \|/.test(out)
       && /\| Plan items to confirm manually \| \d+ \|/.test(out) && !/Dispatch/i.test(out.slice(0, out.indexOf("## Appendix"))),
     () => out.slice(out.indexOf("## Summary"), out.indexOf("## 1.")));
-  check("ENG-99126 CLI: with `--out` the report is the ONLY file written — no plan-vs-built.md beside it and no link to one (nothing reads that file, so it is a second artifact to reconcile for nothing)",
+  check("CLI: with `--out` the report is the ONLY file written — no plan-vs-built.md beside it and no link to one (nothing reads that file, so it is a second artifact to reconcile for nothing)",
     () => { const outFile = path.join(base, "report-split.md");
       cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       const rep = fs.readFileSync(outFile, "utf8");
       return rep.startsWith("# Migration result") && !fs.existsSync(path.join(base, "plan-vs-built.md")) && !/plan-vs-built\.md/.test(rep) && !/## Appendix/.test(rep); },
     () => fs.readdirSync(base));
-  check("ENG-99126 CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
+  check("CLI: exit 2 with a stderr line that names the RUN as not complete and points at the report — an orchestrator reading stderr alone cannot mistake this for a finished run",
     () => run.status === 2 && /⛔ RUN NOT COMPLETE — .*recorded NOT BUILT/.test(run.stderr || "") && /migration result report/.test(run.stderr || ""),
     () => ({ status: run.status, stderr: (run.stderr || "").slice(0, 700) }));
-  check("ENG-99126 CLI: `--out` names the artifact a migration result report and tells the caller to present IT — not the index, not the table, not a hand-written summary",
+  check("CLI: `--out` names the artifact a migration result report and tells the caller to present IT — not the index, not the table, not a hand-written summary",
     () => { const outFile = path.join(base, "report.md");
       const r = cliR(["--verify", "--built", built, "--tasks", dir, "--out", outFile], MANIFEST);
       return /wrote migration result report to/.test(r.stdout || "") && /PRESENT IT VERBATIM/.test(r.stdout || "")
         && /do not present `build-tasks\/index\.md`/.test(r.stdout || "")
         && fs.readFileSync(outFile, "utf8").startsWith("# Migration result"); },
     () => cliR(["--verify", "--built", built, "--tasks", dir, "--out", path.join(base, "report2.md")], MANIFEST).stdout);
-  check("ENG-99126 CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
+  check("CLI (unchanged): a plain `--verify` with NO task folder still prints the bare plan-vs-built table — the report is the orchestrated run's closing artifact, and a run with no ledger has nothing to add to the table",
     () => { const r = cliR(["--verify", "--built", built], MANIFEST); return (r.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(r.stdout || ""); },
     () => cliR(["--verify", "--built", built], MANIFEST).stdout?.slice(0, 200));
-  // ENG-99740 (Alexandr-Kravchuk): the new machine rows run through resolveVk on EVERY --verify, so a plain --verify
+  // The machine rows run through resolveVk on EVERY --verify, so a plain --verify
   // (no --tasks) whose payload carries the new optional fields (handlers / viewModelConfig) must still emit the
   // legacy plan-vs-built table, not the migration result report — the report is the orchestrated close artifact only.
   {
@@ -4391,12 +4663,12 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       schemaUId: "44444444-4444-4444-8444-444444444444", schemaName: "UsrDemo_FormPage",
       handlers: "[{ request: 'crt.SaveRecordRequest', handler: (r,n)=>n }]", viewModelConfig: { attributes: { A: {} } } } } }));
     const pvR = cliR(["--verify", "--built", pvBuilt], MANIFEST);
-    check("ENG-99740 CLI: plain `--verify` (no --tasks) with a payload carrying `handlers`/`viewModelConfig` still prints the legacy plan-vs-built table, never the migration result report",
+    check("CLI: plain `--verify` (no --tasks) with a payload carrying `handlers`/`viewModelConfig` still prints the legacy plan-vs-built table, never the migration result report",
       () => (pvR.stdout || "").startsWith("### ✅ Plan-vs-Done") && !/# Migration result/.test(pvR.stdout || ""),
       () => ({ status: pvR.status, head: (pvR.stdout || "").slice(0, 160), err: (pvR.stderr || "").slice(0, 160) }));
   }
 
-  // ENG-99126 Major B (2nd review) — an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
+  // an UNREADABLE ledger (a corrupt frozen split) must never read COMPLETE. The
   // fallback set carries `refused`, so `renderFinalReport` pushes a verdict reason and the CLI exits 2 naming the
   // folder — the precise false-green (COMPLETE over a ledger that was never read) this PR targets.
   {
@@ -4404,14 +4676,14 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dBad], MANIFEST);                                    // freeze a valid split first
     fs.writeFileSync(path.join(dBad, SPLIT_FILE), "not valid JSON {{{");  // then corrupt it
     const rBad = cliR(["--verify", "--built", built, "--tasks", dBad], MANIFEST);
-    check("ENG-99126 CLI (Major B): a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
+    check("CLI: a corrupt frozen split (unreadable ledger) is NOT COMPLETE — the report names the ledger as unreadable and the CLI exits 2, never printing COMPLETE over a folder it could not read",
       () => rBad.status === 2 && (rBad.stdout || "").startsWith("# Migration result")
         && /the task ledger could not be read/.test(rBad.stdout || "") && /⛔ \*\*NOT COMPLETE\*\*/.test(rBad.stdout || "")
         && /RUN NOT COMPLETE/.test(rBad.stderr || ""),
       () => ({ status: rBad.status, head: (rBad.stdout || "").slice(0, 400), stderr: (rBad.stderr || "").slice(0, 200) }));
   }
 
-  // ENG-99126 Major C (2nd review) — the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
+  // the LEDGER LEG reaches the CLI verdict on its own. A fresh folder (every task
   // ☐ queued, none dispatched) contributes a `☐ queued N` reason that the machine/verify leg CANNOT produce (that
   // leg emits MISSING / not-confirmed), so exit 2 here is NOT attributable to `verifyIncomplete` alone. The clean
   // conjunction in isolation — a GREEN machine leg + an open ledger ⇒ ONLY the ledger reason — is the `openRep`
@@ -4421,7 +4693,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     cliR(["--tasks", dQ], MANIFEST);   // sync only — every task todo, nothing started
     const rQ = cliR(["--verify", "--built", built, "--tasks", dQ], MANIFEST);
     const vQ = (rQ.stdout || "").split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
-    check("ENG-99126 CLI (Major C): a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
+    check("CLI: a run over a ledger of ☐ queued tasks carries a `☐ queued N` reason — a LEDGER-only fact the verify leg never emits — into BOTH the report verdict and stderr, at exit 2; so the CLI gate reads the ledger leg, not `verifyIncomplete` alone",
       () => rQ.status === 2 && /☐ queued \d+/.test(vQ) && /RUN NOT COMPLETE/.test(rQ.stderr || "")
         && /☐ queued \d+/.test(rQ.stderr || "") && / todo of /.test(rQ.stderr || ""),
       () => ({ status: rQ.status, verdict: vQ, stderr: (rQ.stderr || "").slice(0, 300) }));
@@ -4436,11 +4708,11 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   syncTaskDir(dOpen, RUN, OPTS);   // every task `todo`, nothing dispatched
   const openSet = readMergedTaskDir(dOpen, RUN, OPTS);
   const openRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: openSet, dir: dOpen });
-  check("ENG-99126 renderFinalReport: a GREEN machine table over a ledger of queued tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
+  check("renderFinalReport: a GREEN machine table over a ledger of queued tasks is NOT COMPLETE — the verdict is the conjunction, and the reason names the open tasks (the old `--verify` verdict read ✅ here)",
     () => openRep.complete === false && openRep.reasons.some((r) => /task(s)? not closed \(☐ queued \d+\)/.test(r))
       && /⛔ \*\*NOT COMPLETE\*\*/.test(openRep.markdown) && !openRep.reasons.some((r) => /MISSING|not confirmed/.test(r)),
     () => openRep.reasons);
-  check("ENG-99126 renderFinalReport: the confirm-on-stand row is counted as 'to confirm manually' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
+  check("renderFinalReport: the confirm-on-stand row is counted as 'to confirm manually' in the summary and named per task in the details section — neither hidden nor counted as a failure; the reference-cache task is not listed",
     () => /\| Plan items to confirm manually \| 1 \|/.test(openRep.markdown) && /## 4\. Task details/.test(openRep.markdown)
       // The task is still queued, so its rows have no outcome yet — the details say THAT, not "check by hand".
       && /\| \d+ \| .+ \| — \| — no outcome recorded yet \(task ☐ todo\) \|/.test(openRep.markdown)
@@ -4448,27 +4720,27 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     () => openRep.markdown.slice(openRep.markdown.indexOf("## 4.")));
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
-  check("ENG-99126 renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
+  check("renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS 🟢 COMPLETE — and it still names how many plan items need a check by hand, so it never reads as 'nothing left to look at'",
     () => doneRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
-  // ENG-99126 (3rd review RC-9): the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
-  // its rows built, a green machine table, a gate-clean run ⇒ complete:true / ✅ COMPLETE with no gate/dispatch/n-a
+  // RC-9: the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
+  // its rows built, a green machine table, a gate-clean run ⇒ complete:true / 🟢 COMPLETE with no gate/dispatch/not-applicable
   // reason (the pass path every CLI golden's exit-2 assertion left unproven).
   const closedSet = { planVersion: RUN.planVersion, tasks: [
     { id: "c-a", file: "c-a.md", group: "Form build", pageKey: "main", status: "done", notes: "", rows: [{ label: "Form page", outcomeKind: "built", outcome: "built" }] },
     { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
   ] };
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
-  check("ENG-99126 renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
+  check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, 🟢 COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
     () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
   // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
-  // set they are measured against is `closedSet` above, which the check before this one proves reads ✅ COMPLETE.
+  // set they are measured against is `closedSet` above, which the check before this one proves reads 🟢 COMPLETE.
   // `DRIFT` is the real thing, merged out of a folder recorded against SET's rows and re-read against SET3's.
   const driftedSet = { planVersion: RUN.planVersion, tasks: [...closedSet.tasks, DRIFT] };
   const driftRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: driftedSet, dir: tmp("result-report-drift") });
-  check("renderFinalReport: a task closed `done` whose ROWS DRIFTED since its cells were recorded blocks the verdict and is named — the cells were filled against deliverables the plan no longer carries, so no mark re-attaches and the collector sees nothing owed",
+  check("renderFinalReport: a task closed `done` whose ROWS DRIFTED since its cells were recorded blocks the verdict and is named — the cells were filled against deliverables the plan has since dropped, so no mark re-attaches and the collector sees nothing owed",
     // Its drift and its closure both have to be real, or the reason is asserted over a task the guard never sees.
     () => DRIFT.drifted === true && DRIFT.status === "done" && driftRep.complete === false
       && driftRep.reasons.some((r) => /deliverables CHANGED since its cells were recorded/.test(r)
@@ -4482,7 +4754,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       && unreadRep.reasons.some((r) => /could not be read/.test(r) && /o-x\.md/.test(r)),
     () => ({ complete: unreadRep.complete, reasons: unreadRep.reasons }));
 
-  // ENG-99126 (3rd review RC-7): a task closed `n/a` with a plan row left unaccounted (no outcomeKind, not a boundary)
+  // A task closed `not-applicable` with a plan row left unaccounted (no outcomeKind, not a boundary)
   // must NOT let the run read COMPLETE — the same self-assertion guard the row-level n-a boundary already carries.
   const naSet = { planVersion: RUN.planVersion, tasks: [
     { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "not-applicable", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
@@ -4493,9 +4765,9 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       && naRep.reasons.some((r) => /closed not-applicable with no recorded decision/.test(r)),
     () => ({ complete: naRep.complete, reasons: naRep.reasons }));
 
-  // ENG-99740 (kamil-mikosz-creatio P1): a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
+  // a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
   // page must not bleed state across identically-labeled rows on different pages — `Handler — init` not-built on
-  // main and built on child:C1. Before the fix the label-only fallback marked BOTH not-built.
+  // main and built on child:C1. A label-only fallback would mark BOTH not-built.
   const collapseSet = { planVersion: RUN.planVersion, tasks: [
     { id: "whole", file: "whole.md", group: "Whole run", pageKey: "run", status: "partial", notes: "", rows: [
       { label: "Handler — `init`", pageKey: "main", outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" },
@@ -4507,17 +4779,17 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
   const repCollapse = renderFinalReport({ result: RUN, verifyRes: vCollapse, set: collapseSet, dir: tmp("result-report-collapse") });
   const tasksSecC = repCollapse.markdown.slice(repCollapse.markdown.search(/## \d+\. Tasks \(/), repCollapse.markdown.search(/## \d+\. Task details/));
   const lineW = tasksSecC.split("\n").find((l) => l.includes("](whole.md)")) || "";
-  check("ENG-99740 (collapsed run): a whole-run task's rows keep their OWN page — `Handler — init` not-built on main + built on child:C1 do NOT cross-attribute; the built copy counts Confirmed 1/1 and `needs a decision` appears exactly once (row-page join, no label-only bleed)",
+  check("(collapsed run): a whole-run task's rows keep their OWN page — `Handler — init` not-built on main + built on child:C1 do NOT cross-attribute; the built copy counts Confirmed 1/1 and `needs a decision` appears exactly once (row-page join, no label-only bleed)",
     () => repCollapse.counts.openNotBuilt === 1 && /\| 1\/1 \|/.test(lineW) && (lineW.match(/needs a decision/g) || []).length === 1,
     () => ({ openNotBuilt: repCollapse.counts.openNotBuilt, lineW }));
   const sec1C = repCollapse.markdown.slice(repCollapse.markdown.indexOf("## 1."), repCollapse.markdown.indexOf("## 2."));
   const detC = repCollapse.markdown.slice(repCollapse.markdown.search(/## \d+\. Task details/));
-  check("ENG-99740 (collapsed run, sections): section 1's Page column shows the not-built row's OWN page (`Form page`, from its pageKey), and Task details lists the whole task with just the main row's decision — the built child:C1 copy is settled, not listed and not bled",
+  check("(collapsed run, sections): section 1's Page column shows the not-built row's OWN page (`Form page`, from its pageKey), and Task details lists the whole task with just the main row's decision — the built child:C1 copy is settled, not listed and not bled",
     () => /\| Form page \| Handler/.test(sec1C) && !/\| Whole run \| Handler/.test(sec1C)
       && /## \d+\. Task details/.test(detC) && detC.includes("](whole.md)")
       && (detC.match(/Handler — /g) || []).length === 1,
     () => ({ sec1: sec1C, det: detC.slice(0, 500) }));
-  // ENG-99740 (Alexandr minor): readDecisions must accept the D-heading grammar variants an agent may write —
+  // readDecisions must accept the D-heading grammar variants an agent may write —
   // dash, colon, space, dot after the id — so boundaries citing those decisions are backed, not falsely unbacked.
   {
     const baseG = tmp("result-report-grammar"); fs.mkdirSync(baseG, { recursive: true });
@@ -4526,14 +4798,14 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     const bnd = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
       rows: [{ label: `Card action ${id}`, outcomeKind: "not-applicable", outcome: `not-applicable — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repG = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bnd("b7", "D7"), bnd("b8", "D8"), bnd("b9", "D9"), bnd("b10", "D10")] }, dir: dG });
-    check("ENG-99740 (readDecisions grammar): D-heading variants `## D7 — …`, `### D8: …`, `#### D9 …`, `## D10. …` all parse, so boundaries citing D7–D10 are backed (0 unbacked) and each renders with its title",
+    check("(readDecisions grammar): D-heading variants `## D7 — …`, `### D8: …`, `#### D9 …`, `## D10. …` all parse, so boundaries citing D7–D10 are backed (0 unbacked) and each renders with its title",
       () => repG.counts.unbackedBoundaries === 0
         && /\*\*D7\*\* — dash title/.test(repG.markdown) && /\*\*D8\*\* — colon title/.test(repG.markdown)
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
 
-  // ENG-99126 renderFinalReport (Major B unit) — the refused-ledger path at the source. `readMergedTaskDir` over a
+  // renderFinalReport unit — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that
   // empty task list as "everything closed" — `refused` forces `complete: false` and a verdict reason naming it.
   {
@@ -4542,7 +4814,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(path.join(dRef, SPLIT_FILE), "{ broken");
     const refusedSet = readMergedTaskDir(dRef, RUN, OPTS);
     const refRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: refusedSet, dir: dRef });
-    check("ENG-99126 renderFinalReport (Major B): a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
+    check("renderFinalReport: a refused/unreadable ledger is complete:false with a verdict reason naming it — an empty `tasks: []` from a REFUSED read is never mistaken for a fully-closed run (the false-green this PR targets)",
       () => refusedSet.refused === true && refRep.complete === false
         && refRep.reasons.some((r) => /task ledger could not be read/.test(r))
         && /⛔ \*\*NOT COMPLETE\*\*/.test(refRep.markdown),
@@ -4566,10 +4838,10 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     fs.writeFileSync(f2, text2);
     const set2 = readMergedTaskDir(d2, RUN, OPTS);
     const rep2 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: set2, dir: d2 });
-    check("ENG-99126 markers: section 1 quotes the `Decision needed (row N)` line verbatim as the decision the person has to make",
+    check("markers: section 1 quotes the `Decision needed (row N)` line verbatim as the decision the person has to make",
       () => /\| 1 \| .* \| keep the Classic allow-list behaviour \(a\) or drop it as inert in Freedom \(b\)\? \| /.test(rep2.markdown),
       () => rep2.markdown.slice(rep2.markdown.indexOf("## 1."), rep2.markdown.indexOf("## 2.")));
-    check("ENG-99126 boundaries: an `n-a` citing a decision that decisions.md records is listed as information with the decision's title; one citing a decision nobody recorded is a question and names the missing reference — and only the latter is a verdict reason",
+    check("boundaries: an `n-a` citing a decision that decisions.md records is listed as information with the decision's title; one citing a decision nobody recorded is a question and names the missing reference — and only the latter is a verdict reason",
       () => { const s2 = rep2.markdown.slice(rep2.markdown.indexOf("## 2."), rep2.markdown.indexOf("## 3."));
         return /Closed by a recorded decision \(1\)/.test(s2) && /\*\*D7\*\* — Print is not migrated/.test(s2)
           && /Without a recorded decision \(1\)/.test(s2) && /cites D99, not found in decisions\.md/.test(s2)
@@ -4588,7 +4860,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
         rows: [{ label: shared, outcomeKind: "not-applicable", outcome: "not-applicable — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
       const rep4 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [A, B], planVersion: RUN.planVersion }, dir: d2 });
       const sec1 = rep4.markdown.slice(rep4.markdown.indexOf("## 1."), rep4.markdown.indexOf("## 2."));
-      check("ENG-99126 splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
+      check("splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
         () => /\| Plan items not built BY DECISION \| 1 \|/.test(rep4.markdown) && rep4.counts.decidedNotBuilt === 1
           && rep4.counts.openNotBuilt === 0 && !sec1.includes(shared)
           && !rep4.reasons.some((r) => /recorded NOT BUILT/.test(r)),
@@ -4601,17 +4873,17 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
         rows: [{ label: "Card action - Export", outcomeKind: "not-applicable", outcome: "not-applicable - " + reason, outcomeReason: reason, na: null }] });
       const repIncidental = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build, like D7 in the Leads section")], planVersion: RUN.planVersion }, dir: d2 });
       const repCited = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build here, per D7")], planVersion: RUN.planVersion }, dir: d2 });
-      check("ENG-99126 decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
+      check("decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
         () => repIncidental.counts.unbackedBoundaries === 1
           && repIncidental.reasons.some((r) => /boundary closed by the agent with NO recorded decision/.test(r))
           && repCited.counts.unbackedBoundaries === 0
           && !repCited.reasons.some((r) => /NO recorded decision/.test(r)),
         () => ({ incidental: repIncidental.counts, cited: repCited.counts }));
 
-      // ENG-99126 taskRows (Major A, 2nd review) — a not-built plan item on ONE page must not bleed onto a
+      // taskRows — a not-built plan item on ONE page must not bleed onto a
       // same-labeled row on ANOTHER page. Two tasks share the deliverable label but live on different pages: one
-      // not-built (main), one built and machine-confirmed (child:C1). The whole-run label fallback used to match by
-      // bare label and mark BOTH rows not-built; taskRows now falls back to the label ONLY for the synthetic `run`
+      // not-built (main), one built and machine-confirmed (child:C1). A whole-run label fallback matching by
+      // bare label would mark BOTH rows not-built; taskRows falls back to the label ONLY for the synthetic `run`
       // task, so the child's row stays confirmed (Not built "—") and only the main task carries the open question.
       const shBleed = "Handler — `save`";
       const bA = { id: "bl-a", file: "bl-a.md", group: "Form build", pageKey: "main", status: "partial", notes: "",
@@ -4624,7 +4896,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
       const secTasks = repBleed.markdown.slice(repBleed.markdown.search(/## \d+\. Tasks \(/), repBleed.markdown.search(/## \d+\. Task details/));
       const lineA = secTasks.split("\n").find((l) => l.includes("](bl-a.md)")) || "";
       const lineC = secTasks.split("\n").find((l) => l.includes("](bl-c.md)")) || "";
-      check("ENG-99126 taskRows (Major A): a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
+      check("taskRows: a not-built row on `main` does NOT bleed onto a same-labeled built row on `child:C1` — the child task's Not-built cell stays `—` while only the main task carries the open question; one open question in all",
         () => repBleed.counts.openNotBuilt === 1
           && /save/.test(lineA) && /needs a decision/.test(lineA)
           && !/needs a decision/.test(lineC) && lineC.trim().endsWith("| — |"),
@@ -4650,7 +4922,7 @@ console.log("\n===== ENG-99126: the migration result report — one artifact, co
     } } }));
     const outN = path.join(baseN, "report.md");
     const runN = cliR(["--verify", "--built", builtN, "--tasks", dN, "--out", outN], MANIFEST);
-    check("ENG-99126 CLI: a --built payload with schemaName/handlers/viewModelConfig is accepted (no exit-1 shape/validator error) and the report names the page by its Freedom schemaName, not the engine key",
+    check("CLI: a --built payload with schemaName/handlers/viewModelConfig is accepted (no exit-1 shape/validator error) and the report names the page by its Freedom schemaName, not the engine key",
       () => runN.status === 2 && !/cannot read --built|Expected/.test(runN.stderr || "")
         && /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) && !/\| Form page \|/.test(fs.readFileSync(outN, "utf8")),
       () => ({ status: runN.status, stderr: (runN.stderr || "").slice(0, 300), hasName: /UsrDemo_FormPage/.test(fs.readFileSync(outN, "utf8")) }));
@@ -4858,7 +5130,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         if (w.cause === HOLD_OVERLAP) return (res.blockedByOverlap || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
         return !!res.unread;
       }), () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
-    // HELD DIRECTION — the class the equivalence used to skip. A task the query holds for its STATUS must be
+    // HELD DIRECTION — the class an equivalence can skip. A task the query holds for its STATUS must be
     // refused by `--start` too: a gate that stamped a clock on it would send a sub-agent at work somebody has
     // already decided to stop, while the query was still printing it as a decision nobody has made.
     check("T2 (R4, refuse): a task the query HOLDS for its status is refused by `--start` on the same folder — the held class is part of the equivalence, not an exception to it",
@@ -4874,8 +5146,8 @@ console.log("\n===== the startable set — one predicate, two callers =====");
           && !res.started && res.blockedByStatus === "blocked";
       }, () => ({ startable: idsOf(a.startable) }));
     // LEDGER DIRECTION — a broken dispatch ledger makes the gate refuse EVERY id, so a per-task cause computed as
-    // if the ledger were healthy publishes a cause the gate would not give. The query used to answer `deps` here
-    // while `--start` on that same id answered with the ledger refusal: two callers of one predicate disagreeing
+    // if the ledger were healthy publishes a cause the gate would not give. A query that answered `deps` here
+    // while `--start` on that same id answered with the ledger refusal would be two callers of one predicate disagreeing
     // on one folder, which is precisely the invariant the whole design rests on.
     check("T2 (R4, refuse): with the dispatch ledger broken, every cause the query publishes is the one `--start` actually gives for that id — the ledger outranks the per-task causes in the answer exactly as it does in the gate",
       () => {
@@ -4963,7 +5235,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
     check("T4 fixture (anti-vacuity): the blocked task's clock really is STILL OPEN and its status really is `blocked` — the whole point is that those two facts disagree, and a mode reading the clock alone cannot tell",
       () => !!readTimingsFile(d).running[HEAD] && set.tasks.find((t) => t.id === HEAD).status === "blocked",
       () => ({ running: readTimingsFile(d).running, status: set.tasks.find((t) => t.id === HEAD)?.status }));
-    check("T4 (R6): a `blocked` task with an open clock is NOT work in flight — the answer is the failing not-in-flight verdict, so an orchestrator is never left polling a run that can no longer change",
+    check("T4 (R6): a `blocked` task with an open clock is NOT work in flight — the answer is the failing not-in-flight verdict, so an orchestrator is never left polling a run that cannot change",
       () => a.verdict === NEXT_STUCK && a.inFlight.length === 0,
       () => ({ verdict: a.verdict, inFlight: idsOf(a.inFlight), startable: idsOf(a.startable) }));
     check("T4 (R6): the verdict names what holds the run — the blocked task is reported as HELD by its status, and every other task by the dependency it waits on",
@@ -5092,11 +5364,11 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
       () => stuck.stdout);
   }
   // F4 — a refusal prints NOTHING WRITTEN and names no task, so it must not exit like an answer. Every other
-  // `--next` non-answer exits 2; a frozen cut the plan no longer resolves used to exit 0 beside that banner.
+  // `--next` non-answer exits 2; a frozen cut the plan cannot resolve must not exit 0 beside that banner.
   {
     fs.writeFileSync(path.join(dir, SPLIT_FILE), JSON.stringify({ planVersion: "nope", items: "not a list" }));
     const refused = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--next"], { encoding: "utf8" });
-    check("--next (R3): a frozen split the plan no longer resolves is a REFUSAL, not an answer — it prints NOTHING WRITTEN and exits non-zero, like every other --next non-answer",
+    check("--next (R3): a frozen split the plan cannot resolve is a REFUSAL, not an answer — it prints NOTHING WRITTEN and exits non-zero, like every other --next non-answer",
       () => refused.status !== 0 && /NOTHING WRITTEN/.test(refused.stdout || ""),
       () => ({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr }));
   }
@@ -5210,6 +5482,26 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
     () => unresolved.status === 1 && /does not resolve against this plan/.test(unresolved.stderr || "")
       && fs.readdirSync(dir).length === before,
     () => ({ status: unresolved.status, stderr: (unresolved.stderr || "").slice(0, 400), files: fs.readdirSync(dir).length, before }));
+
+  // A folder whose frozen split falls short of the plan refuses on every other command. `--add` mints files, so
+  // it is the one leg that could leave a declared task on disk beside an index nothing regenerated.
+  {
+    const baseA = tmp("cli-add-drift-base");
+    const dirA = path.join(baseA, "build-tasks");
+    const splitA = path.join(baseA, "split.json");
+    fs.writeFileSync(splitA, JSON.stringify(FULL_SPLIT, null, 2));
+    cliTasks(["--tasks", dirA, "--split", splitA], MANIFEST);
+    const beforeA = fs.readdirSync(dirA).sort();
+    const drifted = cliTasks(["--tasks", dirA, "--add", declFile({ ...GOOD, id: "cli-add-drift" }, "drift")], MANIFEST5);
+    check("CLI `--add` on a folder whose cut falls short of the plan writes NOTHING and exits non-zero — every other command refuses that folder, and minting a file here would leave it beside an index nothing regenerated",
+      () => drifted.status !== 0
+        && /wrote nothing/.test(drifted.stderr || "")
+        && /does not cover this plan|no longer covers this plan/.test(drifted.stderr || "")
+        && JSON.stringify(fs.readdirSync(dirA).sort()) === JSON.stringify(beforeA),
+      () => ({ status: drifted.status, stderr: (drifted.stderr || "").slice(0, 400),
+        before: beforeA, after: fs.readdirSync(dirA).sort() }));
+    fs.rmSync(baseA, { recursive: true, force: true });
+  }
 
   const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);
   check("CLI `--add`: a resolving declaration exits 0, and the answer names the file the engine wrote and how many deliverables it carries — the caller's next move is to fill that file's `Outcome` column",
