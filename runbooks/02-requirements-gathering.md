@@ -301,6 +301,14 @@ Also include when applicable:
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
+**External users (portal) — a CONDITIONAL subsection of `## 6`.** Add a `### 6.E External users (portal)` block ONLY when the app exposes sections to external users (see the external-user trigger in `context/business-checklist.md`, "Users, access and ownership", and the SKILL core rule). It describes the EXTERNAL audience's view — the `All external users` role — structured like the section UX above, scoped to the portal:
+
+- lead line `portal sections:` — how many of the app's sections are exposed to external users, named by `Title`, e.g. `portal sections: 2 (Requests, Knowledge Base)`.
+- one `- **`Section <name>`** ` block per exposed section (reuse an existing section `Title`, so it has a carrier in `## 3. Object Model`), each describing the EXTERNAL form page and list with the SAME labels as above (`list columns:`, `form groups:` / `form fields:`, `add page:` / `edit page:`) — the external view may be narrower or read-only than the internal one.
+- `external access:` — the object operations granted to `All external users` on that section's object, e.g. `external access: read` (read-only) or `external access: read, create, edit`. Default read-only; widen only where external users author records. Confidentiality of one external company's records from another's is record-level access and out of scope for this subsection.
+
+Omit `### 6.E` entirely when external access is out of scope — it is not a required subsection and the validator does not check for it. Do not invent an external audience the developer did not ask for or agree to.
+
 `## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
 
 Organize `## 7. Analytics` into two required subsections:

@@ -86,6 +86,11 @@ If restrictions are not essential, explicitly state:
 
 Do not suggest optional restrictions without a business reason.
 
+Also decide external-user (portal) access — the audience OUTSIDE the company: customers, partners, vendors, suppliers, applicants, citizens, or any self-service / client audience ("external users" is the concept, not the literal word "portal"). Two paths put it in the plan:
+- PROACTIVELY, as a domain expert — when the app's domain plausibly serves an external audience (a customer/partner/self-service scenario), ASK the developer in this discovery batch whether part of the app should be exposed to external users. Do not wait for them to raise it, and do not assume it silently either.
+- EXPLICITLY — when the request already says external / portal / self-service access is needed, take it as decided.
+When external access is in scope, carry the external audience (`All external users`) in `## 2. Roles and Permissions` and describe the exposed sections in the conditional `### 6.E External users (portal)` subsection of `## 6. UX Expectations` (section-6 labels in `runbooks/02-requirements-gathering.md`). When it is out of scope, say nothing about a portal — omit the subsection. The build mechanics belong to clio — see `get-guidance name=portal-sections`; the checklist only secures the developer's decision.
+
 Also required, and NOT covered by the sentence above — navigation placement and audience:
 - where the app belongs in the left navigation: a NEW workplace named for the app (recommend this when
   scaffolding a new app), the default `My applications`, or an existing workplace the developer names

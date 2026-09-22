@@ -29,6 +29,7 @@ Full checklist rules are in `context/business-checklist.md`. This section provid
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
 `Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
+`UX Expectations` MAY carry a CONDITIONAL `### 6.E External users (portal)` subsection when the app exposes sections to external users (customers/partners/self-service — the concept, not the word "portal"); it is optional (present only when external access is in scope, per `context/business-checklist.md`) and, like the `### 7.1`/`### 7.2` subsections, is not format drift. The eight top-level sections and their order never change.
 
 Required BA-style Business Plan template:
 
