@@ -3239,6 +3239,7 @@ export function revokeDecision(dir, result, opts = {}) {
   const merged = mergeTaskSet(fresh, readExisting(dir));
 
   const cleared = [];
+  const skipped = [];
   for (const t of merged.tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     if (!map || !map.size) continue;
@@ -3247,13 +3248,25 @@ export function revokeDecision(dir, result, opts = {}) {
       if (d !== decision) continue;
       const idx = n - 1;
       const row = t.rows?.[idx];
-      if (row) {
-        row.outcome = "";
-        row.outcomeKind = null;
-        row.outcomeCause = null;
-        row.outcomeReason = "";
-        row.naNoReason = false;
+      // CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER, and `carryOver` copies the map
+      // verbatim onto rows re-sliced from the CURRENT plan while re-attaching every other mark by LABEL. So the
+      // moment the plan inserts or drops a row above this one, `n` addresses a different deliverable — and
+      // blanking it unconditionally destroys whatever now sits there, including an agent's own `built` record,
+      // the one mark this codebase cannot recover. Position keying is the scheme `rowKeys` exists to avoid
+      // ("position keying would detach a mark as soon as a row is inserted above it"); until the map itself is
+      // label-keyed, the cell must prove it is the one this decision wrote before it is touched.
+      const decided = row && (row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED);
+      if (!decided || !String(row.outcome || "").includes(`(${decision})`)) {
+        skipped.push({ task: t, n, why: row
+          ? `its Outcome cell reads \`${row.outcomeKind || "blank"}\` and does not carry (${decision}) — the map entry no longer matches the cell`
+          : "that row no longer exists in this task" });
+        continue;
       }
+      row.outcome = "";
+      row.outcomeKind = null;
+      row.outcomeCause = null;
+      row.outcomeReason = "";
+      row.naNoReason = false;
       map.delete(n);
       cleared.push({ task: t, n });
       changed = true;
@@ -3265,7 +3278,7 @@ export function revokeDecision(dir, result, opts = {}) {
     }
     if (changed) t.decisions = map;
   }
-  if (!cleared.length) return { refused: false, decision, cleared: [], set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
+  if (!cleared.length) return { refused: false, decision, cleared: [], skipped, set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
 
   // Recompute the status of every task the revoke touched. Rows that were closed by decision are now
   // blank, so a task that read `wont-do` / `not-applicable` / `partial` re-enters the verification list.
@@ -3288,7 +3301,7 @@ export function revokeDecision(dir, result, opts = {}) {
   attachDispatch(merged, dir);
   resolvePartials(merged);
   persistTaskSet(dir, merged);
-  return { refused: false, decision, cleared, set: merged };
+  return { refused: false, decision, cleared, skipped, set: merged };
 }
 
 export function syncTaskDir(dir, result, opts = {}, split = null) {

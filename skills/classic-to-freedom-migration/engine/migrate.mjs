@@ -3332,11 +3332,16 @@ function runDecideMode(result, dir, opts) {
 function runRevokeMode(result, dir, opts) {
   const res = revokeDecision(dir, result, opts);
   if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
+  // A map entry whose cell no longer matches is NOT cleared (see revokeDecision) — say so either way, because
+  // a silent skip reads exactly like a successful revoke to the person who ran the command.
+  const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   if (!res.cleared.length) {
-    return { note: `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.\n`, ok: true };
+    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
+    return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
+  lines.push(...skipLines);
   lines.push("", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
   return { note: lines.join("\n") + "\n", ok: true };
 }

@@ -5358,6 +5358,79 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
     fs.rmSync(base, { recursive: true, force: true });
   }
 
+  // Three DISTINGUISHABLE rows in one task — row 1 under D13, row 2 under D19, row 3 the agent's own `built` —
+  // because the check above cannot tell selective clearing from blanket clearing: `cleared.length >= 1` plus
+  // "every row is blank" both hold for an implementation that blanks the whole folder, which is the very
+  // failure the `decisions:` provenance map exists to prevent.
+  {
+    const base = tmp("revoke-identity");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length >= 3 && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    // Without this, a finder that stops resolving turns every assertion below into a silent skip and the suite
+    // still reports green.
+    check("ENG-99749 (review RC-6) fixture: a task with three or more rows was found to revoke against",
+      () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: 1 }, decisions: decisionsMap() });
+      applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed", destination: "ENG-12345",
+        rowRef: { taskId: t.id, n: 2 }, decisions: decisionsMap() });
+      // Row 3 is the agent's own record — the one mark this codebase treats as unrecoverable.
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 3, "built"));
+      const before = readTaskDir(dir).find((x) => x.id === t.id);
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const after = readTaskDir(dir).find((x) => x.id === t.id);
+      const fm = fs.readFileSync(fp, "utf8");
+      check("ENG-99749 (AC 7 / review RC-6) --revoke D13 clears EXACTLY the cell D13 wrote — the D19 row keeps its cell byte-for-byte and the agent's own `built` row is untouched",
+        () => !rev.refused && rev.cleared.length === 1 && rev.cleared[0].n === 1
+          && !after?.rows?.[0]?.outcomeKind
+          && after?.rows?.[1]?.outcomeKind === "postponed"
+          && after?.rows?.[1]?.outcome === before?.rows?.[1]?.outcome
+          && after?.rows?.[2]?.outcomeKind === "built",
+        () => ({ cleared: rev.cleared.map((c) => c.n), kinds: after?.rows?.slice(0, 3).map((r) => r.outcomeKind),
+          row2Before: before?.rows?.[1]?.outcome, row2After: after?.rows?.[1]?.outcome }));
+      check("ENG-99749 (AC 7 / review RC-6) the `decisions:` front matter keeps D19's pairing and loses only D13's — the map is the provenance stamp, so a revoke that reached the wrong cell shows up here",
+        () => /^decisions:.*\b2:D19\b/m.test(fm) && !/\b1:D13\b/.test(fm),
+        () => ({ decisionsLine: fm.split("\n").find((l) => l.startsWith("decisions:")) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // The case position keying actually loses: the map says D13 wrote row 1, the cell says the AGENT built it.
+  // `carryOver` copies `decisions:` verbatim onto rows re-sliced from the current plan while re-attaching every
+  // other mark by label, so one inserted or dropped row upstream is all it takes to produce this state — and a
+  // revoke that trusted the number would destroy a `built` record to undo a decision that never wrote it.
+  {
+    const base = tmp("revoke-stale-map");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length >= 2 && !x.unread
+      && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+    check("ENG-99749 (review RC-6) fixture: a task with two or more rows was found for the stale-map check",
+      () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed", destination: "ENG-12345",
+        rowRef: { taskId: t.id, n: 2 }, decisions: decisionsMap() });
+      const fp = path.join(dir, t.file);
+      let text = setOutcome(fs.readFileSync(fp, "utf8"), 1, "built");
+      text = text.replace(/^decisions:.*$/m, "decisions: 1:D13 2:D19");
+      fs.writeFileSync(fp, text);
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const after = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 (AC 7 / review RC-6) a STALE `decisions:` entry pointing at an agent's `built` cell is refused, not blanked — --revoke proves the cell is the one that decision wrote before it touches anything, and says which entries it skipped",
+        () => !rev.refused && rev.cleared.length === 0
+          && (rev.skipped || []).some((s) => s.n === 1)
+          && after?.rows?.[0]?.outcomeKind === "built"
+          && after?.rows?.[1]?.outcomeKind === "postponed",
+        () => ({ cleared: rev.cleared?.map((c) => c.n), skipped: (rev.skipped || []).map((s) => `${s.n}: ${s.why}`),
+          kinds: after?.rows?.slice(0, 2).map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
   // ---- an old `declared: n/a` folder reads as UNRECOGNISED (loud fail, not silent coercion) ----------------
   {
     const base = tmp("legacy-na");
