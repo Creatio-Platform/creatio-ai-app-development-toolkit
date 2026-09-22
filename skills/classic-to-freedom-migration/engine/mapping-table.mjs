@@ -556,10 +556,13 @@ export function featureVerifyExtraTypes(featureName) {
    template NAME is substituted, so nothing else varies by family either. The rationale and the AC reconciliation
    are written down in `docs/guidance-item-contract-decision.md` rather than left in a review thread.
 
-   It could not honestly branch in any case: `rowsForFeatures` and `rowsForWidgets` are handed no `opts`, so
-   `planMeta.formTemplate` is not in scope where the route is resolved, and `meta.templateProvided` is a flat
-   per-row flag carrying no per-template verdict. A template-aware route needs a measured capability table this
-   branch does not have.
+   THE ROUTE IS UNCONDITIONAL; THE MERGE-vs-INSERT VERDICT IS NOT PRINTED AT ALL. `meta.templateProvided` is a flat
+   per-row flag carrying no per-template verdict, so for a GUIDED component it is not printed as one: the Layout
+   cell names `planMeta.formTemplate` (threaded into `rowsForFeatures` / `rowsForWidgets` from `renderDesignSpec`'s
+   `opts`) and instructs the builder to read that template's merged bundle on-stand before writing — the one check
+   that can be performed where clio and the stand exist. The flag still drives every NON-guided row, which is what
+   it is honest for. Deciding the verdict here would need a measured per-template capability table, and an
+   unmeasured template would be a guess either way; the instruction is correct for every template, measured or not.
 
    The id is a CROSS-REPO CONTRACT — an entry in `requirements.itemIds[]` in clio-knowledge's `bundle-source.json`.
    Renaming it there without renaming it here produces a plan that points at nothing, which is why the engine tests

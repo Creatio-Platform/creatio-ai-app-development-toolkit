@@ -2904,6 +2904,23 @@ let startableGateFailure = null;
 // rather than a reuse of the one above: that one carries the halted-run ANSWER its stderr banner renders, and a
 // refusal has no answer to render. It only has to make the exit code agree with the banner already on stdout.
 let nextRefusalFailure = false;
+// ⛔ `--tasks` REFUSED TO CUT — the split does not resolve against the plan, so the folder is left exactly as it
+// was. A refusal writes nothing and names no task, and the exit code is the only part of it a caller PARSES: a
+// mode that printed the banner and exited like an answer would have an orchestrator dispatch sub-agents against a
+// folder that was never cut. Its own variable, per the one-flag-per-mode shape beside it, so a run can still say
+// WHICH mode declined.
+let taskRefusalFailure = false;
+// ⛔ A REPAIR ROUND OPENED NOTHING — the frozen cut the folder's task ids derive from does not resolve, or the
+// round could not be written, so no repair task exists and no row is scheduled to close. One flag for one repair
+// code path reached by two entry commands (`--tasks --route` and `--verify --tasks`), so the exit code follows the
+// banner whichever of them asked. Same rule as the two above, on the other modes that print the banner.
+let routeRefusalFailure = false;
+// ⛔ `--START` MARKED NOTHING — every reason it refuses ends the same way: no clock was opened and the folder
+// records nothing started. It is the command an orchestrator runs before EVERY dispatch, so a refusal it exits 0
+// on is the one that costs most: the caller hands the named task to a sub-agent that has no token for it. Raised
+// for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
+// does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
+let startRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -3035,10 +3052,10 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
-  if (set.refused) return splitRefusalText(set, dir);
+  if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
-    if (refusal) return refusal;
+    if (refusal) { startRefusalFailure = true; return refusal; }
   }
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
@@ -3283,10 +3300,16 @@ function runRouteMode(result, dir, opts) {
   const refused = repairPreflight(result, dir);
   if (refused) return refused;
   let res;
+  // A round that could not be written opened nothing, exactly like the refusal below, so it raises the same flag:
+  // the banner on stdout and the exit code are one verdict.
   try { res = syncRepairDir(dir, result, {}, opts); }
-  catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
+  catch (e) {
+    routeRefusalFailure = true;
+    return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`;
+  }
   // A refused set writes nothing: the folder's task ids cannot be derived from it.
   if (res.refused) {
+    routeRefusalFailure = true;
     return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
       + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then route again.\n`;
   }
@@ -3306,11 +3329,17 @@ function runRepairMode(result, dir, verifyRes, opts) {
   const refused = repairPreflight(result, dir);
   if (refused) return { note: refused, set: null, repair: null };
   let res;
+  // Same verdict as the routed round, raised on the same flag: one repair code path reached by two entry commands,
+  // and the exit code follows the banner whichever of them asked.
   try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
-  catch (e) { return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null }; }
+  catch (e) {
+    routeRefusalFailure = true;
+    return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null };
+  }
   // The folder's task ids cannot be derived from a refused set — nothing was written, the same refusal a build
   // run makes. Repairing against a cut that does not resolve would renumber the whole folder.
   if (res.refused) {
+    routeRefusalFailure = true;
     return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
       + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then re-verify.\n`, set: null, repair: null };
   }
@@ -3669,7 +3698,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
-    || !!startableGateFailure || nextRefusalFailure;
+    || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
+    || startRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";

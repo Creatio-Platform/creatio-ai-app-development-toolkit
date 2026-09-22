@@ -11191,8 +11191,8 @@ const n2TreeManifest = (titleA, titleB) => ({
 
    THE DEFECT. A page migrated onto a Freedom form template gets Feed and Attachments, and gets none of the property
    values the section/app CREATION flow produces — so the Feed queries nothing and the attachments list shows
-   nothing. What the plan said about both was that they are template-provided: true about the CONTAINER, and silent
-   about everything that makes the component work. Nothing in this repository answered "configured how".
+   nothing. Calling them template-provided is true about the CONTAINER and silent about everything that makes the
+   component work, and nothing in this repository answers "configured how".
 
    WHERE THE VALUES LIVE, AND WHY NOT HERE. The canonical value set was measured read-only from a page the creation
    flow built, and PUBLISHED — as the clio-knowledge guidance item `page-modification-standard-components`, which a
@@ -11208,13 +11208,16 @@ const n2TreeManifest = (titleA, titleB) => ({
      (ii)  the deliverables are gated by PRESENCE — the component on its own gated row, and the companion
            `AttachmentListDS` data source, without which a `crt.FileList` lists nothing;
      (iii) the value table is ABSENT from CAADT — asserted over the rendered output AND over every engine source.
-           That guard is what stops decision (i) decaying back into a paste.
+           That guard is what stops decision (i) decaying back into a paste;
+     (iv)  the same line NAMES the form template the plan targets and instructs an on-stand read of its merged
+           bundle, and asserts NO merge-vs-insert verdict of its own.
 
-   THE ROUTE IS UNCONDITIONAL, and that is this branch's design rather than an omission. The guidance item covers
-   the MERGE path and the INSERT path alike, so a builder needs it either way. This branch carries no measured
-   template-capability table — no verdicts, no per-template merge-vs-insert decision — so there is nothing here to
-   branch on, and nothing that could honestly be branched on. What that costs is stated in the PR body rather than
-   papered over here.
+   THE ROUTE IS UNCONDITIONAL AND THE VERDICT IS NOT PRINTED, which are two halves of one design. The guidance item
+   covers the MERGE path and the INSERT path alike, so a builder needs it either way; and whether the chosen
+   template already ships the component is a fact about that template's merged bundle, readable only on a stand.
+   An offline plan that asserted it would give the same answer for every template — wrong for some of them, and
+   silently so in the ADD direction, where an `insert` over a container the template already filled ships a
+   duplicate that `update-page` never sees. So the cell states the check instead of the answer.
    ================================================================================================================ */
 // The fixture: ONE page carrying BOTH components, built by the REAL mapper rather than hand-composed, so the
 // widget/feature records under test are the ones production emits.
@@ -11238,7 +11241,12 @@ const faClient = L("Client", { entity: FA_ENTITY,
     di({ name: "Nm", parentName: "FileTab", propertyName: "items", bindTo: "Nm" })] });
 const faCs = mapToFreedom(mergeHierarchy([faClient], { seedTemplate: [faSeed] }));
 const faResult = { entity: FA_ENTITY, changeSet: faCs, signals: {} };
-const faOpts = { planMeta: { formTemplate: "PageWithTopAreaAndTabsFreedomTemplate" } };
+// The two form templates the fixture is rendered on. Declared once, here, because several checks below assert that
+// a guided Layout cell NAMES the template the plan targets: a second spelling of either name would let one of them
+// drift and the assertion would then be comparing the test to itself.
+const FA_BASIC_TEMPLATE = "PageWithTabsFreedomTemplate";
+const FA_TOPAREA_TEMPLATE = "PageWithTopAreaAndTabsFreedomTemplate";
+const faOpts = { planMeta: { formTemplate: FA_TOPAREA_TEMPLATE } };
 const faPlan = renderPlan(faResult, faOpts);
 const faRowRecs = checklistGroups(faResult, faOpts).flatMap((g) => g.rows);
 // The spec a builder actually READS is the plan document PLUS the coverage checklist it is gated on. The R7 guard
@@ -11253,7 +11261,14 @@ const FA_GUIDANCE_ID = "page-modification-standard-components";
 const FA_CALL = `get-guidance name=${FA_GUIDANCE_ID}`;
 // The Layout-table row for one component — the line a builder reads when it learns the component is on this page,
 // which is where the routing has to be.
-const faLayoutRow = (what) => faPlan.split("\n").find((l) => l.startsWith("|") && l.includes(`| ${what} |`)) || "";
+const faRowIn = (plan, what) => plan.split("\n").find((l) => l.startsWith("|") && l.includes(`| ${what} |`)) || "";
+const faLayoutRow = (what) => faRowIn(faPlan, what);
+// The Source CELL alone, which is the cell under test wherever the disposition and the route are asserted. The
+// whole row would drag the Additions cell in with it, and for Attachments that cell carries a long composite note
+// naming component parts — so a guard reading the row would be answered by wording in a cell it does not govern.
+// Layout columns are `region | element | type | source | rule | additions`, so the source is the 4th field once the
+// leading empty one is counted.
+const faSourceCell = (row) => (row.split("|")[4] || "").trim();
 
 check("fixture: the page carries a base-declared Feed widget AND an entity-matched Attachments feature — both halves of the defect on ONE page, emitted by the real mapper",
   faCs.widgets.some((w) => w.widget === "Feed (ESN)" && w.base === true)
@@ -11328,10 +11343,10 @@ const faDsJudged = renderVerify(faVerifyRes, {}, { ...faVerifyBuilt,
 // value that is not even a constant (the migrated object's schema name). A plan that hardcoded it would be this
 // same defect in a new place.
 //
-// NO EXPECTED COUNT IS ASSERTED FOR FEED, and that is deliberate. Feed reaches the plan as a WIDGET on this branch,
-// and widgets file no coverage count here. Filing one would mean asserting that the chosen template does NOT ship
-// Feed — a claim this branch has no measured capability table to support, and exactly the "extra expected count
-// against a component the template provides" that a plan must not make.
+// NO EXPECTED COUNT IS ASSERTED FOR FEED, and that is deliberate. Feed reaches the plan as a WIDGET, and widgets
+// file no coverage count here. Filing one would mean asserting that the chosen template does NOT ship Feed — the
+// merge-vs-insert verdict, smuggled in as arithmetic, and exactly the "extra expected count against a component
+// the template provides" that a plan must not make.
 check("T2 (R1 + R7): the Feed Layout row routes the builder to the same guidance item for the Feed value set — the engine names the component and the source of its settings, never the settings",
   () => faLayoutRow("Feed (ESN)").includes(FA_CALL),
   () => ({ layoutRow: faLayoutRow("Feed (ESN)"),
@@ -11499,34 +11514,71 @@ check("GUARD: the VALUE list and the NAME list are disjoint and non-empty — ev
   () => ({ values: FA_VALUE_TOKENS, names: FA_NAME_TOKENS,
     overlap: FA_NAME_TOKENS.filter((n) => FA_VALUE_TOKENS.some((v) => v.includes(n))) }));
 
-// ---- BOUNDARY: the flat template-provided flags still say what they said ----------------------------
-// This branch decides merge-vs-insert nowhere: `meta.templateProvided` is a flat per-row flag, Feed's Layout cell is
-// driven by `w.base` alone, and no template is ever consulted. This change appends a ROUTE to those cells and
-// changes NOT ONE of those decisions — the honest statement of what it does and does not do. Pinning the existing
-// wording is what stops a later "while we are here" from quietly turning the flat flag into a claim about a
-// specific template, which is a different ticket needing measurements this branch does not have.
-check("the route is APPENDED to each cell's own disposition and replaces none of them — Attachments reads `template-provided`, Feed reads `⚠ ADD — the Freedom template does NOT provide this`, neither names a SPECIFIC template as shipping or omitting the component, and no expected count is filed for either",
-  () => {
-    const att = faLayoutRow("Attachments"); const feed = faLayoutRow("Feed (ESN)");
-    // The cell PREFIX, not the whole cell: this check's job is that the pre-existing disposition survived, so it
-    // must stay green with or without the route appended after it. Demanding the separator too would turn a
-    // guard into a second copy of T1/T2 and would go red on the baseline it is meant to describe.
-    //
-    // FEED'S DISPOSITION DIFFERS ON THIS
-    // BRANCH AND THE CHANGE IS CORRECT, so the pin MOVES rather than going away. That branch carries each mapping
-    // row's `templateProvided` down into the widget def, and Feed's row says `false`; the cell now says the Freedom
-    // template does NOT ship Feed instead of claiming it does - the leap that cost a live run its Feed tab. So
-    // `⚠ ADD` leaves the forbidden list, because Feed legitimately carries it now. What this guard actually
-    // protects is untouched and still asserted: the route is APPENDED to whatever the cell already said (both
-    // prefixes are pinned), neither cell names a SPECIFIC template schema as shipping or omitting the component,
-    // and neither files an expected count. A later "while we are here" still goes red.
-    return att.includes("| template-provided")
-      && feed.includes("| ⚠ ADD — the Freedom template does NOT provide this; build it")
-      && !/ships NO|ships Feed|ships Attachments|`\w+Template`/.test(`${att}\n${feed}`)
-      && !faRowRecs.some((r) => /Feed.*expected|Attachments.*expected/.test(r.label));
-  },
-  () => ({ attachments: faLayoutRow("Attachments"), feed: faLayoutRow("Feed (ESN)"),
+// ---- BOUNDARY: a guided cell states the CHECK, and never the VERDICT ------------------------------------------
+// THE CONTRACT THESE CELLS ARE PINNED TO. A Layout Source cell for Feed or Attachments owes three things and is
+// forbidden a fourth:
+//   NAMES the form template this plan targets, so the builder reads the right template's merged bundle rather than
+//     "the Freedom template" as a generic;
+//   INSTRUCTS the build-time read and both of its outcomes — present → MERGE onto it, absent → INSERT;
+//   ROUTES to the guidance item, because the property set is owed on either outcome;
+//   ASSERTS NOTHING about whether that template ships the component.
+//
+// WHY THE FOURTH IS FORBIDDEN, and why it is not a nicety. The plan is rendered offline under plain `node` with no
+// clio and no stand, so nothing here can read a template's merged bundle; a per-row flag printed as a verdict gives
+// the SAME answer for every template and is therefore wrong for some of them. The expensive direction is the false
+// ADD: `insert` over a container the template already filled puts a second element of the same name on the page,
+// and `update-page` validates the DIFF it was sent rather than the merged result, so the duplicate ships with
+// nothing raised. Template INHERITANCE makes that the ordinary case rather than a corner one — a template
+// extending another inherits its containers and their contents, so `PageWithTabsAndProgressBarTemplate` carries
+// `FeedTabContainer` and a `crt.Feed` it never declares itself. The opposite direction fails quietly in the other
+// way: a component claimed template-provided over a template that omits it is simply never built.
+//
+// The forbidden shapes are spelled out rather than left to a reader's judgement, and the cell must NAME a template
+// schema — the assertion the old flat wording could not make. Both arms matter: dropping the name would take the
+// builder back to reading whichever template it assumed, and dropping the ban would let a flat flag grow back into
+// a claim about a specific template.
+const FA_VERDICT_SHAPES = [/template-provided/, /⚠ ADD/, /does NOT provide/, /provided by the Freedom template/,
+  /\bships (?:NO|it|this|Feed|Attachments)\b/i, /\bdoes not ship\b/i];
+const FA_TEMPLATE_NAMED_RE = /`\w+Template`/;
+const faGuidedCells = () => ({ attachments: faSourceCell(faLayoutRow("Attachments")),
+  feed: faSourceCell(faLayoutRow("Feed (ESN)")) });
+check("each guided Layout cell NAMES the plan's form template, instructs the on-stand read and BOTH its outcomes, and carries the guidance route — while asserting nothing about whether that template ships the component, and filing no expected count for either",
+  () => Object.values(faGuidedCells()).every((c) =>
+    c.includes(`\`${FA_TOPAREA_TEMPLATE}\``) && FA_TEMPLATE_NAMED_RE.test(c)
+      && /merged bundle/.test(c) && /get-page/.test(c)
+      && /present → MERGE onto it/.test(c) && /absent → INSERT/.test(c)
+      && c.includes(FA_CALL)
+      && !FA_VERDICT_SHAPES.some((re) => re.test(c)))
+    && !faRowRecs.some((r) => /Feed.*expected|Attachments.*expected/.test(r.label)),
+  () => ({ cells: faGuidedCells(),
+    verdictHits: Object.fromEntries(Object.entries(faGuidedCells())
+      .map(([k, c]) => [k, FA_VERDICT_SHAPES.filter((re) => re.test(c)).map(String)])),
     expectedRows: faRowRecs.filter((r) => /expected/.test(r.label)).map((r) => r.label) }));
+// The guard is only worth having if the shapes it bans are the ones a verdict actually arrives in. These are the
+// two flat dispositions a per-row flag prints — one per direction — plus the inheritance-blind claim in the middle,
+// each run through the same predicate the arm uses.
+const FA_VERDICT_PROBES = {
+  "the flat provided disposition": "template-provided · configure it from `get-guidance name=x`",
+  "the flat absent disposition": "⚠ ADD — the Freedom template does NOT provide this; build it",
+  "an inheritance-blind claim about a named template": "`PageWithTabsFreedomTemplate` ships Feed — re-bind it",
+};
+check("negative control: the verdict ban BITES — the flat provided disposition, the flat absent disposition and a claim that a named template ships the component are each caught, so the ban cannot be satisfied by rewording one of them",
+  () => Object.values(FA_VERDICT_PROBES).every((p) => FA_VERDICT_SHAPES.some((re) => re.test(p))),
+  () => ({ undetected: Object.entries(FA_VERDICT_PROBES)
+    .filter(([, p]) => !FA_VERDICT_SHAPES.some((re) => re.test(p))).map(([k]) => k) }));
+// THE UNNAMED TEMPLATE. `planMeta.formTemplate` and the manifest `template` are both optional, and a cell that
+// answered their absence by inventing a schema name, or by falling back to a flat verdict, would put a fact in the
+// plan that nothing established. What it says instead is the same instruction with a neutral subject — the check is
+// performable either way, because the builder knows which template it is about to write onto even when the plan
+// does not.
+const faNoTplPlan = renderPlan(faResult, {});
+check("with NO form template supplied the guided cells stay honest — they name no template schema, say `the selected form template`, and still carry the on-stand read and the guidance route",
+  () => [faSourceCell(faRowIn(faNoTplPlan, "Attachments")), faSourceCell(faRowIn(faNoTplPlan, "Feed (ESN)"))]
+    .every((c) => c.includes("the selected form template") && !FA_TEMPLATE_NAMED_RE.test(c)
+      && /present → MERGE onto it/.test(c) && /absent → INSERT/.test(c) && c.includes(FA_CALL)
+      && !FA_VERDICT_SHAPES.some((re) => re.test(c))),
+  () => ({ attachments: faSourceCell(faRowIn(faNoTplPlan, "Attachments")),
+    feed: faSourceCell(faRowIn(faNoTplPlan, "Feed (ESN)")) }));
 
 // ---- the guided feature NAME has exactly ONE spelling in engine source ----------------
 // `meta.feature` is a JOIN KEY. Three places could spell it independently — the mapping row that declares the
@@ -11648,16 +11700,15 @@ check("on the production path the Attachments record really is `component`-shape
 // template family would have broken that run. So R8's "exactly as before" is NOT what this branch ships; the PR
 // body says so in those words rather than letting the requirement and the behaviour disagree quietly.
 //
-// WHAT THE ENGINE COULD EVEN BRANCH ON, for completeness: nothing. `rowsForFeatures(cs.standardFeatures, …)` and
-// `rowsForWidgets(cs.widgets, …)` are handed no `opts`, so `planMeta.formTemplate` is not in scope where the route
-// is resolved, and `meta.templateProvided` is a flat per-row flag carrying no per-template verdict. A template-aware
-// route would need a measured template-capability table this branch does not have — a different ticket.
-const FA_BASIC_TEMPLATE = "PageWithTabsFreedomTemplate";
-const FA_TOPAREA_TEMPLATE = "PageWithTopAreaAndTabsFreedomTemplate";
+// WHAT THE CELL DOES VARY BY is the template NAME, which is the whole of the template-awareness there is here:
+// `renderDesignSpec` threads `planMeta.formTemplate` (else the manifest `template`) into `rowsForFeatures` and
+// `rowsForWidgets`, and the guided cell prints it as the subject of an on-stand read. It does NOT branch on it —
+// the instruction is identical on every template, and `meta.templateProvided` stays a flat per-row flag that no
+// guided cell prints as a verdict.
 const faBasicOpts = { planMeta: { formTemplate: FA_BASIC_TEMPLATE } };
 const faBasicPlan = renderPlan(faResult, faBasicOpts);
 const faBasicRowRecs = checklistGroups(faResult, faBasicOpts).flatMap((g) => g.rows);
-const faBasicLayoutRow = (what) => faBasicPlan.split("\n").find((l) => l.startsWith("|") && l.includes(`| ${what} |`)) || "";
+const faBasicLayoutRow = (what) => faRowIn(faBasicPlan, what);
 check("AC-4/R8: on the BASIC form template the guidance route IS emitted for Feed and Attachments and the companion `AttachmentListDS` row is gated exactly as on any other template — the basic-template path is pinned by a fixture through the real mapper instead of inferred",
   () => faBasicLayoutRow("Attachments").includes(FA_CALL)
     && faBasicLayoutRow("Feed (ESN)").includes(FA_CALL)
@@ -11665,6 +11716,17 @@ check("AC-4/R8: on the BASIC form template the guidance route IS emitted for Fee
     && faBasicRowRecs.some((r) => r.vk?.id === "main#datasource:AttachmentListDS" && r.vk?.type === "evidence"),
   () => ({ template: FA_BASIC_TEMPLATE, attachments: faBasicLayoutRow("Attachments"), feed: faBasicLayoutRow("Feed (ESN)"),
     gatedRows: faBasicRowRecs.filter((r) => /Attachment|Feed/i.test(r.label)).map((r) => ({ label: r.label.slice(0, 120), vk: r.vk || null })) }));
+// The name in the cell is THIS plan's template, not a constant that happens to read like one. Render the same
+// mapper result on a second template and each guided cell names the second template and not the first — an
+// assertion a hardcoded string could never satisfy, and the one that says the builder will read the bundle of the
+// template it is actually writing onto.
+check("the template named in a guided cell is the one THIS plan targets — rendered on the basic template both cells name it and neither still names the top-area one, so the name tracks `planMeta.formTemplate` rather than being a fixed string",
+  () => [faSourceCell(faBasicLayoutRow("Attachments")), faSourceCell(faBasicLayoutRow("Feed (ESN)"))]
+    .every((c) => c.includes(`\`${FA_BASIC_TEMPLATE}\``) && !c.includes(FA_TOPAREA_TEMPLATE)
+      && !FA_VERDICT_SHAPES.some((re) => re.test(c)))
+    && Object.values(faGuidedCells()).every((c) => c.includes(`\`${FA_TOPAREA_TEMPLATE}\``)),
+  () => ({ basic: { attachments: faSourceCell(faBasicLayoutRow("Attachments")), feed: faSourceCell(faBasicLayoutRow("Feed (ESN)")) },
+    topArea: faGuidedCells() }));
 // The strongest form of "the template family changes nothing else either": render the SAME mapper result under the
 // basic template and under the top-area one, and the two documents differ in the TEMPLATE NAME and in nothing at
 // all besides. Substituting one name for the other makes them byte-identical — every route, every disposition,
