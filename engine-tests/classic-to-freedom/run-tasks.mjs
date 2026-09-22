@@ -5289,11 +5289,22 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
         () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"
           && rr?.rows?.[1]?.outcome === "" && rr?.rows?.[1]?.outcomeKind === null,
         () => ({ touched: res.touched?.length, row0: rr?.rows?.[0]?.outcome, row1: rr?.rows?.[1]?.outcome }));
-      // The task's status stays partial because it now has one closed cell and one blank — the row addressing
-      // was deliberately not "close the whole task", which would have been the --task <id> form.
-      check("ENG-99749 --decide --row leaves the task OPEN — one cell closed, the rest still blank (the task is not `wont-do` or `done` off one decided row)",
-        () => rr?.status && !["done", "wont-do", "not-applicable"].includes(rr.status),
-        () => ({ status: rr?.status }));
+      // AC 5's second half — "the task's status recomputes on its own" — asserted as the exact word `partial`,
+      // not as a negative list that also passes for `todo`, `in-progress` and `blocked`. It is asserted on a
+      // FULLY ACCOUNTED task on purpose: while any cell is still blank `computeStatus` returns the CARRIED
+      // word, so that a fresh task cannot read `partial` off one filled cell. A half-filled fixture would
+      // therefore assert the carried word rather than the recomputed one, which is the same class of mistake
+      // as the negative list it replaces.
+      const fpRow = path.join(dir, t.file);
+      let rowTxt = fs.readFileSync(fpRow, "utf8");
+      for (let i = 2; i <= t.rows.length; i++) {
+        rowTxt = setOutcome(rowTxt, i, i === t.rows.length ? "not-built — blocked" : "built");
+      }
+      fs.writeFileSync(fpRow, rowTxt);
+      const rrFull = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 (AC 5) with every other row accounted for, the one decided row leaves the task `partial` — a single decision does not close a task that still owes work",
+        () => rrFull?.status === "partial" && rrFull?.rows?.[0]?.outcomeKind === "wont-do",
+        () => ({ status: rrFull?.status, kinds: rrFull?.rows?.map((r) => r.outcomeKind) }));
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -5602,12 +5613,19 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
       const decKeys = decidedRowKeys(preMerged);
       const withoutFilter = renderVerify(RUN, OPTS, {});
       const withFilter = renderVerify(RUN, OPTS, {}, decKeys);
+      const decidedLabels = new Set((res.touched || []).map((x) => x.task.rows[x.n - 1].label));
       check("ENG-99749 (AC 12) a row closed by decision drops out of `--verify`'s row list — decidedKeys filters the plan walk, so the deliverable is not in the rendered table",
         () => !res.refused && decKeys.size >= 1
           && withoutFilter.rows.some((r) => r.deliverable === closedLabel)
           && !withFilter.rows.some((r) => r.deliverable === closedLabel)
           && withFilter.decided?.some((r) => r.deliverable === closedLabel)
-          && withFilter.rows.length === withoutFilter.rows.length - res.touched.length,
+          // Membership, not arithmetic: the replaced conjunct equated a PLAN-walk row count with a TASK row
+          // count, which diverge as soon as two tasks cover one deliverable or the cascade touches a row the
+          // plan lists once — a drift that would fail while saying nothing about the filter. What the filter
+          // promises is that it removes the DECIDED deliverables (this block closes the whole task, so there
+          // are several) and leaves every other row of the walk exactly where it was.
+          && withoutFilter.rows.every((r) => decidedLabels.has(r.deliverable)
+            || withFilter.rows.some((w) => w.deliverable === r.deliverable && w.pageKey === r.pageKey)),
         () => ({ touched: res.touched?.length, decKeys: decKeys.size,
           before: withoutFilter.rows.length, after: withFilter.rows.length,
           decided: withFilter.decided?.length, closedLabel }));
@@ -5974,9 +5992,15 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // checklistOpts(MANIFEST) so slicing matches what the CLI wrote (task ids are content-derived, and
     // the two callers must agree on the opts or the ids diverge).
     const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
+    // No `pageKey !== "run"` filter here, unlike the blocks that slice with `OPTS`: the CLI slices with the
+    // DEFAULT budget, which collapses this fixture into whole-run tasks whose pageKey IS "run". Excluding them
+    // left `t` undefined on every run, so the two checks below never executed and the suite stayed green while
+    // the only CLI coverage of the happy path was dead. A collapsed run task is a valid `--task` target.
     const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && x.artifact !== ARTIFACT_REFS
       && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    check("ENG-99749 (M2) fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
+      () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
     if (t) {
       const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
       check("ENG-99749 (M2) happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",

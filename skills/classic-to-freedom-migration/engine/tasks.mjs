@@ -3134,11 +3134,17 @@ function pickDecideTargets(tasks, opts) {
 // branch used to emit a bare `postponed — D13 → <dest>`, which parsePostponedCell (`/\(D(\d{1,3})\)/`)
 // then failed to read back, and the Carry-over rendered `⚠ no D<N> found in the cell` for a cell that IS
 // decided. Both sides of the round-trip now agree on the parenthesised shape.
+// The destination is collapsed the same way the title is, not merely trimmed. It is OPERATOR-SUPPLIED and lands
+// inside a `## Deliverables` table cell: `cell()` escapes pipes but not line breaks, and `setAdoptedRowOutcome`
+// splices the text straight into the line before re-joining, so a `--to` carrying a newline would write extra
+// physical rows into the middle of the table the engine parses back — the task then reads as unaccounted and
+// loses its derived status, and caller-chosen markdown lands in a file the report renders.
+const collapseWs = (s) => String(s || "").replace(/\s+/g, " ").trim();
 function decideCellText({ mode, decision, title, destination }) {
   const outcome = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
-  const reason = String(title || "").replace(/\s+/g, " ").trim();
+  const reason = collapseWs(title);
   const stem = reason ? `${outcome} — ${reason} (${decision})` : `${outcome} — (${decision})`;
-  return mode === "postponed" ? `${stem} → ${String(destination || "").trim()}` : stem;
+  return mode === "postponed" ? `${stem} → ${collapseWs(destination)}` : stem;
 }
 
 // Apply `--decide D<N>` to the addressed rows. Refuses on the addressing problems it can see BEFORE touching
@@ -3167,7 +3173,7 @@ export function applyDecision(dir, result, opts = {}) {
   const cellText = decideCellText({ mode, decision, title, destination });
   const outcomeKind = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
   const outcomeReason = mode === "postponed"
-    ? `${title || ""} (${decision}) → ${String(destination).trim()}`.trim()
+    ? `${title || ""} (${decision}) → ${collapseWs(destination)}`.trim()
     : `${title || ""} (${decision})`.trim();
 
   const touched = [];

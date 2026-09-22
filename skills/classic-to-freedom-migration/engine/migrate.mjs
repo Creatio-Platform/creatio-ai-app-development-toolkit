@@ -2844,8 +2844,9 @@ function dispatchFailureSections(audit, dir) {
     [audit.openClock, (n) => `⛔ ${n} task(s) closed while their clock is still open — the folder's books are`
       + ` behind, not wrong. Re-run \`--tasks ${dir}\` to close them and record their samples:`,
       (t) => `   · ${t.file}  (${t.id})`],
-    [audit.naNoReason, (n) => `⛔ ${n} task(s) recorded \`n/a\` with no dispatch record and no reason under`
-      + " `## Notes`. The reason is what exempts an `n/a` from the dispatch gate. Write why each does not apply,"
+    [audit.naNoReason, (n) => `⛔ ${n} task(s) recorded \`not-applicable\` with no dispatch record and no reason`
+      + " under `## Notes`. The reason is what exempts a `not-applicable` from the dispatch gate. Write why each"
+      + " does not apply,"
       + " or re-open and build it:",
       (t) => `   · ${t.file}  (${t.id})`],
     [audit.signature, (n) => `⛔ ${n} task(s) closed carrying a signature dispatch did not issue for them —`
@@ -3212,7 +3213,7 @@ function repairRoundLines(res, dir, kind) {
   // A row held back because the ledger settled it by decision is NOT written as a round, so this is the only
   // place the caller hears about it.
   for (const b of res.boundaries || []) {
-    lines.push(`migrate.mjs: NOT routed — \`${b.row.deliverable}\` (${b.pageKey}) was closed \`n-a\` with a reason`
+    lines.push(`migrate.mjs: NOT routed — \`${b.row.deliverable}\` (${b.pageKey}) was closed \`not-applicable\` with a reason`
       + ` on ${b.task.file}, and a verify run re-opened it. The decision stands: confirm the boundary, or record`
       + ` the row \`not-built\` to schedule the work.`);
   }
@@ -3488,6 +3489,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
     if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets \"later\" pass for an answer.`);
     if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
+    // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
+    // markdown table row: a line break would split the row in two and the engine would read the task back broken.
+    if (toArg && /[\r\n]/.test(toArg)) fail(`\`${TO_FLAG}\` must be a single line — the destination is written into a \`## Deliverables\` table cell, and a line break splits the row.`);
     const addressings = [!!pagesArg, !!taskArg, !!rowArg].filter(Boolean).length;
     if (addressings === 0) fail(`\`${DECIDE_FLAG}\` needs one of \`${PAGES_FLAG} <keys>\`, \`${TASK_FLAG} <id>\` or \`${ROW_FLAG} <task-id>:<n>\` — the row addressing this decision covers.`);
     if (addressings > 1) fail(`\`${PAGES_FLAG}\` / \`${TASK_FLAG}\` / \`${ROW_FLAG}\` are three addressings for ONE decision — pick one.`);
@@ -3846,7 +3850,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // finished run.
   if (finalReport && !finalReport.complete) {
     const t = finalReport.counts.tasks;
-    const naPart = t.na ? ` / ${t.na} n-a` : "";
+    const naPart = t.na ? ` / ${t.na} not-applicable` : "";
     const blockedPart = t.blocked ? ` / ${t.blocked} blocked` : "";
     process.stderr.write(`migrate.mjs: ⛔ RUN NOT COMPLETE — ${finalReport.reasons.join(" · ")}. Tasks: ${t.done} done`
       + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`

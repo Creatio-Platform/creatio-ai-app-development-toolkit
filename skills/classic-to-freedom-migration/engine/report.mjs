@@ -488,7 +488,7 @@ function collectPostponedRows(tasks) {
   for (const t of tasks || []) {
     if (t.unread) continue;
     (t.rows || []).forEach((r, i) => {
-      if (r.outcomeKind !== "postponed") return;
+      if (r.outcomeKind !== O_POSTPONED) return;
       const { decision, destination } = parsePostponedCell(r.outcome);
       out.push({ task: t, row: r, n: i + 1, decision, destination });
     });
