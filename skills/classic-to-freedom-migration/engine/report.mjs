@@ -28,7 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
-import { notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
+import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
   S_DONE, S_NA, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
@@ -199,6 +199,24 @@ function splitDecided(notBuilt, boundaries) {
     (b ? decided : open).push(b ? { ...it, decidedBy: b } : it);
   }
   return { open, decided };
+}
+
+// A SETTLED TASK WHOSE ROWS DRIFTED: its cells were recorded against deliverables the plan no longer carries, so
+// no mark re-attaches and the collector sees no owed row. Its word stands over rows nobody accounted for.
+function driftedSettledReasons(tasks) {
+  const bad = (tasks || []).filter((t) => t.drifted && !t.unread && (t.status === S_DONE || t.status === S_PARTIAL));
+  if (!bad.length) return [];
+  return [`${plural(bad.length, "settled task")} whose deliverables CHANGED since its cells were recorded`
+    + ` (${bad.map((t) => esc(t.file)).join(", ")}) — re-check those cells against the rows now in the file`];
+}
+
+// A LEDGER ENTRY NOBODY CAN DERIVE — distinct from `ledgerRefused` (a file that would not parse at all):
+// this one parses and carries a status with no cells behind it.
+function unreadableLedgerReasons(tasks) {
+  const bad = unreadableLedger(tasks);
+  if (!bad.length) return [];
+  return [`${plural(bad.length, "task")} whose \`## Deliverables\` table could not be read`
+    + ` (${bad.map((t) => esc(t.file)).join(", ")}) — their status is not derived from anything`];
 }
 
 function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
@@ -454,6 +472,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const handLeft = (verifyRes?.rows || []).filter((r) => r.kind === "confirm" && !flaggedLabels.has(`${r.pageKey} ${labelKey(r.deliverable)}`)).length;
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
+  reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
   // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
   // and must not leave plan rows unaccounted while the run reads COMPLETE.
