@@ -2909,14 +2909,16 @@ let nextRefusalFailure = false;
 // folder that was never cut. Its own variable, per the one-flag-per-mode shape beside it, so a run can still say
 // WHICH mode declined.
 let taskRefusalFailure = false;
-// ⛔ `--route` REFUSED TO OPEN A ROUND — the frozen cut the folder's task ids derive from does not resolve, so no
-// repair task is written. Same rule as the two above, on the one other mode that prints the banner.
+// ⛔ A REPAIR ROUND OPENED NOTHING — the frozen cut the folder's task ids derive from does not resolve, or the
+// round could not be written, so no repair task exists and no row is scheduled to close. One flag for one repair
+// code path reached by two entry commands (`--tasks --route` and `--verify --tasks`), so the exit code follows the
+// banner whichever of them asked. Same rule as the two above, on the other modes that print the banner.
 let routeRefusalFailure = false;
 // ⛔ `--START` MARKED NOTHING — every reason it refuses ends the same way: no clock was opened and the folder
 // records nothing started. It is the command an orchestrator runs before EVERY dispatch, so a refusal it exits 0
 // on is the one that costs most: the caller hands the named task to a sub-agent that has no token for it. Raised
-// for the WHOLE refusal set rather than per reason — three of them already carry a dispatch verdict, and the
-// remaining two (an unreadable file, an id the folder does not hold) carry none of their own.
+// for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
+// does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
 let startRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
@@ -3253,8 +3255,13 @@ function runRouteMode(result, dir, opts) {
   const refused = repairPreflight(result, dir);
   if (refused) return refused;
   let res;
+  // A round that could not be written opened nothing, exactly like the refusal below, so it raises the same flag:
+  // the banner on stdout and the exit code are one verdict.
   try { res = syncRepairDir(dir, result, {}, opts); }
-  catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
+  catch (e) {
+    routeRefusalFailure = true;
+    return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`;
+  }
   // An unreadable split writes nothing: the folder's task ids cannot be derived from it.
   if (res.refused) {
     routeRefusalFailure = true;
@@ -3277,11 +3284,17 @@ function runRepairMode(result, dir, verifyRes, opts) {
   const refused = repairPreflight(result, dir);
   if (refused) return { note: refused, set: null, repair: null };
   let res;
+  // Same verdict as the routed round, raised on the same flag: one repair code path reached by two entry commands,
+  // and the exit code follows the banner whichever of them asked.
   try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
-  catch (e) { return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null }; }
+  catch (e) {
+    routeRefusalFailure = true;
+    return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null };
+  }
   // The frozen split is unreadable, so the folder's task ids cannot be derived — nothing was written, the same
   // refusal a build run makes. Repairing against a split that cannot be parsed would renumber the whole folder.
   if (res.refused) {
+    routeRefusalFailure = true;
     return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
       + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`, set: null, repair: null };
   }

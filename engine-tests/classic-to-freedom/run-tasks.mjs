@@ -2390,8 +2390,8 @@ console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CL
     const splitPath = path.join(base, "split.json");
     fs.writeFileSync(splitPath, JSON.stringify(split, null, 2));
     const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
-    check(`migrate.mjs --tasks: a split refused for ${kind} exits NON-ZERO and writes nothing — the banner and the exit code are one verdict, not two`,
-      () => run.status !== 0 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
+    check(`migrate.mjs --tasks: a split refused for ${kind} exits 2 and writes nothing — the banner and the exit code are one verdict, not two`,
+      () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
         && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
       () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 400), exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -2408,16 +2408,16 @@ console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CL
     () => cut.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
     () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 300) }));
   const ghost = cliTasks(["--tasks", dir, "--start", "no-such-task-id"], MANIFEST);
-  check("migrate.mjs --start: an id the folder does not hold is refused with a NON-ZERO exit — nothing was marked started, and a caller reading that as success dispatches a sub-agent onto a task with no clock",
-    () => ghost.status !== 0 && /⛔ no task `no-such-task-id`/.test(ghost.stdout || ""),
+  check("migrate.mjs --start: an id the folder does not hold is refused with an exit of 2 — nothing was marked started, and a caller reading that as success dispatches a sub-agent onto a task with no clock",
+    () => ghost.status === 2 && /⛔ no task `no-such-task-id`/.test(ghost.stdout || ""),
     () => ({ status: ghost.status, stdout: (ghost.stdout || "").slice(0, 300) }));
   // A file the engine cannot parse is left untouched rather than rewritten, so the id it holds can never be started.
   const victim = fs.readdirSync(dir).find((f) => f.startsWith("task-"));
   const startId = /^id:\s*(\S+)/m.exec(fs.readFileSync(path.join(dir, victim), "utf8"))?.[1];
   fs.writeFileSync(path.join(dir, victim), "---\nid: " + startId + "\nstatus: todo\n");
   const unread = cliTasks(["--tasks", dir, "--start", startId], MANIFEST);
-  check("migrate.mjs --start: a task whose file cannot be read is refused with a NON-ZERO exit — the engine will not rewrite that file, so the task it names cannot be started and the run must not continue as though it were",
-    () => unread.status !== 0 && /⛔/.test(unread.stdout || "") && /could not be read/.test(unread.stdout || ""),
+  check("migrate.mjs --start: a task whose file cannot be read is refused with an exit of 2 — the engine will not rewrite that file, so the task it names cannot be started and the run must not continue as though it were",
+    () => unread.status === 2 && /⛔/.test(unread.stdout || "") && /could not be read/.test(unread.stdout || ""),
     () => ({ status: unread.status, stdout: (unread.stdout || "").slice(0, 400) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
@@ -2439,12 +2439,12 @@ console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CL
     ["--tasks --route", ["--tasks", dir, "--route"]]];
   const runs = MODES.map(([label, args]) => [label, cliTasks(args, MANIFEST)]);
   for (const [label, r] of runs) {
-    check(`migrate.mjs \`${label}\`: a folder whose frozen cut does not resolve against the plan is refused with a NON-ZERO exit — every mode that prints the banner owes the caller the same verdict the banner states`,
-      () => r.status !== 0 && /⛔/.test((r.stdout || "") + (r.stderr || "")),
+    check(`migrate.mjs \`${label}\`: a folder whose frozen cut does not resolve against the plan is refused with an exit of 2 — every mode that prints the banner owes the caller the same verdict the banner states`,
+      () => r.status === 2 && /⛔/.test((r.stdout || "") + (r.stderr || "")),
       () => ({ status: r.status, stdout: (r.stdout || "").slice(0, 400), stderr: (r.stderr || "").slice(0, 400) }));
   }
-  check("migrate.mjs: the refusing modes answer the IDENTICAL code for one folder state — a caller must not have to remember which command it asked with to know whether the folder is approvable",
-    () => new Set(runs.map(([, r]) => r.status)).size === 1,
+  check("migrate.mjs: every refusing mode answers 2 for one folder state — a caller must not have to remember which command it asked with to know whether the folder is approvable",
+    () => runs.every(([, r]) => r.status === 2),
     () => runs.map(([label, r]) => `${label}: ${r.status}`).join(" | "));
   fs.rmSync(base, { recursive: true, force: true });
 }
