@@ -643,7 +643,11 @@ export const parseDecisionsMap = (s) => {
   for (const tok of String(s || "").trim().split(/\s+/).filter(Boolean)) {
     const [n, d] = tok.split(":");
     const num = Number(n);
-    if (Number.isFinite(num) && num >= 1 && /^D\d+$/.test(String(d || ""))) out.set(num, d);
+    // ENG-99749 review m10: `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
+    // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
+    // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
+    // decision entry the engine cannot reach.
+    if (Number.isInteger(num) && num >= 1 && /^D\d+$/.test(String(d || ""))) out.set(num, d);
   }
   return out;
 };
@@ -3095,10 +3099,14 @@ function pickDecideTargets(tasks, opts) {
 
 // The literal that lands in the Outcome cell. Pipes in a caption would break the table, so any pipe in the
 // reason or destination is escaped by the same `cell()` writer the row table uses.
+// ENG-99749 review m3: the decision is ALWAYS wrapped in `(D<N>)` — with or without a title. The title-less
+// branch used to emit a bare `postponed — D13 → <dest>`, which parsePostponedCell (`/\(D(\d{1,3})\)/`)
+// then failed to read back, and the Carry-over rendered `⚠ no D<N> found in the cell` for a cell that IS
+// decided. Both sides of the round-trip now agree on the parenthesised shape.
 function decideCellText({ mode, decision, title, destination }) {
   const outcome = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
   const reason = String(title || "").replace(/\s+/g, " ").trim();
-  const stem = reason ? `${outcome} — ${reason} (${decision})` : `${outcome} — ${decision}`;
+  const stem = reason ? `${outcome} — ${reason} (${decision})` : `${outcome} — (${decision})`;
   return mode === "postponed" ? `${stem} → ${String(destination || "").trim()}` : stem;
 }
 

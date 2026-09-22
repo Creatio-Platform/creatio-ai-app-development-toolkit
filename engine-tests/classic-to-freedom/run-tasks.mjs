@@ -20,7 +20,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir,
-  applyDecision, revokeDecision, decidedRowKeys } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
@@ -5520,6 +5520,73 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
+}
+
+// ============================================================================================================
+// ENG-99749 review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
+// non-integer row keys, m11 last-arrow anchoring).
+// ============================================================================================================
+console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
+{
+  // m3: title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
+  const base = tmp("m3-titleless-dn");
+  const migrationDir = base;
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13\n");
+  const decisions = new Map([["D13", ""]]);   // title-less
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  if (t) {
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "postponed",
+      destination: "ENG-9999", taskId: t.id, decisions });
+    const rr = readTaskDir(dir).find((x) => x.id === t.id);
+    check("ENG-99749 (m3) a decision without a title still writes a cell that carries `(D<N>)` — the round-trip needs it, parsePostponedCell reads only the parenthesised shape",
+      () => !res.refused && /\(D13\)/.test(rr?.rows?.[0]?.outcome || ""),
+      () => rr?.rows?.[0]?.outcome);
+    // And the report renders **D13** (not the ⚠-fallback) — the round-trip is the whole point.
+    const set2 = readMergedTaskDir(dir, RUN, OPTS);
+    const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: set2, dir, built: {}, repair: null });
+    check("ENG-99749 (m3) the Carry-over section renders **D13** for a title-less decision — the round-trip is complete, no `⚠ no D<N>` fallback fires",
+      () => /\*\*D13\*\*/.test(rep.markdown) && !/⚠ no D<N> found in the cell/.test(rep.markdown),
+      () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
+  check("ENG-99749 (m10) parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
+    () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
+    () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
+  check("ENG-99749 (m10) parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
+    () => {
+      const m = parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42");
+      return m.size === 1 && m.get(4) === "D42";
+    },
+    () => JSON.stringify([...parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42").entries()]));
+}
+{
+  // m11: a decision title containing `→` must not leak into the destination. parsePostponedCell is
+  // module-internal, so assert through the report — the observable end-state.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "postpone-title-arrow", file: "p.md", group: "Business rules", pageKey: "main", status: "partial",
+      origin: "engine", notes: "", rows: [
+        { label: "Rule — `Cross-ref`", outcomeKind: "postponed",
+          // The title itself contains `→` — a reference like "see D3 → D4". The parser MUST anchor on the
+          // LAST arrow, or the destination becomes garbage and the Jira link is lost.
+          outcome: "postponed — see D3 → D4, defer (D19) → ENG-12345",
+          outcomeReason: "see D3 → D4, defer (D19) → ENG-12345" },
+      ], dispatched: "yes", agentNonce: "tok" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("m11-title-arrow"), built: {}, repair: null });
+  check("ENG-99749 (m11) a decision title containing `→` (e.g. `see D3 → D4`) does not leak into the destination — the parser anchors on the LAST arrow, the Jira link renders on the real key",
+    () => /ENG-12345/.test(rep.markdown)
+      && /https:\/\/creatio\.atlassian\.net\/browse\/ENG-12345/.test(rep.markdown)
+      && !/browse\/D4/.test(rep.markdown),
+    () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
 }
 
 // ============================================================================================================

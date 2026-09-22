@@ -470,15 +470,16 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 
 // ENG-99749 point 6 helpers — the carry-over row-level list of every postponed item, with its decision and
 // destination parsed out of the cell text. `--decide --postponed` writes cells shaped `postponed — <reason>
-// (D<N>) → <destination>`; the regexes below pick the D<N> and the destination back out for the report.
-const POSTPONED_DECISION_RE = /\(D\d{1,3}\)/;
-const POSTPONED_DEST_RE = /→\s*(.+?)\s*$/;
+// (D<N>) → <destination>`; the regex below picks D<N> out and anchors the destination on the LAST `→`
+// (review m11: a decision title containing `→` — a reference like `see D3 → D4` — used to leak into the
+// destination when the regex took the first arrow, breaking the Jira-link render).
+const POSTPONED_DECISION_RE = /\(D(\d{1,3})\)/;
 function parsePostponedCell(text) {
   const s = String(text || "");
-  const dmatch = s.match(/\(D(\d{1,3})\)/);
+  const dmatch = s.match(POSTPONED_DECISION_RE);
   const decision = dmatch ? `D${dmatch[1]}` : null;
-  const destMatch = s.match(POSTPONED_DEST_RE);
-  const destination = destMatch ? destMatch[1] : null;
+  const lastArrow = s.lastIndexOf("→");
+  const destination = lastArrow < 0 ? null : s.slice(lastArrow + 1).trim() || null;
   return { decision, destination };
 }
 function collectPostponedRows(tasks) {
