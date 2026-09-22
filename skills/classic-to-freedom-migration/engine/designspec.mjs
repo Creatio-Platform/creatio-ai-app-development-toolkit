@@ -197,53 +197,69 @@ const GUIDANCE_CALL = `\`get-guidance name=${STANDARD_COMPONENTS_GUIDANCE_ID}\``
 const GUIDANCE_ROUTE = ` · configure it from ${GUIDANCE_CALL} — that item owns the canonical property set; this plan names none of the values, and none may be invented`;
 // The same route, compressed to what fits at the end of a gated checklist row.
 const GUIDANCE_POINTER = `settings: ${GUIDANCE_CALL}`;
-function rowsForFeatures(standardFeatures, tabRegion) {
+/* THE MERGE-vs-INSERT DECISION IS THE BUILDER'S, AND THE PLAN SAYS SO RATHER THAN GUESSING IT.
+   Whether a Freedom form template already ships Feed or Attachments is a fact about THAT template's merged bundle,
+   readable only on a stand. `migrate.mjs` renders this plan OFFLINE, under plain `node`, with no clio and no stand,
+   so this engine cannot resolve it; `meta.templateProvided` is a flat per-row flag that answers the same for every
+   template, which makes it a coin toss dressed as a fact. Both faces of that toss are damaging:
+     ADD over a template that DOES ship the component → the builder `insert`s a second element of the same name into
+       a container the template already filled, and `update-page` validates the DIFF it was sent rather than the
+       merged result, so the page ships with a duplicate and nothing is raised;
+     template-provided over a template that does NOT ship it → the component is never built at all.
+   Template inheritance makes the first case ordinary rather than exotic: a template that extends another inherits
+   its containers and their contents, so a component absent from the child's own body can still be on the page.
+   So the cell names the template this plan targets and states the check the builder can actually perform, instead
+   of asserting a verdict this engine has no way to hold. Scoped to the components the guidance item covers — every
+   other feature and widget keeps its own disposition, because each has its own recipe and its own answer. */
+function guidedSource(formTemplate) {
+  // An unnamed template still gets an honest cell: the instruction is identical, and inventing a schema name — or
+  // falling back to a verdict — would put a fact in the plan that nothing established.
+  const named = formTemplate ? `\`${esc(formTemplate)}\`` : "the selected form template";
+  return `⚠ resolve on-stand — read ${named}'s merged bundle (\`get-page\`) before writing:`
+    + ` present → MERGE onto it, never a second element of the same name; absent → INSERT${GUIDANCE_ROUTE}`;
+}
+function rowsForFeatures(standardFeatures, tabRegion, formTemplate = null) {
   return (standardFeatures || []).map((s) => {
     const isList = s.uiShape === "list";
     const type = isList ? "Related list" : esc(s.feature);
-    // `template-provided` on its own was the whole of what the plan said about a component whose
-    // settings decide whether it works at all. It is true and it is not enough: the template supplies the
-    // container, the page still owes the configuration, and nothing here told anyone where that is defined.
+    // `template-provided` on its own is not enough for a component whose settings decide whether it works at all:
+    // the template supplies the container, the page still owes the configuration, and the cell has to say where
+    // that is defined. For a guided feature the cell also has to stop asserting WHICH of the two paths applies.
     const guided = isList ? null : featureGuidanceId(s.feature);
-    const nativeSrc = (s.templateProvided ? "template-provided" : "native — confirm component on-stand")
-      + (guided ? GUIDANCE_ROUTE : "");
+    const nativeSrc = guided ? guidedSource(formTemplate)
+      : (s.templateProvided ? "template-provided" : "native — confirm component on-stand");
     const src = isList ? `${esc(s.entity || "Activity")} · native` : nativeSrc;
     const inferredNote = s.inferredFromEntity ? "⚠ inferred from entity — confirm" : DASH;
     const add = s.note ? `⚠ ${esc(s.note)}` : inferredNote;
     return { region: s.tab ? tabRegion(s.tab) : "⚠ unplaced", sort: isList ? 1 : 2, cells: [esc(s.feature), type, src, DASH, add] };
   });
 }
-function widgetSource(w) {
+function widgetSource(w, formTemplate = null) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
   if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed)"; // the re-bind / MainContainer-fallback recipe lives in the mapping doc, not this cell
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
-  // `w.base` is a fact about the CLASSIC page — the widget came from its base template. Reading that as "the
-  // FREEDOM template provides it" is the leap that cost a live run its Feed tab: the mapping row for Feed says
-  // `templateProvided: false`, the layout row said "provided by the Freedom template", and the builder believed
-  // the row it was reading. Where the row has an answer, it wins.
+  // `w.base` is a fact about the CLASSIC page — the widget came from its base template — and says nothing about
+  // what the FREEDOM template ships. `w.templateProvided` is the mapping row's flat flag and says the same thing
+  // for every template. Neither is a per-template verdict, so neither may be printed as one for a GUIDED widget:
+  // Feed arrives here rather than as a standard feature (one table row, two consumers), and its cell owes the same
+  // answer the feature cell owes — the template named, the check stated, the verdict left to the builder (see
+  // `guidedSource`). The route travels with it, because the guidance item covers the MERGE path and the INSERT
+  // path alike and a builder needs it whichever one the on-stand read resolves to.
   //
-  // same correction as the feature cell above, for the widget half of the same defect. Feed arrives
-  // here rather than as a standard feature (one table row, two consumers), and "provided by the Freedom template"
-  // was the entire instruction: true about the container, silent about the five properties without which the Feed
-  // queries nothing. The route is appended for the components the guidance item covers and for no others.
-  //
-  // THE TWO SENTENCES ANSWER DIFFERENT QUESTIONS AND EVERY BRANCH OWES BOTH. The row's `templateProvided` says
-  // WHETHER this component has to be built; the guidance route says WHERE its settings are defined. They are not
-  // alternatives, and the `templateProvided === false` branch is the one that needs the route MOST — a builder
-  // told to build the component from nothing has nothing else to configure it from. It is also the branch Feed
-  // actually takes (its row is `templateProvided: false`), i.e. the guided widget: resolving `guided` after that
-  // return would have silently dropped the route from the only widget that has one. So it is resolved ONCE, above
-  // every branch, and appended to each.
+  // `guided` is tested BEFORE the flag and the base marker, because those two are exactly what a guided cell must
+  // not print; reading either first would put a verdict back in the cell that `guidedSource` exists to keep out.
+  // Non-guided widgets keep their own dispositions untouched and carry no route — each has its own recipe, and
+  // pointing one at an item that says nothing about it would be a false instruction.
   const guided = widgetGuidanceId(w.widget);
-  const route = guided ? GUIDANCE_ROUTE : "";
-  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it" + route;
-  if (w.base) return "template context — provided by the Freedom template" + route;
-  return "native — confirm on-stand" + route;
+  if (guided) return guidedSource(formTemplate);
+  if (w.templateProvided === false) return "⚠ ADD — the Freedom template does NOT provide this; build it";
+  if (w.base) return "template context — provided by the Freedom template";
+  return "native — confirm on-stand";
 }
-function rowsForWidgets(widgets, dcmActive) {
+function rowsForWidgets(widgets, dcmActive, formTemplate = null) {
   // When the DCM case is resolved present on-stand (`dcmActive`), the DCM widgets (case progress bar + Next steps)
   // are template/on-stand chrome, NOT page-body layout, and are already covered where it matters: the `### On-stand
   // signals` DCM line ("present → build it"), the DCM template banner (use the progress-bar template that SHIPS
@@ -254,7 +270,7 @@ function rowsForWidgets(widgets, dcmActive) {
   // so this row is its only mention and MUST stay. Non-DCM widgets (Timeline, Recommendations, Duplicates) always stay.
   return (widgets || []).filter((w) => !(dcmActive && w.signal === "dcm")).map((w) => {
     const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION;
-    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+    return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w, formTemplate), DASH, w.note ? esc(w.note) : DASH] };
   });
 }
 // the friendly Region label for a card widget is `regionOf(region)`, the SAME resolver every other
@@ -1047,6 +1063,10 @@ export function renderDesignSpec(result, opts = {}) {
   // owns and prints the banner, so the spec skips it (both banners gate on `!opts.embedded` in renderSpecHeader) to
   // avoid a double print. Do NOT "fix" the embedded skip to also print here — that would duplicate renderPlan's banner.
   const L = renderSpecHeader(result, opts, entity, fields, cs);
+  // The Freedom form template this plan targets, resolved exactly as every other sink here resolves it
+  // (`planMeta.formTemplate`, else the manifest's `template`). The guided Layout cells name it so the builder reads
+  // the right template's merged bundle; `null` when neither is supplied, which `guidedSource` renders neutrally.
+  const formTpl = opts.planMeta?.formTemplate || opts.template || null;
 
   // ---- ONE Layout table (structure + contents) — one row-builder per element category (see helpers above) ----
   // A value-bound crt.ImageInput emitted through the FIELD path (an entity IMAGELOOKUP column laid out as a normal
@@ -1060,8 +1080,8 @@ export function renderDesignSpec(result, opts = {}) {
   const rows = [
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
-    ...rowsForFeatures(cs.standardFeatures, tabRegion),
-    ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present)),
+    ...rowsForFeatures(cs.standardFeatures, tabRegion, formTpl),
+    ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present), formTpl),
     ...rowsForCardWidgets(cs.cardWidgets, regionOf),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),

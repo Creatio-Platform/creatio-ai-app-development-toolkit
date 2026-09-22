@@ -134,7 +134,8 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
 | Side profile › <island> | <field label> | Lookup (<ref>) / Text (250) / Email / Phone / Date / Number / Boolean | PDS.<col> | read-only (only if intrinsic) / — | Value from a linked record … / tip: … |
 | Tab · <name> | <field label> | … | PDS.<col> | … | … |
 | Tab · <name> | <detail title> | Related list | <child entity> · by <FK> | — | cols: … |
-| Tab · <name> | <feature> | Approvals / Attachments / Feed (component) | template-provided / native — confirm component on-stand | — | — |
+| Tab · <name> | <feature> | Approvals (component) | template-provided / native — confirm component on-stand | — | — |
+| Tab · <name> | <feature> | Attachments / Feed (component) | ⚠ resolve on-stand — read `<form template>`'s merged bundle (`get-page`) before writing: present → MERGE onto it, never a second element of the same name; absent → INSERT · configure it from `get-guidance name=page-modification-standard-components` … | — | — |
 | Tab · <name> | Activities / Emails | Related list | Activity · native | — | — |
 | Card actions | <action> | Action | — | — | ⚠ which process / verify print reports |
 
@@ -206,7 +207,7 @@ Reading order follows the plan's **Main scope** table: list page first, then the
 | Side profile › Request | Department | Lookup (OrgStructureUnit) | PDS.Department | read-only | Value from linked Request |
 | Tab · Basic information | Reject reason | Lookup (RejectReason) | PDS.RejectReason | — | — |
 | Tab · Basic information | Contact comms | Related list | ContactCommunication · by Contact | — | — |
-| Tab · Basic information | Attachments | Attachments | template-provided | — | — |
+| Tab · Basic information | Attachments | Attachments | ⚠ resolve on-stand — read `PageWithTabsFreedomTemplate`'s merged bundle (`get-page`) before writing: present → MERGE onto it, never a second element of the same name; absent → INSERT · configure it from `get-guidance name=page-modification-standard-components` … | — | — |
 | Tab · Current vacancies | Applicant requests | Related list | InternalRequest · by EmployeeJob | — | cols: Number · Status · Job |
 | Tab · History | Stage history | Related list | RecruitmentInStage · by RootEntity | — | — |
 | Tab · History | Activities | Related list | Activity · native | — | — |
