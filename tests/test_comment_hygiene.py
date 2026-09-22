@@ -48,12 +48,17 @@ MARKERS = (
     # blocker was judging an empty container" name a product condition, not a
     # review verdict. The left edge excludes a quoted literal, so a sentinel
     # string such as ``"BLOCKER: ..."`` is read as the value the product emits,
-    # and, for a bare ``P1``, an ordinary fixture identifier.
+    # and, for a bare ``P1``, an ordinary fixture identifier. It does admit
+    # ``#``, because a label is as often written ``#Major1`` as ``Major1``.
+    # The label may carry the pass that raised it - ``Blocker1(part2)``,
+    # ``Major3(seed)`` - so the digits are part of the label: a ``\b`` placed
+    # straight after the word never fires there, since a letter followed by a
+    # digit is no boundary at all.
     (
         "severity_label",
         re.compile(
-            r"(?:^|[\s(\[])(?:Blocker|Major|Minor|BLOCKER|MAJOR|MINOR)\b"
-            r"|(?:^|[\s(\[])P[0-3](?=[\s):,.\]]|$)"
+            r"(?:^|[\s(\[#])(?:Blocker|Major|Minor|BLOCKER|MAJOR|MINOR)\d*\b"
+            r"|(?:^|[\s(\[#])P[0-3](?=[\s):,.\]]|$)"
         ),
     ),
     # An attribution, not any hyphenated name that happens to end in "creatio":
@@ -417,6 +422,9 @@ class CommentHygieneTests(unittest.TestCase):
                 "// Blocker: the handler drops its page key.",
                 "// Guard for the BLOCKER raised against the handler.",
                 "// MINOR: the caption is rendered without its tooltip.",
+                "// Blocker1(part2): the alias array carries a dynamic value.",
+                "// #Major1 stub-detect: an all-stub seed looks skeletal.",
+                "// Minor1: the caption is rendered without its tooltip.",
             ],
             "person_handle": [
                 "// Reported by kamil-mikosz-creatio on the parity run.",

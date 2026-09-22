@@ -413,7 +413,7 @@ check("removals: N client removes produce NO '[removal]' rows and NO '[removals 
 // tab climb, falsely flagging ~20 real General-info fields as unresolved on every page with this tab.
 // The tab op here keeps the `$Resources.Strings.*` caption on purpose: this fixture exercises the CLIMB (does the
 // resolver reach the tab at all), not the tab-caption FORM. The mapper's real `#ResourceString(Key)#` caption is
-// covered by F9 / Minor1 below.
+// covered by F9 / the resource-caption goldens below.
 const giSpec = renderDesignSpec({ entity: "X", changeSet: {
   resources: { GeneralInfoTabCaption: "General information" },
   viewConfigDiff: [
@@ -2272,10 +2272,10 @@ check("cycle(mini): a cyclic mini renders its mini spec ('Mini page (quick-add)'
    Provenance + how to re-capture: fixtures/activityminipage/README.md. ---- */
 const realMini = runMigration(JSON.parse(fs.readFileSync(path.join(FIX, "activityminipage", "manifest.json"), "utf8")), { baseDir: FIX });
 const realMiniFields = (realMini.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).map((o) => o.name);
-check("Minor3 real mini page: ActivityMiniPage's real captured layer chain folds gate-clean + structure-complete (not a toy body)",
+check("real mini page (Activity): ActivityMiniPage's real captured layer chain folds gate-clean + structure-complete (not a toy body)",
   realMini.gate?.blocked === false && realMini.structure?.complete === true,
   () => ({ blocked: realMini.gate?.blocked, reasons: realMini.gate?.reasons, issues: realMini.structure?.issues }));
-check("Minor3 real mini page: the real customer fields (ConferenceRoom, StartDate) survive the layer merge into the Freedom layout",
+check("real mini page (Activity): the real customer fields (ConferenceRoom, StartDate) survive the layer merge into the Freedom layout",
   realMiniFields.includes("ConferenceRoom") && realMiniFields.includes("StartDate"),
   () => realMiniFields);
 
@@ -2288,10 +2288,10 @@ check("Minor3 real mini page: the real customer fields (ConferenceRoom, StartDat
    Provenance + how to re-capture: fixtures/contactminipage/README.md. ---- */
 const realMini2 = runMigration(JSON.parse(fs.readFileSync(path.join(FIX, "contactminipage", "manifest.json"), "utf8")), { baseDir: FIX });
 const realMini2Fields = (realMini2.changeSet?.viewConfigDiff || []).filter((o) => o?.values?.control).map((o) => o.name);
-check("Minor4 real mini page: ContactMiniPage's base-layer + customer-merge chain folds gate-clean + structure-complete (a different fold path than Activity)",
+check("real mini page (Contact): ContactMiniPage's base-layer + customer-merge chain folds gate-clean + structure-complete (a different fold path than Activity)",
   realMini2.gate?.blocked === false && realMini2.structure?.complete === true,
   () => ({ blocked: realMini2.gate?.blocked, reasons: realMini2.gate?.reasons, issues: realMini2.structure?.issues }));
-check("Minor4 real mini page: the real base-layout contact fields (Name, Account) survive the layer merge into the Freedom layout",
+check("real mini page (Contact): the real base-layout contact fields (Name, Account) survive the layer merge into the Freedom layout",
   realMini2Fields.includes("Name") && realMini2Fields.includes("Account"),
   () => realMini2Fields);
 
@@ -2374,19 +2374,19 @@ check("#5: a full seed (160 methods, >=150) → NOT possiblyPartial",
 // emptyMethods, so they are correctly treated as real-bodied and are unaffected.
 const stubBody = `define("BaseStub",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){},onSaved:function(){},loadValues:function(){},getActions:function(){},setColumns:function(){},onRender:function(){}}};});`;
 const stubSeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(stubBody, "BaseStub")] });
-check("#Major1 stub-detect: a >=5-method seed whose methods are ALL empty stubs is looksSkeletal → BLOCKS (count alone would clear it)",
+check("stub-detect: a >=5-method seed whose methods are ALL empty stubs is looksSkeletal → BLOCKS (count alone would clear it)",
   stubSeed.seedQuality.seedMethods === 6 && stubSeed.seedQuality.seedRealMethods === 0
   && stubSeed.seedQuality.looksSkeletal === true && stubSeed.warnings.some((w) => w.name === "skeletal-seed" && /EMPTY stubs/.test(w.hint)),
   () => stubSeed.seedQuality);
 const realBody = `define("BaseReal",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){return 1;},onSaved:function(){this.x=1;},loadValues:function(){var a=2;},getActions:function(){return [];},setColumns:function(){this.y=3;},onRender:function(){return true;}}};});`;
 const realBodySeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(realBody, "BaseReal")] });
-check("#Major1 stub-detect: a >=5-method seed with REAL bodies (< 150) is NOT skeletal — only the possiblyPartial advisory (no false-block on a small real template)",
+check("stub-detect: a >=5-method seed with REAL bodies (< 150) is NOT skeletal — only the possiblyPartial advisory (no false-block on a small real template)",
   realBodySeed.seedQuality.seedRealMethods === 6 && realBodySeed.seedQuality.looksSkeletal === false
   && realBodySeed.seedQuality.possiblyPartial === true && !realBodySeed.warnings.some((w) => w.name === "skeletal-seed"),
   () => realBodySeed.seedQuality);
 const mixedBody = `define("BaseMixed",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}}],methods:{init:function(){},onSaved:function(){},loadValues:function(){},getActions:function(){},setColumns:function(){},onRender:function(){return 1;}}};});`;
 const mixedSeed = mergeHierarchy(clientF(), { seedTemplate: [parseSchema(mixedBody, "BaseMixed")] });
-check("#Major1 stub-detect: even ONE real-bodied method among stubs → NOT skeletal (real content present, not a broken fetch)",
+check("stub-detect: even ONE real-bodied method among stubs → NOT skeletal (real content present, not a broken fetch)",
   mixedSeed.seedQuality.seedRealMethods === 1 && mixedSeed.seedQuality.looksSkeletal === false,
   () => mixedSeed.seedQuality);
 // and the plan SURFACES the advisory (⚠, non-blocking) so a partial fetch isn't silently folded onto. NB a PARTIAL
@@ -2804,7 +2804,7 @@ try {
   const r = detectAddMode(adversarial);
   const ms = Date.now() - t0;
   const ceiling = Math.max(5000, baseMs * 500 + 2000); // linear scan → a few×base+jitter; ReDoS blows far past this
-  check(`Minor4 ReDoS: detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays linear (bounded quantifiers, no catastrophic backtracking) — ${ms}ms vs ceiling ${ceiling}ms`,
+  check(`ReDoS (timing): detectAddMode on a ~${Math.round(bytes / 1024)}KB adversarial body stays linear (bounded quantifiers, no catastrophic backtracking) — ${ms}ms vs ceiling ${ceiling}ms`,
     bytes > 600 * 1024 && ms < ceiling && (r === null || typeof r === "object"),
     () => ({ bytes, ms, baseMs, ceiling, r }));
   // the wall-clock check reads ~0 ms baseline on Windows and collapses to a fixed ceiling,
@@ -2814,7 +2814,7 @@ try {
   // behaviour-preserving refactors). This keeps a timing-independent ReDoS guard that a reintroduced
   // unbounded quantifier still fails, while surviving a rename/extract that keeps the bounded discipline.
   const daSrc = detectAddMode.toString();
-  check("Minor4 structural: detectAddMode has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` run (deterministic ReDoS guard, timing-independent, refactor-tolerant)",
+  check("ReDoS (structural): detectAddMode has NO unbounded `[\\s\\S]*` / `[\\s\\S]+` run (deterministic ReDoS guard, timing-independent, refactor-tolerant)",
     daSrc.includes(String.raw`[\s\S]`) && !daSrc.includes(String.raw`[\s\S]*`) && !daSrc.includes(String.raw`[\s\S]+`),
     () => ({ usesBoundedScan: daSrc.includes(String.raw`[\s\S]`), hasUnboundedStar: daSrc.includes(String.raw`[\s\S]*`), hasUnboundedPlus: daSrc.includes(String.raw`[\s\S]+`) }));
 }
@@ -2936,7 +2936,7 @@ check("#format R-m3: the type LABELS read Phone / Web link / Email (driven by th
 // an image-only top-level form (its only field is a crt.ImageInput) is NOT a hollow
 // 0-field form. crt.ImageInput binds via `value`, so the OLD hollow gate (filter on values.control) read it as 0
 // fields → false "0 FIELDS" block. The shared countFormFields() now counts image inputs too.
-check("Major3 image-only form: a sole crt.ImageInput is NOT a false hollow 0-field structure block",
+check("image-only form: a sole crt.ImageInput is NOT a false hollow 0-field structure block",
   imgBound.structure.complete === true
   && !(imgBound.structure.issues || []).some((i) => /0 FIELDS/.test(i)),
   () => imgBound.structure.issues);
@@ -4162,13 +4162,13 @@ check("scalarControl: ENUM '11' → ComboBox WITHOUT a lookup ref (an enum has n
 // (c) a DEEP-leaf dynamic (a field's caption) stays advisory — it does NOT add the structural-field block.
 const b1alias = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){ var d=[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]; return {entitySchemaName:"X", diff:d}; });` }] }, { baseDir: FIX });
-check("Blocker1(part2): a diff built via an array const alias resolves statically — no parse diagnostic, field captured",
+check("structural hole (const alias): a diff built via an array const alias resolves statically — no parse diagnostic, field captured",
   b1alias.parseDiagnostics.length === 0 && b1alias.changeSet.viewConfigDiff.some((o) => o.name === "F"));
 const b1call = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){ return {entitySchemaName:"X", diff: makeDiff()}; });` }] }, { baseDir: FIX });
-check("Blocker1(part1): an unresolved construct AT a structural key (diff via a call) BLOCKS the gate, not a hollow pass",
+check("structural hole (dynamic diff): an unresolved construct AT a structural key (diff via a call) BLOCKS the gate, not a hollow pass",
   b1call.gate.blocked === true && b1call.gate.reasons.some((r) => /structural field/.test(r) && /diff/.test(r)));
-check("Blocker1(boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
+check("structural hole (boundary): a deep-leaf dynamic (a field's caption) is advisory — it does NOT add the structural-field gate reason",
   !pdCs.gate.reasons.some((r) => /structural field/.test(r)));
 // An alias array whose ITEM carries a dynamic STRUCTURAL value (`values: makeValues()`) must NOT resolve to a
 // silent hole: the lazy-node alias eval flags `diff.0.values` in the real sink, so the gate BLOCKS rather than
@@ -4217,13 +4217,13 @@ check("enum-alias: an aliased enum member resolves identically to the full path 
 const m3det = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});` }],
   detailSchemas: { BrokenDetail: { body: "define(" } } }, { baseDir: FIX });
-check("Major3(detail): a detail-schema body that fails to parse reaches parseErrors → gate blocks",
+check("aggregate gate (detail parse): a detail-schema body that fails to parse reaches parseErrors → gate blocks",
   m3det.gate.blocked === true && m3det.gate.reasons.some((r) => /detail:BrokenDetail/.test(r)));
 const m3childBad = { schemas: [{ pkg: "CP", body: `define("CP",[],function(){ return {entitySchemaName:"C", diff: makeDiff()}; });` }] };
 const m3child = runMigration({ entity: "X",
   schemas: [{ pkg: "PP", body: `define("PP",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}],details:{D:{schemaName:"CDetail",entitySchemaName:"C",filter:{detailColumn:"X",masterColumn:"Id"}}}};});` }],
   childPageSchemas: { C: m3childBad, CPage: m3childBad } }, { baseDir: FIX });
-check("Major3(child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
+check("aggregate gate (nested child): a nested child that fails its OWN gate blocks the parent (not embedded green at exit 0)",
   m3child.gate.blocked === true && m3child.gate.reasons.some((r) => /nested child/.test(r)));
 // A detail body that PARSES but builds its `diff` via an unresolved call resolves to
 // columns:null. Its astDiagnostics must reach the gate (tagged detail:<name>) and BLOCK on the structural diff,
@@ -4231,7 +4231,7 @@ check("Major3(child): a nested child that fails its OWN gate blocks the parent (
 const m4detDyn = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",details:{D:{schemaName:"DynDetail",entitySchemaName:"C",filter:{detailColumn:"X",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}]};});` }],
   detailSchemas: { DynDetail: { entity: "C", editPage: false, body: `define("DynDetail",[],function(){ return {entitySchemaName:"C", diff: buildCols()}; });` } } }, { baseDir: FIX });
-check("Major4(detail): a detail whose diff is built by an unresolved call BLOCKS the gate (detail:<name> structural diag), not green columns:null",
+check("aggregate gate (detail dynamic diff): a detail whose diff is built by an unresolved call BLOCKS the gate (detail:<name> structural diag), not green columns:null",
   m4detDyn.gate.blocked === true && m4detDyn.gate.reasons.some((r) => /structural field/.test(r) && /detail:DynDetail/.test(r)),
   () => ({ blocked: m4detDyn.gate.blocked, reasons: m4detDyn.gate.reasons }));
 // A page built with NO parent-template seed must BLOCK (a Classic page always extends a
@@ -4239,11 +4239,11 @@ check("Major4(detail): a detail whose diff is built by an unresolved call BLOCKS
 // containers so `unresolvedParents` stays empty) would otherwise slip through green. Verified opt-out clears it.
 const dodgeBody = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Header",values:{itemType:15}},{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F"}}]};});`;
 const noSeedRun = runMigration({ entity: "X", schemas: [{ pkg: "P", body: dodgeBody }] }, { baseDir: FIX });
-check("Major3(seed): a page with NO seed (skeleton-dodge) is gate-BLOCKED with a 'no parent-template seed' reason",
+check("seed required: a page with NO seed (skeleton-dodge) is gate-BLOCKED with a 'no parent-template seed' reason",
   noSeedRun.gate.blocked === true && noSeedRun.gate.reasons.some((r) => /no parent-template seed/.test(r)),
   () => noSeedRun.gate.reasons);
 const optOutRun = runMigration({ entity: "X", noParentTemplate: true, schemas: [{ pkg: "P", body: dodgeBody }] }, { baseDir: FIX });
-check("Major3(seed): the verified opt-out (noParentTemplate:true) clears the no-seed block (rare no-parent page)",
+check("seed required (opt-out): the verified opt-out (noParentTemplate:true) clears the no-seed block (rare no-parent page)",
   !optOutRun.gate.reasons.some((r) => /no parent-template seed/.test(r)));
 
 /* ---- This round's Majors/Minors on the plan + layout ---- */
@@ -4277,9 +4277,9 @@ check("F7: a genuine 2-up (left col + right col, same row) still coexists on one
 // "Tab · " with no label. The text itself is not lost: `cs.resources.GeneralTabCaption === "General"` is populated
 // as before; only the LOOKUP path is broken. Fix `capText` ONLY — match `#ResourceString(<key>)#` first, fall
 // through to `resourceKey()` otherwise. Do NOT widen `resourceKey` itself: its `#`-strip is the culture-anchor
-// rule pinned by the live golden two lines above Minor1 (`$Resources.Strings.Foo#en-US` → `Foo`). This is a
+// rule pinned by the live golden in the `resourceKey` check below (`$Resources.Strings.Foo#en-US` → `Foo`). This is a
 // FOURTH expected-side read, alongside regionResolver's type check, `hasTabs` and `expTabs`; fixing it turns
-// this assertion — plus Minor1 below — green unchanged.
+// this assertion — plus the #anchor-caption golden below — green unchanged.
 const f9 = runMigration({ entity: "X", seed: CLEAN_SEED, resources: { GeneralTabCaption: "General" },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"GeneralTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.GeneralTabCaption"}},{operation:"insert",name:"Fld",parentName:"GeneralTab",propertyName:"items",values:{bindTo:"Fld"}}]};});` }] }, { baseDir: FIX });
 check("F9: a resolved tab caption renders as text in the design-spec Region (Tab · General), not the $Resources key",
@@ -4559,7 +4559,7 @@ check("seam-disarm: with C2F_TEST_SEAM cleared, __setVendorIntegrityForTest is I
 // section.processNames are ESCAPED at the sink (defense-in-depth), not left to a remote parser
 // regex invariant. Feed a hostile name straight to the renderer (bypassing the parser) → the pipe is escaped.
 const procSpec = renderDesignSpec({ entity: "X", changeSet: {}, section: { processLaunch: true, processNames: ["Ev|il"] } });
-check("Minor2: section processNames are escaped at the sink (pipe neutralized), not reliant on a remote parser invariant",
+check("section sink: section processNames are escaped at the sink (pipe neutralized), not reliant on a remote parser invariant",
   procSpec.includes(String.raw`Ev\|il`) && !procSpec.includes("Ev|il"),
   () => procSpec.split("\n").find((l) => /Section process/.test(l)));
 
@@ -4590,14 +4590,14 @@ const callSinkCell = cells(callSinkSpec.split("\n").find((l) => l.startsWith("|"
 
 // ONE canonical resourceKey shared by mapper (store) + designspec (lookup): strips $/prefix/#anchor
 // uniformly, so a `Resources.Strings.Foo#en-US` caption resolves instead of leaking the raw key.
-check("Minor1: resourceKey strips $-sigil, Resources.Strings prefix, and #culture anchor uniformly",
+check("resourceKey: strips $-sigil, Resources.Strings prefix, and #culture anchor uniformly",
   resourceKey("$Resources.Strings.Foo#en-US") === "Foo" && resourceKey("Resources.Strings.Bar") === "Bar" && resourceKey("Baz") === "Baz");
 // ⚠ KNOWN RED — same single root cause as F9 above: `resourceKey()` truncates the mapper's `#ResourceString(Key)#`
 // tab caption to "", so the Region renders "Tab · " with no text. Left failing deliberately; narrowing it to just
 // the `!/AnchTab/` half would pass while dropping the half that proves the text actually resolves.
 const anchorTabCs = runMigration({ entity: "X", seed: CLEAN_SEED, resources: { AnchTab: "General" },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"AnchTab",parentName:"Tabs",propertyName:"tabs",values:{itemType:15,isTab:true,caption:"Resources.Strings.AnchTab#en-US"}},{operation:"insert",name:"F",parentName:"AnchTab",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX });
-check("Minor1: a #anchor caption resolves to its text in the design spec (Tab · General), never the raw key",
+check("resource caption: a #anchor caption resolves to its text in the design spec (Tab · General), never the raw key",
   /Tab · General/.test(anchorTabCs.designSpec) && !/AnchTab/.test(anchorTabCs.designSpec),
   () => anchorTabCs.designSpec.split("\n").filter((l) => /Tab ·|AnchTab/.test(l)));
 
@@ -4605,7 +4605,7 @@ check("Minor1: a #anchor caption resolves to its text in the design spec (Tab ·
 // as a real heading in the verbatim plan (esc collapses newlines but not a leading `##`; escBareLine does).
 const widPlan = runMigration({ entity: "X", seed: CLEAN_SEED, planMeta: { ...FULL_PLANMETA, whatItDoes: "## Boom is not a heading" },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}]};});` }] }, { baseDir: FIX }).plan;
-check("Minor5: a whatItDoes value starting with a block marker does NOT render as a heading (bare-line escaped)",
+check("plan bare-line: a whatItDoes value starting with a block marker does NOT render as a heading (bare-line escaped)",
   !/^\s{0,3}#{1,6}\s+Boom/m.test(widPlan) && /Boom is not a heading/.test(widPlan),
   () => JSON.stringify(widPlan.split("\n").find((l) => /Boom/.test(l))));
 
@@ -4639,14 +4639,14 @@ check("Variant B: framework chrome (templateOwned, NO bindTo) is STILL suppresse
 const m2Body = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"D",parentName:"T",values:{itemType:2}}],details:{D:{schemaName:"ChildDetail",entitySchemaName:"Child",filter:{detailColumn:"X",masterColumn:"Id"}}}};});`;
 const m2ChildBody = `define("ChildDetail",[],function(){return{entitySchemaName:"Child",diff:[],methods:{getEditPageName:function(){return "ChildPageV2";},getAddRecordButtonVisible:function(){return false;}}};});`;
 const m2 = runMigration({ entity: "X", seed: CLEAN_SEED, schemas: [{ pkg: "P", body: m2Body }], detailSchemas: { ChildDetail: { entity: "Child", body: m2ChildBody } } }, { baseDir: FIX });
-check("Major2: a real editPage + hidden add-record → structure INCOMPLETE (hidden Add does not waive a real child page)",
+check("child edit page: a real editPage + hidden add-record → structure INCOMPLETE (hidden Add does not waive a real child page)",
   m2.structure.complete === false && m2.structure.issues.some((i) => /ChildPageV2/.test(i)),
   () => ({ complete: m2.structure.complete, issues: m2.structure.issues }));
 
 // a dynamic mapping-affecting property (visible via a call) → an explicit dynamic-property decision.
 const m3 = runMigration({ entity: "X", seed: CLEAN_SEED,
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"F",parentName:"Header",propertyName:"items",values:{bindTo:"F",visible:computeVisibility()}}]};});` }] }, { baseDir: FIX });
-check("Major3: a dynamic 'visible' (call) surfaces as a dynamic-property decision + reaches the plan (not a silent static default)",
+check("dynamic-property: a dynamic 'visible' (call) surfaces as a dynamic-property decision + reaches the plan (not a silent static default)",
   m3.changeSet.needsDecision.some((n) => n.kind === "dynamic-property" && n.item === "F") && /dynamic 'visible'/.test(m3.designSpec),
   () => m3.changeSet.needsDecision.map((n) => n.kind));
 
@@ -4758,7 +4758,7 @@ const m4ord = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
 ] })]));
 const m4a = m4ord.viewConfigDiff.find((o) => o.name === "A")?.values.layoutConfig;
 const m4b = m4ord.viewConfigDiff.find((o) => o.name === "B")?.values.layoutConfig;
-check("Major4: lower classic order → earlier row (B.order 0 before A.order 1), no overlap",
+check("layout order: lower classic order → earlier row (B.order 0 before A.order 1), no overlap",
   m4b && m4a && m4b.row < m4a.row, () => ({ A: m4a, B: m4b }));
 const m4span = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
   di({ name: "TS", parentName: "Tabs", propertyName: "tabs", isTab: true }),
@@ -4767,7 +4767,7 @@ const m4span = mapToFreedom(mergeHierarchy([L("Client", { entity: "X", diff: [
 ] })]));
 const mtTall = m4span.viewConfigDiff.find((o) => o.name === "Tall")?.values.layoutConfig;
 const mtNxt = m4span.viewConfigDiff.find((o) => o.name === "Nxt")?.values.layoutConfig;
-check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap); layoutConfig.rowSpan carries the classic value",
+check("layout rowSpan: rowSpan occupancy — a Tall(rowSpan:2) field forces the next same-column field off its rows (no overlap); layoutConfig.rowSpan carries the classic value",
   mtTall && mtNxt && mtTall.rowSpan === 2 && mtNxt.rowSpan === 1   // the classic rowSpan is preserved on the Freedom field
   && !(mtNxt.column === mtTall.column && mtNxt.row >= mtTall.row && mtNxt.row < mtTall.row + mtTall.rowSpan),
   () => ({ Tall: mtTall, Nxt: mtNxt }));
@@ -4775,7 +4775,7 @@ check("Major4: rowSpan occupancy — a Tall(rowSpan:2) field forces the next sam
 // a skeleton seed with a token method (no getActions) is STILL skeletal (keys on getActions, not count).
 const m7 = mergeHierarchy([L("Client", { entity: "X", diff: [di({ name: "F", parentName: "Header", propertyName: "items", bindTo: "F" })] })],
   { seedTemplate: [L("Base", { diff: [di({ name: "Header", itemType: 15 })], methods: ["dummy"] })] });
-check("Major7: a seed with a token method but NO getActions is still looksSkeletal (not cleared by a non-zero count)",
+check("skeletal seed: a seed with a token method but NO getActions is still looksSkeletal (not cleared by a non-zero count)",
   m7.seedQuality.looksSkeletal === true && m7.seedQuality.hasGetActions === false && m7.warnings.some((w) => w.name === "skeletal-seed"),
   () => m7.seedQuality);
 
@@ -5621,7 +5621,7 @@ const docTypedImage = runMigration({
   typedPageSchemas: { XICPage: { seed: CLEAN_SEED, schemas: [{ pkg: "P", body: `define("XICPage",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Photo",parentName:"ProfileContainer",propertyName:"items",values:{}}]};});` }] } },
   planMeta: docPlanMeta, signals: FULL_SIGNALS,
 });
-check("Major3 image-only typed fold: a sole crt.ImageInput is NOT a false EMPTY Layout block (countFormFields counts the image)",
+check("image-only typed fold: a sole crt.ImageInput is NOT a false EMPTY Layout block (countFormFields counts the image)",
   docTypedImage.structure.complete === true
   && !docTypedImage.structure.issues.some((i) => /XICPage.*EMPTY Layout/.test(i)),
   () => docTypedImage.structure.issues);
@@ -7161,7 +7161,7 @@ check("visibility-rule: SUPPRESSED on a mini page (add-mode visibility, not a bu
 // the Region column; fall back to the plain tab. A RESOLVED caption still shows as the group.
 // The tab op is scaffolding here (it just has to be recognised as a tab, hence `crt.TabContainer`); its caption
 // deliberately stays in the `$Resources.Strings.*` form so these two assertions isolate the GROUP-caption path.
-// The tab-caption FORM the mapper emits is covered by F9 / Minor1.
+// The tab-caption FORM the mapper emits is covered by F9 / the resource-caption goldens.
 const capUnres = { resources: { TabCap: "Basic information" }, viewConfigDiff: [
   { name: "GT", parentName: "Tabs", propertyName: "items", values: { type: "crt.TabContainer", caption: "$Resources.Strings.TabCap" } },
   { name: "GRP", parentName: "GT", values: { caption: "$Resources.Strings.Tab67ea6463TabLabelGroupc1bf3d46GroupCaption" } },

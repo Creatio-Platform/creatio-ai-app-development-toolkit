@@ -1752,8 +1752,8 @@ function resolveDetailBody(name, e, bodyOf) {
 // linear global match — no nested/ambiguous quantifier — so a large adversarial body stays linear (no catastrophic
 // backtracking). engine.mjs documents why the quantifiers are bounded: an unbounded one costs ~32s on 700KB. GUARDED by two goldens in
 // engine-tests/classic-to-freedom/run-mapper.mjs — a wall-clock timing bound on a ~700KB adversarial body
-// ("Minor4 ReDoS: detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
-// ({0,N}) ("Minor4 structural …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
+// ("ReDoS (timing): detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
+// ({0,N}) ("ReDoS (structural) …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
