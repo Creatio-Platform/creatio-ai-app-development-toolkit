@@ -6120,18 +6120,16 @@ console.log("\n===== cell round-trip edge cases (Group B) =====");
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
-{
-  // m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
-  check("m10: parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
-    () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
-    () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
-  check("m10: parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
-    () => {
-      const m = parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42");
-      return m.size === 1 && m.get(4) === "D42";
-    },
-    () => JSON.stringify([...parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42").entries()]));
-}
+// m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
+check("m10: parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
+  () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
+  () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
+check("m10: parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
+  () => {
+    const m = parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42");
+    return m.size === 1 && m.get(4) === "D42";
+  },
+  () => JSON.stringify([...parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42").entries()]));
 {
   // m11: a decision title containing `→` must not leak into the destination. parsePostponedCell is
   // module-internal, so assert through the report — the observable end-state.
