@@ -447,8 +447,19 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
+// WHY THE LEDGER YIELDED NOTHING, matched to the refusal's own reason. "Could not be read" is the narrowest of
+// them: a cut that parses perfectly well but does not cover the plan refuses here too, and calling that a read
+// failure sends the reader to check a file whose syntax is fine. `null` when the ledger was readable.
+function ledgerReason(set) {
+  if (!set?.refused) return null;
+  const detail = (set.problems || []).join("; ") || "the task folder could not be read";
+  const how = !set.refusal || set.refusal === REFUSED_UNREADABLE ? "could not be read" : "yielded no tasks";
+  return `the task ledger ${how} (${esc(detail)}) — the run cannot be called complete until the folder is fixed`
+    + " and re-verified";
+}
+
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
-  const ledgerRefused = set?.refused ? (set.problems || []).join("; ") || "the task folder could not be read" : null;
+  const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
   const decisions = readDecisions(path.join(dir || ".", ".."));
@@ -473,13 +484,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
-  // WHY the ledger yielded nothing, matched to the refusal's own reason. "Could not be read" is the narrowest of
-  // them: a cut that parses perfectly well but does not cover the plan refuses here too, and calling that a read
-  // failure sends the reader to check a file whose syntax is fine.
-  if (ledgerRefused) {
-    const how = set.refusal === REFUSED_UNREADABLE || !set.refusal ? "could not be read" : "yielded no tasks";
-    reasons.unshift(`the task ledger ${how} (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
-  }
+  if (ledgerRefused) reasons.unshift(ledgerRefused);
   // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
   // and must not leave plan rows unaccounted while the run reads COMPLETE.
   const naUnbacked = tasks.filter((t) => t.status === S_NA
