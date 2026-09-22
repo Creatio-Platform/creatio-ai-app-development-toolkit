@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
-  S_DONE, S_NA, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED } from "./tasks.mjs";
+  S_DONE, S_NA, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -473,7 +473,13 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
 
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
-  if (ledgerRefused) reasons.unshift(`the task ledger could not be read (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
+  // WHY the ledger yielded nothing, matched to the refusal's own reason. "Could not be read" is the narrowest of
+  // them: a cut that parses perfectly well but does not cover the plan refuses here too, and calling that a read
+  // failure sends the reader to check a file whose syntax is fine.
+  if (ledgerRefused) {
+    const how = set.refusal === REFUSED_UNREADABLE || !set.refusal ? "could not be read" : "yielded no tasks";
+    reasons.unshift(`the task ledger ${how} (${esc(ledgerRefused)}) — the run cannot be called complete until the folder is fixed and re-verified`);
+  }
   // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
   // and must not leave plan rows unaccounted while the run reads COMPLETE.
   const naUnbacked = tasks.filter((t) => t.status === S_NA

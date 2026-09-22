@@ -2482,6 +2482,9 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
   cliTasks(["--tasks", dirD, "--split", splitD], MANIFEST);        // built against plan A
   const drift = cliTasks(["--tasks", dirD], MANIFEST5);            // plan B gained handler rows
   const driftRoute = cliTasks(["--tasks", dirD, "--route"], MANIFEST5);
+  const builtD = path.join(baseD, "built.json");
+  fs.writeFileSync(builtD, JSON.stringify({ pages: { main: false } }));
+  const driftVerify = cliTasks(["--verify", "--built", builtD, "--tasks", dirD], MANIFEST5);
   check("migrate.mjs: a frozen split met by a plan that GAINED rows names THAT as the cause and offers both remedies — 'could not be read' would send the operator to fix a file whose syntax is fine",
     () => /NOTHING WRITTEN/.test(drift.stdout || "") && /no longer covers this plan/.test(drift.stdout || "")
       && !/could not be read/.test(drift.stdout || "")
@@ -2494,6 +2497,13 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
       && !/could not be read/.test(driftRoute.stdout || "")
       && /Place the named rows/.test(driftRoute.stdout || ""),
     () => driftRoute.stdout);
+  check("--verify's repair leg answers that folder the same way — the two legs share one cause writer, so a reader cannot be told the file is unreadable on one and short on coverage on the other",
+    () => {
+      const out = (driftVerify.stdout || "") + (driftVerify.stderr || "");
+      return /yielded no tasks/.test(out) && /is in NO item/.test(out) && !/could not be read/.test(out);
+    },
+    () => ({ banner: ((driftVerify.stdout || "") + (driftVerify.stderr || ""))
+      .split(/\r?\n/).filter((l) => /REPAIR|covers|could not be read/.test(l)).join(" | ").slice(0, 700) }));
   fs.rmSync(baseD, { recursive: true, force: true });
   // A split cut against a DIFFERENT plan version.
   const base3 = tmp("cli-split-ver");
