@@ -2918,7 +2918,8 @@ const legacyUnsynced = (name) => {
   syncTaskDir(d, RUN, OPTS);
   fs.writeFileSync(path.join(d, `task-${LEGACY_ID}.md`),
     asLegacyBody(handWrittenText(allBuilt, "done", LEGACY_ID)));
-  const failing = (tasks) => dispatchAudit(tasks, d).failing.map((t) => t.id).sort();
+  const failing = (tasks) => dispatchAudit(tasks, d).failing.map((t) => t.id)
+    .sort((a, b) => a.localeCompare(b));
   return { plain: failing(readTaskDir(d)), merged: failing(readMergedTaskDir(d, RUN, OPTS).tasks) };
 };
 
