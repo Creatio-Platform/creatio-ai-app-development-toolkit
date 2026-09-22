@@ -24,7 +24,7 @@ integrity gate, the four golden runners, the generated-workflow drift check and 
 The CI job **Classic→Freedom engine goldens** runs the same commands as separate steps, so that one runner's
 failure does not hide another's, and `run-infra.mjs` asserts that the two lists match. Do NOT hand-maintain a
 third list here: a contributor who ran a subset of the gate pushed a branch that failed checks they had no way to
-know to run, which is what this section used to cause.
+know to run, which is what naming a subset here would cause.
 
 Individual runners (from this directory) while iterating on one area:
 

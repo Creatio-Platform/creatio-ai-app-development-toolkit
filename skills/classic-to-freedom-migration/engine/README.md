@@ -281,7 +281,7 @@ element the template provides is touched with `operation: "merge"` and carries n
 could never confirm Feed, FileList, ApprovalList or the DCM bar. A payload that is not keyed by page is rejected
 with exit 1, and an id or page key the engine did not publish is silently "not checked" — never invent one.
 
-**The LIST page's OWN template is its own machine-checked row (ENG-95470), the same mechanism the form page's
+**The LIST page's OWN template is its own machine-checked row, the same mechanism the form page's
 `Form template` row uses.** `pages["list"]` carries `parentSchemaName` exactly like every other page key, and when
 the plan resolved at least one other list-page deliverable (columns, a quick filter, a command-bar action) a
 `List template → <planned template>` row is added alongside them, resolved against `pages["list"].parentSchemaName`.
@@ -312,7 +312,7 @@ is built from ALL methods including the standard ones the worklist filters out �
 `init` / `onEntityInitialized`. Cycles are guarded, callers are sorted so the result is order-independent, a declared
 trigger is never replaced by an internal one, and every caller travels along when there is more than one. Rows left
 knowing only their caller are counted apart (`internalCallOnly`) from true orphans (`unresolvedTrigger`): both are
-still behaviour-analysis work, and collapsing them would make the recovery look like work that no longer needs doing.
+still behaviour-analysis work, and collapsing them would make the recovery look like work already done.
 
 The plan then **folds** each such helper under the row that calls it: ordered directly beneath it, marked `↳`, with
 its Freedom target replaced by `port with <caller>` so nobody builds a second artifact for half a behaviour. The
@@ -389,7 +389,7 @@ table is not emitted with `--tasks` at all — nothing reads it as a file; the r
 **Identity matching:** an expected field name `Col` is satisfied by an element named `Col`, `ColField`, or bound
 to `$Col` / `$PDS_Col_<hash>` (one built field per expected name); an expected rule target is satisfied by a rule
 whose `condition`/`actions` carry it as a whole token in any of those forms — `caption`/`name` are never tokenized.
-**Machine rows that used to be confirm-on-stand (ENG-99126):** with `--built.pages[k].handlers` and `.viewModelConfig`
+**Machine rows that would otherwise be confirm-on-stand:** with `--built.pages[k].handlers` and `.viewModelConfig`
 (verbatim from get-page) the engine resolves `handler` rows (method name · folded caller · a branch on the method's
 Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
 (side profile / tab found by caption words / header, measured inside the container; a container-less payload is
@@ -415,7 +415,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `engine.mjs` — `parseSchema()` (AST parse of a classic `define(...)` body — reads the returned object, never executes it) + `mergeHierarchy()` (replay the layer chain into one effective page + provenance).
 - `vendor/acorn.cjs` — vendored **acorn 8.17.0** (MIT, the CommonJS build `dist/acorn.js`), the JS parser `parseSchema` uses; keeps the engine self-contained (no `npm install`). It is the CJS build so a plain synchronous `require()` loads it after the integrity check on ANY supported Node (no `require(esm)` >= 22.12 floor). **Not in `package.json` by design** (zero runtime deps), so it is outside `npm audit` / Dependabot — see the pin below.
   - **Integrity pin** — because this bundle is the one executable component that processes *untrusted* stand schema-body, its provenance is pinned in `vendor/provenance.json` (upstream package + version + SHA-256 of the LF-normalized bytes, which equals the published npm artifact's hash). `verify-vendor.mjs` recomputes the hash and exits non-zero on any mismatch; CI (`.github/workflows/pr.yml` → *Vendor integrity*) runs it, and `verify-vendor-upstream.mjs` additionally compares against the npm registry's own `dist.integrity`.
-- `mapping-table.mjs` — the **shared mapping table** (ENG-95543): one row per recognised Classic thing, carrying its role, its tier (A automatic / B view built + behaviour stubbed / C typed decision), its Freedom `target`/`verify` types and its notes. It absorbed the four hand catalogs that used to live in `mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`/`WIDGET_BY_CONTAINER`, `PROFILE_CARD_BY_MODULE`, `CARD_ACTION_BY_ITEM`) — `mapper.mjs` reads them back through views over the table, so there is ONE place a component target lives.
+- `mapping-table.mjs` — the **shared mapping table**: one row per recognised Classic thing, carrying its role, its tier (A automatic / B view built + behaviour stubbed / C typed decision), its Freedom `target`/`verify` types and its notes. It absorbs the four hand catalogs that would otherwise live in `mapper.mjs` (`FEATURE_CATALOG`, `WIDGET_BY_MODULE`/`WIDGET_BY_CONTAINER`, `PROFILE_CARD_BY_MODULE`, `CARD_ACTION_BY_ITEM`) — `mapper.mjs` reads them back through views over the table, so there is ONE place a component target lives.
 - `mapping-registry.mjs` — registry validation of that table: every `componentType` exists, every `propMap` key is a real `input`, every `events` key a real `output`, **per platform version**. Also `resolveRunIndex` (which registry a RUN validates against: the stand's export via `manifest.componentRegistry`, a version pinned by `manifest.platformVersion`, or the vendored union) and `rankCandidates` for the `registry-target` decision text.
 - `registry/component-index.json` — the **generated** component index (205 components × 7 platform versions; version membership as a bitmask). Regenerate with `node scripts/build-registry-index.mjs --src <static-files checkout>`; it is data, never hand-edited, and excluded from Sonar for that reason.
 - `mapper.mjs` — `mapToFreedom()` (effective page → Freedom ChangeSet + `needsDecision[]`).

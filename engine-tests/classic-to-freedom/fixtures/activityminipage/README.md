@@ -1,12 +1,12 @@
 # `ActivityMiniPage` — real captured mini-page fixture
 
 Real Classic **mini page** used by the mapper golden (`run-mapper.mjs`, "Minor3 real mini page …") to prove the
-engine folds a genuinely captured mini page — not only hand-written toy bodies. Closes PR #58 review AC2
-("mini-page tests use synthetic inline bodies") for **ENG-93926** (mini pages → Freedom quick-add / mini cards).
+engine folds a genuinely captured mini page — not only hand-written toy bodies. Without it, the mini-page
+coverage rests on synthetic inline bodies alone (mini pages → Freedom quick-add / mini cards).
 
 ## Provenance
 
-- **Schema:** `ActivityMiniPage` (entity `Activity`), a customized mini page on the ENG-93926 **workenu** site.
+- **Schema:** `ActivityMiniPage` (entity `Activity`), a customized mini page on the **workenu** site.
 - **Captured from:** clio environment `applicants_workbuild246_0817` via
   `get-classic-page-sources --schema-name ActivityMiniPage`.
 - **`manifest.json`** holds the fold input the engine consumes: `schemas` (the real replacing-layer chain),

@@ -94,7 +94,7 @@ export const SOURCE = {
 };
 
 // GATE KIND — the STRUCTURED {kind,id} intent a row carries about WHY its Freedom target might not resolve on a
-// given stand (ENG-95683). Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
+// given stand. Before this, the only signal was the free-text `notes` / `freedom:` prose ("it requires
 // the CrtCustomer360App package AND the CommonCommunicationsBehavior feature") — a human could read it, but the
 // registry gate could not branch on it, so a real component gated behind an absent package produced the same
 // "settle the target" guidance as a fabricated type that no re-plan-free action can fix. The taxonomy is aligned
@@ -110,7 +110,7 @@ export const SOURCE = {
 // the two names the guidance tells an operator to install/enable, resolved BY KIND instead of parsed out of prose.
 export const GATE_KIND = { COMPONENT: "component", COMPOSITE: "composite", COMPOSITE_ONLY: "compositeOnly" };
 
-// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE (ENG-94756, PR #182 review) ---------------------------------
+// ---- THE TWO GUIDED FEATURE NAMES, declared ONCE ---------------------------------
 // `meta.feature` is a JOIN KEY, not a caption: the rows below declare it, `GUIDED_FEATURES` decides from it which
 // components are routed to the guidance item, and `companionRows` in designspec.mjs decides from it which page
 // owes the `AttachmentListDS` evidence row. That was three independent spellings of one string, and the failure
@@ -245,7 +245,7 @@ const ITEM_TYPE_ROWS = [
 //
 // STANDARD Creatio features are REPLACED by their Freedom analog (A3), not rebuilt as a generic detail. Each row
 // is keyed by SCHEMA_SUFFIX, which covers the exact name AND the entity-prefixed variants a real site uses
-// (`ApplicantEmailDetailV2` -> Emails); prefixed variants were previously missed and fell through as generic
+// (`ApplicantEmailDetailV2` -> Emails); prefixed variants must not be missed and fall through as generic
 // details, then dropped.
 //
 // `verify.componentType` is the type the BUILT page is gated on, so it must be a type the stand really resolves —
@@ -285,7 +285,7 @@ const feature = (suffix, { feature: name, freedom, componentType = null, uiShape
 // the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
 // `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
 const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
-// ENG-96327 — the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
+// the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
 // read get-component-info, do NOT downgrade to a plain grid over ContactCommunication, etc.) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
 // PREREQUISITE / decision, which the short note keeps.
@@ -318,7 +318,7 @@ const FEATURE_ROWS = [
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
   feature("ContactCommunicationDetail", { feature: "Communication options",
     freedom: "Freedom Communication-options component (crt.CommunicationOptions)", componentType: "crt.CommunicationOptions", uiShape: "component",
-    // `satisfies` — the LEGACY expected type this row's real component answers for. ENG-95470 kept this pair in its
+    // `satisfies` — the LEGACY expected type this row's real component answers for. This pair lives here rather than in its
     // own interim table in designspec.mjs and said it would be repointed here; this is that repoint. A plan
     // produced by an older engine EXPECTED `crt.ContactCommunication` (the entity name with a `crt.` prefix, which
     // resolves to nothing on a stand), and a correctly built page carrying `crt.CommunicationOptions` must read ✅
@@ -330,7 +330,7 @@ const FEATURE_ROWS = [
     gate: COMMS_GATE,
     notes: COMMS_NOTE }),
   // Feed. Its classic origin is the ESN feed CONTAINER, not a detail schema, so it is keyed by container name —
-  // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry used to hold.
+  // but it is the same kind of row and it carries the gate type that `FEATURE_TYPE`'s fourth entry holds.
   // Without it the Feed row silently left the `--verify` gate when that map was absorbed.
   row({ match: { by: MATCH.CONTAINER_NAME, containerName: "ESNFeedContainer" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.WIDGET, uiShape: "component",
@@ -365,7 +365,7 @@ const FEATURE_ENTITY_ROWS = [
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-// ENG-96327 — SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
+// SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
 // flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
 // `references/classic-to-freedom-mapping.md`, which the build agent is handed.
 const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
@@ -378,7 +378,7 @@ const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; au
 // plan always has a definite answer here.
 const DCM_PROGRESS = { widget: "Case progress bar", freedom: "Freedom case-stage progress bar (page top)", note: DCM_PROGRESS_NOTE, placement: "page-top", signal: "dcm" };
 const DCM_NEXTSTEPS = { widget: "Next steps", freedom: "Freedom Next steps panel (new tab next to Feed)", note: DCM_NEXTSTEPS_NOTE, placement: "tab-next-to-feed", signal: "dcm" };
-// ENG-95543 — the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
+// the two catalogs are ROWS now (MODULE_KEY / CONTAINER_NAME). The widget DEFS keep their exact shape:
 // `mapWidgets` consumes them directly, and rewriting that builder was not part of giving the data one home.
 // `verify.componentType` is stated wherever the Freedom component type is KNOWN and registry-resolvable — the DCM
 // pair and the Feed. It was prose-only before, so a fabricated type there could never have been caught.
@@ -503,12 +503,12 @@ export function featureVerifyType(featureName) {
   return r?.verify.componentType || null;
 }
 
-// ENG-95859 — a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
+// a standard feature that renders as MORE THAN ONE required Freedom component. Approvals is the
 // approval MODULE/widget placed ABOVE the profile island (`crt.Approval`) PLUS the approval LIST
 // (`crt.ApprovalList`, already gated by `featureVerifyType` above) — the FEATURE_ROWS note for Approvals has said
-// so in prose since ENG-95254, and the build recipe repeats it, but
+// so in prose, and the build recipe repeats it, but
 // `featureVerifyType` only ever answered ONE componentType, so the module half had NO row to gate `--verify` on.
-// Two real builds (the base measurement run and its ENG-95859 recurrence) added only `crt.ApprovalList` and had
+// Two real builds (the base measurement run and its recurrence) added only `crt.ApprovalList` and had
 // the missing module recorded as a "proposal" instead of a hard MISSING — a rule read twice and applied to one of
 // two halves is exactly the defect this table exists to close by machine. One entry per feature whose second half
 // has a KNOWN static componentType (confirmed via `get-component-info search="approval"`: `crt.Approval` is a
@@ -519,7 +519,7 @@ export function featureVerifyExtraTypes(featureName) {
   return FEATURE_SECOND_HALF[featureName] || [];
 }
 
-/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE (ENG-94756) ----------------------------------------------------
+/* ---- WHERE THE CANONICAL COMPONENT SETTINGS LIVE ----------------------------------------------------
    The rows above answer WHICH Freedom component a classic Feed / Attachments becomes and WHETHER a template tends
    to ship it (`meta.templateProvided`). Neither they nor anything else in this repository answers HOW the component
    is CONFIGURED — and that is the reported defect: a page migrated onto a non-basic template gets the components
@@ -602,7 +602,7 @@ export function rowForItemType(itemType) {
 // ---- DERIVED VIEWS of the moved catalogs -------------------------------------------------------------------
 // The mapper's widget / profile-card / card-action builders consume these shapes. They are BUILT FROM the rows, so
 // the data has one home and the builders did not have to be rewritten around a new shape.
-// Each widget def carries its ROW's `templateProvided` down with it. The design spec used to infer template
+// Each widget def carries its ROW's `templateProvided` down with it, so the design spec does not infer template
 // provision from the CLASSIC side — "this came from the Classic base template" — and print "provided by the
 // Freedom template" for Feed, whose row says `templateProvided: false`. A live run believed the spec, shipped a
 // form page with no Feed, and the gap surfaced at verify: a 21-minute user question and a second sub-agent.
@@ -619,8 +619,8 @@ export function knownCardActions() {
 }
 
 // The Freedom types accepted for a PLANNED component type: the type itself, plus any row whose real component
-// `satisfies` that (legacy) name. ENG-95470 held this as its own interim table with the note "repointed [to the
-// shared table] when ENG-95543 lands" — this is that repoint, so the analog knowledge has one home like the rest.
+// `satisfies` that (legacy) name. This is the one home for the analog knowledge, like the rest of the
+// table, rather than an interim copy of its own.
 export function analogsOf(plannedType) {
   return MAPPING_ROWS.filter((r) => (r.verify?.satisfies || []).includes(plannedType))
     .map((r) => r.verify.componentType);
@@ -633,11 +633,11 @@ export function satisfiedLegacyTypes() {
 // The `crt.*` component type a row NAMES as its Freedom target — the thing it emits (`target.componentType`) with the
 // thing the built page is gated on (`verify.componentType`) as the fallback. Exported as the ONE resolver so the gate
 // lookup below, `gateConflicts`/`gateShapeIssues`, the registry-side check, and any future reader agree on where a
-// row's real type lives AND on the emit-over-verify precedence (ENG-95683 RC-7) — a second private copy that reordered
+// row's real type lives AND on the emit-over-verify precedence (RC-7) — a second private copy that reordered
 // these would silently attach a gate to a different type than `--verify` gates on.
 export const rowComponentType = (r) => r?.target?.componentType || r?.verify?.componentType || null;
 
-// The structured gate intent for a component type, resolved BY KIND from the shared rows (ENG-95683). This is the
+// The structured gate intent for a component type, resolved BY KIND from the shared rows. This is the
 // typed replacement for reading a package/feature prerequisite out of a row's prose: given a `crt.*` type, return
 // the `{ kind, id?, feature? }` a row records for it, or null. A null answer is meaningful — it says "no row gates
 // this type", which the registry guidance reads as "not a package-install away" (a real component simply absent on
@@ -650,13 +650,13 @@ export function gateForComponentType(type) {
   return null;
 }
 
-// The ONE-GATE-PER-TYPE invariant (ENG-95683). `gateForComponentType` returns the FIRST matching row's gate, so two
+// The ONE-GATE-PER-TYPE invariant. `gateForComponentType` returns the FIRST matching row's gate, so two
 // rows carrying DIFFERENT gates for the same component type would let array order silently decide the winner.
 // Repeating a type with the SAME gate is legal and expected — the Communication-options schema row and the entity
 // fallback row both carry `COMMS_GATE` — so the invariant is one-gate-VALUE-per-type, not one-row-per-type; only a
 // DIVERGENT gate for a single type is a defect. `validateTable` folds these into its errors so the CI table check
 // fails on a conflict rather than a build resolving a stale gate. Returns one finding per conflicting type.
-// Key-order-independent identity of a gate value (ENG-95683 RC-8): key on the fields themselves, not `JSON.stringify`,
+// Key-order-independent identity of a gate value (RC-8): key on the fields themselves, not `JSON.stringify`,
 // which is key-INSERTION-order sensitive — an inline-constructed `{ id, kind }` (which `gateShapeIssues` accepts,
 // since it keys on a Set) would hash differently from the constructor's `{ kind, id }` and read as a spurious
 // conflict. Safe direction only today, but this removes the foot-gun for any future inline gate.
@@ -678,7 +678,7 @@ export function gateConflicts(rows = MAPPING_ROWS) {
   return out;
 }
 
-// The GATE SHAPE contract (ENG-95683 review). `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
+// The GATE SHAPE contract. `gateConflicts` catches ONE silent-wrong-gate mode — two divergent
 // gates for a type — and left its sibling unchecked: a MALFORMED gate. Both are silent-wrong in the same way. A gate
 // whose `id` key is mistyped (`{ kind: "composite", package: "X" }`) reaches `registrySettleGuidance` as an id-less
 // gate and gets the "fix the mapping or the plan, re-plan" dead end — the exact message the by-kind branch exists to
@@ -715,7 +715,7 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
 }
 
 
-// ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
+// ---- LIST-PAGE VOCABULARY ---------------------------------------------------------------------
 //
 // A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
 // element become on a Freedom FORM page"; these answer the same question for a LIST page, and for the same
@@ -776,7 +776,7 @@ const listRow = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType
 const LIST_ROWS = [
   // The grid IS the list page. Absorbed by the surface `buildListChangeSet` already owns (`LIST_GRID` =
   // `DataTable`, its `values.columns[]` merge and the `PDS_*` view-model attributes), so the element emits nothing
-  // of its own and needs no component type — but it is no longer UNMAPPED, because the engine really does build a
+  // of its own and needs no component type — but it is not UNMAPPED, because the engine really does build a
   // Freedom equivalent for it.
   listRow(VIEW_ITEM_TYPE.GRID, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "list",
     notes: "On a SECTION this is the list itself, not an editable-grid detail: `buildListChangeSet` already emits it as `DataTable` with the section's columns and quick filters. Configuration it carries that the engine models on no field (`controlColumnName`, `applyControlConfig`, `controlCellClass`) is raised as a `list-grid-config` open item rather than folded into that merge." }),

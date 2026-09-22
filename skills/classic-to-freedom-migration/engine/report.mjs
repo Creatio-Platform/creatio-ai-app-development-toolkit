@@ -1,4 +1,4 @@
-// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on (ENG-99126).
+// THE MIGRATION RESULT REPORT — the ONE artifact an orchestrated run closes on.
 //
 // Before this module the run ended on two files that disagreed. `--verify` printed the plan-vs-built table and a
 // verdict computed from its machine rows alone ("2 machine row(s) not confirmed"); `build-tasks/index.md` — the
@@ -201,7 +201,7 @@ function splitDecided(notBuilt, boundaries) {
   return { open, decided };
 }
 
-// A SETTLED TASK WHOSE ROWS DRIFTED: its cells were recorded against deliverables the plan no longer carries, so
+// A SETTLED TASK WHOSE ROWS DRIFTED: its cells were recorded against deliverables the plan has since dropped, so
 // no mark re-attaches and the collector sees no owed row. Its word stands over rows nobody accounted for.
 function driftedSettledReasons(tasks) {
   const bad = (tasks || []).filter((t) => t.drifted && !t.unread && (t.status === S_DONE || t.status === S_PARTIAL));
@@ -459,7 +459,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const gaps = planGaps(result);
   const pageName = pageNamer(built);
   const vidx = verifyIndex(verifyRes);
-  // ENG-99740 — key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
+  // key on the ROW's own page (a collapsed whole-run task's rows now carry it), so both this set and
   // taskRows' lookup join on (page, label) and state cannot bleed across same-labeled rows on different pages.
   const keyOf = (it) => `${it.row.pageKey || it.task.pageKey} ${labelKey(it.row.label)}`;
   const withLabels = (items) => { const ks = new Set(items.map(keyOf)); ks.hasLabel = new Set(items.map((it) => labelKey(it.row.label))); return ks; };

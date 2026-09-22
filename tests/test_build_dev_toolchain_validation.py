@@ -315,7 +315,7 @@ class LauncherTests(unittest.TestCase):
 class OrchestrationTests(unittest.TestCase):
     def test_prepare_marketplace_refuses_and_preserves_existing_fallback(self):
         # When the link can't be made and a hand-maintained parent marketplace.json exists, _prepare_marketplace
-        # must refuse and leave that file untouched (regression: an earlier version overwrote + deleted it).
+        # must refuse and leave that file untouched (overwriting then deleting it is the failure).
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             repo = root / "repo"
