@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
@@ -22,7 +22,6 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -5850,7 +5849,6 @@ const decideFixtureB = (label, md = null) => {
   // (the engine's own provenance stamp) is caught by Attention via `undecidedDecisionCells`, and
   // `decidedRowKeys` refuses to hide it from `--verify`.
   {
-    const { parseTaskFile: parse, readTaskDir: rtd } = { parseTaskFile, readTaskDir };
     // Guard A: a plain "wont-do — I don't feel like building this" cell (no parens, no D<N>).
     // parseOutcome must downgrade it to `not-built — needs-decision`, keeping the row open.
     const { base, dir, t } = decideFixtureB("m1-handtyped-bare");
@@ -6343,7 +6341,7 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
       () => !res.refused && (res.unplaced || []).length === 0
         && res.touched.length === handlers.rows.length
         && (rr?.rows || []).every((r) => r.outcomeKind === "postponed")
-        && /→ ENG-1$/.test(rr?.rows?.[0]?.outcome || "")
+        && (rr?.rows?.[0]?.outcome || "").endsWith("→ ENG-1")
         && rr?.status === "partial",
       () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
         status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
@@ -6385,7 +6383,7 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
     const planted = fs.readFileSync(fp, "utf8").split("\n").map((l) => {
       if (!/^\s*\|\s*1\s*\|/.test(l)) return l;
       const cells = l.split(/(?<!\\)\|/);
-      return `${cells.slice(0, cells.length - 2).join("|")}| ${RAW} |`;
+      return `${cells.slice(0, -2).join("|")}| ${RAW} |`;
     });
     fs.writeFileSync(fp, planted.join("\n"));
     const parsedBefore = readTaskDir(dir).find((x) => x.id === target.id);
@@ -6396,7 +6394,7 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
     check("a decision lands on a cell that already held a RAW `|` — the writer rebuilds the row through the same split the parser uses, so the cell really changes and can never be recorded as written while the body still holds the old text",
       // The planted cell must really carry the raw pipe, or this check pins nothing: the parser rejoins
       // everything from the Outcome column, so `a|b` surviving the read is what proves the shape.
-      () => /^not-built/.test(parsedBefore?.rows?.[0]?.outcome || "")
+      () => (parsedBefore?.rows?.[0]?.outcome || "").startsWith("not-built")
         && /a\|b/.test(parsedBefore?.rows?.[0]?.outcome || "")
         && !res.refused && (res.unplaced || []).length === 0
         && rr?.rows?.[0]?.outcomeKind === "wont-do"

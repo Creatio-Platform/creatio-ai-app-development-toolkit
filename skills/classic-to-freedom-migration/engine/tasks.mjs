@@ -1305,7 +1305,7 @@ export function undecidedDecisionCells(tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
       if (r.outcomeKind !== O_WONT_DO && r.outcomeKind !== O_POSTPONED) return;
-      if (map && map.has(i + 1)) return;
+      if (map?.has(i + 1)) return;
       out.push({ task: t, row: r, n: i + 1 });
     });
   }
@@ -2174,7 +2174,7 @@ const causeText = (cause) => CAUSE_TEXT[cause] || cause;
 // direction, because failing to count one would let the cap never fire and repair rounds run forever.
 function closedByDecision(meta, rows, outcomes) {
   const map = parseDecisionsMap(meta?.decisions);
-  if (!map || !map.size) return false;
+  if (!map?.size) return false;
   const keys = rowKeys(rows.map((r) => r.label));
   if (!rows.length) return false;
   for (let i = 0; i < rows.length; i++) {
@@ -3276,7 +3276,7 @@ function pickDecideTargets(tasks, opts) {
     if (!(t.rows || []).length) return { problems: [`task '${taskId}' has no readable rows to decide over`], targets: [] };
     return { targets: [{ task: t, rowIndices: t.rows.map((_, i) => i) }] };
   }
-  if (pages && pages.length) {
+  if (pages?.length) {
     const pageSet = new Set(pages);
     const targets = tasks
       .filter((t) => !t.unread && pageSet.has(t.pageKey) && (t.rows || []).length)
@@ -3318,7 +3318,7 @@ export function applyDecision(dir, result, opts = {}) {
   if (mode === "postponed" && !String(destination || "").trim()) {
     return { refused: true, problems: ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"] };
   }
-  if (!decisions?.has || !decisions.has(decision)) {
+  if (!decisions?.has?.(decision)) {
     return { refused: true, problems: [`decision '${decision}' does not resolve in decisions.md or the plan's ### Adjustments — nothing was written. Add it there first (a heading '## ${decision} — <title>' in decisions.md, or a numbered item under Adjustments), then re-run.`] };
   }
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
@@ -3456,9 +3456,11 @@ export function revokeDecision(dir, result, opts = {}) {
   const skipped = [];
   for (const t of merged.tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
-    if (!map || !map.size) continue;
+    if (!map?.size) continue;
     let changed = false;
-    for (const [n, d] of [...map.entries()]) {
+    // A SNAPSHOT, because the loop deletes from `map` as it clears cells.
+    const entries = [...map.entries()];
+    for (const [n, d] of entries) {
       if (d !== decision) continue;
       const idx = n - 1;
       const row = t.rows?.[idx];
@@ -3496,7 +3498,7 @@ export function revokeDecision(dir, result, opts = {}) {
 
   // Recompute the status of every task the revoke touched. Rows that were closed by decision are now
   // blank, so a task that read `wont-do` / `not-applicable` / `partial` re-enters the verification list.
-  // The recompute carries `S_TODO` as the previous word (not the pre-revoke closure) — treating the file
+  // The recompute carries the lifecycle word as the previous one (not the pre-revoke closure) — treating the file
   // as freshly-opened is what makes the run see the rows as work to do again; leaving the carried word as
   // `wont-do` would compute back to `wont-do` under the "all blank + already closed" branch and the
   // revoke would look like it did nothing.

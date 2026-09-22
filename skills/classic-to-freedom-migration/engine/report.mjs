@@ -477,7 +477,7 @@ function detailsSection(tasks, perTask, pageName, secNo) {
 const POSTPONED_DECISION_RE = /\(D(\d{1,3})\)/;
 function parsePostponedCell(text) {
   const s = String(text || "");
-  const dmatch = s.match(POSTPONED_DECISION_RE);
+  const dmatch = POSTPONED_DECISION_RE.exec(s);
   const decision = dmatch ? `D${dmatch[1]}` : null;
   const lastArrow = s.lastIndexOf("→");
   const destination = lastArrow < 0 ? null : s.slice(lastArrow + 1).trim() || null;
@@ -646,7 +646,9 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
-  return { markdown: md, complete, reasons, postponed: postponedRows,
-    verdictColour: !complete ? "red" : postponedCount ? "yellow" : "green",
+  let verdictColour = "green";
+  if (!complete) verdictColour = "red";
+  else if (postponedCount) verdictColour = "yellow";
+  return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
     counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount } };
 }

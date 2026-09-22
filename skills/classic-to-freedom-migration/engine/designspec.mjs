@@ -4268,7 +4268,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
       // `buildVerifyRow` applies inside.
       const rowPage = r.pageKey || g.pageKey || "main";
-      if (decidedKeys && decidedKeys.has(verifyRowKey(rowPage, r.label))) {
+      if (decidedKeys?.has(verifyRowKey(rowPage, r.label))) {
         decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
         continue;
       }

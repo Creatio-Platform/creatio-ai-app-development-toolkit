@@ -3390,9 +3390,12 @@ function runDecideMode(result, dir, opts) {
       : [];
     return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems, help), ok: false };
   }
-  const target = opts.rowRef ? `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`
-    : opts.taskId ? `task ${opts.taskId}`
-    : `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
+  // Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
+  // addressed by task or by row, so reading its length up front throws on the two commonest forms.
+  let target;
+  if (opts.rowRef) target = `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`;
+  else if (opts.taskId) target = `task ${opts.taskId}`;
+  else target = `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
   const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${target}.`];
   if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
   for (const t of res.touched) lines.push(`  · ${t.task.file} row ${t.n} — ${t.task.rows[t.n - 1].label}`);
@@ -3425,8 +3428,7 @@ function runRevokeMode(result, dir, opts) {
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
   for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
-  lines.push(...skipLines);
-  lines.push("", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
+  lines.push(...skipLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 
@@ -3570,7 +3572,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (!/^D\d+$/.test(decideArg)) fail(`\`${DECIDE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${DECIDE_FLAG} D13\`) — got \`${decideArg}\`.`);
     if (!wontDoFlag && !postponedFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\` or \`${POSTPONED_FLAG}\`. The two words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination.`);
     if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
-    if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets \"later\" pass for an answer.`);
+    if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets "later" pass for an answer.`);
     if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
     // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
     // markdown table row: a line break would split the row in two and the engine would read the task back broken.
@@ -3715,7 +3717,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
-      rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: NaN }; })() : null };
+      rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
     let res;
     try { res = runDecideMode(result, tasksDir, opts); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
