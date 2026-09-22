@@ -360,13 +360,17 @@ function mergeSideFiles(dir, built, acc, problems) {
 // not. Only ids the engine published are searched, so an unrelated string in the prose claims nothing.
 export const DECISION_FILES = ["decisions.md", "findings.md"];
 // An id CONTINUES where the neighbouring character could still be part of one, so a published id is not claimed by
-// a longer id that merely contains it. Both sides: a mis-filed name extends the real id to its right, and a page
-// key prefixes another id to its left.
-const ID_CONTINUES = /[A-Za-z0-9_:.#-]/;
-const boundary = (ch) => ch === undefined || !ID_CONTINUES.test(ch);
+// a longer id that merely contains it. The two sides take different sets, because they guard different shapes: an id
+// is EXTENDED to its right only by more of its own name (`-<hash>` on a mis-filed key), while `:` and `.` there are
+// ordinary sentence punctuation and must not hide a claim written without backticks. To its left an id is PREFIXED
+// by another key, which ends in `:`, so that side keeps the wider set.
+const ID_EXTENDS_RIGHT = /[A-Za-z0-9_#-]/;
+const ID_EXTENDS_LEFT = /[A-Za-z0-9_:.#-]/;
+const freeLeft = (ch) => ch === undefined || !ID_EXTENDS_LEFT.test(ch);
+const freeRight = (ch) => ch === undefined || !ID_EXTENDS_RIGHT.test(ch);
 function namedIn(text, id) {
   for (let i = text.indexOf(id); i !== -1; i = text.indexOf(id, i + 1)) {
-    if (boundary(text[i - 1]) && boundary(text[i + id.length])) return true;
+    if (freeLeft(text[i - 1]) && freeRight(text[i + id.length])) return true;
   }
   return false;
 }

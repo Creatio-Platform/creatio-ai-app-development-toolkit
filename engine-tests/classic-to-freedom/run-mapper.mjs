@@ -2711,6 +2711,21 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
+  // A MIS-FILED evidence id blocks the run through the CLI, not only through the library: the OR-chain that
+  // carries it into `notReady` and the banner that names it are the part an orchestrator actually meets, and a
+  // row-level check proves neither. Its verdict is its own — the page is whole, so the BUILD leg must stay quiet.
+  fs.writeFileSync(builtPath, JSON.stringify({
+    pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } },
+    evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+    judge: { "main#quality-gates-de6871bb": { convincing: true, why: "diffed against AccountPage" } },
+  }));
+  const vOrphan = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  check("migrate.mjs --verify --built: an id this run does not publish exits 2 and says EVIDENCE MIS-FILED, naming the key",
+    vOrphan.status === 2 && /EVIDENCE MIS-FILED/.test(vOrphan.stderr || "") && /main#quality-gates-de6871bb/.test(vOrphan.stderr || ""),
+    () => ({ status: vOrphan.status, stderr: (vOrphan.stderr || "").slice(0, 200) }));
+  check("the mis-filed verdict does NOT speak for the build — its stderr line says the filing is wrong, never that the page is short",
+    /Not a build gap/.test(vOrphan.stderr || ""),
+    () => ({ stderr: (vOrphan.stderr || "").slice(0, 200) }));
   // (c-D12) Contract v2 — exit 2 is TWO conditions with OPPOSITE responses. Exiting 2 in silence would leave
   // an executor unable to tell "my build is short" (repair on-stand and re-verify) from "the PLAN is short"
   // (stop, return to the caller — no amount of building clears it). This SU
@@ -8838,6 +8853,23 @@ check("a mis-filed id is a RUN-level fault, not rows: it adds nothing to a row c
   orphanRun.unverified === nothingFiled.unverified && orphanRun.orphans.length === 1
   && Object.values(orphanRun.pages).every((pg) => pg.unverified <= orphanRun.unverified),
   () => ({ u: orphanRun.unverified, nothingFiledU: nothingFiled.unverified, orphans: orphanRun.orphans.length }));
+const scopedOrphan = renderVerify(evShapeRes, { scopePageKey: "main" }, { ...evShapePage,
+  evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+  judge: { "main#quality-gates-de6871bb": { convincing: true, why: "diffed" } } });
+check("a SCOPED sweep raises no orphan — it renders one page's rows, so every other page's id would read as an orphan of the scope rather than of the run",
+  scopedOrphan.orphans.length === 0, () => ({ orphans: scopedOrphan.orphans.length }));
+const manyEv = {}, manyJu = {};
+for (let i = 0; i < 15; i++) {
+  const k = `main#quality-gates-orphan${String(i).padStart(2, "0")}`;
+  manyEv[k] = { referencePage: "P", components: ["crt.Input"] };
+  manyJu[k] = { convincing: true, why: "ok" };
+}
+const manyOrphans = orphanBuilt(manyEv, manyJu);
+const bannerLine = manyOrphans.markdown.split("\n").find((l) => /does not publish/.test(l)) || "";
+const namedCount = (bannerLine.match(/orphan\d\d/g) || []).length;
+check("the orphan banner names at most twelve ids and counts the rest — a list that grows without bound stops being readable, and a cut with no count hides how much it cut",
+  manyOrphans.orphans.length === 15 && namedCount === 12 && /\(\+3 more\)/.test(bannerLine),
+  () => ({ orphans: manyOrphans.orphans.length, named: namedCount, line: bannerLine.slice(-90) }));
 check("the SAME record filed under the published id raises no orphan — the check names mis-filed keys, not every key",
   /does not publish/.test(cleanRun.markdown) === false,
   () => ({ said: /does not publish/.test(cleanRun.markdown) }));
