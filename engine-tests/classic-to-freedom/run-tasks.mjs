@@ -5415,6 +5415,71 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
       () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
   }
 
+  // ---- (M1) hand-typed wont-do/postponed cells bypass the --decide gate — the two guards -------------------
+  // parseOutcome downgrades a cell WITHOUT `(D<N>)` to `not-built — needs-decision` (the row stays open,
+  // visibly). A cell WITH a `(D<N>)` marker but whose row index is not in the task's `decisions:` map
+  // (the engine's own provenance stamp) is caught by Attention via `undecidedDecisionCells`, and
+  // `decidedRowKeys` refuses to hide it from `--verify`.
+  {
+    const { parseTaskFile: parse, readTaskDir: rtd } = { parseTaskFile, readTaskDir };
+    // Guard A: a plain "wont-do — I don't feel like building this" cell (no parens, no D<N>).
+    // parseOutcome must downgrade it to `not-built — needs-decision`, keeping the row open.
+    const base = tmp("m1-handtyped-bare");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    if (t) {
+      const fp = path.join(dir, t.file);
+      // Hand-edit: put an unauthorised closure in row 1's Outcome cell (no D<N> marker).
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — I skipped this row"));
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("ENG-99749 (M1a) a hand-typed `wont-do — <reason>` cell WITHOUT a `(D<N>)` marker is downgraded to `not-built — needs-decision` by parseOutcome — the row stays open, visibly, and no closure sneaks through the gate `--decide` was built to police",
+        () => rr?.rows?.[0]?.outcomeKind === "not-built"
+          && rr?.rows?.[0]?.outcomeCause === "needs-decision"
+          && rr?.rows?.[0]?.naNoReason === true
+          && rr?.status !== "wont-do" && rr?.status !== "done",
+        () => ({ kind: rr?.rows?.[0]?.outcomeKind, cause: rr?.rows?.[0]?.outcomeCause,
+          status: rr?.status, cell: rr?.rows?.[0]?.outcome }));
+      // The row must ALSO stay in --verify's list (registry says the row is still owed).
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      check("ENG-99749 (M1a) the downgraded row stays in `--verify`'s list — decidedRowKeys does not hide a row parseOutcome refused to close",
+        () => decKeys.size === 0,
+        () => ({ decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Guard B: a spoofed cell WITH a fake `(D<N>)` marker but no matching `decisions:` map entry (the
+    // engine writes both together through `--decide`, so the missing map entry is the tell). parseOutcome
+    // accepts it as `wont-do`, but the Attention pass names the file and decidedRowKeys keeps the row in
+    // the verify list — the second guard behind the first.
+    const base = tmp("m1-handtyped-spoof");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    if (t) {
+      const fp = path.join(dir, t.file);
+      // Hand-edit: write a plausible closure with fake D<N> — but never run --decide, so `decisions:` stays empty.
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — I made this up (D99)"));
+      syncTaskDir(dir, RUN, OPTS);
+      const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      check("ENG-99749 (M1b) a hand-typed `wont-do` cell WITH a `(D<N>)` marker but WITHOUT a matching `decisions:` map entry is named on Attention — the map is the engine's provenance stamp (only `--decide` writes both together), so a cell present without its entry is a hand edit",
+        () => /but the row is NOT in this task's `decisions:` map/.test(idx),
+        () => idx.split("## Attention")[1]?.slice(0, 400));
+      check("ENG-99749 (M1b) the spoofed row is NOT hidden from `--verify` — decidedRowKeys requires the same provenance stamp Attention checks, so the two guards agree",
+        () => decKeys.size === 0,
+        () => ({ decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
   // ---- (AC 12) --verify sources rows from the task registry ------------------------------------------------
   // A row the registry has closed by decision must not appear in --verify's table, its verdict, or its
   // pages map — even if the built payload is empty (so the plan walk alone would report it MISSING).
@@ -5452,6 +5517,159 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
         () => /plan row\(s\) closed by a recorded decision are OUT of this table/.test(withFilter.markdown)
           && !/plan row\(s\) closed by a recorded decision/.test(withoutFilter.markdown),
         () => withFilter.markdown.split("###")[0]);
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+// ============================================================================================================
+// ENG-99749 review M2: spawnSync coverage for the --decide / --revoke CLI parser. Every other CLI mode
+// (--next, --verify, --start, --split, --add) is exercised through spawnSync; this one was going through
+// applyDecision / revokeDecision directly and left the parser silent. Fixing that here.
+// ============================================================================================================
+console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====");
+{
+  const setup = (label) => {
+    const base = tmp(label);
+    const migrationDir = base;   // manifest baseDir = folder we call from
+    const dir = path.join(base, "build-tasks");
+    // A live `decisions.md` under the parent so --decide can resolve D13. `readDecisions` reads from
+    // path.join(dir, "..") which is `migrationDir`.
+    fs.writeFileSync(path.join(migrationDir, "decisions.md"),
+      "## D13 — descope the typed forms (CLI test)\n\nDetails go here.\n");
+    return { base, migrationDir, dir };
+  };
+
+  // --- refusal shapes: every combination the parser rejects, asserted through the CLI ---------------------
+  {
+    // No --tasks: --decide needs a folder to write into.
+    const { base } = setup("cli-decide-no-tasks");
+    const r = cliTasks(["--decide", "D13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --decide without --tasks exits 1 and names the missing flag",
+      () => r.status === 1 && /`--decide`.*only means something with `--tasks/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Bad D<N> shape.
+    const { base, dir } = setup("cli-decide-bad-dn");
+    const r = cliTasks(["--tasks", dir, "--decide", "d13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --decide with a lower-case `d13` (bad shape) exits 1 and prints the expected D<N> shape",
+      () => r.status === 1 && /needs a decision id shaped D<N>/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --decide + --revoke: two opposite operations, mutually exclusive.
+    const { base, dir } = setup("cli-decide-revoke-mutex");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--revoke", "D13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --decide and --revoke together exit 1 — opposite operations, run them as separate commands",
+      () => r.status === 1 && /`--decide`.*`--revoke`.*opposite operations/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --decide + --verify: cross-mode refusal — verify writes/moves the folder, so both together would
+    // describe a state the reader cannot identify.
+    const { base, dir, migrationDir } = setup("cli-decide-verify-cross");
+    const builtFile = path.join(migrationDir, "built.json");
+    fs.writeFileSync(builtFile, "{}");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--pages", "main",
+      "--verify", "--built", builtFile], MANIFEST);
+    check("ENG-99749 (M2) --decide + --verify exit 1 — the two write / move the folder in different ways; cannot combine",
+      () => r.status === 1 && /`--decide`.*writes into the folder/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --wont-do + --postponed: two answers to one question, pick one.
+    const { base, dir } = setup("cli-wontdo-postponed-mutex");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--postponed",
+      "--to", "ENG-1", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --wont-do and --postponed together exit 1 — two answers to one question",
+      () => r.status === 1 && /`--wont-do`.*`--postponed`.*two answers to one question/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --postponed requires --to.
+    const { base, dir } = setup("cli-postponed-no-to");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--postponed", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --postponed without --to exits 1 and names the destination requirement",
+      () => r.status === 1 && /`--postponed`.*`--to <destination>`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --wont-do refuses --to (a decision that closes the debt goes nowhere).
+    const { base, dir } = setup("cli-wontdo-with-to");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--to", "ENG-1", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --wont-do + --to exit 1 — a closure has no destination",
+      () => r.status === 1 && /`--to` only means something with `--postponed`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // No addressing at all.
+    const { base, dir } = setup("cli-decide-no-addr");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do"], MANIFEST);
+    check("ENG-99749 (M2) --decide with no addressing exits 1 — needs one of --pages / --task / --row",
+      () => r.status === 1 && /--decide.*needs one of/.test(r.stderr || "")
+        && /--pages/.test(r.stderr || "") && /--task/.test(r.stderr || "") && /--row/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Two addressings at once.
+    const { base, dir } = setup("cli-decide-two-addr");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do",
+      "--pages", "main", "--task", "some-id"], MANIFEST);
+    check("ENG-99749 (M2) --decide with two addressings (--pages + --task) exits 1 — pick one",
+      () => r.status === 1 && /three addressings for ONE decision — pick one/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --revoke refuses addressing / value flags — the subject is the decision, not what it touched.
+    const { base, dir } = setup("cli-revoke-with-addr");
+    const r = cliTasks(["--tasks", dir, "--revoke", "D13", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --revoke with an addressing flag exits 1 — the subject is the decision; no addressing to give",
+      () => r.status === 1 && /`--pages` does not go with `--revoke`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Missing D<N> in decisions.md: the refusal is the safeguard the ticket names.
+    const { base, dir } = setup("cli-decide-missing-dn");
+    cliTasks(["--tasks", dir], MANIFEST);   // slice the folder so --decide has something to look at
+    const r = cliTasks(["--tasks", dir, "--decide", "D999", "--wont-do", "--pages", "main"], MANIFEST);
+    check("ENG-99749 (M2) --decide with a D<N> not in decisions.md exits 1 and prints how to add it — the safeguard AC 3 names",
+      () => r.status === 1 && /D999.*does not resolve/.test(r.stdout || "" + (r.stderr || "")),
+      () => ({ status: r.status, stdout: r.stdout, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Happy path: --decide --wont-do --task <id>, then --revoke. `--task` addressing avoids the pageKey
+    // guessing --pages needs (the fixture's exact page keys are an implementation detail; the CLI
+    // contract is what this test asserts).
+    const { base, dir } = setup("cli-decide-happy");
+    cliTasks(["--tasks", dir], MANIFEST);
+    // First non-refs, non-boundary plan task with real rows — same finder the mechanism tests use. Use
+    // checklistOpts(MANIFEST) so slicing matches what the CLI wrote (task ids are content-derived, and
+    // the two callers must agree on the opts or the ids diverge).
+    const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
+    const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    if (t) {
+      const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
+      check("ENG-99749 (M2) happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",
+        () => decide.status === 0 && /wont-do \d+ row\(s\) under D13/.test(decide.stdout || ""),
+        () => ({ status: decide.status, stdout: decide.stdout, stderr: decide.stderr }));
+      const revoke = cliTasks(["--tasks", dir, "--revoke", "D13"], MANIFEST);
+      check("ENG-99749 (M2) happy path: --revoke D13 exits 0 and prints the cleared-cell count",
+        () => revoke.status === 0 && /revoked D13 — cleared \d+ cell\(s\)/.test(revoke.stdout || ""),
+        () => ({ status: revoke.status, stdout: revoke.stdout, stderr: revoke.stderr }));
     }
     fs.rmSync(base, { recursive: true, force: true });
   }

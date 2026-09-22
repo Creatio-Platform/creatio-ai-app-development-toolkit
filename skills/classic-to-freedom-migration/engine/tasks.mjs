@@ -1051,11 +1051,15 @@ function parseOutcome(raw) {
     return { outcome: O_NOT_BUILT, cause: CAUSE_NEEDS_DECISION, reason: "", text: raw, naNoReason: true };
   }
   // A person's answer through `--decide`. `wont-do` closes the debt; `postponed` records it with a
-  // destination. Both come with a reason that carries `(D<N>)` and (for `postponed`) the destination; the
-  // engine writes them, so the reason is always there — a cell missing one would only mean somebody typed it
-  // by hand, and that lands as `not-built` for the same reason `not-applicable` without one does.
+  // destination. `--decide` ALWAYS embeds a `(D<N>)` marker in the reason (see decideCellText), so a cell
+  // WITHOUT one is a hand edit — the same defect this ticket exists to close (Direction §1: "the decision
+  // reaches the task folder one way — somebody opens the files and edits them"). The engine downgrades
+  // such a cell to `not-built — needs-decision`, so the row stays visibly open until `--decide` runs and
+  // Attention names the file at index time. A cell WITH a `(D<N>)` marker is honoured as authored: this
+  // catches the byte-for-byte engine output on re-parse, and a spoofed hand edit still lands on Attention
+  // via `undecidedDecisionCells` — the two guards are complementary rather than redundant.
   if (kind === O_WONT_DO || kind === O_POSTPONED) {
-    if (detail) return { outcome: kind, cause: null, reason: detail, text: raw };
+    if (detail && /\(D\d{1,3}\)/.test(detail)) return { outcome: kind, cause: null, reason: detail, text: raw };
     return { outcome: O_NOT_BUILT, cause: CAUSE_NEEDS_DECISION, reason: "", text: raw, naNoReason: true };
   }
   // A `not-built` with no recognised cause still counts as not built, and routes to a human because it cannot
@@ -1258,8 +1262,40 @@ function dispatchAttention(dispatch) {
   return out;
 }
 
+// ENG-99749 review M1: a `wont-do` / `postponed` cell the ENGINE wrote is recorded in the task's
+// `decisions:` front-matter map — `--decide` writes both together (the cell text + the D<N> pairing) and
+// `persistTaskSet` lands them in one write. A cell whose row index is NOT in that map is therefore a
+// hand-typed closure, the exact bypass the ticket exists to close (Direction §1). parseOutcome already
+// downgrades the ones missing a `(D<N>)` marker to `not-built — needs-decision`; this guard catches the
+// spoofed shape too — a cell hand-typed WITH a fake `(D<N>)` still lands here, because the D<N> that
+// stamp records is what makes the entry engine-authored, not the parenthesised text in the cell.
+export function undecidedDecisionCells(tasks) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== O_WONT_DO && r.outcomeKind !== O_POSTPONED) return;
+      if (map && map.has(i + 1)) return;
+      out.push({ task: t, row: r, n: i + 1 });
+    });
+  }
+  return out;
+}
+
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
+  // ENG-99749 review M1: hand-typed `wont-do` / `postponed` cells that slipped past parseOutcome (they
+  // carry a plausible `(D<N>)`) but whose row is not in the task's own `decisions:` map. Named here so a
+  // reader sees exactly which cell the engine did not write.
+  for (const it of undecidedDecisionCells(set.tasks)) {
+    out.push(`- \`${it.task.file}\` row ${it.n} — recorded \`${it.row.outcomeKind}\` but the row is NOT in`
+      + ` this task's \`decisions:\` map: ${brief(it.row.label)} (cell: ${brief(it.row.outcome, 120)}).`
+      + " The engine writes cell + decisions map together through `--decide D<N>`; a cell present without"
+      + " its map entry is a hand edit. Re-open the row (clear its Outcome cell) and run"
+      + " `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed [--to <dest>] --row"
+      + ` ${it.task.id}:${it.n}` + "` if the decision actually holds.");
+  }
   // Reported per DELIVERABLE, not per task: the row and its cause are the fact a reader needs.
   // A `not-applicable` the agent typed on a row the PLAN did not mark as a boundary — the engine pre-fills
   // plan boundaries, so anything else in this shape is a hand edit. It closes the row without building it
@@ -2985,19 +3021,27 @@ export function startableTasks(set, dir) {
 // ENG-99749 AC 12: the row keys `--verify` should EXCLUDE — the deliverables the registry has closed by
 // decision. Keyed on (row's own page, normalized label) using `verifyRowKey` so the plan-walk key inside
 // `renderVerify` matches. `not-built` is NOT here — a `not-built — needs-decision` row is a question, not
-// a closure, and the machine gate still measures whether the stand has it (usually not). Only the three
-// closure words (`wont-do`, `postponed`, `not-applicable`) hide a row from the verify list.
+// a closure, and the machine gate still measures whether the stand has it (usually not).
+//
+// ENG-99749 review M1: `wont-do` / `postponed` only hide a row from `--verify` when the ENGINE wrote them.
+// The task's `decisions:` map is the provenance stamp (`--decide` writes cell + map together through
+// `persistTaskSet`), so a `wont-do` cell whose row index is NOT in the map is a hand-typed spoof — it
+// stays in the verify list and is named on Attention by `undecidedDecisionCells`. `not-applicable` is
+// exempt from this check: it is either the plan's own boundary (r.na set) or an agent-typed one
+// (already caught by `assertedBoundaryRows` on the Attention pass), and neither uses the decisions map.
 const DECIDED_ROW_KINDS = new Set([O_WONT_DO, O_POSTPONED, O_NOT_APPLICABLE]);
 export function decidedRowKeys(set) {
   const keys = new Set();
   for (const t of set?.tasks || []) {
     if (t.unread) continue;
-    for (const r of t.rows || []) {
-      if (!DECIDED_ROW_KINDS.has(r.outcomeKind)) continue;
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    (t.rows || []).forEach((r, i) => {
+      if (!DECIDED_ROW_KINDS.has(r.outcomeKind)) return;
+      if ((r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && !map?.has(i + 1)) return;
       const rowPage = r.pageKey || t.pageKey;
-      if (!rowPage) continue;
+      if (!rowPage) return;
       keys.add(verifyRowKey(rowPage, r.label));
-    }
+    });
   }
   return keys;
 }
