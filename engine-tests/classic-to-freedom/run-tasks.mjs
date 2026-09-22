@@ -2375,6 +2375,80 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
   fs.rmSync(base3, { recursive: true, force: true });
 }
 
+console.log("\n===== a ⛔ refusal EXITS non-zero, whichever mode printed it (CLI) =====");
+// The exit code is what an orchestrator reads to tell an approvable folder from one the engine declined to touch:
+// the ⛔ banner is prose a machine does not parse. A refusal writes nothing and names no task, so exiting like an
+// answer would have the run schedule sub-agents against a folder that was never cut.
+{
+  // Each refusal KIND gets its own pin, because they are indistinguishable to a caller and share the one banner.
+  for (const [kind, split, said] of [
+    ["a row claimed TWICE", DUP_SPLIT(), /is claimed 2 times/],
+    ["a row the plan does not have", BOGUS_SPLIT(), /claims a row the plan does not have/],
+  ]) {
+    const base = tmp("cli-refusal-kind");
+    const dir = path.join(base, "build-tasks");
+    const splitPath = path.join(base, "split.json");
+    fs.writeFileSync(splitPath, JSON.stringify(split, null, 2));
+    const run = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+    check(`migrate.mjs --tasks: a split refused for ${kind} exits NON-ZERO and writes nothing — the banner and the exit code are one verdict, not two`,
+      () => run.status !== 0 && /⛔ NOTHING WRITTEN/.test(run.stdout || "") && said.test(run.stdout || "")
+        && !fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 400), exists: fs.existsSync(dir) ? fs.readdirSync(dir) : null }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+{
+  // `--start` is the command the orchestrator runs before EVERY dispatch, so a refusal it exits 0 on is the most
+  // expensive one to misread: the caller hands the named task to a sub-agent while no clock was opened for it and
+  // the folder records nothing started.
+  const base = tmp("cli-start-refusal");
+  const dir = path.join(base, "build-tasks");
+  const cut = cliTasks(["--tasks", dir], MANIFEST);
+  check("start-refusal fixture (anti-vacuity): the folder is really cut and clean, so the refusals below are the id and the unreadable file rather than a missing folder",
+    () => cut.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE)),
+    () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 300) }));
+  const ghost = cliTasks(["--tasks", dir, "--start", "no-such-task-id"], MANIFEST);
+  check("migrate.mjs --start: an id the folder does not hold is refused with a NON-ZERO exit — nothing was marked started, and a caller reading that as success dispatches a sub-agent onto a task with no clock",
+    () => ghost.status !== 0 && /⛔ no task `no-such-task-id`/.test(ghost.stdout || ""),
+    () => ({ status: ghost.status, stdout: (ghost.stdout || "").slice(0, 300) }));
+  // A file the engine cannot parse is left untouched rather than rewritten, so the id it holds can never be started.
+  const victim = fs.readdirSync(dir).find((f) => f.startsWith("task-"));
+  const startId = /^id:\s*(\S+)/m.exec(fs.readFileSync(path.join(dir, victim), "utf8"))?.[1];
+  fs.writeFileSync(path.join(dir, victim), "---\nid: " + startId + "\nstatus: todo\n");
+  const unread = cliTasks(["--tasks", dir, "--start", startId], MANIFEST);
+  check("migrate.mjs --start: a task whose file cannot be read is refused with a NON-ZERO exit — the engine will not rewrite that file, so the task it names cannot be started and the run must not continue as though it were",
+    () => unread.status !== 0 && /⛔/.test(unread.stdout || "") && /could not be read/.test(unread.stdout || ""),
+    () => ({ status: unread.status, stdout: (unread.stdout || "").slice(0, 400) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // ONE folder state, read by every mode that can refuse it. A code that differs per mode makes the same folder
+  // approvable or not depending on which command happened to ask, which is the contradiction the parity closes.
+  const base = tmp("cli-refusal-parity");
+  const dir = path.join(base, "build-tasks");
+  const splitPath = path.join(base, "split.json");
+  fs.writeFileSync(splitPath, JSON.stringify(FULL_SPLIT, null, 2));
+  const cut = cliTasks(["--tasks", dir, "--split", splitPath], MANIFEST);
+  check("refusal parity (anti-vacuity): the folder is really CUT and clean first, so the three modes below refuse over a folder that exists rather than over a missing one",
+    () => cut.status === 0 && fs.existsSync(path.join(dir, TASK_INDEX_FILE)) && fs.existsSync(path.join(dir, SPLIT_FILE)),
+    () => ({ status: cut.status, stdout: (cut.stdout || "").slice(0, 300), stderr: (cut.stderr || "").slice(0, 300) }));
+  // The frozen copy is what every later run reconciles against, so replacing it with a cut that does not resolve
+  // puts the SAME refusal in front of each mode without any of them being handed a different input.
+  fs.writeFileSync(path.join(dir, SPLIT_FILE), JSON.stringify(DUP_SPLIT(), null, 2));
+  const MODES = [["--tasks", ["--tasks", dir]], ["--tasks --next", ["--tasks", dir, "--next"]],
+    ["--tasks --route", ["--tasks", dir, "--route"]]];
+  const runs = MODES.map(([label, args]) => [label, cliTasks(args, MANIFEST)]);
+  for (const [label, r] of runs) {
+    check(`migrate.mjs \`${label}\`: a folder whose frozen cut does not resolve against the plan is refused with a NON-ZERO exit — every mode that prints the banner owes the caller the same verdict the banner states`,
+      () => r.status !== 0 && /⛔/.test((r.stdout || "") + (r.stderr || "")),
+      () => ({ status: r.status, stdout: (r.stdout || "").slice(0, 400), stderr: (r.stderr || "").slice(0, 400) }));
+  }
+  check("migrate.mjs: the refusing modes answer the IDENTICAL code for one folder state — a caller must not have to remember which command it asked with to know whether the folder is approvable",
+    () => new Set(runs.map(([, r]) => r.status)).size === 1,
+    () => runs.map(([label, r]) => `${label}: ${r.status}`).join(" | "));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
 console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round =====");
 {
   const base = tmp("cli-repair");

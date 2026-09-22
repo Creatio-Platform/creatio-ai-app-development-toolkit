@@ -925,7 +925,9 @@ check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in 
   const dictLine = step8.split("\n").find((l) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(l)) || "";
   const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
   const verdictMarks = (dictLine.match(/⛔/g) || []).length;
-  const exit2Verdicts = ["VERIFY INCOMPLETE", "GATE BLOCKED", "DISPATCH GATE", "NOT BUILT", "RUN HALTED"];
+  // A REFUSAL is one of them: a mode that declines to touch the folder prints its banner and exits 2 like any
+  // other verdict, so a dictionary that left it out would send a reader looking up that banner to nothing.
+  const exit2Verdicts = ["VERIFY INCOMPLETE", "GATE BLOCKED", "DISPATCH GATE", "NOT BUILT", "RUN HALTED", "NOTHING WRITTEN"];
   check("doc lint: step 8's exit-2 dictionary states as many verdicts as it enumerates — the count and the list are two answers to one question, and a reader is free to believe either",
     () => {
       const stated = statedCounts[(/^\*\*Exit 2 is ([A-Z]+) /.exec(dictLine) || [])[1]];

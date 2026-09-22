@@ -2903,6 +2903,21 @@ let startableGateFailure = null;
 // rather than a reuse of the one above: that one carries the halted-run ANSWER its stderr banner renders, and a
 // refusal has no answer to render. It only has to make the exit code agree with the banner already on stdout.
 let nextRefusalFailure = false;
+// ⛔ `--tasks` REFUSED TO CUT — the split does not resolve against the plan, so the folder is left exactly as it
+// was. A refusal writes nothing and names no task, and the exit code is the only part of it a caller PARSES: a
+// mode that printed the banner and exited like an answer would have an orchestrator dispatch sub-agents against a
+// folder that was never cut. Its own variable, per the one-flag-per-mode shape beside it, so a run can still say
+// WHICH mode declined.
+let taskRefusalFailure = false;
+// ⛔ `--route` REFUSED TO OPEN A ROUND — the frozen cut the folder's task ids derive from does not resolve, so no
+// repair task is written. Same rule as the two above, on the one other mode that prints the banner.
+let routeRefusalFailure = false;
+// ⛔ `--START` MARKED NOTHING — every reason it refuses ends the same way: no clock was opened and the folder
+// records nothing started. It is the command an orchestrator runs before EVERY dispatch, so a refusal it exits 0
+// on is the one that costs most: the caller hands the named task to a sub-agent that has no token for it. Raised
+// for the WHOLE refusal set rather than per reason — three of them already carry a dispatch verdict, and the
+// remaining two (an unreadable file, an id the folder does not hold) carry none of their own.
+let startRefusalFailure = false;
 
 // EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
 // started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
@@ -2990,10 +3005,10 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
-  if (set.refused) return splitRefusalText(set);
+  if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
-    if (refusal) return refusal;
+    if (refusal) { startRefusalFailure = true; return refusal; }
   }
   const done = set.tasks.filter((t) => t.status === "done").length;
   const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
@@ -3242,6 +3257,7 @@ function runRouteMode(result, dir, opts) {
   catch (e) { return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`; }
   // An unreadable split writes nothing: the folder's task ids cannot be derived from it.
   if (res.refused) {
+    routeRefusalFailure = true;
     return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
       + ` ${(res.problems || []).join("; ")}. Fix or remove it, then route again.\n`;
   }
@@ -3619,7 +3635,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
-    || !!startableGateFailure || nextRefusalFailure;
+    || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
+    || startRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
