@@ -580,6 +580,21 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   // merged tasks so the verdict can distinguish "the machine has nothing left to do, the person has a debt"
   // (🟡) from "someone still has work here" (🔴).
   const postponedRows = collectPostponedRows(tasks);
+  // AC 13 — 🟡 IS GRANTED ONLY OVER DECISIONS THAT STILL RESOLVE. `collectPostponedRows` parses the cell TEXT, so
+  // it accepts a `(D<N>)` naming a decision renamed or deleted from decisions.md after the cell was written, and a
+  // cell carrying no `→ <destination>` at all. Neither is a person's answer: one points at nothing, the other names
+  // no debt to carry. They are unbacked closures and belong on `reasons`, so the verdict computes RED through the
+  // path every other shortfall already takes. Without this split a `D999` that resolved nowhere still bought 🟡,
+  // and the single-group headline below interpolated a literal `null` destination. Because an unbacked row always
+  // lands on `reasons`, `complete` implies EVERY postponed row carries a resolvable decision and a destination —
+  // which is what makes the headline's `grouped[0]` fields safe to interpolate without a guard.
+  const postponedUnbacked = postponedRows.filter((p) => !p.decision || !decisions.has(p.decision) || !p.destination);
+  if (postponedUnbacked.length) {
+    const where = postponedUnbacked.map((p) => `\`${esc(p.task.file)}\` row ${p.n}`).join(", ");
+    reasons.push(`${plural(postponedUnbacked.length, "row")} postponed without a resolvable \`D<N>\` and a destination`
+      + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
+      + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`);
+  }
   const complete = reasons.length === 0;
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
   const postponedCount = postponedRows.length;
@@ -596,7 +611,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     const grouped = postponedGroups(postponedRows);
     const headline = grouped.length === 1
       ? `${plural(postponedCount, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
-      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section${manualNote ? "" : ""}`;
+      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
     verdict = `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}`;
   } else {
     verdict = `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`;

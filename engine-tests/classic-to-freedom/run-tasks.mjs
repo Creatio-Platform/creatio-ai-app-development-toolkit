@@ -5388,31 +5388,56 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
   // (no gate blocks, no machine misses, no unbacked boundaries), so the only reason the run is not 🟢 is
   // the debt on that one row.
   {
-    const set = { planVersion: RUN.planVersion, tasks: [
+    // AC 13 requires the decision to RESOLVE, not merely to appear in the cell, so the fixture is a real
+    // migration folder: `decisions.md` beside a `build-tasks/` dir, which is the shape
+    // `readDecisions(path.join(dir, ".."))` reads. A bare `tmp()` dir would put decisions.md in the shared
+    // system temp root and resolve nothing — and 🟡 granted over a decision that resolves nowhere is exactly
+    // the defect AC 13 names.
+    const vbase = tmp("verdict-yellow");
+    const vdir = path.join(vbase, "build-tasks");
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vbase, "decisions.md"), "## D19 — defer to backlog\n");
+    const setWith = (outcome) => ({ planVersion: RUN.planVersion, tasks: [
       { id: "closed-a", file: "a.md", group: "Custom methods", pageKey: "main", status: "done",
         origin: "engine", notes: "", rows: [
           { label: "Handler — `built`", outcomeKind: "built", outcome: "built", outcomeReason: "" },
         ], dispatched: "yes", agentNonce: "tok-a" },
       { id: "postpone-b", file: "b.md", group: "Business rules", pageKey: "main", status: "partial",
         origin: "engine", notes: "", rows: [
-          { label: "Rule — `Deferred`", outcomeKind: "postponed",
-            outcome: "postponed — deferred, per decision (D19) → ENG-99999",
-            outcomeReason: "deferred, per decision (D19) → ENG-99999" },
+          { label: "Rule — `Deferred`", outcomeKind: "postponed", outcome,
+            outcomeReason: outcome.replace("postponed — ", "") },
         ], dispatched: "yes", agentNonce: "tok-b" },
-    ] };
-    const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
-      set, dir: tmp("verdict-yellow"), built: {}, repair: null });
+    ] });
+    const reportFor = (outcome) => renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: setWith(outcome), dir: vdir, built: {}, repair: null });
+    const verdictLine = (r) => r.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
+    const rep = reportFor("postponed — deferred, per decision (D19) → ENG-99999");
     check("ENG-99749 (AC 13) three-colour verdict — a postponed row with a D<N> and a destination renders 🟡 COMPLETE FOR THIS PHASE, not 🔴 or 🟢",
       () => /🟡 \*\*COMPLETE FOR THIS PHASE\*\*/.test(rep.markdown)
         && rep.verdictColour === "yellow"
         && rep.counts.postponed >= 1,
-      () => ({ colour: rep.verdictColour, postponed: rep.counts.postponed,
-        headSnippet: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+      () => ({ colour: rep.verdictColour, postponed: rep.counts.postponed, headSnippet: verdictLine(rep) }));
     check("ENG-99749 (AC 14) the report carries a row-level Carry-over section for postponed items with the decision + destination",
       () => /## Carry-over — postponed items/.test(rep.markdown)
         && /\*\*D19\*\*/.test(rep.markdown)
         && /ENG-99999/.test(rep.markdown),
       () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+    // REVIEW RC-7 — the two shapes that used to buy 🟡 and must now compute RED. Both are reachable without a
+    // hand edit: `D999` is a decision deleted or renamed in decisions.md AFTER the cell was written, and the
+    // destination-less cell is what `--to "   "` leaves behind (the CLI guard tests truthiness, so a
+    // whitespace-only value passes it and `decideCellText` then trims it away).
+    const repUnresolvable = reportFor("postponed — deferred, per decision (D999) → ENG-99999");
+    check("ENG-99749 (AC 13 / review RC-7) a postponed row whose `(D<N>)` does NOT resolve in decisions.md computes RED — a token pointing at nothing is not a person's answer, and 🟡 over it would hide a shortfall behind it",
+      () => repUnresolvable.verdictColour === "red"
+        && /⛔ \*\*NOT COMPLETE\*\*/.test(repUnresolvable.markdown)
+        && /resolvable/.test(repUnresolvable.markdown)
+        && !/COMPLETE FOR THIS PHASE/.test(verdictLine(repUnresolvable)),
+      () => ({ colour: repUnresolvable.verdictColour, headSnippet: verdictLine(repUnresolvable) }));
+    const repNoDest = reportFor("postponed — deferred, per decision (D19)");
+    check("ENG-99749 (AC 13 / review RC-7) a postponed row carrying NO destination computes RED, and the headline can never interpolate a literal `null` — AC 13 requires a destination, because a debt with nowhere to go is not a carry-over",
+      () => repNoDest.verdictColour === "red" && !/null/.test(verdictLine(repNoDest)),
+      () => ({ colour: repNoDest.verdictColour, headSnippet: verdictLine(repNoDest) }));
+    fs.rmSync(vbase, { recursive: true, force: true });
   }
 
   // ---- (M1) hand-typed wont-do/postponed cells bypass the --decide gate — the two guards -------------------
