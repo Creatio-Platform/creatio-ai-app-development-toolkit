@@ -2217,7 +2217,7 @@ export function unclaimedPlanRows(tasks, groups) {
 
 // The mechanical cut answers to the same rule as a split file, but a row it drops is a defect in the slicer
 // rather than a file anybody can correct, so it is named as one.
-function cutProblems({ unplaced, surplus }) {
+export function cutProblems({ unplaced, surplus }) {
   const say = (r) => `\`${r.pageKey}\`: ${JSON.stringify(String(r.label).slice(0, 90))}`;
   const out = unplaced.map((u) => `plan row on ${say(u)} reached no task`
     + " — the mechanical cut dropped it; nobody is scheduled to build it.");

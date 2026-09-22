@@ -19,7 +19,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, REFUSED_COVERAGE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, cutProblems, REFUSED_COVERAGE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1335,6 +1335,31 @@ check("(anti-vacuity) the REAL cut of the real plan is clean under that check �
     const { unplaced, surplus } = unclaimedPlanRows(SET.tasks, GROUPS);
     return unplaced.length === 0 && surplus.length === 0 && GROUPS.flatMap((g) => g.rows).length > 30;
   }, () => unclaimedPlanRows(SET.tasks, GROUPS));
+// The COLLAPSED cut is the shape that makes per-row keying load-bearing: the whole-run task's own `pageKey` is
+// the literal `run`, while its rows keep their source pages. Keying on the task would report every row of it as
+// unplaced and refuse a correct run outright.
+check("the same check is clean over a COLLAPSED whole-run task, whose own `pageKey` is `run` while its rows keep their source pages",
+  () => {
+    const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+    const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const { unplaced, surplus } = unclaimedPlanRows(collapsed.tasks, GROUPS);
+    return unplaced.length === 0 && surplus.length === 0
+      && whole?.pageKey === "run" && whole.rows.some((r) => r.pageKey && r.pageKey !== "run");
+  }, () => {
+    const collapsed = buildTaskSet(RUN, checklistOpts(MANIFEST));
+    return { problems: unclaimedPlanRows(collapsed.tasks, GROUPS),
+      whole: collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE)?.rows.map((r) => r.pageKey) };
+  });
+// What the engine's own cut SAYS when it finds a row on either side. The remedy is the operator's only signal
+// that no file of theirs is at fault, so it is asserted rather than assumed from the helper's return.
+check("a row the mechanical cut drops, and one it invents, each render with the row's own page and text — and neither points at a split file, which is not in play on that path",
+  () => {
+    const dropped = cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS));
+    const invented = cutProblems(unclaimedPlanRows(addOneRow(), GROUPS));
+    return dropped.length === 1 && /reached no task/.test(dropped[0]) && /the mechanical cut dropped it/.test(dropped[0])
+      && invented.length === 1 && /backed by no plan row/.test(invented[0])
+      && ![...dropped, ...invented].some((p) => /split\.json|--split/.test(p));
+  }, () => [...cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS)), ...cutProblems(unclaimedPlanRows(addOneRow(), GROUPS))]);
 
 console.log("\n===== a review waits for the page it judges, and may not precede a writer of it =====");
 // A late scaffolding item is legitimate; a review before a writer of its page never is — it would file a verdict
@@ -2427,12 +2452,19 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
   fs.writeFileSync(splitD, JSON.stringify(FULL_SPLIT, null, 2));
   cliTasks(["--tasks", dirD, "--split", splitD], MANIFEST);        // built against plan A
   const drift = cliTasks(["--tasks", dirD], MANIFEST5);            // plan B gained handler rows
+  const driftRoute = cliTasks(["--tasks", dirD, "--route"], MANIFEST5);
   check("migrate.mjs: a frozen split met by a plan that GAINED rows names THAT as the cause and offers both remedies — 'could not be read' would send the operator to fix a file whose syntax is fine",
     () => /NOTHING WRITTEN/.test(drift.stdout || "") && /no longer covers this plan/.test(drift.stdout || "")
       && !/could not be read/.test(drift.stdout || "")
       && /Place the named rows/.test(drift.stdout || "")
       && /delete `?split\.json`? to fall back/.test(drift.stdout || ""),
     () => drift.stdout);
+  check("--route names the SAME cause and remedy for that folder — a repair round reads the cut the build leg reads, so one state cannot be a coverage shortfall on one command and an unreadable file on the other",
+    () => /NO REPAIR TASKS WRITTEN/.test(driftRoute.stdout || "")
+      && /no longer covers this plan/.test(driftRoute.stdout || "")
+      && !/could not be read/.test(driftRoute.stdout || "")
+      && /Place the named rows/.test(driftRoute.stdout || ""),
+    () => driftRoute.stdout);
   fs.rmSync(baseD, { recursive: true, force: true });
   // A split cut against a DIFFERENT plan version.
   const base3 = tmp("cli-split-ver");
