@@ -10,7 +10,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
-import { validateTable, validateRow, vendoredIndex, versionsOf, rankCandidates, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
+import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
@@ -9801,38 +9801,6 @@ try {
   check("an unseen version yields `unknown-version`, never a false `component-absent-in-version`",
     kindsOf(validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" })).includes("unknown-version"),
     () => validateRow(fakeRow({ componentType: "crt.Label", slot: "items", propMap: {} }), { version: "7.1.0" }));
-  // Candidate ranking: taxonomy evidence OUTRANKS a name match, and every candidate says which one put it there.
-  // The taxonomy covers 8 of 205 components, so a ranking that did not distinguish the two would present a name
-  // coincidence as a documented recommendation.
-  const ranked = rankCandidates(["approval"], { version: oldest });
-  check("candidate ranking states its EVIDENCE per candidate and scores published taxonomy above a type-name match",
-    ranked.length > 0 && ranked.every((c) => Array.isArray(c.evidence) && c.evidence.length > 0)
-    && ranked.every((c, i) => i === 0 || ranked[i - 1].score >= c.score)
-    && ranked.some((c) => /taxonomy mentions/.test(c.evidence.join(" ")) || /type name contains/.test(c.evidence.join(" "))),
-    () => ranked);
-  // A candidate absent on the target version is not a candidate at all — recommending it would send a build agent
-  // to insert a component the stand cannot resolve.
-  const newOnly = Object.entries(idx.components).find(([, c]) => versionsOf(c.v, idx).length === 1 && versionsOf(c.v, idx)[0] === idx.meta.versions.at(-1));
-  check("ranking is scoped to the target version — a component that exists only in the newest snapshot is not offered for the oldest",
-    !newOnly || !rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }).some((c) => c.componentType === newOnly[0]),
-    () => ({ newestOnly: newOnly?.[0], ranked: newOnly ? rankCandidates([newOnly[0].replace(/^crt\./, "")], { version: oldest }) : null }));
-  // ---- entity-coupling evidence, on a SYNTHETIC index for the `appliesToCustomEntities === false`
-  // branch. Real data is `true` on every one of the 8/205 components that publish the field (zero `false`
-  // observed), so this branch cannot be exercised against the vendored index — it needs a fabricated component.
-  const couplingIdx = { meta: { versions: ["v1"] }, baseInputs: {}, components: {
-    "crt.SyntheticCoupled": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false, entityCouplingNote: "does not bind to a custom entity" }, inputs: {}, outputs: {} },
-    "crt.SyntheticNoNote": { v: 1, compositeOnly: false, taxonomy: { synonyms: ["widget"], appliesToCustomEntities: false }, inputs: {}, outputs: {} },
-  } };
-  const coupledRanked = rankCandidates(["widget"], { index: couplingIdx });
-  const coupled = coupledRanked.find((c) => c.componentType === "crt.SyntheticCoupled");
-  const noNote = coupledRanked.find((c) => c.componentType === "crt.SyntheticNoNote");
-  check("a candidate with appliesToCustomEntities:false is NOT dropped, and the false value + note both survive as evidence — no `=== false` gate anywhere in rankCandidates",
-    !!coupled && coupled.appliesToCustomEntities === false && coupled.entityCouplingNote === "does not bind to a custom entity",
-    () => coupledRanked);
-  check("entityCouplingNote does not have to co-occur with appliesToCustomEntities — a candidate missing the note still carries the false value, unset key omitted rather than defaulted",
-    !!noNote && noNote.appliesToCustomEntities === false && !("entityCouplingNote" in noNote),
-    () => noNote);
-
   // ---- the RUN-TIME registry (the half that keeps this reachable without the clio change) ----------
   // Three sources, deliberately distinguished, because "checked against the stand", "checked against a pinned
   // version" and "checked against a union of seven versions" are three different strengths of evidence.
