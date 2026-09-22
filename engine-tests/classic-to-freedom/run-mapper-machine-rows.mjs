@@ -226,32 +226,32 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => st(r1) === "✅ Done" && st(r2) === "✅ Done" && cachedAfterFirst,
       () => [r1, r2, cachedAfterFirst]);
   }
-  // ENG-99126 F14a (Applicants live run): a virtual attribute whose element is named EXACTLY as the attribute —
-  // bare, no `Field` suffix, and NOT the bound column (`StaffUnit` bound `$PDS_RequestStaffUnit_<hash>`) — must close.
+  // A virtual attribute whose element is named EXACTLY as the attribute — bare, no `Field` suffix, and NOT the
+  // bound column (`StaffUnit` bound `$PDS_RequestStaffUnit_<hash>`) — still closes.
   {
     const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
       { type: "crt.ComboBox", name: "StaffUnit", control: "$PDS_RequestStaffUnit_ab12cd" }] }, viewModelConfig: { attributes: { Other: {} } } }) } }, "main");
     const r = resolveVk({ type: "vmattr", name: "StaffUnit" }, c);
-    check("ENG-99126 F14a vmattr: an element named EXACTLY the attribute (bare `StaffUnit`, bound `$PDS_RequestStaffUnit_<hash>`) closes ✅ — the fallback matches the bare name, not only `<Name>Field` / the bound column",
+    check("vmattr: an element named EXACTLY the attribute (bare `StaffUnit`, bound `$PDS_RequestStaffUnit_<hash>`) closes ✅ — the fallback matches the bare name, not only `<Name>Field` / the bound column",
       () => st(r) === "✅ Done", () => r);
   }
-  // ENG-99126 F15 (Applicants live run): a native control built as a `crt.MenuItem` under a NON-`items` array
-  // (`menuItems` / a button menu) must be SEEN — walkViewConfig recurses every nested child, not only `items`.
+  // A native control built as a `crt.MenuItem` under a NON-`items` array (`menuItems` / a button menu) is seen:
+  // walkViewConfig recurses every nested child, not only `items`.
   {
     const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
       { type: "crt.Button", name: "CardActionsButton", menuItems: [{ type: "crt.MenuItem", name: "ReloadDataMenuItem" }] }] } }) } }, "main");
     const r = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
-    check("ENG-99126 F15 cardnative: a `ReloadDataMenuItem` built under `menuItems` (not `items`) is found — walkViewConfig walks every child array, so a built menu control no longer reads missing",
+    check("cardnative: a `ReloadDataMenuItem` built under `menuItems` (not `items`) is found — walkViewConfig walks every child array, so a built menu control is not reported missing",
       () => st(r) === "✅ Done", () => r);
   }
-  // ENG-99126 F16 (Applicants live run): crt.PhoneInput and crt.EmailInput count as fields (the plan's
-  // "↳ linked (read-only)" MobilePhone/Email recipe) — a side profile of exactly those two reads 2/2, not 0/2.
+  // crt.PhoneInput and crt.EmailInput are field types (the plan's "↳ linked (read-only)" MobilePhone/Email recipe):
+  // a side profile of exactly those two reads 2 fields.
   {
     const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
       { type: "crt.FlexContainer", name: "SideContainer", items: [
         { type: "crt.PhoneInput", name: "MobilePhone" }, { type: "crt.EmailInput", name: "Email" }] }] } }) } }, "main");
     const r = resolveVk({ type: "layout", region: "side", fields: 2, lists: 0, widgets: [] }, c);
-    check("ENG-99126 F16 fields: crt.PhoneInput / crt.EmailInput are field types — a side profile holding exactly those two resolves 2 fields ✅, not an under-count",
+    check("fields: crt.PhoneInput / crt.EmailInput are field types — a side profile holding exactly those two resolves 2 fields ✅, not an under-count",
       () => st(r) === "✅ Done" && /2 fields/.test(ev(r)), () => r);
   }
 }

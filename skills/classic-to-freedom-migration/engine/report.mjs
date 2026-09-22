@@ -95,10 +95,9 @@ function readDecisions(migrationDir) {
   const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
     const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    // The three shapes `references/migration-documentation.md` sanctions, in priority per line (F13 — the parser
-    // used to accept only the heading, so a decision written as a table row or a plain dated line read as "not
-    // found" and its boundary was wrongly reported unbacked): a markdown HEADING (`## D1 — …`), a TABLE ROW
-    // (`| D1 | **title** | … |`, the shape the doc's own example uses), or a plain LINE (`D1 — …` / `D1: …`).
+    // Three shapes `references/migration-documentation.md` sanctions, tried in priority per line: a markdown
+    // HEADING (`## D1 — …`), a TABLE ROW (`| D1 | **title** | … |`, the shape the doc's own example uses), or a
+    // plain LINE (`D1 — …` / `D1: …`). A decision in any of them is resolvable, so a boundary citing it is backed.
     for (const dl of text.split(/\r?\n/)) {
       let m = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl)             // heading
         || /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl)          // table row — second cell is the title (linear: [^|] can't cross the cell)

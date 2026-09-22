@@ -4825,9 +4825,9 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
-  // ENG-99126 F13 (Applicants live run): decisions.md is written as a TABLE (`| D1 | **title** | … |`) or a plain
-  // dated line, per references/migration-documentation.md — not only as a heading. The parser used to accept only
-  // the heading, so a real recorded decision (D1) read "not found" and its boundary was wrongly reported unbacked.
+  // decisions.md may be written as a TABLE (`| D1 | **title** | … |`) or a plain dated line, per
+  // references/migration-documentation.md, not only as a heading; a decision in any of those shapes is resolvable,
+  // so a boundary citing it is backed.
   {
     const baseT = tmp("result-report-grammar-table"); fs.mkdirSync(baseT, { recursive: true });
     fs.writeFileSync(path.join(baseT, "decisions.md"),
@@ -4836,7 +4836,7 @@ console.log("\n===== the migration result report — one artifact, computed from
     const bndT = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
       rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repT = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndT("t1", "D1"), bndT("t2", "D2"), bndT("t3", "D3")] }, dir: dT });
-    check("ENG-99126 F13 (readDecisions formats): a TABLE row `| D1 | **title** | … |` and a plain line `D3 — …` both parse (not only headings), so boundaries citing D1/D2/D3 are backed (0 unbacked) and the title is the bold lead / line text, not the whole cell",
+    check("readDecisions formats: a TABLE row `| D1 | **title** | … |` and a plain line `D3 — …` parse alongside headings, so boundaries citing D1/D2/D3 are backed (0 unbacked) and the title is the bold lead / line text, not the whole cell",
       () => repT.counts.unbackedBoundaries === 0
         && /\*\*D1\*\* — Section boundary — Requests stay Classic/.test(repT.markdown)
         && /\*\*D2\*\* — Section host — new app/.test(repT.markdown)
