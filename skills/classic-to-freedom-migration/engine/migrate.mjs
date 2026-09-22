@@ -3376,6 +3376,32 @@ function decidePrintProblems(prefix, problems, addHelp) {
   if (addHelp) lines.push(...addHelp);
   return lines.join("\n") + "\n";
 }
+// The one refusal that can be acted on without reading the code: the decision does not resolve yet, so the
+// message has to name the file to add it to and the two shapes that count as a heading there.
+function decideRefusalHelp(res, opts, migrationDir) {
+  if (!res.problems.some((p) => /does not resolve in decisions\.md/.test(p))) return [];
+  return ["", "  add it to `" + path.join(migrationDir, "decisions.md") + "` as a heading (`## " + opts.decision
+    + " — <title>`), or under the plan's `### Adjustments` as `N. **<title>**`, then re-run."];
+}
+// Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
+// addressed by task or by row, so reading its length up front throws on the two commonest forms.
+function decideTargetLabel(opts) {
+  if (opts.rowRef) return `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`;
+  if (opts.taskId) return `task ${opts.taskId}`;
+  return `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
+}
+const decidedRowLine = (x) => `  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`;
+function decideTouchedLines(res, opts) {
+  const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${decideTargetLabel(opts)}.`];
+  if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
+  lines.push(...res.touched.map(decidedRowLine));
+  if (res.cascaded?.length) {
+    lines.push("", `Cascaded into ${res.cascaded.length} matching row(s) across other tasks (repair tasks whose deliverable was the same row):`,
+      ...res.cascaded.map(decidedRowLine));
+  }
+  lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
+  return lines;
+}
 function runDecideMode(result, dir, opts) {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
   // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
@@ -3384,33 +3410,17 @@ function runDecideMode(result, dir, opts) {
   const decisions = readDecisions(migrationDir);
   const res = applyDecision(dir, result, { ...opts, decisions });
   if (res.refused) {
-    const help = res.problems.some((p) => /does not resolve in decisions\.md/.test(p))
-      ? ["", "  add it to `" + path.join(migrationDir, "decisions.md") + "` as a heading (`## " + opts.decision
-          + " — <title>`), or under the plan's `### Adjustments` as `N. **<title>**`, then re-run."]
-      : [];
-    return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems, help), ok: false };
+    return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
+      decideRefusalHelp(res, opts, migrationDir)), ok: false };
   }
-  // Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
-  // addressed by task or by row, so reading its length up front throws on the two commonest forms.
-  let target;
-  if (opts.rowRef) target = `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`;
-  else if (opts.taskId) target = `task ${opts.taskId}`;
-  else target = `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
-  const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${target}.`];
-  if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
-  for (const t of res.touched) lines.push(`  · ${t.task.file} row ${t.n} — ${t.task.rows[t.n - 1].label}`);
-  if (res.cascaded?.length) {
-    lines.push("", `Cascaded into ${res.cascaded.length} matching row(s) across other tasks (repair tasks whose deliverable was the same row):`);
-    for (const c of res.cascaded) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
-  }
-  for (const s of res.skipped) lines.push(`  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  const lines = decideTouchedLines(res, opts);
   // A cell the in-place writer could not place is reported as a FAILURE, not folded into the success line. Its
   // `decisions:` entry was dropped with it, so the folder is consistent — but the decision did not fully land
   // and the person has to look at the body before re-running.
   if (res.unplaced?.length) {
     lines.push("", `⛔ ${res.unplaced.length} row(s) could NOT be written — their \`## Deliverables\` row was not found`
-      + " or the rewritten cell did not read back. Nothing was recorded for them; fix the body and re-run:");
-    for (const u of res.unplaced) lines.push(`  · ${u.task.file} row ${u.n}`);
+      + " or the rewritten cell did not read back. Nothing was recorded for them; fix the body and re-run:",
+      ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
   lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");

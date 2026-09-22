@@ -3258,32 +3258,35 @@ function findTaskByHandle(tasks, handle) {
   return tasks.find((t) => t.id === bare || t.file === bare + ".md" || t.file === bare);
 }
 
+function decideRowTarget(tasks, rowRef) {
+  const t = findTaskByHandle(tasks, rowRef.taskId);
+  if (!t) return { problems: [`no task with id or file '${rowRef.taskId}' in the folder`], targets: [] };
+  if (t.unread) return { problems: [`task '${rowRef.taskId}' could not be read — its body is malformed; --decide cannot address a row it cannot count`], targets: [] };
+  const n = Number(rowRef.n);
+  if (!Number.isFinite(n) || n < 1 || n > (t.rows || []).length) {
+    return { problems: [`row ${rowRef.n} out of range for task '${t.id}' (1..${(t.rows || []).length})`], targets: [] };
+  }
+  return { targets: [{ task: t, rowIndices: [n - 1] }] };
+}
+function decideTaskTarget(tasks, taskId) {
+  const t = findTaskByHandle(tasks, taskId);
+  if (!t) return { problems: [`no task with id or file '${taskId}' in the folder`], targets: [] };
+  if (!(t.rows || []).length) return { problems: [`task '${taskId}' has no readable rows to decide over`], targets: [] };
+  return { targets: [{ task: t, rowIndices: t.rows.map((_, i) => i) }] };
+}
+function decidePagesTargets(tasks, pages) {
+  const pageSet = new Set(pages);
+  const targets = tasks
+    .filter((t) => !t.unread && pageSet.has(t.pageKey) && (t.rows || []).length)
+    .map((t) => ({ task: t, rowIndices: t.rows.map((_, i) => i) }));
+  if (!targets.length) return { problems: [`no tasks with pageKey in {${pages.join(", ")}} in the folder`], targets: [] };
+  return { targets };
+}
 function pickDecideTargets(tasks, opts) {
   const { pages, taskId, rowRef } = opts;
-  if (rowRef) {
-    const t = findTaskByHandle(tasks, rowRef.taskId);
-    if (!t) return { problems: [`no task with id or file '${rowRef.taskId}' in the folder`], targets: [] };
-    if (t.unread) return { problems: [`task '${rowRef.taskId}' could not be read — its body is malformed; --decide cannot address a row it cannot count`], targets: [] };
-    const n = Number(rowRef.n);
-    if (!Number.isFinite(n) || n < 1 || n > (t.rows || []).length) {
-      return { problems: [`row ${rowRef.n} out of range for task '${t.id}' (1..${(t.rows || []).length})`], targets: [] };
-    }
-    return { targets: [{ task: t, rowIndices: [n - 1] }] };
-  }
-  if (taskId) {
-    const t = findTaskByHandle(tasks, taskId);
-    if (!t) return { problems: [`no task with id or file '${taskId}' in the folder`], targets: [] };
-    if (!(t.rows || []).length) return { problems: [`task '${taskId}' has no readable rows to decide over`], targets: [] };
-    return { targets: [{ task: t, rowIndices: t.rows.map((_, i) => i) }] };
-  }
-  if (pages?.length) {
-    const pageSet = new Set(pages);
-    const targets = tasks
-      .filter((t) => !t.unread && pageSet.has(t.pageKey) && (t.rows || []).length)
-      .map((t) => ({ task: t, rowIndices: t.rows.map((_, i) => i) }));
-    if (!targets.length) return { problems: [`no tasks with pageKey in {${pages.join(", ")}} in the folder`], targets: [] };
-    return { targets };
-  }
+  if (rowRef) return decideRowTarget(tasks, rowRef);
+  if (taskId) return decideTaskTarget(tasks, taskId);
+  if (pages?.length) return decidePagesTargets(tasks, pages);
   return { problems: ["--decide needs one of --pages, --task or --row to address rows"], targets: [] };
 }
 
@@ -3311,16 +3314,76 @@ function decideCellText({ mode, decision, title, destination }) {
 // Writes NOTHING when a target row is `built` — the row is already on the stand, and closing a built row as
 // wont-do is a lie about it. A plan-boundary row's own pre-fill (`not-applicable — <plan reason>`) is left
 // alone too: a person's decision does not overturn the plan's own fact.
-export function applyDecision(dir, result, opts = {}) {
-  const { decision, mode, destination, decisions } = opts;
-  if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--decide needs a D<N> (got '${decision || "(none)"}')`] };
-  if (mode !== "wont-do" && mode !== "postponed") return { refused: true, problems: [`--decide needs --wont-do or --postponed (got '${mode || "(none)"}')`] };
+// Everything `--decide` refuses over BEFORE it touches the folder. The last one is the safeguard: a decision
+// the engine cannot resolve is not a decision, and minting one is exactly what the mode exists to prevent.
+function decideGuardProblems({ decision, mode, destination, decisions }) {
+  if (!decision || !/^D\d+$/.test(decision)) return [`--decide needs a D<N> (got '${decision || "(none)"}')`];
+  if (mode !== "wont-do" && mode !== "postponed") return [`--decide needs --wont-do or --postponed (got '${mode || "(none)"}')`];
   if (mode === "postponed" && !String(destination || "").trim()) {
-    return { refused: true, problems: ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"] };
+    return ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"];
   }
   if (!decisions?.has?.(decision)) {
-    return { refused: true, problems: [`decision '${decision}' does not resolve in decisions.md or the plan's ### Adjustments — nothing was written. Add it there first (a heading '## ${decision} — <title>' in decisions.md, or a numbered item under Adjustments), then re-run.`] };
+    return [`decision '${decision}' does not resolve in decisions.md or the plan's ### Adjustments — nothing was written. Add it there first (a heading '## ${decision} — <title>' in decisions.md, or a numbered item under Adjustments), then re-run.`];
   }
+  return null;
+}
+// THE KEY IS THE ROW'S OWN PAGE PLUS AN OCCURRENCE-AWARE LABEL KEY, not the TASK's page and a label-only hash.
+// Rows carry their own page (`pageKey: r.pageKey || pageKey` when a chunk is built) because a collapsed
+// whole-run task has `pageKey: "run"` and merges rows from several pages, so keying on the task's page would
+// put its rows under `run <label>` where the repair task of the page they belong to can never meet them;
+// `report.mjs` and `decidedRowKeys` key on the row's own page for the same reason. And `coverKey` hashes the
+// label ALONE, while `rowKeys` disambiguates repeats with `::n`, because one task routinely carries the same
+// deliverable text twice — without the suffix `--decide --row T:3` reaches row 7 of T whenever both share a
+// label, which AC 5 forbids.
+const cascadeKeysOf = (cache) => (task) => {
+  let ks = cache.get(task);
+  if (!ks) {
+    const rk = rowKeys((task.rows || []).map((r) => r.label));
+    ks = (task.rows || []).map((r, i) => `${r.pageKey || task.pageKey} ${rk[i]}`);
+    cache.set(task, ks);
+  }
+  return ks;
+};
+// The SAME outcome into every row whose deliverable came from a row this decision closed, so a repair task
+// covering the source row picks up the closure and its status recomputes on its own next read.
+//
+// The occurrence suffix is per-task, so deciding the SECOND of two identically-labelled rows does not match a
+// repair row that lists that deliverable once. That under-match is deliberate: a repair row left open is
+// visible and recoverable, while closing a row nobody decided writes off debt behind the person's back.
+function cascadeDecision(merged, touched, writeCell) {
+  const keysOf = cascadeKeysOf(new Map());
+  const touchedKeys = new Set(touched.map((t) => keysOf(t.task)[t.n - 1]));
+  const cascaded = [];
+  for (const t of merged.tasks) {
+    if (t.unread) continue;
+    const keys = keysOf(t);
+    for (let i = 0; i < (t.rows || []).length; i++) {
+      if (!touchedKeys.has(keys[i])) continue;
+      // Do not re-hit a source row we already touched: `touched` names it by (task, n).
+      if (touched.some((x) => x.task === t && x.n === i + 1)) continue;
+      if (writeCell(t, i)) cascaded.push({ task: t, n: i + 1 });
+    }
+  }
+  return cascaded;
+}
+// `computeStatus` reads its `outcomes` from a map, so for tasks written in memory the map is rebuilt from
+// `t.rows` and the newly-filled cells drive the derivation. A plan task would compute again on the next read,
+// but the in-memory `t.status` is what `persistTaskSet` writes into the front matter here.
+function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, editedOf = (t) => !!t.statusEdited) {
+  for (const t of tasks) {
+    const keys = rowKeys(t.rows.map((r) => r.label));
+    const outcomes = new Map();
+    t.rows.forEach((r, i) => {
+      const parsed = parseOutcome(r.outcome || "");
+      if (parsed) outcomes.set(keys[i], parsed);
+    });
+    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, carriedOf(t), editedOf(t));
+  }
+}
+export function applyDecision(dir, result, opts = {}) {
+  const { decision, mode, destination, decisions } = opts;
+  const guard = decideGuardProblems(opts);
+  if (guard) return { refused: true, problems: guard };
   const fresh = taskSetFor(dir, result, opts, opts.split || null);
   if (fresh.refused) return { refused: true, problems: fresh.problems || ["the task folder could not be sliced"] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
@@ -3335,7 +3398,6 @@ export function applyDecision(dir, result, opts = {}) {
     : `${title || ""} (${decision})`.trim();
 
   const touched = [];
-  const cascaded = [];
   const skipped = [];
   const writeCell = (task, idx) => {
     const row = task.rows[idx];
@@ -3371,60 +3433,8 @@ export function applyDecision(dir, result, opts = {}) {
   }
   if (!touched.length) return { refused: true, problems: ["--decide touched no rows (every addressed row was already built or is a plan boundary)"], skipped };
 
-  // ---8<--- CASCADE (point 4): the SAME outcome into every row whose deliverable came from a row
-  // this decision closed, so a repair task covering the source row picks up the closure and its status
-  // recomputes on its own next read. The source task itself is not double-touched (it is already in `touched`).
-  //
-  // THE KEY IS THE ROW'S OWN PAGE PLUS AN OCCURRENCE-AWARE LABEL KEY, not the TASK's page and a label-only
-  // hash. Two identity errors followed from the latter. (1) Rows carry their own page (`pageKey: r.pageKey ||
-  // pageKey` when a chunk is built) because a collapsed whole-run task has `pageKey: "run"` and merges rows
-  // from several pages — so its rows keyed as `run <label>` and never met the repair task of the page they
-  // actually belong to, and the AC 9 closure silently did not happen. `report.mjs` and `decidedRowKeys` both
-  // key on the row's own page for exactly this reason. (2) `coverKey` hashes the label ALONE,
-  // while `rowKeys` disambiguates repeats with `::n` precisely because one task routinely carries the same
-  // deliverable text twice — so `--decide --row T:3` also wrote row 7 of T when both shared a label, which is
-  // what AC 5 forbids.
-  //
-  // The occurrence suffix is per-task, so deciding the SECOND of two identically-labelled rows does not
-  // matches a repair row that lists that deliverable once. That under-match is deliberate: a repair row left
-  // open is visible and recoverable, while closing a row nobody decided writes off debt behind the person's
-  // back — the failure this ticket exists to remove.
-  const cascadeKeyCache = new Map();
-  const cascadeKeysOf = (task) => {
-    let ks = cascadeKeyCache.get(task);
-    if (!ks) {
-      const rk = rowKeys((task.rows || []).map((r) => r.label));
-      ks = (task.rows || []).map((r, i) => `${r.pageKey || task.pageKey} ${rk[i]}`);
-      cascadeKeyCache.set(task, ks);
-    }
-    return ks;
-  };
-  const touchedKeys = new Set(touched.map((t) => cascadeKeysOf(t.task)[t.n - 1]));
-  for (const t of merged.tasks) {
-    if (t.unread) continue;
-    const keys = cascadeKeysOf(t);
-    for (let i = 0; i < (t.rows || []).length; i++) {
-      if (!touchedKeys.has(keys[i])) continue;
-      // Do not re-hit a source row we already touched: `touched` names it by (task, n).
-      if (touched.some((x) => x.task === t && x.n === i + 1)) continue;
-      if (writeCell(t, i)) cascaded.push({ task: t, n: i + 1 });
-    }
-  }
-
-  // Recompute the status of every task the cascade touched. computeStatus reads its `outcomes` from a map;
-  // for tasks written in memory rebuild the map from `t.rows` so the newly-filled cells drive the derivation.
-  // Plan tasks would compute again on the next read too, but the in-memory `t.status` is what persistTaskSet
-  // writes into the front matter here.
-  const touchedTasks = new Set([...touched, ...cascaded].map((x) => x.task));
-  for (const t of touchedTasks) {
-    const keys = rowKeys(t.rows.map((r) => r.label));
-    const outcomes = new Map();
-    t.rows.forEach((r, i) => {
-      const parsed = parseOutcome(r.outcome || "");
-      if (parsed) outcomes.set(keys[i], parsed);
-    });
-    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, t.status || S_TODO, !!t.statusEdited);
-  }
+  const cascaded = cascadeDecision(merged, touched, writeCell);
+  recomputeDecidedStatuses(new Set([...touched, ...cascaded].map((x) => x.task)));
 
   fs.mkdirSync(dir, { recursive: true });
   attachDispatch(merged, dir);
@@ -3445,6 +3455,49 @@ export function applyDecision(dir, result, opts = {}) {
 // A repair task closed by CASCADE keeps its closure (the next `--verify` round measures the page as it then
 // stands and re-opens what still needs work). This mirrors the ticket's note: "repair tasks closed by the
 // cascade are NOT revived, because the next --verify round measures the page as it then stands."
+// CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER, and `carryOver` copies the map
+// verbatim onto rows re-sliced from the CURRENT plan while re-attaching every other mark by LABEL. So the
+// moment the plan inserts or drops a row above this one, `n` addresses a different deliverable — and blanking
+// it unconditionally destroys whatever now sits there, including an agent's own `built` record, the one mark
+// this codebase cannot recover. Position keying is the scheme `rowKeys` exists to avoid; until the map itself
+// is label-keyed, the cell must prove it is the one this decision wrote before it is touched.
+function revokeSkipReason(row, decision) {
+  if (!row) return "that row no longer exists in this task";
+  const decided = row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED;
+  if (decided && String(row.outcome || "").includes(`(${decision})`)) return null;
+  return `its Outcome cell reads \`${row.outcomeKind || "blank"}\` and does not carry (${decision}) — the map entry no longer matches the cell`;
+}
+function clearDecidedCell(t, idx) {
+  const row = t.rows[idx];
+  row.outcome = "";
+  row.outcomeKind = null;
+  row.outcomeCause = null;
+  row.outcomeReason = "";
+  row.naNoReason = false;
+  // Adopted-body row lands through persistTaskSet's in-place writer via `dirtyRows`.
+  if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
+    t.dirtyRows = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+    t.dirtyRows.add(idx);
+  }
+}
+function revokeInTask(t, decision, cleared, skipped) {
+  const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+  if (!map?.size) return;
+  let changed = false;
+  // A SNAPSHOT, because the loop deletes from `map` as it clears cells.
+  const entries = [...map.entries()];
+  for (const [n, d] of entries) {
+    if (d !== decision) continue;
+    const idx = n - 1;
+    const why = revokeSkipReason(t.rows?.[idx], decision);
+    if (why) { skipped.push({ task: t, n, why }); continue; }
+    clearDecidedCell(t, idx);
+    map.delete(n);
+    cleared.push({ task: t, n });
+    changed = true;
+  }
+  if (changed) t.decisions = map;
+}
 export function revokeDecision(dir, result, opts = {}) {
   const { decision } = opts;
   if (!decision || !/^D\d+$/.test(decision)) return { refused: true, problems: [`--revoke needs a D<N> (got '${decision || "(none)"}')`] };
@@ -3454,64 +3507,13 @@ export function revokeDecision(dir, result, opts = {}) {
 
   const cleared = [];
   const skipped = [];
-  for (const t of merged.tasks) {
-    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
-    if (!map?.size) continue;
-    let changed = false;
-    // A SNAPSHOT, because the loop deletes from `map` as it clears cells.
-    const entries = [...map.entries()];
-    for (const [n, d] of entries) {
-      if (d !== decision) continue;
-      const idx = n - 1;
-      const row = t.rows?.[idx];
-      // CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER, and `carryOver` copies the map
-      // verbatim onto rows re-sliced from the CURRENT plan while re-attaching every other mark by LABEL. So the
-      // moment the plan inserts or drops a row above this one, `n` addresses a different deliverable — and
-      // blanking it unconditionally destroys whatever now sits there, including an agent's own `built` record,
-      // the one mark this codebase cannot recover. Position keying is the scheme `rowKeys` exists to avoid
-      // ("position keying would detach a mark as soon as a row is inserted above it"); until the map itself is
-      // label-keyed, the cell must prove it is the one this decision wrote before it is touched.
-      const decided = row && (row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED);
-      if (!decided || !String(row.outcome || "").includes(`(${decision})`)) {
-        skipped.push({ task: t, n, why: row
-          ? `its Outcome cell reads \`${row.outcomeKind || "blank"}\` and does not carry (${decision}) — the map entry no longer matches the cell`
-          : "that row no longer exists in this task" });
-        continue;
-      }
-      row.outcome = "";
-      row.outcomeKind = null;
-      row.outcomeCause = null;
-      row.outcomeReason = "";
-      row.naNoReason = false;
-      map.delete(n);
-      cleared.push({ task: t, n });
-      changed = true;
-      // Adopted-body row lands through persistTaskSet's in-place writer via `dirtyRows`.
-      if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-        t.dirtyRows = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
-        t.dirtyRows.add(idx);
-      }
-    }
-    if (changed) t.decisions = map;
-  }
+  for (const t of merged.tasks) revokeInTask(t, decision, cleared, skipped);
   if (!cleared.length) return { refused: false, decision, cleared: [], skipped, set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
 
-  // Recompute the status of every task the revoke touched. Rows that were closed by decision are now
-  // blank, so a task that read `wont-do` / `not-applicable` / `partial` re-enters the verification list.
-  // The recompute carries the lifecycle word as the previous one (not the pre-revoke closure) — treating the file
-  // as freshly-opened is what makes the run see the rows as work to do again; leaving the carried word as
-  // `wont-do` would compute back to `wont-do` under the "all blank + already closed" branch and the
-  // revoke would look like it did nothing.
-  const touchedTasks = new Set(cleared.map((c) => c.task));
-  for (const t of touchedTasks) {
-    const keys = rowKeys(t.rows.map((r) => r.label));
-    const outcomes = new Map();
-    t.rows.forEach((r, i) => {
-      const parsed = parseOutcome(r.outcome || "");
-      if (parsed) outcomes.set(keys[i], parsed);
-    });
-    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, S_TODO, false);
-  }
+  // The recompute carries the lifecycle word as the previous one, not the pre-revoke closure: treating the file
+  // as freshly-opened is what makes the run see the rows as work to do again, where a carried `wont-do` would
+  // compute back to `wont-do` under the "all blank + already closed" branch and the revoke would look inert.
+  recomputeDecidedStatuses(new Set(cleared.map((c) => c.task)), () => S_TODO, () => false);
 
   fs.mkdirSync(dir, { recursive: true });
   attachDispatch(merged, dir);
