@@ -483,9 +483,12 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    next `--start` refuses and opens no clock, a plain `--tasks` exits 2, and so does `--verify --tasks`. The
    message names every such file and the `--start` that re-opens it. Re-open each one (clear its `Outcome` cells,
    then `status: todo`), start it,
-   and hand it to its own sub-agent — the whole set, because `--start` refuses while any of it stands. `n/a` is
-   the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it that: an `n/a` with
-   nothing written there fails too.
+   and hand it to its own sub-agent — the whole set, because `--start` refuses while any of it stands.
+   `not-applicable` is the one closure that needs no sub-agent, and the REASON under `## Notes` is what earns it
+   that: one with nothing written there fails too. It is the PLAN's own boundary, never yours to declare — a
+   scope decision ("we will not build this", "not this phase") is the developer's, and it reaches the folder only
+   through `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed`, which refuses unless `D<N>` already
+   resolves as a heading in `decisions.md`. Never hand-edit a task file to close it.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
@@ -662,7 +665,7 @@ Report what passed, what could not run, and what stays risky (missing runtime, p
 statuses are how the step-7 orchestrator schedules work and how a killed session resumes; they are recorded by the
 sub-agents that did the work, so a run closed on them alone would be arithmetic over self-assertion. The `--verify`
 table reads only the built pages, so a run closed on IT alone never sees what a build agent recorded as NOT BUILT
-(a handler that needs a decision, a row closed `n-a` on the agent's own say-so) or which tasks never closed. A
+(a handler that needs a decision, a row closed `not-applicable` on the agent's own say-so) or which tasks never closed. A
 real run ended exactly there: the table said "2 machine row(s) not confirmed", the ledger held 5 open tasks, 3
 partial and three handlers recorded not built, and the table was what the user was shown.
 
@@ -674,7 +677,7 @@ With `--tasks` the engine writes ONE report computed from the task ledger AND th
 the plan the user approved (a *plan item*, a page named by its Freedom schema) — verdict first (`✅ COMPLETE` /
 `⛔ NOT COMPLETE — <every reason>`), then a summary, then in the order a person acts on them: **1.** plan items
 recorded not built that still need a decision — each with the `Decision needed (row N)` line the build agent wrote,
-**2.** boundaries the agent closed `n-a` — those citing a recorded decision (`D<N>` in `decisions.md`, `Adjustment N`
+**2.** boundaries closed `not-applicable` — those citing a recorded decision (`D<N>` in `decisions.md`, `Adjustment N`
 in the plan) as information, those citing none as a question, **3.** machine rows the engine could not confirm (only
 when there are any), **4.** the task ledger with HOW each task was verified (machine / evidence + judge / by hand),
 **5.** per-task details of what is still open, with each build agent's `Check on stand (row N)` line. The plan-vs-built

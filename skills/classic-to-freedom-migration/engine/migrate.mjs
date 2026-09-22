@@ -3710,10 +3710,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // `renderVerify` so those rows never become MISSING. When `--verify` runs without `--tasks`, no
     // registry exists — `decidedKeys` stays null and `renderVerify` falls back to the plan walk unchanged.
     let decidedKeys = null;
+    let preMergedSet = null;
     if (tasksMode) {
       try {
-        const preMerged = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
-        if (preMerged && !preMerged.refused) decidedKeys = decidedRowKeys(preMerged);
+        preMergedSet = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+        if (preMergedSet && !preMergedSet.refused) decidedKeys = decidedRowKeys(preMergedSet);
+        else preMergedSet = null;
       } catch { /* folder unreadable — fall back to plan walk; the report leg will name the failure */ }
     }
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
@@ -3741,7 +3743,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
       repairNote = rep.note;
       // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
-      const set = rep.set || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+      // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
+      // (`rep.set` is null), so the folder is byte-identical to what that pass already read. It cannot be
+      // reused for the post-round report, because `runRepairMode`/`syncRepairDir` write repair task files
+      // between the two and a reused set would render a stale folder.
+      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
       finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
