@@ -6408,13 +6408,70 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
-// AC 10 (a decision-closed round must not consume a repair round) has NO check here. Asserting it end to
-// end needs a page that reports a NEW gap of the SAME kind AFTER a decision closed the previous round —
-// a cause whose rows are all closed never asks for another round, so the cap is invisible until then, and
-// this synthetic `VERIFY_PAGES` does not reproduce that state (the widened fixture produced no handlers
-// group at all). The mechanism is in `repairRounds` / `nextRound`: a decision-closed task is kept out of
-// the cap map and left in `openRounds`. It is unit-untested, deliberately and visibly, rather than pinned
-// by a check whose fixture does not mean what it appears to mean.
+{
+  // AC 10 is observable only in this shape: a cause whose rows are ALL closed never asks for another round, so
+  // the cap and the round NUMBER are both invisible until the page reports a NEW gap of the same kind.
+  const base = tmp("cap-after-decision");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n");
+  const decisions = new Map([["D13", "descope the handlers"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const first = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written.find((t) => t.cause === "missing:handlers");
+  check("AC 10 fixture: round 1 exists for the handlers cause, so the round below is a SECOND one",
+    () => first?.repairRound === 1, () => ({ round: first?.repairRound, id: first?.id }));
+  if (first) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: first.id, decisions });
+    const widened = { main: { ...VERIFY_PAGES.main,
+      openRows: [...VERIFY_PAGES.main.openRows, openRow(20, "Handler — `onBrandNew`")] } };
+    const next = syncRepairDir(dir, RUN, widened, OPTS).written.find((t) => t.cause === "missing:handlers");
+    const onDisk = fs.readdirSync(dir).filter((f) => f.includes("missing-handlers"));
+    // The round NUMBER has to advance even though the cap was not spent: a repair task's id is derived from
+    // (page, cause, round, chunk) and not from its rows, so re-issuing round 1 would mint the id of the file
+    // already on disk, `syncRepairDir` would skip the write, and the open rows would never be routed again.
+    check("AC 10: a round closed by a DECISION does not spend one of the three attempts, and the next genuine gap still opens a NEW round with a file of its own — the cap counts attempts, the number keeps counting rounds",
+      () => next?.repairRound === 2 && next.id !== first.id && onDisk.length === 2,
+      () => ({ nextRound: next?.repairRound, firstId: first.id, nextId: next?.id, onDisk }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The cascade is what AC 9 is about, and it only shows on a deliverable TWO tasks carry: a plan task owns the
+  // row, a repair task covers the same label on the same page. The verify fixture is built from a real plan row
+  // so the two sides share a label, which is the join the cascade makes.
+  const base = tmp("cascade-cross-task");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope\n");
+  const decisions = new Map([["D13", "descope"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const src = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
+    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= 2 && !(x.rows || []).some((r) => r.na));
+  check("AC 9 fixture: a plan task on `main` was found whose first row can be mirrored into a repair task",
+    () => !!src, () => ({ tasks: set.tasks.map((x) => `${x.id}:${x.pageKey}:${(x.rows || []).length}`).slice(0, 6) }));
+  if (src) {
+    const shared = src.rows[0].label;
+    const mirrored = { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } };
+    const rep = syncRepairDir(dir, RUN, mirrored, OPTS).written.find((t) => t.cause);
+    check("AC 9 fixture: the repair task really carries the SAME deliverable as the plan row, so the cascade has something to join on",
+      () => !!rep && (rep.rows || []).some((r) => r.label === shared),
+      () => ({ repair: rep?.id, rows: (rep?.rows || []).map((r) => r.label) }));
+    if (rep) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: src.id, n: 1 }, decisions });
+      const repAfter = readTaskDir(dir).find((x) => x.id === rep.id);
+      const srcAfter = readTaskDir(dir).find((x) => x.id === src.id);
+      check("AC 9: deciding ONE row of a plan task cascades the same outcome into the row a DIFFERENT task covers — the closure is reported on `cascaded`, the repair row carries the decision, and the plan task's other rows stay untouched",
+        () => !res.refused
+          && (res.cascaded || []).some((c) => c.task.id === rep.id)
+          && repAfter?.rows?.some((r) => r.label === shared && r.outcomeKind === "wont-do")
+          && srcAfter?.rows?.[0]?.outcomeKind === "wont-do"
+          && !srcAfter?.rows?.[1]?.outcomeKind,
+        () => ({ cascaded: (res.cascaded || []).map((c) => `${c.task.id}:${c.n}`),
+          repairKinds: (repAfter?.rows || []).map((r) => r.outcomeKind),
+          srcKinds: (srcAfter?.rows || []).map((r) => r.outcomeKind) }));
+    }
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
