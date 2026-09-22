@@ -354,6 +354,36 @@ function mergeSideFiles(dir, built, acc, problems) {
 // that quietly stands in for one: the caller decides what an unread file does to the run, and it cannot decide
 // that from a payload alone. `expect` is the read plan for the manifest being verified — pass it and a stale or
 // hand-edited index is named; omit it (an offline replay) and the index is taken at its word.
+// WHICH ROWS THE DECISION LOG CLAIMS. A design-pass record that raises findings is not owned by the record — the
+// owner is whoever decided, and that is written in `decisions.md`/`findings.md`. Matched by the row's OWN published
+// id appearing verbatim, so nothing has to read what a finding says: the decision either names the row or it does
+// not. Only ids the engine published are searched, so an unrelated string in the prose claims nothing.
+export const DECISION_FILES = ["decisions.md", "findings.md"];
+// An id CONTINUES where the neighbouring character could still be part of one, so a published id is not claimed by
+// a longer id that merely contains it. Both sides: a mis-filed name extends the real id to its right, and a page
+// key prefixes another id to its left.
+const ID_CONTINUES = /[A-Za-z0-9_:.#-]/;
+const boundary = (ch) => ch === undefined || !ID_CONTINUES.test(ch);
+function namedIn(text, id) {
+  for (let i = text.indexOf(id); i !== -1; i = text.indexOf(id, i + 1)) {
+    if (boundary(text[i - 1]) && boundary(text[i + id.length])) return true;
+  }
+  return false;
+}
+// NULL is not the empty list: null is "no decision log was read", which states nothing about ownership, and the
+// empty list is "read, and it names no row". A reader that cannot tell them apart holds open every row a run
+// without a decision log ever raised a finding on.
+function decisionClaims(dir, evidenceIds, problems) {
+  if (!Array.isArray(evidenceIds) || !evidenceIds.length) return null;
+  let text = "", read = false;
+  for (const f of DECISION_FILES) {
+    const full = path.join(dir, f);
+    if (!fs.existsSync(full)) continue;
+    try { text += fs.readFileSync(full, "utf8") + "\n"; read = true; }
+    catch (e) { problems.push({ file: f, what: "the decision log", why: `not readable (${e.message}) — no row can be shown as owned while it cannot be read` }); }
+  }
+  return read ? evidenceIds.filter((id) => namedIn(text, id)) : null;
+}
 export function assembleBuilt(dir, expect = null) {
   const problems = [];
   const idxFile = path.posix.join(READS_DIR, READS_INDEX_FILE);
@@ -375,6 +405,8 @@ export function assembleBuilt(dir, expect = null) {
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
   mergeSideFiles(dir, built, acc, problems);
+  const claims = decisionClaims(dir, index.evidenceIds, problems);
+  if (claims) built.decisionClaims = claims;
   return { built, problems };
 }
 

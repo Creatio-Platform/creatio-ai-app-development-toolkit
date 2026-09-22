@@ -274,7 +274,7 @@ Those page keys are the ONLY valid keys of the `--built` payload:
 { "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "schemaUId": "<page.schemaUId>" },
              "child:InternalRequest": false },      // false = genuinely not built; key omitted = not checked
   "reachability": { "sectionRegistered": { "workplaces": 1, "names": ["<Workplace>"] }, "reuseBindings": false },   // a COUNT, not a flag — a registration only ADDS, so the row closes at exactly 1
-  "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"] } },
+  "evidence": { "<id from --checklist>": { "referencePage": "…", "components": ["…"], "findings": ["…"], "findingsRaised": ["…"] } },
   "judge":    { "<id from --checklist>": { "convincing": true, "why": "…" } } }
 ```
 

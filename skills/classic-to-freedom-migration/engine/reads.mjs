@@ -128,7 +128,7 @@ export function readPlan(result, opts = {}) {
 // they carry the run's own answers, and regenerating one would delete them.
 export function writeEvidenceSkeletons(dir, plan) {
   const written = [];
-  for (const [file, empty] of [[EVIDENCE_SKELETON_FILE, { referencePage: "", components: [] }],
+  for (const [file, empty] of [[EVIDENCE_SKELETON_FILE, { referencePage: "", components: [], findings: [], findingsRaised: [] }],
     [JUDGE_SKELETON_FILE, { convincing: null }]]) {
     const full = path.join(dir, file);
     if (fs.existsSync(full) || !plan.evidenceIds.length) continue;
