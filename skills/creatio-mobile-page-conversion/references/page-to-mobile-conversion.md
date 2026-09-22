@@ -82,11 +82,54 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    `get-guidance freedom-page-web-to-mobile-conversion` ONCE here and reuse it for the rest of the run.
 2. **Analyze the source page:** run `get-mobile-page-conversion-guide` with the source `schema-name`.
    It reads the page and returns the conversion guide. It writes nothing.
-2a. **Check for an existing mobile equivalent.** From `guide.existingMobilePages`: if the entity/page
-   being converted already has a mobile page, ask the developer before Gate M — reuse the existing page,
-   or convert again. If none is reported, continue. This check runs the same way every time this flow is
-   entered, including on every step 8a follow-up re-entry — it is a fact the guide reports, not a search
-   you perform by hand.
+2a. **Check for an existing mobile equivalent.** Several signals, none alone complete — run all that
+   apply before concluding "no equivalent exists":
+   - **Registration (`guide.existingMobilePages`).** If the entity/page being converted already has a
+     mobile page REGISTERED to it (an entity's default mobile edit page, or a section's mobile
+     binding), it is reported here. This check runs the same way every time this flow is entered,
+     including on every step 8a follow-up re-entry — it is a fact the guide reports, not a search you
+     perform by hand. It is registration-based and CANNOT see an orphaned mobile page — one converted
+     earlier that was never wired to anything (no button binding, no entity-default-mobile-page
+     registration, no section binding).
+   - **Entity content match — the primary signal for an orphan.** Resolve the source page's primary
+     entity (`guide.modelConfig.dataSources[guide.modelConfig.primaryDataSourceName].config.entitySchemaName`).
+     Then find every mobile page bound to that SAME entity, regardless of name: `list-pages` scoped to
+     the known mobile/target packages, filtered client-side to a `parentSchemaName` from the mobile
+     template family (`BaseMobilePageTemplate`, `MobilePageWithTabsFreedomTemplate`,
+     `BaseMobileListTemplate`), then `get-page` each candidate and read its own
+     `modelConfigDiff` → `dataSources[...].config.entitySchemaName`. Any match is a real candidate,
+     independent of what the page is named. This is the ONLY signal that reliably catches an orphaned
+     page the developer gave an arbitrary custom name (e.g. a mobile page named `Apple`): a
+     name-pattern search can never find it, because there is no lexical relationship to search for.
+   - **Name-pattern search is a cheap FIRST pass, never proof of absence.** A `list-pages`
+     `search-pattern` built from the source schema name (e.g. `*<SourceName>*`) is fast and catches the
+     common same-convention case, but an empty result proves nothing — it only means nothing matched
+     that one guessed pattern. Never conclude "no existing mobile equivalent" from this alone; the
+     entity content match above is the check that must come up empty too before you stop looking.
+   - **Disambiguate when the entity match returns MULTIPLE candidates.** A record's own default mobile
+     page and any number of auxiliary/mini pages (e.g. an action page like "escalate" or "reclassify")
+     can all share the SAME primary entity — entity alone does not tell them apart. When more than one
+     candidate shares the entity, narrow by name correlation to the specific SOURCE page (not just the
+     entity) and by comparing the field/attribute set — read each candidate's `viewModelConfigDiff`
+     attribute paths against the source page's own fields for that specific mini-page. If it is still
+     ambiguous, list the candidates and ask the developer to confirm which one (if any) corresponds —
+     never guess.
+   - **A `web-page` (`crt.OpenPageRequest`) target reported `state: "missing"` is NOT a search result.**
+     `requestConversions.unresolvedTargetRequests` / `missingTargetPages` marks EVERY `web-page` target
+     `missing` unconditionally — a web page schema can never be opened by `crt.OpenPageRequest` on
+     mobile, so the guide flags this structurally without ever checking whether a converted mobile
+     counterpart already exists elsewhere. Do not read a `web-page` "missing" flag as "no mobile
+     equivalent was found" — it means only that THIS specific binding is broken as authored. Whether an
+     equivalent already exists is answered only by running this same step 2a (registration + entity
+     content match) against the TARGET page itself, exactly as step 8a re-enters the flow at step 2a
+     for it.
+   Treat a genuine match from any of the above exactly like a `guide.existingMobilePages` hit — ask the
+   developer before Gate M whether to reuse it or convert again. Skipping this risks silently creating a
+   duplicate mobile page next to one that already exists — this has been confirmed to happen in
+   practice: an audited environment held two independently-converted duplicates for the same mini-page,
+   one saved under `guide.suggestedTargetSchemaName`'s `<SourceName>_Mobile` pattern and one under this
+   playbook's own `<Entity>_MobileFormPage` convention (see the naming note in step 7).
+   If every signal above comes up empty, continue.
 3. **Determine the source page type** from the returned `sourceType`:
    - **Classic UI / not `freedom-web`:** conversion STOPS here. Offer the developer a separate
      Classic UI → Freedom UI migration first (a dedicated classic-web → freedom-web converter — not
@@ -123,6 +166,13 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      `<Entity>_MobileFormPage` / `<Entity>_MobileListPage` (no prefix in the plan — clio applies the
      environment SchemaNamePrefix). The mobile template provides the Scaffold root — never add a
      second Scaffold.
+     **Naming-convention conflict to watch for:** `guide.suggestedTargetSchemaName` defaults to
+     `<SourceSchemaName>_Mobile` (derived from the WEB page's own name), which does NOT match this
+     playbook's `<Entity>_MobileFormPage` convention. Confirmed on a live environment: the same source
+     mini-page had been converted twice, once under each pattern, producing two duplicate mobile
+     schemas with byte-identical bodies. Do not treat `guide.suggestedTargetSchemaName` as the name to
+     create under without first running step 2a's full check (including under BOTH naming patterns) —
+     a name search alone is exactly what missed one of the two duplicates in that case.
    - **Capture the `schemaUId` from the `create-page` result and pass it as `target-schema-uid` on EVERY
      subsequent `update-page` call** (body, `resources`, adaptive diffs — and re-use it for `get-page`).
      This is REQUIRED: without it, when the chosen package is not the app's design package, `update-page`
