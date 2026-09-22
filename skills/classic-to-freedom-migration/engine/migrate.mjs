@@ -59,7 +59,8 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
-  NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK } from "./tasks.mjs";
+  NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -2965,15 +2966,11 @@ function startRefusalText(set, startId, dir) {
   return null;
 }
 
-// A frozen split met by a plan that moved. Neither is fatal — the folder is written — but a row nobody is
-// scheduled to build is work that will simply not happen, so it is said on stdout and not only on the index.
+// A frozen split met by a plan that moved. An item whose rows all left the plan is not fatal — its file may hold
+// the only record of work already done — so the folder is written and the drift is said on stdout, not only on
+// the index. A plan row no item claims is refused before this point.
 function splitDriftLines(set) {
   const L = [];
-  if (set.added?.length) {
-    L.push(`⚠ ${set.added.length} plan row group(s) are in NO item — nobody is scheduled to build them.`
-      + ` Place them in ${SPLIT_FILE}; the engine will not pick an owner, because which item a row belongs to is`
-      + ` the judgement the split records. See the "Attention" section of ${TASK_INDEX_FILE}.`);
-  }
   if (set.emptied?.length) {
     L.push(`⚠ ${set.emptied.length} split item(s) have no rows left in the current plan: ${set.emptied.map((e) => "`" + e.id + "`").join(", ")}. Their files are kept.`);
   }
@@ -2990,12 +2987,60 @@ function planGapRefusal(result) {
     + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
 }
 
-// A split that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
+// WHAT WAS REFUSED, AND WHAT CLEARS IT — one pair of writers, because the build leg, `--route` and `--verify`
+// all refuse on the same three causes and an operator acts on the remedy, not on the banner.
+const handedIn = (set) => set.splitSource === SPLIT_HANDED;
+
+// Each reason is matched by NAME, and the fallback is the one sentence true of every refusal. Defaulting to a
+// specific claim would hand a new reason the most misleading wording in the set — telling an operator to fix the
+// syntax of a file whose syntax is fine.
+function refusalCause(set, dir) {
+  if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
+  if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
+  if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
+  if (set.refusal === REFUSED_COVERAGE) {
+    return handedIn(set)
+      ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
+      : `the frozen split in ${dir} no longer covers this plan`;
+  }
+  return "the cut does not resolve against this plan";
+}
+
+function refusalRemedy(set) {
+  if (set.refusal === REFUSED_CUT) {
+    return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
+      + " produced it.";
+  }
+  if (set.refusal === REFUSED_COVERAGE) {
+    // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
+    // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen
+    // cut when it has one, which is a different cut, not the mechanical one.
+    let fallback = `delete ${SPLIT_FILE} to fall back to the engine's own cut`;
+    if (handedIn(set)) {
+      fallback = set.frozenPresent
+        ? `drop ${SPLIT_FLAG} to fall back to the split already frozen in that folder, or delete it too to reach the engine's own cut`
+        : `drop ${SPLIT_FLAG} to fall back to the engine's own cut`;
+    }
+    return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
+  }
+  // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
+  if (set.refusal === REFUSED_UNRESOLVED) {
+    const which = handedIn(set) ? `the file you passed with ${SPLIT_FLAG}` : SPLIT_FILE;
+    return ` Fix ${which} and re-run.`;
+  }
+  return ` Fix or remove ${SPLIT_FILE}.`;
+}
+
+// A cut that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
 // half-applied cut can never schedule part of a plan and drop the rest.
-function splitRefusalText(set) {
-  return "migrate.mjs: ⛔ NOTHING WRITTEN — the split does not resolve against this plan:\n"
+function splitRefusalText(set, dir) {
+  // The shape belongs to a refusal the shape could explain. A file that parsed and resolved is not malformed —
+  // its coverage is short — so several hundred characters of JSON shape only bury the rows to place.
+  const malformed = set.refusal === REFUSED_UNREADABLE || set.refusal === REFUSED_UNRESOLVED;
+  const shape = malformed ? ` Expected shape: ${SPLIT_SHAPE}` : "";
+  return `migrate.mjs: ⛔ NOTHING WRITTEN — ${refusalCause(set, dir)}:\n`
     + set.problems.map((p) => "  · " + p).join("\n")
-    + `\nFix ${SPLIT_FILE} and re-run. Expected shape: ${SPLIT_SHAPE}\n`;
+    + `\n${refusalRemedy(set).trim()}${shape}\n`;
 }
 
 function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
@@ -3007,7 +3052,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
   const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
-  if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set); }
+  if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
     if (refusal) { startRefusalFailure = true; return refusal; }
@@ -3157,7 +3202,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   const noFolder = nextFolderRefusal(dir);
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
   const set = syncTaskDir(dir, result, opts);
-  if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set); }
+  if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
@@ -3262,11 +3307,11 @@ function runRouteMode(result, dir, opts) {
     routeRefusalFailure = true;
     return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`;
   }
-  // An unreadable split writes nothing: the folder's task ids cannot be derived from it.
+  // A refused set writes nothing: the folder's task ids cannot be derived from it.
   if (res.refused) {
     routeRefusalFailure = true;
-    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
-      + ` ${(res.problems || []).join("; ")}. Fix or remove it, then route again.\n`;
+    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
+      + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then route again.\n`;
   }
   // Off the folder this call just wrote, as the verify leg does: a routed row is open work, not a gate failure.
   const stillOpen = unroutedNotBuilt(res.set.tasks);
@@ -3291,12 +3336,12 @@ function runRepairMode(result, dir, verifyRes, opts) {
     routeRefusalFailure = true;
     return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null };
   }
-  // The frozen split is unreadable, so the folder's task ids cannot be derived — nothing was written, the same
-  // refusal a build run makes. Repairing against a split that cannot be parsed would renumber the whole folder.
+  // The folder's task ids cannot be derived from a refused set — nothing was written, the same refusal a build
+  // run makes. Repairing against a cut that does not resolve would renumber the whole folder.
   if (res.refused) {
     routeRefusalFailure = true;
-    return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — the frozen split in ${dir} could not be read:`
-      + ` ${(res.problems || []).join("; ")}. Fix or remove it, then re-verify.\n`, set: null, repair: null };
+    return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
+      + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then re-verify.\n`, set: null, repair: null };
   }
   // Re-read off the folder this call just wrote: a row that now has a repair round is somebody's open work, not
   // a gate failure. What survives is the residual nothing can be scheduled for — a parked cause.
@@ -3504,7 +3549,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
     catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
     if (res.refused) {
-      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing.
+      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
+      // by the writers every other leg shares; a DECLARATION the plan cannot place is named by its own shape.
+      if (res.refusal) {
+        fail(`${ADD_FLAG} wrote nothing — ${refusalCause(res, tasksDir)}:\n`
+          + res.problems.map((x) => "  — " + x).join("\n") + `\n${refusalRemedy(res).trim()}`);
+      }
       fail(`${ADD_FLAG} '${addFile}' does not resolve against this plan:\n`
         + res.problems.map((x) => "  — " + x).join("\n") + `\nExpected shape: ${res.shape}`);
     }

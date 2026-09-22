@@ -85,8 +85,34 @@ export function parseSplit(text) {
 // AND IT CAN REPEAT WITHIN ONE PAGE. `Quality gates` emits its row twice per page by design, and a split simply
 // CANNOT distinguish two rows whose text is identical — refusing the ambiguity made a correct split impossible to
 // write. So occurrences are SLOTS: an entry consumes the next unclaimed occurrence, and an item that means both
-// names the row twice. Naming it once claims one and leaves the other unplaced, which the coverage report then
-// says out loud — the row is not lost, it is reported as belonging to nobody.
+// names the row twice. Naming it once claims one and leaves the other unplaced, which refuses the run by name —
+// an occurrence belonging to nobody is a deliverable nobody is scheduled to build.
+// THE OCCURRENCE RULE, owned here because `planIndex` below owns it for the split and the two must not drift:
+// a row is identified by its page and its structural key, and a label a page carries twice is two slots, not
+// one. `planIndex` marks its slots (`claimedBy`) because the same row objects are reachable from two indexes;
+// a caller matching one flat list against another consumes them instead, which is what these two do.
+export const slotKey = (pageKey, label) => `${pageKey}|${rowKey(label)}`;
+
+// Rows — each `{ pageKey, label }` — collected into occurrence slots. The row is kept rather than a count, so
+// whatever is left unmatched is reportable as the row a reader saw in the plan.
+export function slotIndex(rows) {
+  const slots = new Map();
+  for (const r of rows) {
+    const k = slotKey(r.pageKey, r.label);
+    if (!slots.has(k)) slots.set(k, []);
+    slots.get(k).push(r);
+  }
+  return slots;
+}
+
+// Consume one occurrence of a row, or report that none is left to consume.
+export const takeSlot = (slots, pageKey, label) => {
+  const slot = slots.get(slotKey(pageKey, label));
+  if (!slot?.length) return false;
+  slot.pop();
+  return true;
+};
+
 function planIndex(groups) {
   const byPage = new Map();
   const byGroup = new Map();            // "page|group" -> rows in plan order
@@ -156,10 +182,10 @@ function claimRow(entry, pageKey, itemId, index) {
   return { row: free };
 }
 
-// RESOLVE the split against the plan as it is NOW. Two failures are refused and one is reported-but-survivable:
-//   - an entry matching NO plan row                  → refused: the split describes work the plan does not
-//   - a row claimed more often than the plan has it  → refused: the extra claim sends a second sub-agent
-//   - a plan row claimed by NO item                  → reported as `unplaced`; see `reconcile`
+// RESOLVE the split against the plan as it is NOW. Three failures, all refused:
+//   - an entry matching NO plan row                  → the split describes work the plan does not
+//   - a row claimed more often than the plan has it  → the extra claim sends a second sub-agent
+//   - a plan row claimed by NO item                  → collected as `unplaced`: work nobody is scheduled to do
 // Consume up to `take` rows of one group that no item has claimed yet. Walking the group in PLAN ORDER is what
 // makes `[50]` repeatable and predictable: the second claim continues where the first stopped, so a long group
 // cuts into consecutive chunks rather than an arbitrary selection.
@@ -334,28 +360,37 @@ const resolveWritesTo = (declared, identity) => {
 
 // A SPLIT FROZEN AGAINST ONE PLAN, MET BY A LATER ONE. Rows that left the plan simply stop resolving and the item
 // shrinks; an item left with NOTHING is reported rather than deleted, because its file may record work already
-// done on a stand. A row the plan has GAINED belongs to no item and is reported by name: the engine will not
-// choose an owner for it, because choosing is the judgement the split exists to record. Until someone places it,
-// it is work nobody is scheduled to do — which is exactly what has to be loud.
+// done on a stand — it names work behind the run, not work still owed. A row the plan has GAINED is the opposite
+// and refuses the run: see `unconsumed`.
 export function reconcile(resolved) {
   const emptied = resolved.items.filter((it) => !it.rows.length).map((it) => ({ id: it.id, title: it.title }));
-  const added = resolved.unplaced.map((u) => ({
-    pageKey: u.pageKey,
-    labels: u.rows.map((r) => r.label),
-    group: u.rows[0]?.group || "",
-  }));
-  return { emptied, added };
+  return { emptied };
 }
 
 // The message a caller acts on. Deliberately one text for the CLI and the index: a split refused on stdout and a
 // split refused on the index must not read as two different problems.
+// A PLAN ROW NOBODY IS SCHEDULED TO BUILD, in one sentence for every path that can find one. The remedy varies —
+// a split file has an owner to name, the mechanical cut has none — but the finding itself is one thing, and a
+// reader meeting it on stdout and again on the index has to recognise it as one thing.
+//
+// The occurrence COUNT is part of the finding, not decoration: a page can carry one label twice, so a row placed
+// once and owed twice is still short by one, and a message that named it without the count would repeat itself
+// unchanged after the operator acted on it.
+export function coverageProblem({ pageKey, label, unclaimed = 1 }, remedy) {
+  const owed = unclaimed > 1 ? ` (${unclaimed} occurrences unclaimed)` : "";
+  return `plan row on \`${pageKey}\` is in NO item${owed}: ${JSON.stringify(String(label).slice(0, 90))}`
+    + ` — nobody is scheduled to build it. ${remedy}`;
+}
+
+// The remedy for a split file: an owner exists to be named, and naming it is the judgement the file records.
+export const SPLIT_REMEDY = "Add it to an item in the split file (the engine will not pick an owner: which item"
+  + " it belongs to is the judgement the split records).";
+
 export function splitProblems({ errors = [], unplaced = [], emptied = [] }) {
   const out = [...errors];
   for (const u of unplaced) {
-    const first = u.rows?.[0]?.label || u.labels?.[0] || u.key;
-    out.push(`plan row on \`${u.pageKey}\` is in NO item: ${JSON.stringify(String(first).slice(0, 90))}`
-      + " — nobody is scheduled to build it. Add it to an item in the split file (the engine will not pick an owner:"
-      + " which item it belongs to is the judgement the split records).");
+    const label = u.rows?.[0]?.label || u.labels?.[0] || u.key;
+    out.push(coverageProblem({ pageKey: u.pageKey, label, unclaimed: u.unclaimed ?? u.rows?.length ?? 1 }, SPLIT_REMEDY));
   }
   for (const e of emptied) {
     out.push(`item \`${e.id}\` (${e.title}) has no rows left in the current plan — its work is gone from the plan.`

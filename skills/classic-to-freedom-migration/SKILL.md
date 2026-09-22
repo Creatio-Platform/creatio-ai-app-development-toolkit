@@ -412,15 +412,22 @@ in one context it had one machine check, at the very end. A session that hit a u
    letters, digits and dashes, at most 49 characters — so a descriptive sentence as an id is refused along with the
    whole file. Then:
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --split split.json`
-   The engine REFUSES a split that claims a row twice or names a row the plan does not have, writes nothing at
-   all in that case, and **exits `2`** — the same code every mode that reads the cut answers with, so `--tasks`,
-   `--tasks --next` and `--tasks --route` cannot disagree about whether one folder state is approvable. A plan row in NO item does not block the folder but is reported by name — the engine will not
-   pick an owner for it, because which item it belongs to is the judgement this file records. Once it resolves, the
-   file is copied into the folder and every later run reads that copy, so a re-slice is a reconciliation and not a
-   second opinion.
+   The engine REFUSES a split that claims a row twice, names a row the plan does not have, or leaves a plan row in
+   NO item; it writes nothing at all in that case and **exits `2`** — the same code every mode that reads the cut
+   answers with, so `--tasks`, `--tasks --next` and `--tasks --route` cannot disagree about whether one folder
+   state is approvable. An unclaimed row is work nobody is scheduled to do: the refusal names those rows and their
+   pages, with the count still owed, and picks no owner for them, because which item a row belongs to is the
+   judgement this file records — place them and re-run. Note that a row the plan carries twice — `Quality gates`
+   emits one per page — needs naming twice, once per item that means it. Once the split resolves, the file is
+   copied into the folder and every later run reads that copy, so a re-slice is a reconciliation and not a second
+   opinion.
    Skip `--split` entirely and the engine cuts by its own row budget — fine for a plan small enough that the seams
    do not matter, and measured putting a related list and its filter in different tasks on one that was not.
 3. `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks` (re-run after every status change)
+   A plan that GAINS a row mid-build stops the folder: the frozen split no longer covers it, so `--next`,
+   `--start`, this re-slice and the repair rounds all refuse until the new rows are placed in `split.json`.
+   Nothing is written and no file is touched — every recorded status and `## Notes` survives — so the way
+   forward is to place the rows (or delete `split.json` and fall back to the engine's own cut), not to rebuild.
 4. A **plan-level gap writes nothing** and exits 2 — `gate` / `structure` / `coverage`. None of the three is
    buildable-out-of, so do not slice around it: fix the manifest or the stand, re-run `--plan`, re-approve if the
    plan changed, and slice then.
