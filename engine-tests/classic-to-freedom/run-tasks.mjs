@@ -19,8 +19,8 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, cutProblems, REFUSED_COVERAGE } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
-import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -1352,14 +1352,43 @@ check("the same check is clean over a COLLAPSED whole-run task, whose own `pageK
   });
 // What the engine's own cut SAYS when it finds a row on either side. The remedy is the operator's only signal
 // that no file of theirs is at fault, so it is asserted rather than assumed from the helper's return.
-check("a row the mechanical cut drops, and one it invents, each render with the row's own page and text — and neither points at a split file, which is not in play on that path",
+check("a row the mechanical cut drops reads as the SAME finding a split file's does — one sentence for one condition — while carrying its own remedy: a slicer defect, and the `--split` escape that lets the folder move meanwhile",
   () => {
     const dropped = cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS));
+    const viaSplit = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "x" }], unclaimed: 1 }] });
+    return dropped.length === 1
+      && /is in NO item/.test(dropped[0]) && /is in NO item/.test(viaSplit[0])   // one sentence, both paths
+      && /defect in the slicer/.test(dropped[0]) && /supply a `--split`/.test(dropped[0])
+      && !/Add it to an item in the split file/.test(dropped[0]);                // that remedy is the split path's
+  }, () => cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS)));
+check("the refusal the cut produces carries the shape every caller branches on — refused, `engine-cut`, and NO tasks, so half a plan is never handed out beside the banner",
+  () => {
+    const dropped = cutRefusal({ tasks: dropOneRow(), planVersion: RUN.planVersion }, GROUPS);
+    const clean = cutRefusal({ tasks: SET.tasks, planVersion: RUN.planVersion }, GROUPS);
+    return dropped?.refused === true && dropped.refusal === REFUSED_CUT
+      && dropped.tasks.length === 0 && dropped.problems.length === 1
+      && clean === null;
+  }, () => ({ dropped: cutRefusal({ tasks: dropOneRow() }, GROUPS), clean: cutRefusal({ tasks: SET.tasks }, GROUPS) }));
+check("the CHUNKED plan reaches `taskSetFor` and is clean — the fixture whose pages the budget actually slices across several tasks is where a dropped or duplicated row would come from",
+  () => {
+    const dir = tmp("cut-chunked");
+    const set5 = taskSetFor(dir, RUN5, OPTS5, null);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const { unplaced, surplus } = unclaimedPlanRows(SET5.tasks, checklistGroups(RUN5, OPTS5));
+    return !set5.refused && set5.tasks.length > 1 && unplaced.length === 0 && surplus.length === 0;
+  }, () => unclaimedPlanRows(SET5.tasks, checklistGroups(RUN5, OPTS5)));
+check("a task row backed by no plan row is named with its own page and text — the other half of `exactly one`",
+  () => {
     const invented = cutProblems(unclaimedPlanRows(addOneRow(), GROUPS));
-    return dropped.length === 1 && /reached no task/.test(dropped[0]) && /the mechanical cut dropped it/.test(dropped[0])
-      && invented.length === 1 && /backed by no plan row/.test(invented[0])
-      && ![...dropped, ...invented].some((p) => /split\.json|--split/.test(p));
-  }, () => [...cutProblems(unclaimedPlanRows(dropOneRow(), GROUPS)), ...cutProblems(unclaimedPlanRows(addOneRow(), GROUPS))]);
+    return invented.length === 1 && /backed by no plan/.test(invented[0])
+      && /the mechanical cut invented it/.test(invented[0]);
+  }, () => cutProblems(unclaimedPlanRows(addOneRow(), GROUPS)));
+check("a label the plan carries twice and the split claims once names the COUNT still owed — without it the operator places one, re-runs, and meets a byte-identical refusal",
+  () => {
+    const two = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 2 }] });
+    const one = splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 1 }] });
+    return /\(2 occurrences unclaimed\)/.test(two[0]) && !/occurrences unclaimed/.test(one[0]);
+  }, () => splitProblems({ unplaced: [{ pageKey: "main", rows: [{ label: "Quality gates" }], unclaimed: 2 }] }));
 
 console.log("\n===== a review waits for the page it judges, and may not precede a writer of it =====");
 // A late scaffolding item is legitimate; a review before a writer of its page never is — it would file a verdict
@@ -5392,6 +5421,26 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
     () => unresolved.status === 1 && /does not resolve against this plan/.test(unresolved.stderr || "")
       && fs.readdirSync(dir).length === before,
     () => ({ status: unresolved.status, stderr: (unresolved.stderr || "").slice(0, 400), files: fs.readdirSync(dir).length, before }));
+
+  // A folder whose frozen split falls short of the plan refuses on every other command. `--add` mints files, so
+  // it is the one leg that could leave a declared task on disk beside an index nothing regenerated.
+  {
+    const baseA = tmp("cli-add-drift-base");
+    const dirA = path.join(baseA, "build-tasks");
+    const splitA = path.join(baseA, "split.json");
+    fs.writeFileSync(splitA, JSON.stringify(FULL_SPLIT, null, 2));
+    cliTasks(["--tasks", dirA, "--split", splitA], MANIFEST);
+    const beforeA = fs.readdirSync(dirA).sort();
+    const drifted = cliTasks(["--tasks", dirA, "--add", declFile({ ...GOOD, id: "cli-add-drift" }, "drift")], MANIFEST5);
+    check("CLI `--add` on a folder whose cut falls short of the plan writes NOTHING and exits non-zero — every other command refuses that folder, and minting a file here would leave it beside an index nothing regenerated",
+      () => drifted.status !== 0
+        && /wrote nothing/.test(drifted.stderr || "")
+        && /does not cover this plan|no longer covers this plan/.test(drifted.stderr || "")
+        && JSON.stringify(fs.readdirSync(dirA).sort()) === JSON.stringify(beforeA),
+      () => ({ status: drifted.status, stderr: (drifted.stderr || "").slice(0, 400),
+        before: beforeA, after: fs.readdirSync(dirA).sort() }));
+    fs.rmSync(baseA, { recursive: true, force: true });
+  }
 
   const ok = cliTasks(["--tasks", dir, "--add", declFile(GOOD, "good")], MANIFEST);
   check("CLI `--add`: a resolving declaration exits 0, and the answer names the file the engine wrote and how many deliverables it carries — the caller's next move is to fill that file's `Outcome` column",

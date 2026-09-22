@@ -60,7 +60,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -2974,15 +2974,19 @@ function planGapRefusal(result) {
 // all refuse on the same three causes and an operator acts on the remedy, not on the banner.
 const handedIn = (set) => set.splitSource === SPLIT_HANDED;
 
+// Each reason is matched by NAME, and the fallback is the one sentence true of every refusal. Defaulting to a
+// specific claim would hand a new reason the most misleading wording in the set — telling an operator to fix the
+// syntax of a file whose syntax is fine.
 function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
+  if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
       ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
       : `the frozen split in ${dir} no longer covers this plan`;
   }
-  return `the frozen split in ${dir} could not be read`;
+  return "the cut does not resolve against this plan";
 }
 
 function refusalRemedy(set) {
@@ -2991,11 +2995,15 @@ function refusalRemedy(set) {
       + " produced it.";
   }
   if (set.refusal === REFUSED_COVERAGE) {
-    // The engine picks no owner: which item a row belongs to is the judgement the split records. Falling back
-    // means ceasing to supply the cut, which is a different act for a file you passed and one already frozen.
-    const fallback = handedIn(set)
-      ? `drop ${SPLIT_FLAG} to fall back to the engine's own cut`
-      : `delete ${SPLIT_FILE} to fall back to the engine's own cut`;
+    // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
+    // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen
+    // cut when it has one, which is a different cut, not the mechanical one.
+    let fallback = `delete ${SPLIT_FILE} to fall back to the engine's own cut`;
+    if (handedIn(set)) {
+      fallback = set.frozenPresent
+        ? `drop ${SPLIT_FLAG} to fall back to the split already frozen in that folder, or delete it too to reach the engine's own cut`
+        : `drop ${SPLIT_FLAG} to fall back to the engine's own cut`;
+    }
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
   }
   // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
@@ -3011,8 +3019,8 @@ function refusalRemedy(set) {
 function splitRefusalText(set, dir) {
   // The shape belongs to a refusal the shape could explain. A file that parsed and resolved is not malformed —
   // its coverage is short — so several hundred characters of JSON shape only bury the rows to place.
-  const shapeless = set.refusal === REFUSED_CUT || set.refusal === REFUSED_COVERAGE;
-  const shape = shapeless ? "" : ` Expected shape: ${SPLIT_SHAPE}`;
+  const malformed = set.refusal === REFUSED_UNREADABLE || set.refusal === REFUSED_UNRESOLVED;
+  const shape = malformed ? ` Expected shape: ${SPLIT_SHAPE}` : "";
   return `migrate.mjs: ⛔ NOTHING WRITTEN — ${refusalCause(set, dir)}:\n`
     + set.problems.map((p) => "  · " + p).join("\n")
     + `\n${refusalRemedy(set).trim()}${shape}\n`;
@@ -3512,7 +3520,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
     catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
     if (res.refused) {
-      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing.
+      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
+      // by the writers every other leg shares; a DECLARATION the plan cannot place is named by its own shape.
+      if (res.refusal) {
+        fail(`${ADD_FLAG} wrote nothing — ${refusalCause(res, tasksDir)}:\n`
+          + res.problems.map((x) => "  — " + x).join("\n") + `\n${refusalRemedy(res).trim()}`);
+      }
       fail(`${ADD_FLAG} '${addFile}' does not resolve against this plan:\n`
         + res.problems.map((x) => "  — " + x).join("\n") + `\nExpected shape: ${res.shape}`);
     }

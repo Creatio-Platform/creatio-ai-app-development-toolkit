@@ -39,7 +39,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY } from "./designspec.mjs";
-import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit, rowKey } from "./split.mjs";
+import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
+  slotIndex, takeSlot, coverageProblem } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -2182,32 +2183,19 @@ export function freezeSplit(dir, text) {
 // `REFS_GROUP` rows are engine-authored rather than plan deliverables, and a collapsed run drops them
 // altogether, so they are counted on neither side. Occurrences are matched as a multiset: a label the plan
 // carries twice needs two task rows, not one.
-const slotKey = (pageKey, label) => `${pageKey}|${rowKey(label)}`;
-
-// The task side as SLOTS, holding the row rather than a count: what is left unmatched has to be reportable as
-// the row a reader saw in the plan, not as a key they would have to decode.
-function claimedSlots(tasks) {
-  const held = new Map();
-  for (const t of tasks) {
-    for (const r of t.rows || []) {
-      if (r.group === REFS_GROUP) continue;
-      const row = { pageKey: r.pageKey || t.pageKey, label: r.label };
-      const k = slotKey(row.pageKey, row.label);
-      if (!held.has(k)) held.set(k, []);
-      held.get(k).push(row);
-    }
-  }
-  return held;
-}
+// What this side contributes is WHICH rows to feed in: the row's own page, not the task's, and never a
+// `REFS_GROUP` row, which is engine-authored rather than a plan deliverable and is dropped outright by a
+// collapsed run. The occurrence rule itself belongs to `split.mjs`.
+const planRowsOf = (tasks) => tasks.flatMap((t) => (t.rows || [])
+  .filter((r) => r.group !== REFS_GROUP)
+  .map((r) => ({ pageKey: r.pageKey || t.pageKey, label: r.label })));
 
 export function unclaimedPlanRows(tasks, groups) {
-  const held = claimedSlots(tasks);
+  const held = slotIndex(planRowsOf(tasks));
   const unplaced = [];
   for (const g of groups) {
     for (const r of g.rows) {
-      const slot = held.get(slotKey(g.pageKey, r.label));
-      if (slot?.length) slot.pop();
-      else unplaced.push({ pageKey: g.pageKey, label: r.label });
+      if (!takeSlot(held, g.pageKey, r.label)) unplaced.push({ pageKey: g.pageKey, label: r.label });
     }
   }
   // What is left over is a task row backed by no plan row — the other half of "exactly one", and the same defect
@@ -2215,13 +2203,17 @@ export function unclaimedPlanRows(tasks, groups) {
   return { unplaced, surplus: [...held.values()].flat() };
 }
 
-// The mechanical cut answers to the same rule as a split file, but a row it drops is a defect in the slicer
-// rather than a file anybody can correct, so it is named as one.
+// The mechanical cut has no file anybody can correct, so it carries its own remedy into the shared sentence —
+// and it names the escape that exists, because a refusal with no way forward stops a folder on every path.
+const CUT_REMEDY = "The mechanical cut dropped it, which is a defect in the slicer: report it with the manifest"
+  + " that produced it. To proceed meanwhile, supply a `--split` covering this plan.";
+
 export function cutProblems({ unplaced, surplus }) {
-  const say = (r) => `\`${r.pageKey}\`: ${JSON.stringify(String(r.label).slice(0, 90))}`;
-  const out = unplaced.map((u) => `plan row on ${say(u)} reached no task`
-    + " — the mechanical cut dropped it; nobody is scheduled to build it.");
-  for (const s of surplus) out.push(`task row on ${say(s)} is backed by no plan row — the mechanical cut invented it.`);
+  const out = unplaced.map((u) => coverageProblem(u, CUT_REMEDY));
+  for (const s of surplus) {
+    out.push(`task row on \`${s.pageKey}\`: ${JSON.stringify(String(s.label).slice(0, 90))} is backed by no plan`
+      + " row — the mechanical cut invented it.");
+  }
   return out;
 }
 
@@ -2237,17 +2229,26 @@ export function taskSetFor(dir, result, opts = {}, split = null) {
   const use = split || frozen?.split || null;
   if (use) {
     const set = buildTaskSetFromSplit(result, use, opts);
-    // Only this frame knows WHICH file the cut came from: below it the two collapse into one argument, and a
-    // refusal has to name the file the operator can actually open.
-    return set.refused ? { ...set, splitSource: split ? SPLIT_HANDED : SPLIT_FROZEN } : set;
+    // Only this frame knows WHICH file the cut came from, and whether the folder holds one of its own: below it
+    // the two collapse into one argument. A refusal has to name the file the operator can open, and what
+    // dropping a handed-in flag would actually fall back to — which is the frozen cut when the folder has one.
+    if (!set.refused) return set;
+    return { ...set,
+      splitSource: split ? SPLIT_HANDED : SPLIT_FROZEN,
+      frozenPresent: !!(split && readFrozenSplit(dir)?.split) };
   }
   // ONE derivation of the groups, shared with the slicer: `taskSetFor` sits on the sync, read, start, repair and
   // report paths, and the check compares against exactly the rows the cut was made from.
   const groups = checklistGroups(result, opts);
   const set = buildTaskSet(result, opts, groups);
+  return cutRefusal(set, groups) || set;
+}
+
+// The refusal a failed coverage check produces, as its own frame so the shape a caller branches on is reachable
+// without a slicer defect to trigger it. `null` means the cut covers the plan.
+export function cutRefusal(set, groups) {
   const problems = cutProblems(unclaimedPlanRows(set.tasks, groups));
-  if (problems.length) return { ...set, refused: true, refusal: REFUSED_CUT, tasks: [], problems };
-  return set;
+  return problems.length ? { ...set, refused: true, refusal: REFUSED_CUT, tasks: [], problems } : null;
 }
 
 // ---8<--- THE CLOCK: what has started, what it cost, and what the next one will cost ---8<---
@@ -2781,6 +2782,13 @@ export function addTasks(dir, result, declarations, opts = {}) {
     if (d?.id) taken.add(String(d.id).trim());
   }
   if (problems.length) return { refused: true, problems, shape: DECL_SHAPE, written: [] };
+  // THE CUT IS CHECKED BEFORE A FILE IS MINTED. A refusal touches nothing, and minting first would leave a
+  // declared file on disk beside an index that was never regenerated — the one path that reports success on a
+  // folder every other command refuses.
+  const cut = taskSetFor(dir, result, opts);
+  if (cut.refused) {
+    return { refused: true, refusal: cut.refusal, splitSource: cut.splitSource, problems: cut.problems, written: [] };
+  }
   const written = [];
   fs.mkdirSync(dir, { recursive: true });
   for (const d of decls) {
