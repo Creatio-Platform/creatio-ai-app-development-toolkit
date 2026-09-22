@@ -3693,7 +3693,7 @@ function resolveEvidenceJudgedPart(vk, ctx) {
   if (judged === true && Array.isArray(ctx.root?.decisionClaims)
       && declaresFindings(rec) && !ctx.root.decisionClaims.includes(vk.id)) {
     return ["⚠ verify", `the record under ${need} raises findings and no decision in \`decisions.md\` /`
-      + " \`findings.md\` names this row — a finding raised rather than fixed is closed by a decision that takes it,"
+      + " `findings.md` names this row — a finding raised rather than fixed is closed by a decision that takes it,"
       + " not by a verdict", "unverified", "verifier"];
   }
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
@@ -4265,7 +4265,7 @@ function orphanEvidenceKeys(root, derived) {
     if (!map || typeof map !== "object") continue;
     for (const k of Object.keys(map)) if (!derived.has(k)) seen.add(k);
   }
-  return [...seen].sort();
+  return [...seen].sort((a, b) => a.localeCompare(b));
 }
 function orphanBanner(orphans) {
   if (!orphans.length) return [];
