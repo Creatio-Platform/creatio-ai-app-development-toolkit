@@ -5523,6 +5523,157 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
 }
 
 // ============================================================================================================
+// ENG-99749 review Group D: test coverage the review named (m6 red/green verdict branches, m7 --pages
+// addressing + refusal, m8 free-text destination + escaped pipe, m9 parseDecisionsMap/renderDecisionsMap
+// direct invariants). Each closes a coverage gap where a one-character change would slip through unnoticed.
+// ============================================================================================================
+console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
+{
+  // m6: three-colour verdict — GREEN branch. A synthetic set with nothing open and nothing postponed must
+  // render 🟢 (not 🟡 or 🔴) and NOT emit a Carry-over section.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "done-only", file: "d.md", group: "Custom methods", pageKey: "main", status: "done",
+      origin: "engine", notes: "", rows: [
+        { label: "Handler — `built`", outcomeKind: "built", outcome: "built", outcomeReason: "" },
+      ], dispatched: "yes", agentNonce: "tok-d" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("verdict-green"), built: {}, repair: null });
+  check("ENG-99749 (m6) three-colour verdict — GREEN: nothing open, nothing postponed renders 🟢 COMPLETE and no Carry-over section",
+    () => rep.verdictColour === "green"
+      && /🟢 \*\*COMPLETE\*\*/.test(rep.markdown)
+      && !/🟡/.test(rep.markdown) && !/🔴/.test(rep.markdown)
+      && !/## Carry-over/.test(rep.markdown),
+    () => ({ colour: rep.verdictColour, head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+}
+{
+  // m6: three-colour verdict — RED branch. A synthetic set with one not-built row (no postponed) must
+  // render 🔴, carry non-empty reasons, and NOT display the 🟡 wording.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "notbuilt-only", file: "nb.md", group: "Custom methods", pageKey: "main", status: "partial",
+      origin: "engine", notes: "", rows: [
+        { label: "Handler — `blocked`", outcomeKind: "not-built", outcome: "not-built — needs-decision",
+          outcomeCause: "needs-decision", outcomeReason: "" },
+      ], dispatched: "yes", agentNonce: "tok-nb" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("verdict-red"), built: {}, repair: null });
+  check("ENG-99749 (m6) three-colour verdict — RED: a not-built row with no postponed items renders 🔴 NOT COMPLETE, reasons non-empty, no 🟡 wording",
+    () => rep.verdictColour === "red"
+      && /⛔ \*\*NOT COMPLETE\*\*/.test(rep.markdown)
+      && rep.reasons.length >= 1
+      && !/🟡/.test(rep.markdown) && !/COMPLETE FOR THIS PHASE/.test(rep.markdown),
+    () => ({ colour: rep.verdictColour, reasons: rep.reasons,
+      head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+}
+{
+  // m7: --pages addressing. Close every task on ONE page; assert every task on that page gets touched
+  // and no task on OTHER pages does.
+  const base = tmp("m7-pages");
+  const migrationDir = base;
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13 — descope for --pages test\n");
+  const decisions = new Map([["D13", "descope for --pages test"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  // Pick a pageKey that has at least one plan task with rows, then pick a DIFFERENT pageKey as the control.
+  const targetPage = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na))?.pageKey;
+  const controlPage = targetPage && set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run" && x.pageKey !== targetPage
+    && (x.rows || []).length >= 1)?.pageKey;
+  if (targetPage) {
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+      pages: [targetPage], decisions });
+    const rr = readMergedTaskDir(dir, RUN, OPTS);
+    const touchedIds = new Set(res.touched.map((x) => x.task.id));
+    const targetTasks = rr.tasks.filter((t) => t.pageKey === targetPage && t.origin === "engine"
+      && t.kind !== "repair" && t.artifact !== ARTIFACT_REFS && (t.rows || []).length);
+    const controlTasks = controlPage ? rr.tasks.filter((t) => t.pageKey === controlPage) : [];
+    check("ENG-99749 (m7) --decide --pages closes every task on the addressed pageKey — the ticket's headline case (D13 descoping the typed forms)",
+      () => !res.refused && targetTasks.length >= 1
+        && targetTasks.every((t) => t.rows.every((r) => r.outcomeKind === "wont-do" || r.na)),
+      () => ({ target: targetPage, touched: res.touched?.length,
+        targetTaskKinds: targetTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
+    if (controlTasks.length) {
+      check("ENG-99749 (m7) --decide --pages touches NO task on a different pageKey — the addressing is pageKey-scoped, not global",
+        () => controlTasks.every((t) => (t.rows || []).every((r) => !r.outcomeKind || r.outcomeKind === "not-applicable" || r.na))
+          && controlTasks.every((t) => !touchedIds.has(t.id)),
+        () => ({ control: controlPage, kinds: controlTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
+    }
+  }
+  // Refusal on a nonexistent pageKey: --decide names nothing and writes nothing.
+  const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+    pages: ["totally-not-a-page-key-9999"], decisions });
+  check("ENG-99749 (m7) --decide --pages with a nonexistent pageKey is refused — nothing to write, and the problem names the missing key",
+    () => bad.refused && bad.problems?.some((p) => /totally-not-a-page-key-9999/.test(p)),
+    () => ({ refused: bad.refused, problems: bad.problems }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // m8: renderDestination free-text branch. A destination that is NOT a Jira issue key (like a plain
+  // sentence with a pipe) must render as escaped text — no Jira link, and the pipe escaped inside the
+  // Carry-over table cell (otherwise the table breaks).
+  const base = tmp("m8-freetext");
+  const migrationDir = base;
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D19 — defer to backlog\n");
+  const decisions = new Map([["D19", "defer to backlog"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  if (t) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "Q4 2026 | backlog", taskId: t.id, decisions });
+    const rr = readMergedTaskDir(dir, RUN, OPTS);
+    const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: rr, dir, built: {}, repair: null });
+    const carry = rep.markdown.split("## Carry-over")[1] || "";
+    check("ENG-99749 (m8) renderDestination free-text branch: a destination that is NOT an issue-key shape renders as escaped text, not as a Jira link — ISSUE_KEY_RE gates the linkification",
+      () => /Q4 2026/.test(carry) && !/https:\/\/creatio\.atlassian\.net\/browse\/Q4/.test(carry),
+      () => carry.slice(0, 600));
+    check("ENG-99749 (m8) a raw `|` in a free-text destination is escaped inside the Carry-over table cell — otherwise the pipe would shift every column after it",
+      () => /Q4 2026 \\\| backlog/.test(carry),
+      () => carry.slice(0, 600));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // m9: renderDecisionsMap emits pairs sorted by numeric key — a stable diff invariant. Feed unsorted
+  // input and assert the output is sorted 1, 2, 10 (not lexicographic 1, 10, 2).
+  const m = new Map([[10, "D42"], [1, "D7"], [2, "D3"]]);
+  check("ENG-99749 (m9) renderDecisionsMap sorts entries by NUMERIC row key — lexicographic sort would put 10 before 2 and break stable diffs",
+    () => renderDecisionsMap(m) === "1:D7 2:D3 10:D42",
+    () => renderDecisionsMap(m));
+  // m9: --revoke over a file with one valid + one malformed entry must not crash — the malformed entry
+  // is dropped by parseDecisionsMap, and the valid one is cleared normally.
+  const base = tmp("m9-revoke-malformed");
+  const migrationDir = base;
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13 — legit\n");
+  const decisions = new Map([["D13", "legit"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  if (t) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: t.id, decisions });
+    // Corrupt the decisions: line: keep the valid entry, add a malformed one.
+    const fp = path.join(dir, t.file);
+    fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^decisions: .*$/m, (line) => `${line} x:junk 2:D-1`));
+    // --revoke must not crash on the malformed tail; the valid entry still clears.
+    let rev;
+    try { rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" }); }
+    catch (e) { rev = { threw: e.message }; }
+    check("ENG-99749 (m9) --revoke over a decisions: map with malformed entries (`x:junk 2:D-1`) does NOT crash — parseDecisionsMap silently drops them, revoke clears the valid ones",
+      () => !rev.threw && !rev.refused && rev.cleared?.length >= 1,
+      () => rev);
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// ============================================================================================================
 // ENG-99749 review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
 // non-integer row keys, m11 last-arrow anchoring).
 // ============================================================================================================
