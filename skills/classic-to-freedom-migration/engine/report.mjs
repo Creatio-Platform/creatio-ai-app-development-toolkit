@@ -85,7 +85,7 @@ function decisionTitle(raw) {
   let t = String(raw || "").trim();
   const bold = /\*\*(.+?)\*\*/.exec(t);
   if (bold) t = bold[1];
-  t = t.replace(/\*\*/g, "").replace(/`/g, "").replace(/^[\s—–:.|-]+/, "").replace(/\s+/g, " ").trim();
+  t = t.replaceAll("**", "").replaceAll("`", "").replace(/^[\s—–:.|-]+/, "").replace(/\s+/g, " ").trim();
   const dot = t.search(/\.(\s|$)/);
   if (dot >= 15) t = t.slice(0, dot);
   return t.trim().slice(0, 120).trim();
@@ -101,8 +101,8 @@ function readDecisions(migrationDir) {
     // (`| D1 | **title** | … |`, the shape the doc's own example uses), or a plain LINE (`D1 — …` / `D1: …`).
     for (const dl of text.split(/\r?\n/)) {
       let m = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl)             // heading
-        || /^\s*\|\s*D(\d+)\s*\|\s*([^|]+?)\s*\|/.exec(dl)   // table row — second cell is the title
-        || /^\s*D(\d+)\b\s*[—–:.)-]?\s*(.+)$/.exec(dl);      // plain line
+        || /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl)          // table row — second cell is the title (linear: [^|] can't cross the cell)
+        || /^\s*D(\d+)[)\s—–:.-]+([^)\s—–:.-].*)$/.exec(dl); // plain line — one separator run, then capture from the first real char
       if (m) add(m[1], m[2]);
     }
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }

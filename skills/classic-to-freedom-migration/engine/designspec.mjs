@@ -3994,19 +3994,20 @@ export function boundAttributeOf(node) {
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
   return m ? m[1] : attr;
 }
+// One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
+// component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
+// never the children array); a FIELD keeps `bound` (the column identity the fields row reads). Extracted so
+// walkViewConfig stays under Sonar's cognitive-complexity ceiling.
+function pushWalkNode(node, out) {
+  const cols = columnsOf(node);
+  const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
+  const attr = boundAttributeOf(node);
+  out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
+}
 function walkViewConfig(node, out = []) {
-  if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
+  if (Array.isArray(node)) { for (const n of node) walkViewConfig(n, out); return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) {
-    // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
-    // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
-    // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
-    // A FIELD component keeps a third: the attribute it binds (`bound`), the column identity the fields row reads.
-    const cols = columnsOf(node);
-    const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    const attr = boundAttributeOf(node);
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
-  }
+  if (node.name != null || node.type != null) pushWalkNode(node, out);
   // Recurse into EVERY nested array/object child, not only `items`. Native controls — menu items, toolbar buttons,
   // card actions — live under other keys (`menuItems`, `menu`, `actions`, …); walking `items` alone made them
   // invisible (F15: `resolveCardNativeVk` could not see `ReloadDataMenuItem`, so a built Reload control read as
