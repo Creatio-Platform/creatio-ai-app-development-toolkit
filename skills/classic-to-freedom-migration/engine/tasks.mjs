@@ -2130,17 +2130,44 @@ const causeText = (cause) => CAUSE_TEXT[cause] || cause;
 // why moves between rounds while the kind holds. WHETHER A ROUND IS STILL OPEN is about that CAUSE's own round,
 // and sharing the key there holds a newly recorded cause behind an unrelated round: no task is written for it, so
 // its rows stay unrouted, the gate keeps naming them and the remedy it prints writes nothing.
+// A ROUND A PERSON CLOSED IS NOT AN ATTEMPT (AC 10). `--decide` writes the cell and the `decisions:` entry
+// together through `persistTaskSet`, so a repair task whose every ACCOUNTED row carries an entry — and none of
+// which is `built` — was closed by a decision rather than by an agent who ran it. A row the plan itself marked,
+// or any row the map does not name, makes this false: counting a round that was genuinely attempted is the safe
+// direction, because failing to count one would let the cap never fire and repair rounds run forever.
+function closedByDecision(meta, rows, outcomes) {
+  const map = parseDecisionsMap(meta?.decisions);
+  if (!map || !map.size) return false;
+  const keys = rowKeys(rows.map((r) => r.label));
+  let accounted = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const mark = outcomes?.get(keys[i]);
+    if (!mark) continue;
+    accounted++;
+    if (mark.outcome === O_BUILT || !map.has(i + 1)) return false;
+  }
+  return accounted > 0;
+}
 function repairRounds(existing) {
   const rounds = new Map(), openRounds = new Map();
   for (const e of existing) {
     if (e.meta?.kind !== REPAIR_KIND) continue;
     const n = Number(e.meta.repairRound) || 1;
+    const rows = rowsFromTable(e.table);
     // COMPUTED, not read off the front matter: a round is closed by its `Outcome` cells, so a file whose agent
     // filled them and left `status: todo` has ATTEMPTED its round and the next one may open.
-    const status = computeStatus({ rows: rowsFromTable(e.table) }, declaredNow(e.meta), e.outcomes,
+    const status = computeStatus({ rows }, declaredNow(e.meta), e.outcomes,
       carriedOf(e.meta), statusEditedIn(e.meta));
+    // The two maps answer different questions, so a decision-closed round belongs in exactly one of them.
+    // `rounds` is the CAP counter — how many tries this page has spent on this KIND of row — and a round nobody
+    // ran spent nothing; leaving it in costs the page one of its three tries and parks it early, which is what
+    // AC 10 forbids. `openRounds` answers "is the previous round still somebody's work?", and a decision-closed
+    // round IS finished, so it must stay there (and in ROUND_ATTEMPTED) — taking it out would hold the cause
+    // pending forever, the trap the comment on `partial` below already records.
+    const decisionClosed = closedByDecision(e.meta, rows, e.outcomes);
     for (const [map, key] of [[rounds, capKey(e.meta.pageKey, e.meta.cause)],
       [openRounds, `${e.meta.pageKey} ${e.meta.cause || ""}`]]) {
+      if (map === rounds && decisionClosed) continue;
       const prev = map.get(key);
       if (!prev || n >= prev.round) map.set(key, { round: n, status });
     }
