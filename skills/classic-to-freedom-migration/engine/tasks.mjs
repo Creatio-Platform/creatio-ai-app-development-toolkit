@@ -3181,21 +3181,39 @@ export function applyDecision(dir, result, opts = {}) {
   if (!touched.length) return { refused: true, problems: ["--decide touched no rows (every addressed row was already built or is a plan boundary)"], skipped };
 
   // ---8<--- CASCADE (ENG-99749 point 4): the SAME outcome into every row whose deliverable came from a row
-  // this decision closed. Keyed on (pageKey, coverKey(label)) — the same key `settledBoundaries` and
-  // `repairCoverage` already use — so a repair task whose `covers` includes the source row's label picks up
-  // the closure and the whole repair task's status recomputes to `wont-do` or `partial` on its own next
-  // read. The source task itself is not double-touched (it is already in `touched`).
-  const touchedKeys = new Set();
-  for (const t of touched) {
-    const row = t.task.rows[t.n - 1];
-    touchedKeys.add(`${t.task.pageKey} ${coverKey(row.label)}`);
-  }
+  // this decision closed, so a repair task covering the source row picks up the closure and its status
+  // recomputes on its own next read. The source task itself is not double-touched (it is already in `touched`).
+  //
+  // THE KEY IS THE ROW'S OWN PAGE PLUS AN OCCURRENCE-AWARE LABEL KEY, not the TASK's page and a label-only
+  // hash. Two identity errors followed from the latter. (1) Rows carry their own page (`pageKey: r.pageKey ||
+  // pageKey` when a chunk is built) because a collapsed whole-run task has `pageKey: "run"` and merges rows
+  // from several pages — so its rows keyed as `run <label>` and never met the repair task of the page they
+  // actually belong to, and the AC 9 closure silently did not happen. `report.mjs` and `decidedRowKeys` both
+  // key on the row's own page for exactly this reason (ENG-99740). (2) `coverKey` hashes the label ALONE,
+  // while `rowKeys` disambiguates repeats with `::n` precisely because one task routinely carries the same
+  // deliverable text twice — so `--decide --row T:3` also wrote row 7 of T when both shared a label, which is
+  // what AC 5 forbids.
+  //
+  // The occurrence suffix is per-task, so deciding the SECOND of two identically-labelled rows no longer
+  // matches a repair row that lists that deliverable once. That under-match is deliberate: a repair row left
+  // open is visible and recoverable, while closing a row nobody decided writes off debt behind the person's
+  // back — the failure this ticket exists to remove.
+  const cascadeKeyCache = new Map();
+  const cascadeKeysOf = (task) => {
+    let ks = cascadeKeyCache.get(task);
+    if (!ks) {
+      const rk = rowKeys((task.rows || []).map((r) => r.label));
+      ks = (task.rows || []).map((r, i) => `${r.pageKey || task.pageKey} ${rk[i]}`);
+      cascadeKeyCache.set(task, ks);
+    }
+    return ks;
+  };
+  const touchedKeys = new Set(touched.map((t) => cascadeKeysOf(t.task)[t.n - 1]));
   for (const t of merged.tasks) {
     if (t.unread) continue;
+    const keys = cascadeKeysOf(t);
     for (let i = 0; i < (t.rows || []).length; i++) {
-      const row = t.rows[i];
-      const key = `${t.pageKey} ${coverKey(row.label)}`;
-      if (!touchedKeys.has(key)) continue;
+      if (!touchedKeys.has(keys[i])) continue;
       // Do not re-hit a source row we already touched: `touched` names it by (task, n).
       if (touched.some((x) => x.task === t && x.n === i + 1)) continue;
       if (writeCell(t, i)) cascaded.push({ task: t, n: i + 1 });
