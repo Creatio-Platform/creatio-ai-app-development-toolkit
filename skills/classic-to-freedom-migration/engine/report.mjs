@@ -29,7 +29,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
-  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED } from "./tasks.mjs";
+  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED,
+  O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -169,9 +170,9 @@ function isPostponedDerivedPartial(t) {
   if (t.status !== S_PARTIAL) return false;
   const rows = t.rows || [];
   if (!rows.length) return false;
-  return rows.every((r) => r.outcomeKind === "built" || r.outcomeKind === "not-applicable"
-    || r.outcomeKind === "wont-do" || r.outcomeKind === "postponed")
-    && rows.some((r) => r.outcomeKind === "postponed");
+  return rows.every((r) => r.outcomeKind === O_BUILT || r.outcomeKind === O_NOT_APPLICABLE
+    || r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED)
+    && rows.some((r) => r.outcomeKind === O_POSTPONED);
 }
 function taskCounts(tasks) {
   const c = { total: tasks.length, done: 0, na: 0, wontDo: 0, postponed: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
@@ -303,7 +304,7 @@ function repairBuiltIndex(tasks) {
   const idx = new Map();
   for (const t of tasks) {
     if (!(t.kind === "repair" || Number(t.repairRound) > 0)) continue;
-    for (const r of t.rows || []) if (r.outcomeKind === "built") idx.set(`${t.pageKey} ${labelKey(r.label)}`, t);
+    for (const r of t.rows || []) if (r.outcomeKind === O_BUILT) idx.set(`${t.pageKey} ${labelKey(r.label)}`, t);
   }
   return idx;
 }
@@ -392,10 +393,10 @@ function taskRows(t, vidx, keys) {
     const hv = howVerified(v);
     let state;
     const inSet = (set) => set.has(key) || (wholeRun && !!set.hasLabel?.has(lk));
-    if (inSet(keys.notBuilt) && r.outcomeKind === "not-built") state = "not-built";
-    else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "not-applicable" || r.outcomeKind === "wont-do" || r.outcomeKind === "postponed")) state = "decided";
-    else if (r.outcomeKind === "not-applicable") state = inSet(keys.unbacked) ? "boundary" : "na";
-    else if (r.outcomeKind === "wont-do" || r.outcomeKind === "postponed") state = "decided";
+    if (inSet(keys.notBuilt) && r.outcomeKind === O_NOT_BUILT) state = "not-built";
+    else if (inSet(keys.decided) && (r.outcomeKind === O_NOT_BUILT || r.outcomeKind === O_NOT_APPLICABLE || r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED)) state = "decided";
+    else if (r.outcomeKind === O_NOT_APPLICABLE) state = inSet(keys.unbacked) ? "boundary" : "na";
+    else if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) state = "decided";
     else if (r.na || r.info || hv.how === "na") state = "na";
     else if (!r.outcomeKind) state = "open";
     else if (hv.how === "hand") state = "hand";

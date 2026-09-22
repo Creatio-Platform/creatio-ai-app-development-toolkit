@@ -74,15 +74,19 @@ const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
 // enough: those two are the answers `--decide` writes under a recorded `D<N>`. A cause is required on
 // `not-built` and is a fixed token — prose goes under `## Notes`, which a table cell cannot hold without
 // breaking.
-const O_BUILT = "built", O_NOT_BUILT = "not-built";
+// Exported (ENG-99749 review m4) so callers that already branch on the row-outcome vocabulary
+// (report.mjs' isPostponedDerivedPartial / collectPostponedRows / taskRows) share the SAME literals as
+// the module that defines them — a future rename lands loudly across every reader instead of leaving
+// stale bare-string comparisons behind.
+export const O_BUILT = "built", O_NOT_BUILT = "not-built";
 // Renamed from `n-a` (ENG-99749). At row level this word is the PLAN's: only a row the plan marked as a
 // cross-section boundary receives it, and the engine writes the reason from `r.na`. An unrecognised token in
 // the cell reports as `not-built` — that includes the old `n-a` word a folder from before the rename may
 // carry, so nothing is silently coerced into a settled row.
-const O_NOT_APPLICABLE = "not-applicable";
+export const O_NOT_APPLICABLE = "not-applicable";
 // A row a person answered through `--decide`. The engine writes the reason plus `(D<N>)` and, for
 // `postponed`, the destination alongside. No agent writes these tokens directly.
-const O_WONT_DO = "wont-do", O_POSTPONED = "postponed";
+export const O_WONT_DO = "wont-do", O_POSTPONED = "postponed";
 export const ROW_OUTCOMES = [O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED];
 // Two causes because routing branches two ways: `blocked` is the only one a re-run may clear by itself, and
 // `needs-decision` is everything a person has to settle. Why it needs a person belongs under `## Notes`, not in
