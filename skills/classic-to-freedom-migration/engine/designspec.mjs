@@ -4005,7 +4005,7 @@ function pushWalkNode(node, out) {
   out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
 }
 function walkViewConfig(node, out = []) {
-  if (Array.isArray(node)) { for (const n of node) walkViewConfig(n, out); return out; }
+  if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
   if (node.name != null || node.type != null) pushWalkNode(node, out);
   // Recurse into EVERY nested array/object child, not only `items`. Native controls — menu items, toolbar buttons,
