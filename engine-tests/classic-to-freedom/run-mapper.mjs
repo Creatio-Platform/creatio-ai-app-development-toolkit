@@ -12298,7 +12298,7 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
 }
 
 // ================================================================================================
-// implementation review — the two payload halves `--from` could not produce.
+// The two payload halves no page read can produce: the dashboard migration log, and a literal `false` denial.
 {
   // DASHBOARDS. `built.dashboards` is a LIST transcribed from `DashboardMigrationLog` — a stand TABLE the
   // migration process writes, which no page read can see. Nothing in the first cut produced it, so on any section
@@ -12432,7 +12432,7 @@ check("the `sectionRegistered` row spells the query as ARGUMENTS — the `SysMod
 }
 
 // ================================================================================================
-// follow-up review — the read-path guard, index order, half a denial, and kind drift.
+// The read-path guard, index order, half a denial, and kind drift.
 {
   // A read may only answer out of `<dir>/reads/`. Both escape shapes: lexical `../` and an absolute path.
   // The migration folder is NESTED inside the temp root so the `../../` decoy lands in that root — a test writes

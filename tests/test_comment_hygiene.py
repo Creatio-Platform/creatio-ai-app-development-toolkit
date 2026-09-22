@@ -34,7 +34,12 @@ MARKERS = (
             r"|\breview\b[\s-]*(?:deep[\s-]*)?#\s*\d+"
             # A count of passes ("four review rounds") and the first-person
             # form ("my own review") narrate who looked, not what the rule is.
-            r"|\breview\s+rounds\b|\bmy\s+own\s+review\b",
+            r"|\breview\s+rounds\b|\bmy\s+own\s+review\b"
+            # A review named by the pass it belonged to: "PR review",
+            # "follow-up review", "implementation review". The qualifier is what
+            # makes it history - a bare "review" stays a domain noun, so a rule
+            # such as "is never treated as a review" is left alone.
+            r"|\b(?:PR|follow[\s-]?up|implementation)\s+review\b",
             re.IGNORECASE,
         ),
     ),
@@ -65,6 +70,12 @@ MARKERS = (
             r"(?i:(?:\b(?:by|from|per|to)\s+|@)[a-z0-9]+-[a-z0-9]+-creatio\b)"
             r"|\bR\d+\s*\([^)\n]*"
             r"(?:[A-Z][a-z]{2,}|\b[a-z]{1,12}-[a-z]{2,}\b)[^)\n]*\)"
+            # A bare given name credited for a review - ``(Alexandr review)``,
+            # ``(Alexandr + m-dymytrova review)`` - attributes the rule to the
+            # person who asked for it rather than stating it. The parenthesis
+            # must OPEN on the name and CLOSE on ``review``, so an aside that
+            # merely mentions one ("(the review step runs last)") is left alone.
+            r"|\(\s*[A-Z][a-z]{2,}(?:\s*[+&,]\s*[A-Za-z][\w.-]*)*\s+review\s*\)"
         ),
     ),
     # "used to" is history only in the active voice: "X used to be Y". The passive
@@ -82,11 +93,12 @@ MARKERS = (
     ),
 )
 
-# R3 asks a SHIPPED reference doc to carry no ticket key, pull request number or
-# review round. The narrative, severity and handle markers are contributor
-# vocabulary: they are enforced on source comments, check titles and internal
-# docs, but must not govern product prose written for end users and agents.
-SHIPPED_DOC_MARKERS = frozenset({"ticket_key", "pr_number", "review_round"})
+# R3 asks a SHIPPED reference doc to carry no ticket key and no pull request
+# number, and nothing further. Every other marker is contributor vocabulary: it
+# is enforced on source comments, check titles and internal docs, but must not
+# govern product prose, which these paths ship to end users and coding agents
+# under ``plugin_runtime``.
+SHIPPED_DOC_MARKERS = frozenset({"ticket_key", "pr_number"})
 
 # Extensions whose comment lines are scanned, mapped to their line-comment token.
 CODE_SUFFIXES = {
@@ -389,6 +401,9 @@ class CommentHygieneTests(unittest.TestCase):
             "review_round": [
                 "// 3rd-review guard for the reviewer's objection.",
                 "// Two reviewers objected to the collapsed row.",
+                "// PR review - the nested ternary this replaces.",
+                "// follow-up review - the read-path guard.",
+                "// implementation review - the two payload halves.",
             ],
             "severity_label": [
                 "// Blocker: the handler drops its page key.",
@@ -398,6 +413,8 @@ class CommentHygieneTests(unittest.TestCase):
             "person_handle": [
                 "// Reported by kamil-mikosz-creatio on the parity run.",
                 "// Raised by KAMIL-MIKOSZ-CREATIO on the parity run.",
+                "// CI jobs (Alexandr review): the ustar reader.",
+                "// The gate (Alexandr + m-dymytrova review) reads the rows.",
             ],
             "history_narrative": [
                 "// Before the fix the label-only fallback matched.",
@@ -423,8 +440,9 @@ class CommentHygieneTests(unittest.TestCase):
         self.assertEqual([], comment_lines('const url = "https://x/*y*/";\n', "//"))
 
     def test_shipped_docs_carry_only_the_shipped_marker_set(self):
-        """Product prose answers for ticket, PR and review refs — not for contributor vocabulary."""
+        """Product prose answers for ticket and PR refs — not for contributor vocabulary."""
         self.assertEqual(SHIPPED_DOC_MARKERS, marker_kinds_for("skills/a/b.md", None))
+        self.assertNotIn("review_round", SHIPPED_DOC_MARKERS)
         self.assertIsNone(marker_kinds_for("engine-tests/a/b.md", None))
         self.assertIsNone(marker_kinds_for("skills/a/b.mjs", "//"))
         shipped = marker_kinds_for("context/essentials.md", None)
@@ -453,6 +471,8 @@ class CommentHygieneTests(unittest.TestCase):
     def test_rule_shaped_comments_are_not_reported(self):
         """A present-tense rule carries no marker, so the lint stays usable."""
         for sample in (
+            "// An item with no quality-gate row is never treated as a review.",
+            "// The gate names every row it cannot close (the review step runs last).",
             "// Rows of a collapsed run carry their own page key.",
             "# The installer writes the state file before it reports success.",
             "// Identically labeled rows on different pages do not share state.",

@@ -1,5 +1,5 @@
 // Offline unit tests for the hand-rolled infra parsers that otherwise run ONLY inside live-network / real-tree
-// CI jobs (Alexandr review): the ustar reader + integrity check in verify-vendor-upstream.mjs, and the
+// CI jobs: the ustar reader + integrity check in verify-vendor-upstream.mjs, and the
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
@@ -841,10 +841,10 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
   // business (the upstream-drift job runs `verify-vendor-upstream.mjs`, which is not part of the module's gate).
   // Sliced from the job's `name:` to the next line at job indentation, so a step added to a LATER job cannot
   // silently join this list.
-  // PR review — Sonar flagged the two lines this replaces: a nested ternary (S3358) and a super-linear regex
-  // (S8786, the `\n {2}…:\n` alternation backtracking across a long file). Both are gone: the slice is a plain
+  // Two Sonar rules constrain this helper: no nested ternary (S3358) and no super-linear regex
+  // (S8786 — a `\n {2}…:\n` alternation backtracks across a long file). Both are avoided: the slice is a plain
   // early return, and the job boundary is found by scanning LINES for one at job indentation — linear in the file,
-  // with no backtracking possible, and easier to read than the pattern it replaces.
+  // with no backtracking possible, and easier to read than a pattern-based match.
   const jobBoundarySlice = (yml, header) => {
     const at = yml.indexOf(header);
     if (at < 0) return "";
