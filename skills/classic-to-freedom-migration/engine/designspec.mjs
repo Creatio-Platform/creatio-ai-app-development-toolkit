@@ -4233,7 +4233,7 @@ function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
     kind: rowKindOf(r, outcome), vkType: r.vk?.type || null, owner: verifyRowOwner(owner), ...idPart };
   return { row, tableLine: `| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |` };
 }
-// ENG-99749 AC 12: the LIST of rows to verify comes from the TASK REGISTRY, not the plan walk. The check
+// AC 12: the LIST of rows to verify comes from the TASK REGISTRY, not the plan walk. The check
 // mechanics stay identical — the resolvers, the `get-page` reads and the machine/judge/hand split are
 // unchanged — but a row the registry closed by decision (`wont-do` / `postponed` / `not-applicable`) is
 // not in the list, so it never becomes MISSING. The plan is still the source of verification descriptors
@@ -4258,7 +4258,7 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
   // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
   const rows = [];
-  // ENG-99749 AC 12: rows the registry has closed by decision. Collected so the caller can render them on
+  // AC 12: rows the registry has closed by decision. Collected so the caller can render them on
   // the report's Carry-over section (postponed) or as decided boundaries (wont-do / not-applicable) —
   // nothing is dropped in silence; the LIST just changes source.
   const decided = [];

@@ -2758,7 +2758,7 @@ const ROUTE_FLAG = "--route";
 // `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
-// `--decide D<N>` / `--revoke D<N>` (ENG-99749): the ONE path a PERSON's scope decision reaches the ledger.
+// `--decide D<N>` / `--revoke D<N>`: the ONE path a PERSON's scope decision reaches the ledger.
 // See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` from
 // `<migration-folder>/decisions.md` and the plan's `### Adjustments`, and refuse when it does not.
 const DECIDE_FLAG = "--decide";
@@ -3366,7 +3366,7 @@ function runRepairMode(result, dir, verifyRes, opts) {
     repair: { written: res.written, pending: res.pending, parked: res.parked } };
 }
 
-// `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>` (ENG-99749)
+// `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`
 // — the one path a person's scope decision reaches the ledger. It refuses unless `D<N>` already resolves in
 // `<migration-folder>/decisions.md` or under the plan's `### Adjustments`; that refusal IS the safeguard
 // (an agent cannot mint the ground it stands on), and the message prints exactly what to add.
@@ -3416,7 +3416,7 @@ function runDecideMode(result, dir, opts) {
 function runRevokeMode(result, dir, opts) {
   const res = revokeDecision(dir, result, opts);
   if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
-  // A map entry whose cell no longer matches is NOT cleared (see revokeDecision) — say so either way, because
+  // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   if (!res.cleared.length) {
@@ -3548,7 +3548,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       .filter(([, on]) => on).map(([name]) => name);
     if (nextMode && moves.length) fail(`\`${NEXT_FLAG}\` cannot be combined with ${moves.join(" / ")} — each of those WRITES the folder before the answer would be printed, so a single call would describe a state you could not identify. Ask \`${NEXT_FLAG}\` first, then run the command it prints.`);
   }
-  // `--decide D<N>` / `--revoke D<N>` — ENG-99749 scope-decision mode. Requires `--tasks <dir>` (the folder
+  // `--decide D<N>` / `--revoke D<N>` — scope-decision mode. Requires `--tasks <dir>` (the folder
   // whose cells it fills or clears). Refuses to combine with other write modes for the same reason `--next`
   // does: a single call would describe or dispatch state the reader cannot identify. Argument shape and
   // resolution live in tasks.mjs / report.mjs (readDecisions).
@@ -3707,7 +3707,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         + " path to get commands that run exactly as printed.\n";
     }
   }
-  // `--decide` / `--revoke` (ENG-99749) — writes into the frozen folder. Placed BEFORE the slicing branch
+  // `--decide` / `--revoke` — writes into the frozen folder. Placed BEFORE the slicing branch
   // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
   // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
   else if (tasksMode && decideMode) {
@@ -3783,7 +3783,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // a file they never wrote.
     if (issue && fromDir) fail(`the payload composed from '${fromDir}' ${issue}. The files under ${fromDir}/reads/ are what it was built from — check they are the ones \`${READS_FLAG}\` named.`);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by.");
-    // ENG-99749 AC 12: when `--tasks <dir>` is present, the LIST of rows to verify comes from the task
+    // AC 12: when `--tasks <dir>` is present, the LIST of rows to verify comes from the task
     // REGISTRY, not the plan walk. Read the folder once here (read-only, before the repair round writes
     // anything), collect the deliverables the registry has closed by decision, and pass them to
     // `renderVerify` so those rows never become MISSING. When `--verify` runs without `--tasks`, no

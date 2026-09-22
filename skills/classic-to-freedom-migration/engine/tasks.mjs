@@ -47,11 +47,11 @@ import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
 // WHO SETS WHICH. `todo` and `in-progress` are the engine's lifecycle (file created, `--start`). `done`,
 // `partial`, `not-applicable`, `wont-do` and `postponed` are COMPUTED from the Outcome cells and never typed.
 // `blocked` is the agent's one status input — a TECHNICAL obstacle, not a choice — and is the only word the
-// derivation does not compute over; see `computeStatus`. Under the ENG-99749 vocabulary the old `n/a` has been
+// derivation does not compute over; see `computeStatus`. Under the vocabulary the old `n/a` has been
 // renamed `not-applicable` (a fact from the PLAN, never asserted by the agent) and the words for a PERSON's
 // decision moved into `wont-do` / `postponed`, filled by `--decide` at row level and computed at task level.
 export const S_TODO = "todo", S_IN_PROGRESS = "in-progress", S_DONE = "done", S_BLOCKED = "blocked";
-// Renamed from `n/a` (ENG-99749): the old word carried TWO opposite meanings — a plan fact and a person's
+// Renamed from `n/a`: the old word carried TWO opposite meanings — a plan fact and a person's
 // decision — so a folder written under the old vocabulary reads as an unrecognised status now and lands on
 // Attention rather than being silently coerced. `wont-do` / `postponed` cover the decision half.
 export const S_NOT_APPLICABLE = "not-applicable";
@@ -90,12 +90,12 @@ const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
 // enough: those two are the answers `--decide` writes under a recorded `D<N>`. A cause is required on
 // `not-built` and is a fixed token — prose goes under `## Notes`, which a table cell cannot hold without
 // breaking.
-// Exported (ENG-99749 review m4) so callers that already branch on the row-outcome vocabulary
+// Exported (review m4) so callers that already branch on the row-outcome vocabulary
 // (report.mjs' isPostponedDerivedPartial / collectPostponedRows / taskRows) share the SAME literals as
 // the module that defines them — a future rename lands loudly across every reader instead of leaving
 // stale bare-string comparisons behind.
 export const O_BUILT = "built", O_NOT_BUILT = "not-built";
-// Renamed from `n-a` (ENG-99749). At row level this word is the PLAN's: only a row the plan marked as a
+// Renamed from `n-a`. At row level this word is the PLAN's: only a row the plan marked as a
 // cross-section boundary receives it, and the engine writes the reason from `r.na`. An unrecognised token in
 // the cell reports as `not-built` — that includes the old `n-a` word a folder from before the rename may
 // carry, so nothing is silently coerced into a settled row.
@@ -606,7 +606,7 @@ function pageIdentities(result) {
 // `status` is the engine's output; nobody else writes it.
 const FRONT_MATTER_KEYS = ["id", "status", "statusFrom", "declared", "origin", "pageKey", "group", "order",
   "planVersion", "rowsDigest", "writesTo", "dependsOn", "stopGate", "agentNonce", "decisions"];
-// The whole of the agent's status vocabulary. Under ENG-99749 only `blocked` remains — a technical halt the
+// The whole of the agent's status vocabulary. Under only `blocked` remains — a technical halt the
 // agent hit and cannot compute a way around. A whole-task scope decision (`not-applicable`, `wont-do`,
 // `postponed`) is a PERSON's answer to a question the plan raised: `--decide D<N>` writes it, no agent may.
 // A folder still carrying the retired `declared: n/a` reads as unrecognised and lands on Attention.
@@ -668,7 +668,7 @@ export const parseDecisionsMap = (s) => {
   for (const tok of String(s || "").trim().split(/\s+/).filter(Boolean)) {
     const [n, d] = tok.split(":");
     const num = Number(n);
-    // ENG-99749 review m10: `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
+    // review m10: `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
     // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
     // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
     // decision entry the engine cannot reach.
@@ -828,7 +828,7 @@ function markersBlock() {
 function outcomeBlock(repair = false) {
   // THE RENDERED FILE IS THE SUB-AGENT'S PROMPT, so it names the field the engine actually reads. `status:`
   // is the engine's output and a word typed there is discarded and reported; `declared:` is the agent's only
-  // status input, and under ENG-99749 it takes exactly ONE word — `blocked`, a technical halt a re-run may
+  // status input, and under it takes exactly ONE word — `blocked`, a technical halt a re-run may
   // clear. Every whole-task scope decision (`not-applicable`, `wont-do`, `postponed`) is a PERSON's answer
   // to a question the plan raised, and `--decide D<N>` is the one path that records it.
   const statusRule = [
@@ -1062,7 +1062,7 @@ function splitMark(s) {
 
 // `built` · `not-built — cause` · `not-applicable — <plan reason>` · `wont-do — <reason (D<N>)>` ·
 // `postponed — <reason (D<N>) → <destination>>`. A plain hyphen is accepted as well as the rendered em dash.
-// The old `n-a` token from before ENG-99749 is intentionally NOT recognised: it falls through as unparsed,
+// The old `n-a` token from before is intentionally NOT recognised: it falls through as unparsed,
 // and the row counts as unaccounted rather than being silently coerced into a settled outcome.
 function parseOutcome(raw) {
   if (!raw || raw === "—") return null;
@@ -1291,7 +1291,7 @@ function dispatchAttention(dispatch) {
   return out;
 }
 
-// ENG-99749 review M1: a `wont-do` / `postponed` cell the ENGINE wrote is recorded in the task's
+// review M1: a `wont-do` / `postponed` cell the ENGINE wrote is recorded in the task's
 // `decisions:` front-matter map — `--decide` writes both together (the cell text + the D<N> pairing) and
 // `persistTaskSet` lands them in one write. A cell whose row index is NOT in that map is therefore a
 // hand-typed closure, the exact bypass the ticket exists to close (Direction §1). parseOutcome already
@@ -1314,7 +1314,7 @@ export function undecidedDecisionCells(tasks) {
 
 function attentionLines(set) {
   const out = set.tasks.flatMap(taskAttention);
-  // ENG-99749 review M1: hand-typed `wont-do` / `postponed` cells that slipped past parseOutcome (they
+  // review M1: hand-typed `wont-do` / `postponed` cells that slipped past parseOutcome (they
   // carry a plausible `(D<N>)`) but whose row is not in the task's own `decisions:` map. Named here so a
   // reader sees exactly which cell the engine did not write.
   for (const it of undecidedDecisionCells(set.tasks)) {
@@ -1397,7 +1397,7 @@ export function countStatuses(tasks) {
 // task, row and cause; the cause says where it goes. Nothing is re-dispatched automatically.
 // Rows recorded as `not-applicable` where the plan carries no `na` of its own — the engine pre-fills plan
 // boundaries and never writes `not-applicable` anywhere else, so a row in this shape is a hand edit or a
-// leftover from before the ENG-99749 rename. Named even though the task computes `done`.
+// leftover from before the rename. Named even though the task computes `done`.
 // MERGE PATH ONLY — the discriminator is the plan's `r.na`, which only a plan-derived row carries. `readTaskDir`
 // builds its rows from the task FILE, so every row there reads `na`-less and every `not-applicable` would look asserted.
 // Call this on a merged set (`syncTaskDir` / `mergeTaskSet`), never on `readTaskDir` output.
@@ -1476,9 +1476,9 @@ function latestPerDeliverable(items) {
 export const notBuiltOpenItems = (tasks) =>
   latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
 
-// ENG-99749 point 3 / AC 8: a `needs-decision` row is NOT open work for the router — it is the build agent
+// point 3 / AC 8: a `needs-decision` row is NOT open work for the router — it is the build agent
 // raising a question, and only a person's `--decide` can settle it. Feeding it to the repair rounds today
-// burned three sub-agents on a page a person had to answer for anyway (measured on ENG-99135: 84 of the 96
+// burned three sub-agents on a page a person had to answer for anyway (measured on the recorded run: 84 of the 96
 // undispatched round-1 repair tasks were for the 14 descoped typed forms). `blocked` still routes: a re-run
 // may clear the technical obstacle it named.
 const ROUTABLE_NOT_BUILT_CAUSES = new Set([CAUSE_BLOCKED]);
@@ -1870,11 +1870,11 @@ const statusStamp = (status) => shortHash(String(status || ""));
 
 // THE ONE DERIVATION, and the only one — a pure function of three facts about the task's own file, not of who
 // filed it. Same inputs, same word.
-//   `declared` — the agent's input: `blocked` or nothing (ENG-99749 removed `n/a` from the vocabulary).
+// `declared` — the agent's input: `blocked` or nothing (removed `n/a` from the vocabulary).
 //   `outcomes` — the `Outcome` cells, one per row.
 //   `carried`  — the word the engine last wrote, which stands wherever the cells cannot answer.
 //
-// ENG-99749 rules over the extended row vocabulary (built · not-built · not-applicable · wont-do · postponed):
+// rules over the extended row vocabulary (built · not-built · not-applicable · wont-do · postponed):
 //   · any `not-built` or blank cell ⇒ `partial` (the run cannot close over an unbuilt or unaccounted row)
 //   · at least one `postponed` and the rest closed ⇒ `partial` (`postponed` is a debt, not a closure)
 //   · every cell `wont-do` ⇒ `wont-do` (the person answered off the whole task)
@@ -1997,7 +1997,7 @@ function adoptOrchestrated(e) {
     writesTo: e.meta.writesTo || "",
     dependsOn: (e.meta.dependsOn || "").split(/\s+/).filter(Boolean),
     agentNonce: e.meta.agentNonce || "",
-    // Row-level decision provenance (ENG-99749): read off the file so a repair task closed by cascade knows
+    // Row-level decision provenance: read off the file so a repair task closed by cascade knows
     // which decision wrote its cells and `--revoke` can find them.
     decisions: parseDecisionsMap(e.meta.decisions),
     file: e.file,
@@ -2520,7 +2520,7 @@ export function forecastMinutes(weight, samples, B = TASK_BUDGET) {
 // filled `endedAt` in as well, with a time it rounded to the minute. The engine then saw the field set, recorded
 // no sample, and the progress block went on saying "no task of this run has closed yet" over `done 1`. A field
 // the caller must not touch does not belong in the file the caller edits.
-// `CLOSED` answers "counts as done" — the index total, the progress line. Under ENG-99749 the plan's
+// `CLOSED` answers "counts as done"the index total, the progress line. Under the plan's
 // `not-applicable`, and the person's `wont-do`, both close the task (no more work is owed on it).
 const CLOSED = new Set([S_DONE, S_NOT_APPLICABLE, S_WONT_DO]);
 // `SETTLED` answers "the agent is finished with it": the clock stops, a dispatch record is owed,
@@ -2732,7 +2732,7 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
 // `status:` line inside the opening front-matter block is replaced; a `status:` in prose further down is not
 // front matter and is left alone.
 // A `decisions:` value the caller passes lands the same way: added when the file does not carry the field, and
-// rewritten (or emptied) when it does. ENG-99749: `--decide` and its cascade write `<n>:D<N>` pairs so
+// rewritten (or emptied) when it does. `--decide` and its cascade write `<n>:D<N>` pairs so
 // `--revoke D<N>` can find exactly the cells it wrote.
 function setFrontMatterStatus(dir, file, status, declared = null, decisions = null) {
   // The stamp moves with the word, or every adopted file reads as hand-edited.
@@ -2993,11 +2993,11 @@ function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
   const unplaced = [];
   for (const t of merged.tasks) {
-    // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
+    // `t.unread` covers the refused file the caller renamed: its name does not match, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
     if (untouchable.has(t.file) || t.unread) continue;
     if (t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR) {
-      // ENG-99749: cascade may have modified the Outcome cell of an adopted task's row. Write those cells
+      // cascade may have modified the Outcome cell of an adopted task's row. Write those cells
       // in place BEFORE the front-matter update — the front matter carries the `decisions:` map that names
       // exactly the cells the body now holds, so the two must land together. Passed null when the run
       // touched no cells here, so `decisions:` is not spuriously added to a file that never carried it.
@@ -3212,12 +3212,12 @@ export function startableTasks(set, dir) {
   return { ...base, verdict: NEXT_STUCK };
 }
 
-// ENG-99749 AC 12: the row keys `--verify` should EXCLUDE — the deliverables the registry has closed by
+// AC 12: the row keys `--verify` should EXCLUDE — the deliverables the registry has closed by
 // decision. Keyed on (row's own page, normalized label) using `verifyRowKey` so the plan-walk key inside
 // `renderVerify` matches. `not-built` is NOT here — a `not-built — needs-decision` row is a question, not
 // a closure, and the machine gate still measures whether the stand has it (usually not).
 //
-// ENG-99749 review M1: `wont-do` / `postponed` only hide a row from `--verify` when the ENGINE wrote them.
+// review M1: `wont-do` / `postponed` only hide a row from `--verify` when the ENGINE wrote them.
 // The task's `decisions:` map is the provenance stamp (`--decide` writes cell + map together through
 // `persistTaskSet`), so a `wont-do` cell whose row index is NOT in the map is a hand-typed spoof — it
 // stays in the verify list and is named on Attention by `undecidedDecisionCells`. `not-applicable` is
@@ -3240,7 +3240,7 @@ export function decidedRowKeys(set) {
   return keys;
 }
 
-// ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised (ENG-99749) ---8<---
+// ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised ---8<---
 //
 // A whole-task scope decision — `wont-do` or `postponed` — is a PERSON's answer, and it reaches the ledger
 // through this ONE mode: `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`.
@@ -3289,10 +3289,9 @@ function pickDecideTargets(tasks, opts) {
 
 // The literal that lands in the Outcome cell. Pipes in a caption would break the table, so any pipe in the
 // reason or destination is escaped by the same `cell()` writer the row table uses.
-// ENG-99749 review m3: the decision is ALWAYS wrapped in `(D<N>)` — with or without a title. The title-less
-// branch used to emit a bare `postponed — D13 → <dest>`, which parsePostponedCell (`/\(D(\d{1,3})\)/`)
-// then failed to read back, and the Carry-over rendered `⚠ no D<N> found in the cell` for a cell that IS
-// decided. Both sides of the round-trip now agree on the parenthesised shape.
+// The decision is ALWAYS wrapped in `(D<N>)`, with or without a title, because `parsePostponedCell` reads
+// it back with `/\(D(\d{1,3})\)/`: a bare `postponed — D13 → <dest>` renders `⚠ no D<N> found in the cell`
+// for a cell that IS decided. Both sides of the round trip agree on the parenthesised shape.
 // The destination is collapsed the same way the title is, not merely trimmed. It is OPERATOR-SUPPLIED and lands
 // inside a `## Deliverables` table cell: `cell()` escapes pipes but not line breaks, and `setAdoptedRowOutcomes`
 // splices the text straight into the line before re-joining, so a `--to` carrying a newline would write extra
@@ -3372,7 +3371,7 @@ export function applyDecision(dir, result, opts = {}) {
   }
   if (!touched.length) return { refused: true, problems: ["--decide touched no rows (every addressed row was already built or is a plan boundary)"], skipped };
 
-  // ---8<--- CASCADE (ENG-99749 point 4): the SAME outcome into every row whose deliverable came from a row
+  // ---8<--- CASCADE (point 4): the SAME outcome into every row whose deliverable came from a row
   // this decision closed, so a repair task covering the source row picks up the closure and its status
   // recomputes on its own next read. The source task itself is not double-touched (it is already in `touched`).
   //
@@ -3381,12 +3380,12 @@ export function applyDecision(dir, result, opts = {}) {
   // pageKey` when a chunk is built) because a collapsed whole-run task has `pageKey: "run"` and merges rows
   // from several pages — so its rows keyed as `run <label>` and never met the repair task of the page they
   // actually belong to, and the AC 9 closure silently did not happen. `report.mjs` and `decidedRowKeys` both
-  // key on the row's own page for exactly this reason (ENG-99740). (2) `coverKey` hashes the label ALONE,
+  // key on the row's own page for exactly this reason. (2) `coverKey` hashes the label ALONE,
   // while `rowKeys` disambiguates repeats with `::n` precisely because one task routinely carries the same
   // deliverable text twice — so `--decide --row T:3` also wrote row 7 of T when both shared a label, which is
   // what AC 5 forbids.
   //
-  // The occurrence suffix is per-task, so deciding the SECOND of two identically-labelled rows no longer
+  // The occurrence suffix is per-task, so deciding the SECOND of two identically-labelled rows does not
   // matches a repair row that lists that deliverable once. That under-match is deliberate: a repair row left
   // open is visible and recoverable, while closing a row nobody decided writes off debt behind the person's
   // back — the failure this ticket exists to remove.
@@ -3499,7 +3498,7 @@ export function revokeDecision(dir, result, opts = {}) {
   // blank, so a task that read `wont-do` / `not-applicable` / `partial` re-enters the verification list.
   // The recompute carries `S_TODO` as the previous word (not the pre-revoke closure) — treating the file
   // as freshly-opened is what makes the run see the rows as work to do again; leaving the carried word as
-  // `wont-do` would compute back to `wont-do` under the "all blank + previously closed" branch and the
+  // `wont-do` would compute back to `wont-do` under the "all blank + already closed" branch and the
   // revoke would look like it did nothing.
   const touchedTasks = new Set(cleared.map((c) => c.task));
   for (const t of touchedTasks) {

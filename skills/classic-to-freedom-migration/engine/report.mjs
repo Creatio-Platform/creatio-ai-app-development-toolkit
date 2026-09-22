@@ -164,7 +164,7 @@ function planTasks(tasks) {
 }
 // A `partial` task whose only remaining un-built rows are `postponed` is not open work — its debt is a
 // person's decision with a destination, so it belongs on the 🟡 side of the verdict rather than the 🔴
-// "tasks not closed" reason. Under ENG-99749 point 6 that keeps 🟡 honest: 🟡 means "the machine has
+// "tasks not closed" reason. Under point 6 that keeps 🟡 honest: 🟡 means "the machine has
 // nothing left to do, the person has a debt", and the debt is the postponed row.
 function isPostponedDerivedPartial(t) {
   if (t.status !== S_PARTIAL) return false;
@@ -192,7 +192,7 @@ function taskCounts(tasks) {
     else c.other++;
   }
   // `postponed` is not open work — it is a debt with a destination — so it does not count against a run's
-  // open total the way `partial` does. The verdict logic (three-colour, ENG-99749 point 6) treats it as
+  // open total the way `partial` does. The verdict logic (three-colour, point 6) treats it as
   // scheduled elsewhere.
   c.open = c.partial + c.inProgress + c.todo + c.blocked + c.unread + c.other;
   return c;
@@ -469,11 +469,11 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   return L;
 }
 
-// ENG-99749 point 6 helpers — the carry-over row-level list of every postponed item, with its decision and
+// point 6 helpers — the carry-over row-level list of every postponed item, with its decision and
 // destination parsed out of the cell text. `--decide --postponed` writes cells shaped `postponed — <reason>
 // (D<N>) → <destination>`; the regex below picks D<N> out and anchors the destination on the LAST `→`
-// (review m11: a decision title containing `→` — a reference like `see D3 → D4` — used to leak into the
-// destination when the regex took the first arrow, breaking the Jira-link render).
+// The LAST arrow, because a decision title may itself carry one — a reference like `see D3 → D4` — and
+// anchoring on the first would swallow it into the destination and break the Jira-link render.
 const POSTPONED_DECISION_RE = /\(D(\d{1,3})\)/;
 function parsePostponedCell(text) {
   const s = String(text || "");
@@ -504,7 +504,7 @@ function postponedGroups(items) {
   }
   return [...by.values()];
 }
-// A destination that reads as an issue key (`ENG-12345`, `PROJ-42`) is rendered as a link into the same
+// A destination that reads as an issue key (`PROJ-42`, `ABC-7`) is rendered as a link into the same
 // Jira/GitHub tracker the plan lives in; free text passes through as-is. The link target uses a per-project
 // convention (`https://…/browse/<KEY>`) that the reader's environment resolves — the report is markdown, so
 // this is just a hint rather than a hard reference.
@@ -572,7 +572,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(ledgerRefused);
   // A task computed `not-applicable` is the plan's own boundary (every row of the task is a plan-boundary
-  // row). Under ENG-99749 the engine writes that outcome only from `r.na`, so a `not-applicable` task with
+  // row). Under the engine writes that outcome only from `r.na`, so a `not-applicable` task with
   // rows the plan did NOT mark that way is the same defect this rename fixes — a person's decision written
   // as a plan fact. It must cite a recorded decision and must not leave plan rows unaccounted while the run
   // reads COMPLETE.
@@ -586,7 +586,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   if (result?.coverage && !result.coverage.complete) reasons.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
   if (result?.listGate?.blocked) reasons.push("the LIST page gate is BLOCKED — the list page is not approvable");
   if (gates?.dispatchFailed) reasons.push("the DISPATCH gate failed — a task was closed with no dispatch token");
-  // ENG-99749 point 6: THREE-COLOUR VERDICT. Postponed items (row cells marked `postponed` through
+  // point 6: THREE-COLOUR VERDICT. Postponed items (row cells marked `postponed` through
   // --decide) are a DEBT with a destination — not a real miss and not a done row. Collected here from the
   // merged tasks so the verdict can distinguish "the machine has nothing left to do, the person has a debt"
   // (🟡) from "someone still has work here" (🔴).

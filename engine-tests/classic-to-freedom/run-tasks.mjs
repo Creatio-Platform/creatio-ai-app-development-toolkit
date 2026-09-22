@@ -1932,10 +1932,10 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => ({ running: readTimingsFile(d).running }));
     }
 
-    // ENG-99749 (removed): the `n/a` dispatch-gate tests are gone — task-level `not-applicable` is no
+    // removed: the `n/a` dispatch-gate tests are gone — task-level `not-applicable` is no
     // longer a hand-declared status (it is computed only when every row is a plan boundary), so the
     // "one-edit-writes-off-the-run" attack surface those tests protected against is now closed by
-    // construction. The new-contract equivalents live in the ENG-99749 test block at the end of the file.
+    // construction. The new-contract equivalents live in the test block at the end of the file.
 
     // ---- the queue order, and one writer per artifact, enforced where the token is ISSUED ----
     {
@@ -2841,7 +2841,7 @@ check("hand-written: `not built` as PROSE under `## Notes` computes nothing — 
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done").status === "done",
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done"));
 
-check("hand-written: `blocked` is never computed over — it is the ONE word an agent chooses deliberately, and it keeps meaning what it says. ENG-99749 retired `n/a` from this list: a whole-task scope decision is a person's answer, recorded through `--decide`, and a folder still declaring it reads as unrecognised.",
+check("hand-written: `blocked` is never computed over — it is the ONE word an agent chooses deliberately, and it keeps meaning what it says. retired `n/a` from this list: a whole-task scope decision is a person's answer, recorded through `--decide`, and a folder still declaring it reads as unrecognised.",
   () => ["blocked"].every((w) =>
     handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status === w),
   () => ["blocked"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
@@ -3906,7 +3906,7 @@ check("that reason SURVIVES the re-render — the engine escapes the cell on the
     return twice.tasks[0].rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter";
   }, "the Outcome cell must round-trip a typed pipe");
 
-check("ENG-99749 the generated task body names `declared:` as the agent's only status input and never instructs a `status:` write — the file IS the sub-agent's prompt, so guidance that names the engine's own field is guidance that loses a halt. Under the new vocab `declared:` takes ONE word (`blocked`); a scope decision goes through `--decide D<N>`.",
+check("the generated task body names `declared:` as the agent's only status input and never instructs a `status:` write — the file IS the sub-agent's prompt, so guidance that names the engine's own field is guidance that loses a halt. Under the new vocab `declared:` takes ONE word (`blocked`); a scope decision goes through `--decide D<N>`.",
   () => /Never write `status:`/.test(SAMPLE_TEXT)
     && /`declared: blocked`/.test(SAMPLE_TEXT)
     && /--decide D<N>/.test(SAMPLE_TEXT)
@@ -4760,7 +4760,7 @@ console.log("\n===== the migration result report — one artifact, computed from
     { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "not-applicable", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
   ] };
   const naRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: naSet, dir: tmp("result-report-na") });
-  check("ENG-99126 / ENG-99749 renderFinalReport (RC-7): a task waved off `not-applicable` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task not-applicable to bypass the conjunction gate",
+  check("renderFinalReport : a task waved off `not-applicable` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task not-applicable to bypass the conjunction gate",
     () => naRep.complete === false && /⛔ \*\*NOT COMPLETE\*\*/.test(naRep.markdown)
       && naRep.reasons.some((r) => /closed not-applicable with no recorded decision/.test(r)),
     () => ({ complete: naRep.complete, reasons: naRep.reasons }));
@@ -5531,11 +5531,11 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
 }
 
 // ============================================================================================================
-// ENG-99749: the NEW scope-decision vocabulary. `--decide D<N>` writes wont-do / postponed cells under a
+// the NEW scope-decision vocabulary. `--decide D<N>` writes wont-do / postponed cells under a
 // recorded decision; `--revoke D<N>` reverses them; the cascade reaches repair tasks; the verdict is three-
 // coloured; and a folder still carrying the retired `n/a` reads as unrecognised and lands on Attention.
 // ============================================================================================================
-console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict =====");
+console.log("\n===== --decide / --revoke and the three-colour verdict =====");
 // The blocks below repeated two fixture shapes verbatim — a fresh folder plus the first plan task that suits the
 // block — which is also what the duplication gate reports over this file's new code. The PREDICATES are carried
 // across unchanged on purpose: they decide which task a block runs against, so tightening or merging them here
@@ -5570,7 +5570,7 @@ const decideFixtureB = (label, md = null) => {
     syncTaskDir(dir, RUN, OPTS);
     const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D999", mode: "wont-do",
       pages: ["main"], decisions: decisionsMap() });
-    check("ENG-99749 --decide refuses when D<N> is not in the decisions map — nothing is written; the caller must add the decision first",
+    check("-decide refuses when D<N> is not in the decisions map — nothing is written; the caller must add the decision first",
       () => bad.refused && bad.problems?.some((p) => /D999.*does not resolve/.test(p)),
       () => ({ refused: bad.refused, problems: bad.problems }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -5583,7 +5583,7 @@ const decideFixtureB = (label, md = null) => {
     syncTaskDir(dir, RUN, OPTS);
     const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
       pages: ["main"], decisions: decisionsMap() });
-    check("ENG-99749 --decide --postponed refuses without a destination — an issue key or free text; \"later\" is not an answer",
+    check("-decide --postponed refuses without a destination — an issue key or free text; \"later\" is not an answer",
       () => bad.refused && bad.problems?.some((p) => /postponed.*--to/.test(p)),
       () => ({ refused: bad.refused, problems: bad.problems }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -5600,7 +5600,7 @@ const decideFixtureB = (label, md = null) => {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         rowRef: { taskId: t.id, n: "1" }, decisions: decisionsMap() });
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 --decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
+      check("-decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
         () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"
           && rr?.rows?.[1]?.outcome === "" && rr?.rows?.[1]?.outcomeKind === null,
         () => ({ touched: res.touched?.length, row0: rr?.rows?.[0]?.outcome, row1: rr?.rows?.[1]?.outcome }));
@@ -5617,7 +5617,7 @@ const decideFixtureB = (label, md = null) => {
       }
       fs.writeFileSync(fpRow, rowTxt);
       const rrFull = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 (AC 5) with every other row accounted for, the one decided row leaves the task `partial` — a single decision does not close a task that still owes work",
+      check("AC 5: with every other row accounted for, the one decided row leaves the task `partial` — a single decision does not close a task that still owes work",
         () => rrFull?.status === "partial" && rrFull?.rows?.[0]?.outcomeKind === "wont-do",
         () => ({ status: rrFull?.status, kinds: rrFull?.rows?.map((r) => r.outcomeKind) }));
     }
@@ -5631,7 +5631,7 @@ const decideFixtureB = (label, md = null) => {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         taskId: t.id, decisions: decisionsMap() });
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 --decide --task fills every Outcome cell of the addressed task; the task's status computes to `wont-do`",
+      check("-decide --task fills every Outcome cell of the addressed task; the task's status computes to `wont-do`",
         () => !res.refused && rr?.status === "wont-do"
           && rr.rows.every((r) => r.outcomeKind === "wont-do"),
         () => ({ status: rr?.status, kinds: rr?.rows?.map((r) => r.outcomeKind) }));
@@ -5647,7 +5647,7 @@ const decideFixtureB = (label, md = null) => {
         destination: "ENG-12345", taskId: t.id, decisions: decisionsMap() });
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
       const c = rr?.rows?.[0]?.outcome || "";
-      check("ENG-99749 --decide --postponed writes `postponed — <reason> (D<N>) → <destination>` into the cell, and the task computes `partial` (postponed is a DEBT, not a closure)",
+      check("-decide --postponed writes `postponed — <reason> (D<N>) → <destination>` into the cell, and the task computes `partial` (postponed is a DEBT, not a closure)",
         () => !res.refused && /^postponed — .* \(D19\) → ENG-12345$/.test(c)
           && rr?.status === "partial",
         () => ({ cell: c, status: rr?.status }));
@@ -5663,7 +5663,7 @@ const decideFixtureB = (label, md = null) => {
         taskId: t.id, decisions: decisionsMap() });
       const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 --revoke D<N> clears every cell that decision wrote; the task's rows re-enter the verification list",
+      check("-revoke D<N> clears every cell that decision wrote; the task's rows re-enter the verification list",
         () => !rev.refused && rev.cleared.length >= 1
           && rr.rows.every((r) => !r.outcomeKind || r.na)
           && rr.status !== "wont-do",
@@ -5680,7 +5680,7 @@ const decideFixtureB = (label, md = null) => {
     const { base, dir, set, t } = decideFixtureA("revoke-identity", 3);
     // Without this, a finder that stops resolving turns every assertion below into a silent skip and the suite
     // still reports green.
-    check("ENG-99749 (review RC-6) fixture: a task with three or more rows was found to revoke against",
+    check("fixture: a task with three or more rows was found to revoke against",
       () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
     if (t) {
       applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
@@ -5694,7 +5694,7 @@ const decideFixtureB = (label, md = null) => {
       const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
       const after = readTaskDir(dir).find((x) => x.id === t.id);
       const fm = fs.readFileSync(fp, "utf8");
-      check("ENG-99749 (AC 7 / review RC-6) --revoke D13 clears EXACTLY the cell D13 wrote — the D19 row keeps its cell byte-for-byte and the agent's own `built` row is untouched",
+      check("AC 7: -revoke D13 clears EXACTLY the cell D13 wrote — the D19 row keeps its cell byte-for-byte and the agent's own `built` row is untouched",
         () => !rev.refused && rev.cleared.length === 1 && rev.cleared[0].n === 1
           && !after?.rows?.[0]?.outcomeKind
           && after?.rows?.[1]?.outcomeKind === "postponed"
@@ -5702,7 +5702,7 @@ const decideFixtureB = (label, md = null) => {
           && after?.rows?.[2]?.outcomeKind === "built",
         () => ({ cleared: rev.cleared.map((c) => c.n), kinds: after?.rows?.slice(0, 3).map((r) => r.outcomeKind),
           row2Before: before?.rows?.[1]?.outcome, row2After: after?.rows?.[1]?.outcome }));
-      check("ENG-99749 (AC 7 / review RC-6) the `decisions:` front matter keeps D19's pairing and loses only D13's — the map is the provenance stamp, so a revoke that reached the wrong cell shows up here",
+      check("AC 7: the `decisions:` front matter keeps D19's pairing and loses only D13's — the map is the provenance stamp, so a revoke that reached the wrong cell shows up here",
         () => /^decisions:.*\b2:D19\b/m.test(fm) && !/\b1:D13\b/.test(fm),
         () => ({ decisionsLine: fm.split("\n").find((l) => l.startsWith("decisions:")) }));
     }
@@ -5715,7 +5715,7 @@ const decideFixtureB = (label, md = null) => {
   // revoke that trusted the number would destroy a `built` record to undo a decision that never wrote it.
   {
     const { base, dir, set, t } = decideFixtureA("revoke-stale-map", 2);
-    check("ENG-99749 (review RC-6) fixture: a task with two or more rows was found for the stale-map check",
+    check("fixture: a task with two or more rows was found for the stale-map check",
       () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
     if (t) {
       applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed", destination: "ENG-12345",
@@ -5726,7 +5726,7 @@ const decideFixtureB = (label, md = null) => {
       fs.writeFileSync(fp, text);
       const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
       const after = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 (AC 7 / review RC-6) a STALE `decisions:` entry pointing at an agent's `built` cell is refused, not blanked — --revoke proves the cell is the one that decision wrote before it touches anything, and says which entries it skipped",
+      check("AC 7: a STALE `decisions:` entry pointing at an agent's `built` cell is refused, not blanked — --revoke proves the cell is the one that decision wrote before it touches anything, and says which entries it skipped",
         () => !rev.refused && rev.cleared.length === 0
           && (rev.skipped || []).some((s) => s.n === 1)
           && after?.rows?.[0]?.outcomeKind === "built"
@@ -5742,7 +5742,7 @@ const decideFixtureB = (label, md = null) => {
     const dir = path.join(base, "build-tasks");
     syncTaskDir(dir, RUN, OPTS);
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE);
-    check("ENG-99749 (AC 16) fixture: a task file was found to plant the retired token in",
+    check("AC 16: fixture: a task file was found to plant the retired token in",
       () => files.length > 0, () => ({ files: files.length }));
     if (files.length) {
       // `status:`, not `declared:`. The engine's loud path is `taskAttention`'s "unrecognised status" line and it
@@ -5756,7 +5756,7 @@ const decideFixtureB = (label, md = null) => {
       syncTaskDir(dir, RUN, OPTS);
       const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
       const onDisk = fs.readFileSync(f, "utf8");
-      check("ENG-99749 (AC 16) a folder still carrying `status: n/a` FAILS LOUDLY — the index names the file under Attention with `unrecognised status `n/a``, prints the vocabulary it must use instead, and the word is left on disk verbatim rather than coerced to anything the engine would act on",
+      check("AC 16: a folder still carrying `status: n/a` FAILS LOUDLY — the index names the file under Attention with `unrecognised status `n/a``, prints the vocabulary it must use instead, and the word is left on disk verbatim rather than coerced to anything the engine would act on",
         () => /## Attention/.test(idx)
           && idx.includes("unrecognised status `n/a`")
           && idx.includes(TASK_STATUSES.join(" / "))
@@ -5768,18 +5768,18 @@ const decideFixtureB = (label, md = null) => {
     fs.rmSync(base, { recursive: true, force: true });
   }
 
-  // The ROW-level half of AC 16, which had no check at all: `parseOutcome` no longer recognises `n-a`, so such a
+  // The ROW-level half of AC 16: `parseOutcome` does not recognise `n-a`, so such a cell reads as
   // cell must read as UNACCOUNTED — it cannot close its row, and the task cannot compute a closed word over it.
   // "Unaccounted" and "loudly rejected" look identical to a reader of a green suite unless this is pinned.
   {
     const { base, dir, set, t } = decideFixtureA("legacy-na-row", 1);
-    check("ENG-99749 (AC 16) fixture: a plan task was found to plant the retired row token in",
+    check("AC 16: fixture: a plan task was found to plant the retired row token in",
       () => !!t, () => ({ tasks: set.tasks.length }));
     if (t) {
       const fp = path.join(dir, t.file);
       fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "n-a — the old token"));
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 (AC 16) an Outcome cell still reading `n-a — <reason>` parses as UNACCOUNTED, never as a settled outcome — the retired token cannot close a row, and the task cannot read `done` or `not-applicable` over it",
+      check("AC 16: an Outcome cell still reading `n-a — <reason>` parses as UNACCOUNTED, never as a settled outcome — the retired token cannot close a row, and the task cannot read `done` or `not-applicable` over it",
         () => !rr?.rows?.[0]?.outcomeKind
           && !["done", "not-applicable", "wont-do"].includes(rr?.status),
         () => ({ kind: rr?.rows?.[0]?.outcomeKind, cell: rr?.rows?.[0]?.outcome, status: rr?.status }));
@@ -5816,29 +5816,29 @@ const decideFixtureB = (label, md = null) => {
       set: setWith(outcome), dir: vdir, built: {}, repair: null });
     const verdictLine = (r) => r.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
     const rep = reportFor("postponed — deferred, per decision (D19) → ENG-99999");
-    check("ENG-99749 (AC 13) three-colour verdict — a postponed row with a D<N> and a destination renders 🟡 COMPLETE FOR THIS PHASE, not 🔴 or 🟢",
+    check("AC 13: three-colour verdict — a postponed row with a D<N> and a destination renders 🟡 COMPLETE FOR THIS PHASE, not 🔴 or 🟢",
       () => /🟡 \*\*COMPLETE FOR THIS PHASE\*\*/.test(rep.markdown)
         && rep.verdictColour === "yellow"
         && rep.counts.postponed >= 1,
       () => ({ colour: rep.verdictColour, postponed: rep.counts.postponed, headSnippet: verdictLine(rep) }));
-    check("ENG-99749 (AC 14) the report carries a row-level Carry-over section for postponed items with the decision + destination",
+    check("AC 14: the report carries a row-level Carry-over section for postponed items with the decision + destination",
       () => /## Carry-over — postponed items/.test(rep.markdown)
         && /\*\*D19\*\*/.test(rep.markdown)
         && /ENG-99999/.test(rep.markdown),
       () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
-    // REVIEW RC-7 — the two shapes that used to buy 🟡 and must now compute RED. Both are reachable without a
+  // The two shapes that must compute RED rather than 🟡. Both are reachable without a
     // hand edit: `D999` is a decision deleted or renamed in decisions.md AFTER the cell was written, and the
     // destination-less cell is what `--to "   "` leaves behind (the CLI guard tests truthiness, so a
     // whitespace-only value passes it and `decideCellText` then trims it away).
     const repUnresolvable = reportFor("postponed — deferred, per decision (D999) → ENG-99999");
-    check("ENG-99749 (AC 13 / review RC-7) a postponed row whose `(D<N>)` does NOT resolve in decisions.md computes RED — a token pointing at nothing is not a person's answer, and 🟡 over it would hide a shortfall behind it",
+    check("AC 13: a postponed row whose `(D<N>)` does NOT resolve in decisions.md computes RED — a token pointing at nothing is not a person's answer, and 🟡 over it would hide a shortfall behind it",
       () => repUnresolvable.verdictColour === "red"
         && /⛔ \*\*NOT COMPLETE\*\*/.test(repUnresolvable.markdown)
         && /resolvable/.test(repUnresolvable.markdown)
         && !/COMPLETE FOR THIS PHASE/.test(verdictLine(repUnresolvable)),
       () => ({ colour: repUnresolvable.verdictColour, headSnippet: verdictLine(repUnresolvable) }));
     const repNoDest = reportFor("postponed — deferred, per decision (D19)");
-    check("ENG-99749 (AC 13 / review RC-7) a postponed row carrying NO destination computes RED, and the headline can never interpolate a literal `null` — AC 13 requires a destination, because a debt with nowhere to go is not a carry-over",
+    check("AC 13: a postponed row carrying NO destination computes RED, and the headline can never interpolate a literal `null` — AC 13 requires a destination, because a debt with nowhere to go is not a carry-over",
       () => repNoDest.verdictColour === "red" && !/null/.test(verdictLine(repNoDest)),
       () => ({ colour: repNoDest.verdictColour, headSnippet: verdictLine(repNoDest) }));
     fs.rmSync(vbase, { recursive: true, force: true });
@@ -5859,7 +5859,7 @@ const decideFixtureB = (label, md = null) => {
       // Hand-edit: put an unauthorised closure in row 1's Outcome cell (no D<N> marker).
       fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — I skipped this row"));
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
-      check("ENG-99749 (M1a) a hand-typed `wont-do — <reason>` cell WITHOUT a `(D<N>)` marker is downgraded to `not-built — needs-decision` by parseOutcome — the row stays open, visibly, and no closure sneaks through the gate `--decide` was built to police",
+      check("M1a: a hand-typed `wont-do — <reason>` cell WITHOUT a `(D<N>)` marker is downgraded to `not-built — needs-decision` by parseOutcome — the row stays open, visibly, and no closure sneaks through the gate `--decide` was built to police",
         () => rr?.rows?.[0]?.outcomeKind === "not-built"
           && rr?.rows?.[0]?.outcomeCause === "needs-decision"
           && rr?.rows?.[0]?.naNoReason === true
@@ -5869,7 +5869,7 @@ const decideFixtureB = (label, md = null) => {
       // The row must ALSO stay in --verify's list (registry says the row is still owed).
       const preMerged = readMergedTaskDir(dir, RUN, OPTS);
       const decKeys = decidedRowKeys(preMerged);
-      check("ENG-99749 (M1a) the downgraded row stays in `--verify`'s list — decidedRowKeys does not hide a row parseOutcome refused to close",
+      check("M1a: the downgraded row stays in `--verify`'s list — decidedRowKeys does not hide a row parseOutcome refused to close",
         () => decKeys.size === 0,
         () => ({ decKeys: decKeys.size }));
     }
@@ -5889,10 +5889,10 @@ const decideFixtureB = (label, md = null) => {
       const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
       const preMerged = readMergedTaskDir(dir, RUN, OPTS);
       const decKeys = decidedRowKeys(preMerged);
-      check("ENG-99749 (M1b) a hand-typed `wont-do` cell WITH a `(D<N>)` marker but WITHOUT a matching `decisions:` map entry is named on Attention — the map is the engine's provenance stamp (only `--decide` writes both together), so a cell present without its entry is a hand edit",
+      check("M1b: a hand-typed `wont-do` cell WITH a `(D<N>)` marker but WITHOUT a matching `decisions:` map entry is named on Attention — the map is the engine's provenance stamp (only `--decide` writes both together), so a cell present without its entry is a hand edit",
         () => /but the row is NOT in this task's `decisions:` map/.test(idx),
         () => idx.split("## Attention")[1]?.slice(0, 400));
-      check("ENG-99749 (M1b) the spoofed row is NOT hidden from `--verify` — decidedRowKeys requires the same provenance stamp Attention checks, so the two guards agree",
+      check("M1b: the spoofed row is NOT hidden from `--verify` — decidedRowKeys requires the same provenance stamp Attention checks, so the two guards agree",
         () => decKeys.size === 0,
         () => ({ decKeys: decKeys.size }));
     }
@@ -5914,7 +5914,7 @@ const decideFixtureB = (label, md = null) => {
       const withoutFilter = renderVerify(RUN, OPTS, {});
       const withFilter = renderVerify(RUN, OPTS, {}, decKeys);
       const decidedLabels = new Set((res.touched || []).map((x) => x.task.rows[x.n - 1].label));
-      check("ENG-99749 (AC 12) a row closed by decision drops out of `--verify`'s row list — decidedKeys filters the plan walk, so the deliverable is not in the rendered table",
+      check("AC 12: a row closed by decision drops out of `--verify`'s row list — decidedKeys filters the plan walk, so the deliverable is not in the rendered table",
         () => !res.refused && decKeys.size >= 1
           && withoutFilter.rows.some((r) => r.deliverable === closedLabel)
           && !withFilter.rows.some((r) => r.deliverable === closedLabel)
@@ -5929,7 +5929,7 @@ const decideFixtureB = (label, md = null) => {
         () => ({ touched: res.touched?.length, decKeys: decKeys.size,
           before: withoutFilter.rows.length, after: withFilter.rows.length,
           decided: withFilter.decided?.length, closedLabel }));
-      check("ENG-99749 (AC 12) the verify markdown carries a banner naming the decided rows kept out of the table — nothing is dropped in silence",
+      check("AC 12: the verify markdown carries a banner naming the decided rows kept out of the table — nothing is dropped in silence",
         () => /plan row\(s\) closed by a recorded decision are OUT of this table/.test(withFilter.markdown)
           && !/plan row\(s\) closed by a recorded decision/.test(withoutFilter.markdown),
         () => withFilter.markdown.split("###")[0]);
@@ -5939,11 +5939,11 @@ const decideFixtureB = (label, md = null) => {
 }
 
 // ============================================================================================================
-// ENG-99749 review Group D: test coverage the review named (m6 red/green verdict branches, m7 --pages
+// review Group D: test coverage the review named (m6 red/green verdict branches, m7 --pages
 // addressing + refusal, m8 free-text destination + escaped pipe, m9 parseDecisionsMap/renderDecisionsMap
 // direct invariants). Each closes a coverage gap where a one-character change would slip through unnoticed.
 // ============================================================================================================
-console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
+console.log("\n===== review coverage gaps (Group D) =====");
 {
   // m6: three-colour verdict — GREEN branch. A synthetic set with nothing open and nothing postponed must
   // render 🟢 (not 🟡 or 🔴) and NOT emit a Carry-over section.
@@ -5955,7 +5955,7 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
   ] };
   const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
     set, dir: tmp("verdict-green"), built: {}, repair: null });
-  check("ENG-99749 (m6) three-colour verdict — GREEN: nothing open, nothing postponed renders 🟢 COMPLETE and no Carry-over section",
+  check("m6: three-colour verdict — GREEN: nothing open, nothing postponed renders 🟢 COMPLETE and no Carry-over section",
     () => rep.verdictColour === "green"
       && /🟢 \*\*COMPLETE\*\*/.test(rep.markdown)
       && !/🟡/.test(rep.markdown) && !/🔴/.test(rep.markdown)
@@ -5974,7 +5974,7 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
   ] };
   const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
     set, dir: tmp("verdict-red"), built: {}, repair: null });
-  check("ENG-99749 (m6) three-colour verdict — RED: a not-built row with no postponed items renders 🔴 NOT COMPLETE, reasons non-empty, no 🟡 wording",
+  check("m6: three-colour verdict — RED: a not-built row with no postponed items renders 🔴 NOT COMPLETE, reasons non-empty, no 🟡 wording",
     () => rep.verdictColour === "red"
       && /⛔ \*\*NOT COMPLETE\*\*/.test(rep.markdown)
       && rep.reasons.length >= 1
@@ -6006,13 +6006,13 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
     const targetTasks = rr.tasks.filter((t) => t.pageKey === targetPage && t.origin === "engine"
       && t.kind !== "repair" && t.artifact !== ARTIFACT_REFS && (t.rows || []).length);
     const controlTasks = controlPage ? rr.tasks.filter((t) => t.pageKey === controlPage) : [];
-    check("ENG-99749 (m7) --decide --pages closes every task on the addressed pageKey — the ticket's headline case (D13 descoping the typed forms)",
+    check("m7: -decide --pages closes every task on the addressed pageKey — the ticket's headline case (D13 descoping the typed forms)",
       () => !res.refused && targetTasks.length >= 1
         && targetTasks.every((t) => t.rows.every((r) => r.outcomeKind === "wont-do" || r.na)),
       () => ({ target: targetPage, touched: res.touched?.length,
         targetTaskKinds: targetTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
     if (controlTasks.length) {
-      check("ENG-99749 (m7) --decide --pages touches NO task on a different pageKey — the addressing is pageKey-scoped, not global",
+      check("m7: -decide --pages touches NO task on a different pageKey — the addressing is pageKey-scoped, not global",
         () => controlTasks.every((t) => (t.rows || []).every((r) => !r.outcomeKind || r.outcomeKind === "not-applicable" || r.na))
           && controlTasks.every((t) => !touchedIds.has(t.id)),
         () => ({ control: controlPage, kinds: controlTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
@@ -6021,7 +6021,7 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
   // Refusal on a nonexistent pageKey: --decide names nothing and writes nothing.
   const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
     pages: ["totally-not-a-page-key-9999"], decisions });
-  check("ENG-99749 (m7) --decide --pages with a nonexistent pageKey is refused — nothing to write, and the problem names the missing key",
+  check("m7: -decide --pages with a nonexistent pageKey is refused — nothing to write, and the problem names the missing key",
     () => bad.refused && bad.problems?.some((p) => /totally-not-a-page-key-9999/.test(p)),
     () => ({ refused: bad.refused, problems: bad.problems }));
   fs.rmSync(base, { recursive: true, force: true });
@@ -6046,10 +6046,10 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
     const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
       set: rr, dir, built: {}, repair: null });
     const carry = rep.markdown.split("## Carry-over")[1] || "";
-    check("ENG-99749 (m8) renderDestination free-text branch: a destination that is NOT an issue-key shape renders as escaped text, not as a Jira link — ISSUE_KEY_RE gates the linkification",
+    check("m8: renderDestination free-text branch: a destination that is NOT an issue-key shape renders as escaped text, not as a Jira link — ISSUE_KEY_RE gates the linkification",
       () => /Q4 2026/.test(carry) && !/https:\/\/creatio\.atlassian\.net\/browse\/Q4/.test(carry),
       () => carry.slice(0, 600));
-    check("ENG-99749 (m8) a raw `|` in a free-text destination is escaped inside the Carry-over table cell — otherwise the pipe would shift every column after it",
+    check("m8: a raw `|` in a free-text destination is escaped inside the Carry-over table cell — otherwise the pipe would shift every column after it",
       () => /Q4 2026 \\\| backlog/.test(carry),
       () => carry.slice(0, 600));
   }
@@ -6059,7 +6059,7 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
   // m9: renderDecisionsMap emits pairs sorted by numeric key — a stable diff invariant. Feed unsorted
   // input and assert the output is sorted 1, 2, 10 (not lexicographic 1, 10, 2).
   const m = new Map([[10, "D42"], [1, "D7"], [2, "D3"]]);
-  check("ENG-99749 (m9) renderDecisionsMap sorts entries by NUMERIC row key — lexicographic sort would put 10 before 2 and break stable diffs",
+  check("m9: renderDecisionsMap sorts entries by NUMERIC row key — lexicographic sort would put 10 before 2 and break stable diffs",
     () => renderDecisionsMap(m) === "1:D7 2:D3 10:D42",
     () => renderDecisionsMap(m));
   // m9: --revoke over a file with one valid + one malformed entry must not crash — the malformed entry
@@ -6082,7 +6082,7 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
     let rev;
     try { rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" }); }
     catch (e) { rev = { threw: e.message }; }
-    check("ENG-99749 (m9) --revoke over a decisions: map with malformed entries (`x:junk 2:D-1`) does NOT crash — parseDecisionsMap silently drops them, revoke clears the valid ones",
+    check("m9: -revoke over a decisions: map with malformed entries (`x:junk 2:D-1`) does NOT crash — parseDecisionsMap silently drops them, revoke clears the valid ones",
       () => !rev.threw && !rev.refused && rev.cleared?.length >= 1,
       () => rev);
   }
@@ -6090,10 +6090,10 @@ console.log("\n===== ENG-99749: review coverage gaps (Group D) =====");
 }
 
 // ============================================================================================================
-// ENG-99749 review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
+// review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
 // non-integer row keys, m11 last-arrow anchoring).
 // ============================================================================================================
-console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
+console.log("\n===== cell round-trip edge cases (Group B) =====");
 {
   // m3: title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
   const base = tmp("m3-titleless-dn");
@@ -6109,14 +6109,14 @@ console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
     const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "postponed",
       destination: "ENG-9999", taskId: t.id, decisions });
     const rr = readTaskDir(dir).find((x) => x.id === t.id);
-    check("ENG-99749 (m3) a decision without a title still writes a cell that carries `(D<N>)` — the round-trip needs it, parsePostponedCell reads only the parenthesised shape",
+    check("m3: a decision without a title still writes a cell that carries `(D<N>)` — the round-trip needs it, parsePostponedCell reads only the parenthesised shape",
       () => !res.refused && /\(D13\)/.test(rr?.rows?.[0]?.outcome || ""),
       () => rr?.rows?.[0]?.outcome);
     // And the report renders **D13** (not the ⚠-fallback) — the round-trip is the whole point.
     const set2 = readMergedTaskDir(dir, RUN, OPTS);
     const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
       set: set2, dir, built: {}, repair: null });
-    check("ENG-99749 (m3) the Carry-over section renders **D13** for a title-less decision — the round-trip is complete, no `⚠ no D<N>` fallback fires",
+    check("m3: the Carry-over section renders **D13** for a title-less decision — the round-trip is complete, no `⚠ no D<N>` fallback fires",
       () => /\*\*D13\*\*/.test(rep.markdown) && !/⚠ no D<N> found in the cell/.test(rep.markdown),
       () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
   }
@@ -6124,10 +6124,10 @@ console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
 }
 {
   // m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
-  check("ENG-99749 (m10) parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
+  check("m10: parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
     () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
     () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
-  check("ENG-99749 (m10) parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
+  check("m10: parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
     () => {
       const m = parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42");
       return m.size === 1 && m.get(4) === "D42";
@@ -6149,7 +6149,7 @@ console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
   ] };
   const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
     set, dir: tmp("m11-title-arrow"), built: {}, repair: null });
-  check("ENG-99749 (m11) a decision title containing `→` (e.g. `see D3 → D4`) does not leak into the destination — the parser anchors on the LAST arrow, the Jira link renders on the real key",
+  check("m11: a decision title containing `→` (e.g. `see D3 → D4`) does not leak into the destination — the parser anchors on the LAST arrow, the Jira link renders on the real key",
     () => /ENG-12345/.test(rep.markdown)
       && /https:\/\/creatio\.atlassian\.net\/browse\/ENG-12345/.test(rep.markdown)
       && !/browse\/D4/.test(rep.markdown),
@@ -6157,11 +6157,11 @@ console.log("\n===== ENG-99749: cell round-trip edge cases (Group B) =====");
 }
 
 // ============================================================================================================
-// ENG-99749 review M2: spawnSync coverage for the --decide / --revoke CLI parser. Every other CLI mode
+// review M2: spawnSync coverage for the --decide / --revoke CLI parser. Every other CLI mode
 // (--next, --verify, --start, --split, --add) is exercised through spawnSync; this one was going through
 // applyDecision / revokeDecision directly and left the parser silent. Fixing that here.
 // ============================================================================================================
-console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====");
+console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
 {
   const setup = (label) => {
     const base = tmp(label);
@@ -6179,7 +6179,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // No --tasks: --decide needs a folder to write into.
     const { base } = setup("cli-decide-no-tasks");
     const r = cliTasks(["--decide", "D13", "--wont-do", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --decide without --tasks exits 1 and names the missing flag",
+    check("M2: -decide without --tasks exits 1 and names the missing flag",
       () => r.status === 1 && /`--decide`.*only means something with `--tasks/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6188,7 +6188,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // Bad D<N> shape.
     const { base, dir } = setup("cli-decide-bad-dn");
     const r = cliTasks(["--tasks", dir, "--decide", "d13", "--wont-do", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --decide with a lower-case `d13` (bad shape) exits 1 and prints the expected D<N> shape",
+    check("M2: -decide with a lower-case `d13` (bad shape) exits 1 and prints the expected D<N> shape",
       () => r.status === 1 && /needs a decision id shaped D<N>/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6197,7 +6197,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // --decide + --revoke: two opposite operations, mutually exclusive.
     const { base, dir } = setup("cli-decide-revoke-mutex");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--revoke", "D13", "--wont-do", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --decide and --revoke together exit 1 — opposite operations, run them as separate commands",
+    check("M2: -decide and --revoke together exit 1 — opposite operations, run them as separate commands",
       () => r.status === 1 && /`--decide`.*`--revoke`.*opposite operations/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6210,7 +6210,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     fs.writeFileSync(builtFile, "{}");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--pages", "main",
       "--verify", "--built", builtFile], MANIFEST);
-    check("ENG-99749 (M2) --decide + --verify exit 1 — the two write / move the folder in different ways; cannot combine",
+    check("M2: -decide + --verify exit 1 — the two write / move the folder in different ways; cannot combine",
       () => r.status === 1 && /`--decide`.*writes into the folder/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6220,7 +6220,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     const { base, dir } = setup("cli-wontdo-postponed-mutex");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--postponed",
       "--to", "ENG-1", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --wont-do and --postponed together exit 1 — two answers to one question",
+    check("M2: -wont-do and --postponed together exit 1 — two answers to one question",
       () => r.status === 1 && /`--wont-do`.*`--postponed`.*two answers to one question/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6229,7 +6229,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // --postponed requires --to.
     const { base, dir } = setup("cli-postponed-no-to");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--postponed", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --postponed without --to exits 1 and names the destination requirement",
+    check("M2: -postponed without --to exits 1 and names the destination requirement",
       () => r.status === 1 && /`--postponed`.*`--to <destination>`/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6238,7 +6238,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // --wont-do refuses --to (a decision that closes the debt goes nowhere).
     const { base, dir } = setup("cli-wontdo-with-to");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--to", "ENG-1", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --wont-do + --to exit 1 — a closure has no destination",
+    check("M2: -wont-do + --to exit 1 — a closure has no destination",
       () => r.status === 1 && /`--to` only means something with `--postponed`/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6247,7 +6247,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // No addressing at all.
     const { base, dir } = setup("cli-decide-no-addr");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do"], MANIFEST);
-    check("ENG-99749 (M2) --decide with no addressing exits 1 — needs one of --pages / --task / --row",
+    check("M2: -decide with no addressing exits 1 — needs one of --pages / --task / --row",
       () => r.status === 1 && /--decide.*needs one of/.test(r.stderr || "")
         && /--pages/.test(r.stderr || "") && /--task/.test(r.stderr || "") && /--row/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
@@ -6258,7 +6258,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     const { base, dir } = setup("cli-decide-two-addr");
     const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do",
       "--pages", "main", "--task", "some-id"], MANIFEST);
-    check("ENG-99749 (M2) --decide with two addressings (--pages + --task) exits 1 — pick one",
+    check("M2: -decide with two addressings (--pages + --task) exits 1 — pick one",
       () => r.status === 1 && /three addressings for ONE decision — pick one/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6267,7 +6267,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     // --revoke refuses addressing / value flags — the subject is the decision, not what it touched.
     const { base, dir } = setup("cli-revoke-with-addr");
     const r = cliTasks(["--tasks", dir, "--revoke", "D13", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --revoke with an addressing flag exits 1 — the subject is the decision; no addressing to give",
+    check("M2: -revoke with an addressing flag exits 1 — the subject is the decision; no addressing to give",
       () => r.status === 1 && /`--pages` does not go with `--revoke`/.test(r.stderr || ""),
       () => ({ status: r.status, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6277,7 +6277,7 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     const { base, dir } = setup("cli-decide-missing-dn");
     cliTasks(["--tasks", dir], MANIFEST);   // slice the folder so --decide has something to look at
     const r = cliTasks(["--tasks", dir, "--decide", "D999", "--wont-do", "--pages", "main"], MANIFEST);
-    check("ENG-99749 (M2) --decide with a D<N> not in decisions.md exits 1 and prints how to add it — the safeguard AC 3 names",
+    check("M2: -decide with a D<N> not in decisions.md exits 1 and prints how to add it — the safeguard AC 3 names",
       () => r.status === 1 && /D999.*does not resolve/.test(r.stdout || "" + (r.stderr || "")),
       () => ({ status: r.status, stdout: r.stdout, stderr: r.stderr }));
     fs.rmSync(base, { recursive: true, force: true });
@@ -6299,15 +6299,15 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
     const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
       && x.artifact !== ARTIFACT_REFS
       && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
-    check("ENG-99749 (M2) fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
+    check("M2: fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
       () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
     if (t) {
       const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
-      check("ENG-99749 (M2) happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",
+      check("M2: happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",
         () => decide.status === 0 && /wont-do \d+ row\(s\) under D13/.test(decide.stdout || ""),
         () => ({ status: decide.status, stdout: decide.stdout, stderr: decide.stderr }));
       const revoke = cliTasks(["--tasks", dir, "--revoke", "D13"], MANIFEST);
-      check("ENG-99749 (M2) happy path: --revoke D13 exits 0 and prints the cleared-cell count",
+      check("M2: happy path: --revoke D13 exits 0 and prints the cleared-cell count",
         () => revoke.status === 0 && /revoked D13 — cleared \d+ cell\(s\)/.test(revoke.stdout || ""),
         () => ({ status: revoke.status, stdout: revoke.stdout, stderr: revoke.stderr }));
     }
@@ -6316,8 +6316,8 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
 }
 
 
-console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair tasks) =====");
-// Every ENG-99749 block above filters `kind !== "repair"`, so none of them reaches `setAdoptedRowOutcomes` —
+console.log("\n===== the cascade and the adopted-body writer (repair tasks) =====");
+// Every block above filters `kind !== "repair"`, so none of them reaches `setAdoptedRowOutcomes` —
 // the in-place cell writer a decision uses on a body the engine must keep byte-for-byte. AC 9, AC 10 and AC 11
 // are all about that path, and it had no coverage at all.
 {
@@ -6328,7 +6328,7 @@ console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair 
   syncTaskDir(dir, RUN, OPTS);
   const round1 = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
   const handlers = round1.written.find((t) => t.cause === "missing:handlers");
-  check("ENG-99749 (review RC-9) fixture: a real repair task was written, so the adopted-body path below is actually exercised",
+  check("fixture: a real repair task was written, so the adopted-body path below is actually exercised",
     () => !!handlers && handlers.rows.length > 1,
     () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
   if (handlers) {
@@ -6339,7 +6339,7 @@ console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair 
       destination: "ENG-1", taskId: handlers.id, decisions });
     const after = fs.readFileSync(fp, "utf8").split("\n");
     const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
-    check("ENG-99749 (AC 11 / review RC-9) a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
+    check("AC 11: a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
       () => !res.refused && (res.unplaced || []).length === 0
         && res.touched.length === handlers.rows.length
         && (rr?.rows || []).every((r) => r.outcomeKind === "postponed")
@@ -6359,14 +6359,14 @@ console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair 
       if (/^(status|statusFrom|decisions):/.test(line)) continue;
       strayEdits.push(`${i}: ${before[i]} -> ${line}`);
     }
-    check("ENG-99749 (AC 9 / review RC-9) the decision edits ONLY the Outcome cells and the engine's own front-matter fields — the rest of an adopted body stays byte-identical, which is the guarantee that makes a repair body safe to decide over",
+    check("AC 9: the decision edits ONLY the Outcome cells and the engine's own front-matter fields — the rest of an adopted body stays byte-identical, which is the guarantee that makes a repair body safe to decide over",
       () => strayEdits.length === 0 && before.length === after.length,
       () => ({ strayEdits: strayEdits.slice(0, 5), beforeLines: before.length, afterLines: after.length }));
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
-  // The writer used to walk back from the LAST pipe, so a cell already holding a RAW `|` — a shape `tableRows`
+  // The writer walks the table with the parser's own split, so a cell already holding a RAW `|` — a shape
   // explicitly supports, since it rejoins everything from the Outcome column to the trailing cell — stopped the
   // walk at that pipe, left the old text in place and still reported success. The decision was then recorded in
   // `decisions:` for a cell the body never received.
@@ -6377,7 +6377,7 @@ console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair 
   syncTaskDir(dir, RUN, OPTS);
   const written = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written;
   const target = written.find((t) => t.cause === "missing:handlers");
-  check("ENG-99749 (review RB-10) fixture: a repair task was found to plant the raw-pipe cell in",
+  check("fixture: a repair task was found to plant the raw-pipe cell in",
     () => !!target, () => ({ written: written.map((t) => t.cause) }));
   if (target) {
     const fp = path.join(dir, target.file);
@@ -6393,7 +6393,7 @@ console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair 
       taskId: target.id, decisions });
     const rr = readTaskDir(dir).find((x) => x.id === target.id);
     const fm = fs.readFileSync(fp, "utf8");
-    check("ENG-99749 (review RB-10) a decision lands on a cell that already held a RAW `|` — the writer rebuilds the row through the same split the parser uses, so the cell really changes and can never be recorded as written while the body still holds the old text",
+    check("a decision lands on a cell that already held a RAW `|` — the writer rebuilds the row through the same split the parser uses, so the cell really changes and can never be recorded as written while the body still holds the old text",
       // The planted cell must really carry the raw pipe, or this check pins nothing: the parser rejoins
       // everything from the Outcome column, so `a|b` surviving the read is what proves the shape.
       () => /^not-built/.test(parsedBefore?.rows?.[0]?.outcome || "")
