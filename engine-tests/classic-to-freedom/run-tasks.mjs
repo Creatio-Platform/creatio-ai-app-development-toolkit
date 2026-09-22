@@ -2419,8 +2419,8 @@ check("migrate.mjs --split: a re-slice with NO `--split` reads the frozen copy a
     () => /Fix the file you passed with --split and re-run/.test(bad.stdout || "")
       && !/Fix that file/.test(bad.stdout || ""),
     () => bad.stdout);
-  // A folder cut against one plan, met by a plan that GAINED rows. The split still PARSES — it simply no longer
-  // covers the plan — and the refusal has to say that, because the two are cleared by different edits.
+  // A folder cut against one plan, met by a plan that GAINED rows. The split still PARSES and its coverage falls
+  // short, and the refusal has to say which, because the two are cleared by different edits.
   const baseD = tmp("cli-split-drift");
   const dirD = path.join(baseD, "build-tasks");
   const splitD = path.join(baseD, "split.json");
