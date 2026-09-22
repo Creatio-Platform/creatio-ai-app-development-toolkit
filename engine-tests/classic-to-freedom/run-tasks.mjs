@@ -6015,5 +6015,106 @@ console.log("\n===== ENG-99749: --decide / --revoke CLI parser (spawnSync) =====
   }
 }
 
+
+console.log("\n===== ENG-99749: the cascade and the adopted-body writer (repair tasks) =====");
+// Every ENG-99749 block above filters `kind !== "repair"`, so none of them reaches `setAdoptedRowOutcomes` —
+// the in-place cell writer a decision uses on a body the engine must keep byte-for-byte. AC 9, AC 10 and AC 11
+// are all about that path, and it had no coverage at all.
+{
+  const base = tmp("rc9-repair");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n## D19 — defer to next phase\n");
+  const decisions = new Map([["D13", "descope the handlers"], ["D19", "defer to next phase"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const round1 = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+  const handlers = round1.written.find((t) => t.cause === "missing:handlers");
+  check("ENG-99749 (review RC-9) fixture: a real repair task was written, so the adopted-body path below is actually exercised",
+    () => !!handlers && handlers.rows.length > 1,
+    () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
+  if (handlers) {
+    const fp = path.join(dir, handlers.file);
+    const before = fs.readFileSync(fp, "utf8").split("\n");
+
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "ENG-1", taskId: handlers.id, decisions });
+    const after = fs.readFileSync(fp, "utf8").split("\n");
+    const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
+    check("ENG-99749 (AC 11 / review RC-9) a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
+      () => !res.refused && (res.unplaced || []).length === 0
+        && res.touched.length === handlers.rows.length
+        && (rr?.rows || []).every((r) => r.outcomeKind === "postponed")
+        && /→ ENG-1$/.test(rr?.rows?.[0]?.outcome || "")
+        && rr?.status === "partial",
+      () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
+        status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
+
+    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells and the three
+    // front-matter fields the engine owns may differ. Anything else means the writer rewrote a file it was
+    // supposed to edit in place.
+    const strayEdits = [];
+    for (let i = 0; i < Math.max(before.length, after.length); i++) {
+      if (before[i] === after[i]) continue;
+      const line = after[i] ?? "";
+      if (/^\s*\|/.test(line)) continue;
+      if (/^(status|statusFrom|decisions):/.test(line)) continue;
+      strayEdits.push(`${i}: ${before[i]} -> ${line}`);
+    }
+    check("ENG-99749 (AC 9 / review RC-9) the decision edits ONLY the Outcome cells and the engine's own front-matter fields — the rest of an adopted body stays byte-identical, which is the guarantee that makes a repair body safe to decide over",
+      () => strayEdits.length === 0 && before.length === after.length,
+      () => ({ strayEdits: strayEdits.slice(0, 5), beforeLines: before.length, afterLines: after.length }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The writer used to walk back from the LAST pipe, so a cell already holding a RAW `|` — a shape `tableRows`
+  // explicitly supports, since it rejoins everything from the Outcome column to the trailing cell — stopped the
+  // walk at that pipe, left the old text in place and still reported success. The decision was then recorded in
+  // `decisions:` for a cell the body never received.
+  const base = tmp("rc9-rawpipe");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope\n");
+  const decisions = new Map([["D13", "descope"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const written = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written;
+  const target = written.find((t) => t.cause === "missing:handlers");
+  check("ENG-99749 (review RB-10) fixture: a repair task was found to plant the raw-pipe cell in",
+    () => !!target, () => ({ written: written.map((t) => t.cause) }));
+  if (target) {
+    const fp = path.join(dir, target.file);
+    const RAW = "not-built — blocked by a|b pipe";
+    const planted = fs.readFileSync(fp, "utf8").split("\n").map((l) => {
+      if (!/^\s*\|\s*1\s*\|/.test(l)) return l;
+      const cells = l.split(/(?<!\\)\|/);
+      return `${cells.slice(0, cells.length - 2).join("|")}| ${RAW} |`;
+    });
+    fs.writeFileSync(fp, planted.join("\n"));
+    const parsedBefore = readTaskDir(dir).find((x) => x.id === target.id);
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+      taskId: target.id, decisions });
+    const rr = readTaskDir(dir).find((x) => x.id === target.id);
+    const fm = fs.readFileSync(fp, "utf8");
+    check("ENG-99749 (review RB-10) a decision lands on a cell that already held a RAW `|` — the writer rebuilds the row through the same split the parser uses, so the cell really changes and can never be recorded as written while the body still holds the old text",
+      // The planted cell must really carry the raw pipe, or this check pins nothing: the parser rejoins
+      // everything from the Outcome column, so `a|b` surviving the read is what proves the shape.
+      () => /^not-built/.test(parsedBefore?.rows?.[0]?.outcome || "")
+        && /a\|b/.test(parsedBefore?.rows?.[0]?.outcome || "")
+        && !res.refused && (res.unplaced || []).length === 0
+        && rr?.rows?.[0]?.outcomeKind === "wont-do"
+        && /\(D13\)/.test(rr?.rows?.[0]?.outcome || "")
+        && /^decisions:.*\b1:D13\b/m.test(fm),
+      () => ({ plantedCell: parsedBefore?.rows?.[0]?.outcome, unplaced: res.unplaced?.length,
+        afterKind: rr?.rows?.[0]?.outcomeKind, afterCell: rr?.rows?.[0]?.outcome,
+        decisionsLine: fm.split("\n").find((l) => l.startsWith("decisions:")) }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+// AC 10 (a decision-closed round must not consume a repair round) has NO check here. Asserting it end to
+// end needs a page that reports a NEW gap of the SAME kind AFTER a decision closed the previous round —
+// a cause whose rows are all closed never asks for another round, so the cap is invisible until then, and
+// this synthetic `VERIFY_PAGES` does not reproduce that state (the widened fixture produced no handlers
+// group at all). The mechanism is in `repairRounds` / `nextRound`: a decision-closed task is kept out of
+// the cap map and left in `openRounds`. It is unit-untested, deliberately and visibly, rather than pinned
+// by a check whose fixture does not mean what it appears to mean.
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
