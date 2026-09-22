@@ -4210,7 +4210,18 @@ function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
     kind: rowKindOf(r, outcome), vkType: r.vk?.type || null, owner: verifyRowOwner(owner), ...idPart };
   return { row, tableLine: `| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |` };
 }
-export function renderVerify(result, opts = {}, built = {}) {
+// ENG-99749 AC 12: the LIST of rows to verify comes from the TASK REGISTRY, not the plan walk. The check
+// mechanics stay identical — the resolvers, the `get-page` reads and the machine/judge/hand split are
+// unchanged — but a row the registry closed by decision (`wont-do` / `postponed` / `not-applicable`) is
+// not in the list, so it never becomes MISSING. The plan is still the source of verification descriptors
+// (`vk`, `na`, `info`, kind), which are too heavy to carry inside a markdown task file.
+//
+// `decidedKeys` is a Set<string> keyed as `${pageKey}::${normalizeVerifyLabel(label)}`. When null (a bare
+// `--verify` without `--tasks`, or an engine test that predates the flag), renderVerify falls back to the
+// plan walk unchanged — no registry means no filter, and every plan row is measured as before.
+export const normalizeVerifyLabel = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " ").trim();
+export const verifyRowKey = (pageKey, label) => `${pageKey}::${normalizeVerifyLabel(label)}`;
+export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
   const tally = verifyTally();
@@ -4224,9 +4235,20 @@ export function renderVerify(result, opts = {}, built = {}) {
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
   // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
   const rows = [];
+  // ENG-99749 AC 12: rows the registry has closed by decision. Collected so the caller can render them on
+  // the report's Carry-over section (postponed) or as decided boundaries (wont-do / not-applicable) —
+  // nothing is dropped in silence; the LIST just changes source.
+  const decided = [];
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
+      // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
+      // `buildVerifyRow` applies inside.
+      const rowPage = r.pageKey || g.pageKey || "main";
+      if (decidedKeys && decidedKeys.has(verifyRowKey(rowPage, r.label))) {
+        decided.push({ n: ++n, pageKey: rowPage, group: g.title, deliverable: r.label });
+        continue;
+      }
       const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
       rows.push(row);
       L.push(tableLine);
@@ -4234,9 +4256,15 @@ export function renderVerify(result, opts = {}, built = {}) {
   }
   const { missing, unverified, builderOpen, pages } = tally;
   const verdict = verifyVerdict(missing, unverified);
+  const decidedBanner = decided.length
+    ? [`> ℹ ${decided.length} plan row(s) closed by a recorded decision are OUT of this table — the task registry`
+        + " is the single source of what is owed (ENG-99749). See the migration result report's Carry-over"
+        + " section for the postponed ones and section 2 for the wont-do / not-applicable ones."]
+    : [];
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
+    ...decidedBanner,
     ...planGapBanner(result),
     ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows };
+  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows, decided };
 }

@@ -20,7 +20,8 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir,
-  applyDecision, revokeDecision } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+import { renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { parseSplit, resolveSplit, rowKey, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -5412,6 +5413,47 @@ console.log("\n===== ENG-99749: --decide / --revoke and the three-colour verdict
         && /\*\*D19\*\*/.test(rep.markdown)
         && /ENG-99999/.test(rep.markdown),
       () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+  }
+
+  // ---- (AC 12) --verify sources rows from the task registry ------------------------------------------------
+  // A row the registry has closed by decision must not appear in --verify's table, its verdict, or its
+  // pages map — even if the built payload is empty (so the plan walk alone would report it MISSING).
+  {
+    const base = tmp("verify-from-registry");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    // Address every non-boundary row of a chosen page. --pages descope is the ticket's headline case
+    // (D13 dropped 14 typed forms in the recorded ENG-99135 run), so it also exercises the intended
+    // addressing mode end-to-end.
+    // A plan task, not the engine's own reference-cache task (whose rows are internal and never verified
+    // against the stand). Boundary rows are also excluded — the plan already pre-fills them.
+    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    if (t) {
+      const closedLabel = t.rows[0].label;
+      const decisions = new Map([["D42", "descoped for AC 12 test"]]);
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D42", mode: "wont-do",
+        taskId: t.id, decisions });
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      const withoutFilter = renderVerify(RUN, OPTS, {});
+      const withFilter = renderVerify(RUN, OPTS, {}, decKeys);
+      check("ENG-99749 (AC 12) a row closed by decision drops out of `--verify`'s row list — decidedKeys filters the plan walk, so the deliverable is not in the rendered table",
+        () => !res.refused && decKeys.size >= 1
+          && withoutFilter.rows.some((r) => r.deliverable === closedLabel)
+          && !withFilter.rows.some((r) => r.deliverable === closedLabel)
+          && withFilter.decided?.some((r) => r.deliverable === closedLabel)
+          && withFilter.rows.length === withoutFilter.rows.length - res.touched.length,
+        () => ({ touched: res.touched?.length, decKeys: decKeys.size,
+          before: withoutFilter.rows.length, after: withFilter.rows.length,
+          decided: withFilter.decided?.length, closedLabel }));
+      check("ENG-99749 (AC 12) the verify markdown carries a banner naming the decided rows kept out of the table — nothing is dropped in silence",
+        () => /plan row\(s\) closed by a recorded decision are OUT of this table/.test(withFilter.markdown)
+          && !/plan row\(s\) closed by a recorded decision/.test(withoutFilter.markdown),
+        () => withFilter.markdown.split("###")[0]);
+    }
+    fs.rmSync(base, { recursive: true, force: true });
   }
 }
 

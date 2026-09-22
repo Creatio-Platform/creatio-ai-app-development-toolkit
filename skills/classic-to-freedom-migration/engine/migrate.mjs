@@ -60,7 +60,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision } from "./tasks.mjs";
+  applyDecision, revokeDecision, decidedRowKeys } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3686,9 +3686,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // a file they never wrote.
     if (issue && fromDir) fail(`the payload composed from '${fromDir}' ${issue}. The files under ${fromDir}/reads/ are what it was built from — check they are the ones \`${READS_FLAG}\` named.`);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by.");
+    // ENG-99749 AC 12: when `--tasks <dir>` is present, the LIST of rows to verify comes from the task
+    // REGISTRY, not the plan walk. Read the folder once here (read-only, before the repair round writes
+    // anything), collect the deliverables the registry has closed by decision, and pass them to
+    // `renderVerify` so those rows never become MISSING. When `--verify` runs without `--tasks`, no
+    // registry exists — `decidedKeys` stays null and `renderVerify` falls back to the plan walk unchanged.
+    let decidedKeys = null;
+    if (tasksMode) {
+      try {
+        const preMerged = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+        if (preMerged && !preMerged.refused) decidedKeys = decidedRowKeys(preMerged);
+      } catch { /* folder unreadable — fall back to plan walk; the report leg will name the failure */ }
+    }
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built);
+    verifyRes = renderVerify(result, checklistOpts(manifest), built, decidedKeys);
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";

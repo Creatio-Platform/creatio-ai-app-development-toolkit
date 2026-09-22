@@ -38,7 +38,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
@@ -2980,6 +2980,26 @@ export function startableTasks(set, dir) {
   if (candidates.length + held.length + inFlight.length === 0) return { ...base, verdict: NEXT_FINISHED };
   if (inFlight.length) return { ...base, verdict: NEXT_WAITING };
   return { ...base, verdict: NEXT_STUCK };
+}
+
+// ENG-99749 AC 12: the row keys `--verify` should EXCLUDE — the deliverables the registry has closed by
+// decision. Keyed on (row's own page, normalized label) using `verifyRowKey` so the plan-walk key inside
+// `renderVerify` matches. `not-built` is NOT here — a `not-built — needs-decision` row is a question, not
+// a closure, and the machine gate still measures whether the stand has it (usually not). Only the three
+// closure words (`wont-do`, `postponed`, `not-applicable`) hide a row from the verify list.
+const DECIDED_ROW_KINDS = new Set([O_WONT_DO, O_POSTPONED, O_NOT_APPLICABLE]);
+export function decidedRowKeys(set) {
+  const keys = new Set();
+  for (const t of set?.tasks || []) {
+    if (t.unread) continue;
+    for (const r of t.rows || []) {
+      if (!DECIDED_ROW_KINDS.has(r.outcomeKind)) continue;
+      const rowPage = r.pageKey || t.pageKey;
+      if (!rowPage) continue;
+      keys.add(verifyRowKey(rowPage, r.label));
+    }
+  }
+  return keys;
 }
 
 // ---8<--- DECIDE / REVOKE: a person's answer to a question the plan raised (ENG-99749) ---8<---
