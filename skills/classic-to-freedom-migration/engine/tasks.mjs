@@ -3191,8 +3191,12 @@ export function revokeDecision(dir, result, opts = {}) {
   }
   if (!cleared.length) return { refused: false, decision, cleared: [], set: merged, note: `nothing to revoke — no cell in this folder was written under ${decision}` };
 
-  // Recompute the status of every task the revoke touched — rows that were closed by decision are now
-  // blank, so a task that read `wont-do` may go back to `partial` (or `todo` if every cell is empty).
+  // Recompute the status of every task the revoke touched. Rows that were closed by decision are now
+  // blank, so a task that read `wont-do` / `not-applicable` / `partial` re-enters the verification list.
+  // The recompute carries `S_TODO` as the previous word (not the pre-revoke closure) — treating the file
+  // as freshly-opened is what makes the run see the rows as work to do again; leaving the carried word as
+  // `wont-do` would compute back to `wont-do` under the "all blank + previously closed" branch and the
+  // revoke would look like it did nothing.
   const touchedTasks = new Set(cleared.map((c) => c.task));
   for (const t of touchedTasks) {
     const keys = rowKeys(t.rows.map((r) => r.label));
@@ -3201,7 +3205,7 @@ export function revokeDecision(dir, result, opts = {}) {
       const parsed = parseOutcome(r.outcome || "");
       if (parsed) outcomes.set(keys[i], parsed);
     });
-    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, t.status || S_TODO, !!t.statusEdited);
+    t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, S_TODO, false);
   }
 
   fs.mkdirSync(dir, { recursive: true });

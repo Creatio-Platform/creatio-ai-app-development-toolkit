@@ -161,6 +161,18 @@ function planTasks(tasks) {
   return (tasks || []).filter((t) => t.artifact !== ARTIFACT_REFS)
     .sort((a, b) => Number(a.step ?? a.order) - Number(b.step ?? b.order));
 }
+// A `partial` task whose only remaining un-built rows are `postponed` is not open work — its debt is a
+// person's decision with a destination, so it belongs on the 🟡 side of the verdict rather than the 🔴
+// "tasks not closed" reason. Under ENG-99749 point 6 that keeps 🟡 honest: 🟡 means "the machine has
+// nothing left to do, the person has a debt", and the debt is the postponed row.
+function isPostponedDerivedPartial(t) {
+  if (t.status !== S_PARTIAL) return false;
+  const rows = t.rows || [];
+  if (!rows.length) return false;
+  return rows.every((r) => r.outcomeKind === "built" || r.outcomeKind === "not-applicable"
+    || r.outcomeKind === "wont-do" || r.outcomeKind === "postponed")
+    && rows.some((r) => r.outcomeKind === "postponed");
+}
 function taskCounts(tasks) {
   const c = { total: tasks.length, done: 0, na: 0, wontDo: 0, postponed: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
   for (const t of tasks) {
@@ -169,7 +181,10 @@ function taskCounts(tasks) {
     else if (t.status === S_NOT_APPLICABLE) c.na++;
     else if (t.status === S_WONT_DO) c.wontDo++;
     else if (t.status === S_POSTPONED) c.postponed++;
-    else if (t.status === S_PARTIAL) c.partial++;
+    else if (t.status === S_PARTIAL) {
+      // A partial task whose debt is postponed rows counts as a postponed-derived task, not as open work.
+      if (isPostponedDerivedPartial(t)) c.postponed++; else c.partial++;
+    }
     else if (t.status === S_IN_PROGRESS) c.inProgress++;
     else if (t.status === S_TODO) c.todo++;
     else if (t.status === S_BLOCKED) c.blocked++;
