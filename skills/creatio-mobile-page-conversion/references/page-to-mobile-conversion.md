@@ -43,9 +43,11 @@ The tools used in this flow:
   `entity-default-mobile-page` targets, each with `references[]`) — the data behind the "Missing target
   pages" plan/report items and the one-level-deep sequential-conversion offer in step 8a — and
   `guide.existingMobilePages` (any mobile page(s) already covering the entity/page being converted), the
-  data behind the reuse-vs-convert check in step 2a. A `web-page` target verified `missing` also gets its
-  binding REMOVED (`bindingRemoved: true`), with the removed shape preserved on `originalBinding` for the
-  repoint sub-step in 8a — see the "Requests (actions)" report bullet.
+  data behind the reuse-vs-convert check in step 2a. A `web-page` target verified `missing` KEEPS its
+  binding on the element (`bindingRemoved: true` here means only "the target param was blanked", never
+  "the binding is gone") — the request still converts, only `params.schemaName` is cleared to `""`. There
+  is no `originalBinding` field: the repoint sub-step in 8a patches the target param on the existing
+  binding in place — see the "Requests (actions)" report bullet.
 - `list-page-templates` (schema-type `mobile`), `create-page`, `update-page`, `validate-page` — persistence.
   Thread `create-page`'s returned `schemaUId` into `update-page` as `target-schema-uid` (see step 7) so the
   body lands in the created schema instead of a replacing schema in the design package.
@@ -213,23 +215,27 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      pre-approve more than one missing-page conversion at once; Gate M stays "scoped to a single page"
      (see below) for every one of these, exactly as for the original page.
    - **Repoint the referencing page(s) once a `web-page` target resolves.** This applies ONLY to a
-     `web-page` candidate whose binding was actually removed (`bindingRemoved: true` on the finding) —
-     once its own step 8 report lands for a freshly-converted page, or as soon as the developer accepts
-     "reuse the existing page" from step 2a (no new page build needed there). An `entity-default-mobile-page` candidate needs
-     NO repoint: its request is scoped by `entityName`, not a page name, so registering the object's default
-     mobile page via `create-related-page-addon` (step 7b) makes the existing binding work again on its own.
+     `web-page` candidate whose target param was actually blanked (`bindingRemoved: true` on the finding —
+     the name is historical; the binding itself was never removed) — once its own step 8 report lands for
+     a freshly-converted page, or as soon as the developer accepts "reuse the existing page" from step 2a
+     (no new page build needed there). An `entity-default-mobile-page` candidate needs NO repoint: its
+     request is scoped by `entityName`, not a page name, so registering the object's default mobile page
+     via `create-related-page-addon` (step 7b) makes the existing binding work again on its own.
      For a `web-page` target, for EVERY entry in its `missingTargetPages[].references[]` (each carries its
-     own `originalBinding` — do not mix one reference's binding into another's repoint, even when several
-     reference the same target): `get-page` the page that carries `elementName` (with its `target-schema-uid`
-     for `update-page`, same rule as step 7), clone that reference's `originalBinding`, replace only its
-     `params.schemaName` with the RESOLVED mobile schema name (from `create-page`'s result for a fresh
-     conversion, or from the reused page confirmed at step 2a — never a guessed naming pattern), set it
-     back onto the element's `binding` property, then `update-page` and `validate-page`.
+     own `elementName`/`binding` — do not mix one reference's element into another's repoint, even when
+     several reference the same target): `get-page` the page that carries `elementName` (with its
+     `target-schema-uid` for `update-page`, same rule as step 7), locate that element's existing `binding`
+     property (its `request` and every other `params` entry are already correct — the conversion never
+     touched them), and set ONLY its target param (`params.schemaName` for `crt.OpenPageRequest`) to the
+     RESOLVED mobile schema name (from `create-page`'s result for a fresh conversion, or from the reused
+     page confirmed at step 2a — never a guessed naming pattern). This is a point patch of one param on the
+     binding already sitting there, not a clone-and-swap of a saved snapshot — there is no `originalBinding`
+     field to clone. Then `update-page` and `validate-page`.
      This is itself a write to an ALREADY-converted page and needs no separate Gate M — the developer already
      approved it by accepting this candidate — but report the outcome, per reference, in that page's own
      step 8 report (see the "Missing pages" report bullet below). **Known limit:** `references[]` only
      covers elements on the page the CURRENT guide call analyzed; if an EARLIER page in this same session
-     also named this exact target, its own binding needs the same repoint too — track every removed
+     also named this exact target, its own binding needs the same repoint too — track every blanked
      `web-page` binding (page, `elementName`, `binding`, target) you have seen so far in this session, not
      just the current page's list, so a target resolving late still reaches every page that named it.
    - **Session-level dedup.** If a later candidate (from this page or an earlier follow-up) names a target
@@ -365,18 +371,20 @@ one followed by a later summary):
   (`create-page-business-rule`) and which `droppedRules` did not convert.
 - **Requests (actions):** from `guide.requestConversions`, which has FOUR collections and you need all of
   them — `convertedRequests` (carried, remapped where the mobile name differs), `droppedRequests` (a binding
-  lost, INCLUDING on a component that stayed on the page), `flaggedRequests` (an unknown request kept for
+  lost — an unsupported request type — OR a `web-page` target's param blanked while the binding itself
+  stays; read `unresolvedTargetRequests` to tell which), `flaggedRequests` (an unknown request kept for
   you to verify) and `unresolvedTargetRequests` (the action's navigation target could not be confirmed —
   read `state` AND `bindingRemoved` together, they answer different questions). `bindingRemoved: true`
-  happens ONLY for a `web-page` target (`crt.OpenPageRequest`) verified `missing`: the binding is already
-  gone from `viewConfigDiff[].values` and duplicated in `droppedRequests` under `drop-request-target-missing`
-  — do NOT re-add it as-is, it would fail every time (an empty `schemaName` still shows a settings-error
-  dialog). The finding's `originalBinding` keeps the removed `{ request, params }` VERBATIM (every param,
-  not just `schemaName`) for the repoint step below. Every other combination (`entity-default-mobile-page`
-  of any state, or `unknown`) keeps `bindingRemoved: false` and the binding untouched — an add-on read or an
-  unreachable environment is never proof enough to strip a working action. A
-  `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements` entry whose
-  coded reason names the request) — list those removed action components for the developer.
+  happens ONLY for a `web-page` target (`crt.OpenPageRequest`) verified `missing`: the request still
+  converts and the binding stays in `viewConfigDiff[].values` — only `params.schemaName` is cleared to
+  `""` — and the finding is ALSO duplicated in `droppedRequests` under `drop-request-target-missing`. Do
+  NOT treat the blanked binding as usable as-is, it fails every time (an empty `schemaName` still shows a
+  settings-error dialog); there is no `originalBinding` snapshot to restore from — the repoint step below
+  patches `params.schemaName` on the SAME binding once the target resolves. Every other combination
+  (`entity-default-mobile-page` of any state, or `unknown`) keeps `bindingRemoved: false` and the binding
+  untouched — an add-on read or an unreachable environment is never proof enough to touch a working
+  action. A `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements`
+  entry whose coded reason names the request) — list those removed action components for the developer.
 - **Missing pages:** the same deduplicated `missingTargetPages` list from the plan. On the ORIGINAL page's
   report, state whether the developer accepted the step 8a offer to convert them, and for each accepted
   target: queued / converted (its own report lands when its turn finishes) / declined / still open (the
