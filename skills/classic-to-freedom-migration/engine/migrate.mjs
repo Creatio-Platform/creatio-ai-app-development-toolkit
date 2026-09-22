@@ -3327,6 +3327,15 @@ function runDecideMode(result, dir, opts) {
     for (const c of res.cascaded) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
   }
   for (const s of res.skipped) lines.push(`  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  // A cell the in-place writer could not place is reported as a FAILURE, not folded into the success line. Its
+  // `decisions:` entry was dropped with it, so the folder is consistent — but the decision did not fully land
+  // and the person has to look at the body before re-running.
+  if (res.unplaced?.length) {
+    lines.push("", `⛔ ${res.unplaced.length} row(s) could NOT be written — their \`## Deliverables\` row was not found`
+      + " or the rewritten cell did not read back. Nothing was recorded for them; fix the body and re-run:");
+    for (const u of res.unplaced) lines.push(`  · ${u.task.file} row ${u.n}`);
+    return { note: lines.join("\n") + "\n", ok: false };
+  }
   lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }

@@ -2671,34 +2671,58 @@ function rewriteFrontMatter(lines, status, declared, decisions = null) {
 // Outcome |`). Outcome is always the LAST cell, so the replacement scans for the row whose ordinal matches
 // `rowIdx + 1` and rewrites the last cell alone — leaving every other column, and every non-table line, byte
 // identical. Returns true when the file was written.
-function setAdoptedRowOutcome(dir, file, rowIdx, cellText) {
+// ONE PASS PER FILE, and the SAME split the parser uses. The previous writer took one row at a time and did a
+// full read + split + scan + `writeIfChanged` per row, so a decision closing ten rows of an adopted body cost
+// ten read-modify-write cycles with every intermediate state flushed — on the ticket's own recorded run (71
+// task files, 84 repair tasks closed by one descope) hundreds of rewrites where one per file suffices.
+//
+// It also re-derived the table format by hand — an ordinal regex, a heading-scoped scan, and a manual walk back
+// from the last pipe — making it a THIRD representation beside the renderer (`renderRowTable` + `cell`) and the
+// parser (`tableCells` + `headerColumns`). The three disagreed: on a cell already holding a RAW `|` (a shape
+// `tableRows` explicitly supports, since it rejoins everything from the Outcome column to the trailing cell)
+// the walk-back stopped at that pipe, left the old text in place, and still reported success — so the caller
+// stamped a decision onto a body that never received it. Tokenizing with `tableCells` and rebuilding from the
+// same column index the parser reads removes that class.
+//
+// Rows are addressed by their INDEX in parse order, the order `tableRows` yields, not by the ordinal printed in
+// the cell: an adopted body whose printed numbers are not 1..n (an orchestrator-authored table, zero-padded or
+// continued numbering) parses into rows whose index and printed ordinal differ, and the caller's `t.rows` index
+// is the former.
+//
+// Returns the indices it could NOT place, so the caller refuses instead of recording provenance for a cell that
+// was never written.
+function setAdoptedRowOutcomes(dir, file, cellsByIdx) {
+  const missed = new Set(cellsByIdx.keys());
   const full = path.join(dir, file);
-  if (!fs.existsSync(full)) return false;
+  if (!fs.existsSync(full)) return missed;
   const lines = fs.readFileSync(full, "utf8").split("\n");
-  const ordinal = rowIdx + 1;
-  const rowRe = new RegExp(String.raw`^\s*\|\s*${ordinal}\s*\|`);
-  let inTable = false;
-  for (let i = 0; i < lines.length; i++) {
-    // Only within `## Deliverables`: a numbered row elsewhere in the file (a code block, a note) must not be
-    // rewritten. The heading name is fixed by the renderer.
-    if (lines[i].trim() === ENGINE_BODY_HEADING) { inTable = true; continue; }
-    if (inTable && /^\s*##\s/.test(lines[i])) inTable = false;
-    if (!inTable) continue;
-    if (!rowRe.test(lines[i])) continue;
-    // Every cell delimiter is an unescaped pipe (see `tableCells`). The last cell is between the LAST two
-    // pipes; rewrite just that span, keeping the trailing whitespace and the closing pipe.
-    const raw = lines[i];
-    const lastPipe = raw.lastIndexOf("|");
-    if (lastPipe <= 0) continue;
-    // Walk back to the previous unescaped pipe.
-    let prevPipe = lastPipe - 1;
-    while (prevPipe > 0 && (raw[prevPipe] !== "|" || raw[prevPipe - 1] === "\\")) prevPipe--;
-    if (prevPipe <= 0) continue;
-    lines[i] = raw.slice(0, prevPipe + 1) + ` ${cell(cellText)} ` + raw.slice(lastPipe);
-    writeIfChanged(full, lines.join("\n"));
-    return true;
+  const from = lines.findIndex((l) => l.trim() === ENGINE_BODY_HEADING);
+  if (from < 0) return missed;
+  const rest = lines.slice(from + 1);
+  const to = rest.findIndex((l) => l.trim() === NOTES_HEADING);
+  const body = to < 0 ? rest : rest.slice(0, to);
+  const col = headerColumns(body, true);
+  if (col.label < 0 || col.outcome < 0) return missed;
+  let idx = -1;
+  for (let j = col.at + 1; j < body.length; j++) {
+    const i = from + 1 + j;
+    const c = tableCells(lines[i]);
+    if (c.length <= col.outcome + 1 || !/^\s*\d+\s*$/.test(c[1])) continue;
+    idx++;
+    if (!cellsByIdx.has(idx)) continue;
+    const text = cellsByIdx.get(idx);
+    const rebuilt = `${c.slice(0, col.outcome).join("|")}| ${cell(text)} |`;
+    // Read the rewritten line back through the parser's own split before accepting it. A writer that reports
+    // success on a line the parser will read differently is the failure mode this replaces, and the check costs
+    // one split per touched row.
+    const back = tableCells(rebuilt);
+    if (back.length <= col.outcome + 1) continue;
+    if (uncell(back.slice(col.outcome, -1).join("|").trim()) !== text) continue;
+    lines[i] = rebuilt;
+    missed.delete(idx);
   }
-  return false;
+  if (missed.size < cellsByIdx.size) writeIfChanged(full, lines.join("\n"));
+  return missed;
 }
 
 // CLOSED BUT NEVER DISPATCHED. The engine cannot tell which context closed a task — the nonce only proves two
@@ -2854,6 +2878,7 @@ function writeIfChanged(full, next) {
 
 function persistTaskSet(dir, merged) {
   const untouchable = new Set((merged.blocked || []).map((b) => b.file));
+  const unplaced = [];
   for (const t of merged.tasks) {
     // `t.unread` covers the refused file the caller renamed: its name no longer matches, so `untouchable` alone
     // would let a fresh `todo` be written beside the record that is still on disk.
@@ -2864,10 +2889,20 @@ function persistTaskSet(dir, merged) {
       // exactly the cells the body now holds, so the two must land together. Passed null when the run
       // touched no cells here, so `decisions:` is not spuriously added to a file that never carried it.
       const dirty = t.dirtyRows instanceof Set ? t.dirtyRows : new Set();
+      const wanted = new Map();
       for (const idx of dirty) {
         const row = t.rows?.[idx];
-        if (!row) continue;
-        setAdoptedRowOutcome(dir, t.file, idx, row.outcome || "—");
+        if (row) wanted.set(idx, row.outcome || "—");
+      }
+      const missed = wanted.size ? setAdoptedRowOutcomes(dir, t.file, wanted) : new Set();
+      // A row whose cell could NOT be placed must not leave a `decisions:` entry behind: the pair is the whole
+      // provenance contract, and a folder carrying the stamp without the cell is one the engine cannot
+      // reconcile — the next read recomputes a different status from the untouched cell, and `--revoke` then
+      // finds a map entry pointing at a cell nobody wrote. The caller is told, so it can refuse rather than
+      // print a success line over a body it did not change.
+      for (const idx of missed) {
+        unplaced.push({ task: t, n: idx + 1 });
+        if (t.decisions instanceof Map) t.decisions.delete(idx + 1);
       }
       const decisionsArg = dirty.size ? renderDecisionsMap(t.decisions) : null;
       setFrontMatterStatus(dir, t.file, t.status, t.declared || null, decisionsArg);
@@ -2876,6 +2911,7 @@ function persistTaskSet(dir, merged) {
     writeIfChanged(path.join(dir, t.file), renderTaskFile(t, merged));
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
+  return { unplaced };
 }
 
 // ---8<--- MINTED: the orchestrator declares deliverables, the engine writes the file ---8<---
@@ -3135,7 +3171,7 @@ function pickDecideTargets(tasks, opts) {
 // then failed to read back, and the Carry-over rendered `⚠ no D<N> found in the cell` for a cell that IS
 // decided. Both sides of the round-trip now agree on the parenthesised shape.
 // The destination is collapsed the same way the title is, not merely trimmed. It is OPERATOR-SUPPLIED and lands
-// inside a `## Deliverables` table cell: `cell()` escapes pipes but not line breaks, and `setAdoptedRowOutcome`
+// inside a `## Deliverables` table cell: `cell()` escapes pipes but not line breaks, and `setAdoptedRowOutcomes`
 // splices the text straight into the line before re-joining, so a `--to` carrying a newline would write extra
 // physical rows into the middle of the table the engine parses back — the task then reads as unaccounted and
 // loses its derived status, and caller-chosen markdown lands in a file the report renders.
@@ -3271,8 +3307,13 @@ export function applyDecision(dir, result, opts = {}) {
   fs.mkdirSync(dir, { recursive: true });
   attachDispatch(merged, dir);
   resolvePartials(merged);
-  persistTaskSet(dir, merged);
-  return { refused: false, decision, mode, destination: destination || null, touched, cascaded, skipped, set: merged };
+  const persisted = persistTaskSet(dir, merged);
+  // A row whose cell the writer could not place is NOT a success. Its `decisions:` entry was dropped with it,
+  // so the folder stays consistent — but the caller must say so rather than print it among the touched rows.
+  const unplaced = persisted?.unplaced || [];
+  const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
+  return { refused: false, decision, mode, destination: destination || null,
+    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
