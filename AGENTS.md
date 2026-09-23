@@ -24,14 +24,20 @@ The required top-level sections of every BA-style Business Plan are, in order:
 7. Analytics
 8. Edge Cases and Exceptions
 
+There is ONE conditional top-level section: **`## 8. Portal section`**, added ONLY when the app exposes
+sections to external / portal users (customers/partners/self-service — the concept, not the word
+"portal"; per `context/business-checklist.md`). When present it sits BEFORE Edge Cases and renumbers it
+to `## 9. Edge Cases and Exceptions`; when the app has no external audience it is OMITTED and Edge Cases
+stays `## 8`. This is the only permitted variation in the top-level set — it is not format drift.
+
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
 `Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
-`UX Expectations` MAY carry a CONDITIONAL `### 6.E External users (portal)` subsection when the app exposes sections to external users (customers/partners/self-service — the concept, not the word "portal"); it is optional (present only when external access is in scope, per `context/business-checklist.md`) and, like the `### 7.1`/`### 7.2` subsections, is not format drift. The eight top-level sections and their order never change.
+`Portal section` (when present) is structured EXACTLY like `## 6. UX Expectations` — no prose, just the section name and the structure: a `portal sections:` count line and, per exposed section, the external surface with §6 labels plus an `external access:` level. Its external field set is DELIBERATELY SMALL — significantly fewer fields than the internal page, never surfacing internal-only information to external users.
 
-Required BA-style Business Plan template:
+Required BA-style Business Plan template (internal-only app):
 
 ```md
 ## 1. Business Outcome
@@ -44,12 +50,26 @@ Required BA-style Business Plan template:
 ## 8. Edge Cases and Exceptions
 ```
 
+When the app exposes sections to external / portal users, insert the conditional Portal section, which
+renumbers Edge Cases:
+
+```md
+## 7. Analytics
+## 8. Portal section
+## 9. Edge Cases and Exceptions
+```
+
 ## Format Compliance Rule
 
 If the requested artifact has a prescribed format, the assistant MUST reproduce that format exactly.
 A structurally similar format is considered incorrect.
 
 If any required section is missing, renamed, reordered, merged, or replaced with a synonym, the assistant MUST treat the artifact as invalid and regenerate it before responding.
+
+The ONE permitted variation is the conditional `## 8. Portal section` (see above): when the app exposes
+sections to external / portal users it is added before Edge Cases, renumbering Edge Cases to `## 9`. That
+is not an "extra section" and not drift; when there is no external audience it is omitted and Edge Cases
+stays `## 8`.
 
 The assistant MUST NOT:
 
@@ -68,7 +88,7 @@ Before returning any Business Plan, the assistant MUST run an internal checklist
 
 1. Does the output use the exact required template?
 2. Are all required sections present in the exact order?
-3. Are there any extra top-level sections?
+3. Are there any extra top-level sections (other than the permitted conditional `## 8. Portal section`)?
 4. Is any section replaced by a synonym or merged with another section?
 5. Is the output a BA-style Business Plan as expected?
 

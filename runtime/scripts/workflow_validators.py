@@ -7,8 +7,17 @@ class WorkflowError(Exception):
 
 UX_HEADING = "## 6. UX Expectations"
 ANALYTICS_HEADING = "## 7. Analytics"
+# "Portal section" is a CONDITIONAL top-level section (present only when the app exposes sections to
+# external / portal users). When present it is § 8 and pushes Edge Cases to § 9; when absent Edge Cases
+# stays § 8. So Edge Cases is matched by whichever number the portal decision implies, not a fixed one.
+PORTAL_HEADING = "## 8. Portal section"
+PORTAL_HEADING_RE = re.compile(r"(?m)^## 8\. Portal section\s*$")
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
+EDGE_CASES_HEADING_WITH_PORTAL = "## 9. Edge Cases and Exceptions"
 
+# The 8 REQUIRED sections. Edge Cases is required too, but its NUMBER varies (§8, or §9 when the
+# conditional Portal section is present), so it is checked number-agnostically below rather than by the
+# literal substring loop — it stays in this list so the canonical "8-section" count is one source of truth.
 REQUIRED_REQUIREMENTS_SECTIONS = [
     "## 1. Business Outcome",
     "## 2. Roles and Permissions",
@@ -152,6 +161,8 @@ def validate_requirements_doc(content: str) -> None:
     if not re.search(r"^# .+ - Requirements$", text, re.MULTILINE):
         raise WorkflowError("Requirements doc failed: title must match '# <AppName> - Requirements'")
     for section in REQUIRED_REQUIREMENTS_SECTIONS:
+        if section == EDGE_CASES_HEADING:
+            continue  # required, but number-agnostic — checked below (portal presence shifts it to §9)
         if section not in text:
             raise WorkflowError(f"Requirements doc failed: missing required section: {section}")
     for marker in REQUIRED_REQUIREMENTS_MARKERS:
@@ -167,9 +178,26 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError("Requirements doc failed: missing 'Section object' subsection in section 3")
     if not LOOKUPS_HEADING_RE.search(text):
         raise WorkflowError("Requirements doc failed: missing Lookups subsection in section 3")
+    # Portal section (§8) is conditional: present only when the app exposes sections to external users.
+    # When present, Edge Cases moves to §9 and §7 Analytics ends where §8 Portal section begins.
+    portal_present = bool(PORTAL_HEADING_RE.search(text))
+    edge_cases_heading = EDGE_CASES_HEADING_WITH_PORTAL if portal_present else EDGE_CASES_HEADING
+    if edge_cases_heading not in text:
+        raise WorkflowError(f"Requirements doc failed: missing required section: {edge_cases_heading}")
+    if portal_present:
+        portal_text = extract_section(text, PORTAL_HEADING, edge_cases_heading)
+        if "portal sections:" not in portal_text.lower():
+            raise WorkflowError(
+                "Requirements doc failed: section 8 Portal section must state a 'portal sections:' line (how many sections are exposed to external users, named)"
+            )
+        if "external access:" not in portal_text.lower():
+            raise WorkflowError(
+                "Requirements doc failed: section 8 Portal section must state an 'external access:' level for each exposed section (default read — do not surface internal fields to external users)"
+            )
     section3_text = extract_section(text, "## 3. Object Model", "## 4. Lifecycle and Statuses")
     section6_text = extract_section(text, UX_HEADING, ANALYTICS_HEADING)
-    section7_analytics_text = extract_section(text, ANALYTICS_HEADING, EDGE_CASES_HEADING)
+    analytics_end_heading = PORTAL_HEADING if portal_present else edge_cases_heading
+    section7_analytics_text = extract_section(text, ANALYTICS_HEADING, analytics_end_heading)
     object_blocks = list(iter_labeled_blocks(section3_text, OBJECT_HEADING_RE))
     if not object_blocks:
         raise WorkflowError("Requirements doc failed: section 3 must contain at least one Section object or Object heading")

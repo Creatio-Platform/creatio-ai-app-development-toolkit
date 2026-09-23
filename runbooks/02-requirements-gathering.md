@@ -200,7 +200,8 @@ Use this exact visible skeleton for the Business Plan:
 - `## 7. Analytics`
   - `### 7.1 Section analytics` — grouped by section: `#### <Section> section dashboards`, then one dashboard block beneath each
   - `### 7.2 Workplace analytics` — exactly one `home page:` block (the app's single home page), with widgets and no access-rights line
-- `## 8. Edge Cases and Exceptions`
+- `## 8. Portal section` — CONDITIONAL: include ONLY when the app exposes sections to external / portal users (see the external-user rule below). When present it renumbers Edge Cases to `## 9`; when omitted, Edge Cases stays `## 8`.
+- `## 8. Edge Cases and Exceptions` (or `## 9.` when `## 8. Portal section` is present)
 
 `## 1. Business Outcome` must include:
 
@@ -301,13 +302,30 @@ Also include when applicable:
 In `## 6. UX Expectations`, list fields, filters, sorting targets, and groups by business `Title`, not by schema, page, or column code.
 If a technical carrier is needed for internal reasoning or pre-analysis, keep it internal and do not expose it in the BA draft.
 
-**External users (portal) — a CONDITIONAL subsection of `## 6`.** Add a `### 6.E External users (portal)` block ONLY when the app exposes sections to external users (see the external-user trigger in `context/business-checklist.md`, "Users, access and ownership", and the SKILL core rule). It describes the EXTERNAL audience's view — the `All external users` role — structured like the section UX above, scoped to the portal:
+**`## 8. Portal section` — a CONDITIONAL top-level section.** Add it ONLY when the app exposes sections to
+external users (see the external-user trigger in `context/business-checklist.md`, "Users, access and
+ownership", and the SKILL core rule). When present it sits BEFORE Edge Cases, which then becomes
+`## 9. Edge Cases and Exceptions`; when external access is out of scope, OMIT `## 8. Portal section`
+entirely and Edge Cases stays `## 8`. Do not invent an external audience the developer did not ask for.
 
-- lead line `portal sections:` — how many of the app's sections are exposed to external users, named by `Title`, e.g. `portal sections: 2 (Requests, Knowledge Base)`.
-- one `- **`Section <name>`** ` block per exposed section (reuse an existing section `Title`, so it has a carrier in `## 3. Object Model`), each describing the EXTERNAL form page and list with the SAME labels as above (`list columns:`, `form groups:` / `form fields:`, `add page:` / `edit page:`) — the external view may be narrower or read-only than the internal one.
-- `external access:` — the object operations granted to `All external users` on that section's object, e.g. `external access: read` (read-only) or `external access: read, create, edit`. Default read-only; widen only where external users author records. Confidentiality of one external company's records from another's is record-level access and out of scope for this subsection.
+Structure it EXACTLY like `## 6. UX Expectations` — no explanatory prose, just the section name and the
+structure. It describes the EXTERNAL audience's view (the `All external users` role):
 
-Omit `### 6.E` entirely when external access is out of scope — it is not a required subsection and the validator does not check for it. Do not invent an external audience the developer did not ask for or agree to.
+- lead line `portal sections:` — how many of the app's sections are exposed to external users, named by
+  `Title`, e.g. `portal sections: 2 (Requests, Knowledge Base)`.
+- one `- **`Section <name>`** ` block per exposed section (reuse an existing section `Title`, so it has a
+  carrier in `## 3. Object Model`), each describing the EXTERNAL surface with the SAME labels as §6
+  (`list columns:`, `form groups:` / `form fields:`, `add page:` / `edit page:`).
+- `external access:` per exposed section — the object operations granted to `All external users`, e.g.
+  `external access: read` or `external access: read, create, edit`. Default `read`; widen only where
+  external users genuinely author records.
+
+Keep the external field set DELIBERATELY SMALL — significantly fewer fields than the internal page.
+Expose only what the customer needs; NEVER surface internal-only information to external users (assigned
+agent/owner, internal notes/comments, costs/margins, internal status or reason codes, other customers'
+data). Choosing the external `list columns:` and form fields is data minimisation, not a copy of the
+internal surface. Per-record confidentiality (one external company not seeing another's records) is
+record-level access — call it out in `## 9. Edge Cases and Exceptions`, not here.
 
 `## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
 

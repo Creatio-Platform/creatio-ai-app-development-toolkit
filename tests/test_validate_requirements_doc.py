@@ -677,5 +677,53 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
         validate_requirements_doc(doc)  # must not raise
 
 
+PORTAL_BLOCK = (
+    "## 8. Portal section\n\n"
+    "- portal sections: 1 (Tasks)\n"
+    "- **`Section Tasks`** — external self-service view.\n"
+    "  - list columns: Name, Status\n"
+    "  - form fields: Name\n"
+    "  - add page: mini page (Name)\n"
+    "  - edit page: full record page\n"
+    "  - external access: read, create\n\n"
+    "## 9. Edge Cases and Exceptions"
+)
+# The conditional Portal section (§8) pushes Edge Cases to §9.
+PORTAL_DOC = VALID_DOC.replace("## 8. Edge Cases and Exceptions", PORTAL_BLOCK)
+
+
+class TestValidateRequirementsDocPortalSection(unittest.TestCase):
+    def test_portal_doc_passes(self):
+        # A plan that exposes a section to external users carries `## 8. Portal
+        # section` and renumbers Edge Cases to `## 9`; both present and populated.
+        validate_requirements_doc(PORTAL_DOC)  # must not raise
+
+    def test_portal_present_but_edge_cases_not_renumbered_is_rejected(self):
+        # With `## 8. Portal section` present, Edge Cases MUST be `## 9`. Leaving it
+        # at `## 8` (a numbering clash) must fail with the expected §9 heading.
+        doc = PORTAL_DOC.replace("## 9. Edge Cases and Exceptions", "## 8. Edge Cases and Exceptions")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("## 9. Edge Cases and Exceptions", str(ctx.exception))
+
+    def test_portal_section_missing_portal_sections_marker_is_rejected(self):
+        doc = PORTAL_DOC.replace("- portal sections: 1 (Tasks)\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("portal sections:", str(ctx.exception))
+
+    def test_portal_section_missing_external_access_marker_is_rejected(self):
+        doc = PORTAL_DOC.replace("  - external access: read, create\n", "")
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("external access:", str(ctx.exception))
+
+    def test_internal_only_doc_keeps_edge_cases_at_8(self):
+        # No portal section → Edge Cases stays `## 8` and the doc is valid (regression
+        # that the number-agnostic Edge Cases handling did not break internal-only plans).
+        self.assertNotIn("## 8. Portal section", VALID_DOC)
+        validate_requirements_doc(VALID_DOC)  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()
