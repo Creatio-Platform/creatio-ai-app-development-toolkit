@@ -435,9 +435,10 @@ one followed by a later summary):
   `crt.OpenPageRequest` today; derived from the conversion rule's `targetParam`/`paramMap`, never assumed
   to stay `schemaName` if another `web-page`-kind request is added later) is cleared to
   `""` — and the finding is ALSO duplicated in `droppedRequests` under `drop-request-target-missing`. Do
-  NOT treat the blanked binding as usable as-is, it fails every time (an empty target param still shows a
-  settings-error dialog); there is no `originalBinding` snapshot to restore from — the repoint step below
-  patches that same target param on the SAME binding once the target resolves. Every other combination
+  NOT treat the blanked binding as usable as-is, it is a silent no-op every time — tapping the control does
+  nothing (confirmed in runtime: no navigation, no error dialog) — the practical implementation of "disable"
+  for an unconverted target; the repoint step below patches that same target param on the SAME binding
+  once the target resolves. Every other combination
   (`entity-default-mobile-page` of any state, or `unknown`) keeps `bindingRemoved: false` and the binding
   untouched — an add-on read or an unreachable environment is never proof enough to touch a working
   action. A `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements`
