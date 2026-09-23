@@ -108,6 +108,16 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const iB = M6i(details), iA = M6i(basic);
     check("layout (guard): a tab also holding another plan tab's fields matches neither row by field identity, and a grid inside a tab is never a tab candidate — whichever row resolves first",
       () => [hA, hB, iB, iA].every((r) => r[2] === "skip" && !/Done/.test(r[0])), () => [hA, hB, iB, iA]);
+    // A tab panel's direct child that is not a `crt.TabContainer` (named as a tab, the candidate filter), and the same
+    // content one level deeper.
+    const panelChild = T(tabsPage([{ type: "crt.GridContainer", name: "DetailsTab", items: fieldsOf(SEVEN) }]))(basic);
+    check("layout: a direct child of a `crt.TabPanel` that is not a `crt.TabContainer` and holds exactly the row's fields matches by field identity",
+      () => panelChild[0] === "✅ Done" && /in tab `DetailsTab`/.test(panelChild[1]) && /matched by the 7 plan field/.test(panelChild[1]),
+      () => panelChild);
+    const nested = T(tabsPage([{ ...other, items: [...fieldsOf(["Notes"]),
+      { type: "crt.GridContainer", name: "InnerGrid", items: fieldsOf(SEVEN) }] }]))(basic);
+    check("layout (guard): a container holding exactly the row's fields one level below a tab panel's child, and not a `crt.TabContainer`, is no tab candidate",
+      () => nested[2] === "skip" && !/Done/.test(nested[0]) && !/InnerGrid/.test(nested[1]), () => nested);
     const wrong = tabsPage([{ ...general, items: fieldsOf(["A", "B", "C", "D", "E", "F", "G"]) }]);
     const r6f = T(wrong)(basic);
     check("layout (guard): a tab with the plan's field COUNT but other fields is not closed — a row with field names never falls to the count-based content fit",
@@ -132,6 +142,17 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
         && r7b[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r7b[1]) && !/matched by/.test(r7b[1])
         && r7raw[0] === "✅ Done" && /matched by content/.test(r7raw[1]) && !/matched by the .* plan field/.test(r7raw[1]),
       () => [r7, r7b, r7raw]);
+    // Keys and names that carry none of the plan's caption words, so only the resolved text can match.
+    const cultureTab = (name) => ({ ...mainTab, name, caption: `#ResourceString(${name}_caption)#` });
+    const byCulture = (strings) => ({ resources: { strings } });
+    const r7c = T(tabsPage([cultureTab("Tab1")], byCulture({ Tab1_caption: { "de-DE": "Basic information" } })))({ caption: "Basic information", fields: 1 });
+    const r7d = T(tabsPage([cultureTab("Tab1"), cultureTab("Tab2")], byCulture({
+      Tab1_caption: { "de-DE": "Basic information", "en-US": "Profile" },
+      Tab2_caption: { "de-DE": "Profil", "en-US": "Basic information" } })))({ caption: "Basic information", fields: 1 });
+    check("layout: a caption resource with no en-US text resolves through another culture's text, and en-US wins when both exist",
+      () => r7c[0] === "✅ Done" && /in tab `Tab1`/.test(r7c[1]) && !/matched by/.test(r7c[1])
+        && r7d[0] === "✅ Done" && /in tab `Tab2`/.test(r7d[1]) && !/matched by/.test(r7d[1]),
+      () => [r7c, r7d]);
   }
   check("layout: the header is judged by its widgets anywhere on the page; a payload with NO containers (the legacy flat ops shape) is judged page-wide and SAYS so — every fixture built that way stays green",
     () => {
