@@ -512,7 +512,7 @@ class DefaultContractDocsTests(unittest.TestCase):
         # Elevation: the STOP decision is a deterministic gate, not prose
         # the agent can reason past. Every contract doc must name the gate script and
         # the three-state verdict (usable / blocked) with its sentinels + exit codes.
-        # Sentinel/exit tokens are derived from the script constants (M1) so a rename
+        # Sentinel/exit tokens are derived from the script constants so a rename
         # is caught here instead of drifting silently.
         usable_token = pf.SENTINEL_USABLE.split(": ", 1)[1].lower()   # clio-mcp-usable
         blocked_token = pf.SENTINEL_BLOCKED.split(": ", 1)[1].lower()  # clio-mcp-unavailable

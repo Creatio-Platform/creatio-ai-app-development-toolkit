@@ -54,6 +54,20 @@ MARKERS = (
     # ``Major3(seed)`` - so the digits are part of the label: a ``\b`` placed
     # straight after the word never fires there, since a letter followed by a
     # digit is no boundary at all.
+    # The same label abbreviated to its initial and the finding's number —
+    # ``M2`` for the second Major, ``m7`` for the seventh minor. A bare
+    # ``[Mm]<digits>`` is far too common to match on its own (``m71``, ``m4b``
+    # and ``M1`` are all ordinary identifiers in this tree), so only the
+    # ATTRIBUTION positions count: the id opening a check title, the id after
+    # the word ``review``, and the id alone in a section banner's parentheses.
+    (
+        "finding_id",
+        re.compile(
+            r"^\s*[Mm]\d+[ab]?\s*[:(]"
+            r"|\breview\s+[Mm]\d+[ab]?\b"
+            r"|(?:^|\s)\(\s*[Mm]\d+[ab]?\s*\)"
+        ),
+    ),
     (
         "severity_label",
         re.compile(
@@ -417,6 +431,12 @@ class CommentHygieneTests(unittest.TestCase):
                 "// PR review - the nested ternary this replaces.",
                 "// follow-up review - the read-path guard.",
                 "// implementation review - the two payload halves.",
+            ],
+            "finding_id": [
+                "M1a: a hand-typed cell without a marker is refused.",
+                "m7: a revoked decision clears the cell.",
+                "// review M2: spawnSync coverage for the CLI parser.",
+                "// ---- (M1) hand-typed cells bypass the gate ----",
             ],
             "severity_label": [
                 "// Blocker: the handler drops its page key.",

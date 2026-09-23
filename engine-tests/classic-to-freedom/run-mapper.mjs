@@ -9332,7 +9332,7 @@ check("entity: an entry that reports NO entity is ⚠ unverified, never ❌ MISS
       && v.pages.main.unverified >= 1 && v.complete === false; },
   () => m12Row(renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } })), "Bound to the EXISTING object"));
 
-check("M1 (complement): the identity path still CLOSES — the same build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
+check("fields: the identity path still CLOSES — a build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
   () => /Fields — 1 expected \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Fields — 1 expected"))
   && m1Named.pages.main.missing === 0 && m1Named.pages.main.unverified === 0 && m1Named.complete === true,
   () => ({ row: m12Row(m1Named, "Fields — 1 expected").slice(0, 200), pages: m1Named.pages }));
