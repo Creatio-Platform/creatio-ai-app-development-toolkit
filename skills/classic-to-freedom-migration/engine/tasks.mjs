@@ -2895,12 +2895,12 @@ export const HOLD_OVERLAP = "overlap";      // another DISPATCHED task is still 
 export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member of THIS answer writes it first
 export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
 export const HOLD_LEDGER = "ledger";        // the dispatch books are broken, so the gate refuses THIS id too
-export const HOLD_DECISION = "decision";    // every open row waits on a decision another task raised
+export const HOLD_DECISION = "decision";    // every open row waits on an open decision on a subject another task shares
 export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION];
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
-export function startBlocker(task, tasks, running = {}) {
+export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks)) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
@@ -2918,7 +2918,7 @@ export function startBlocker(task, tasks, running = {}) {
   // its page reads instead of redoing the work.
   const openDeps = (task.dependsOn || []).map((d) => byId.get(d)).filter((d) => d && !SETTLED.has(d.status));
   if (openDeps.length) return { cause: HOLD_DEPS, tasks: openDeps };
-  const decision = decisionHold(task, tasks);
+  const decision = decisionHold(task, decisions);
   if (decision) return decision;
   // ONE WRITER PER ARTIFACT. The comparison is on `writesTo` and on an OPEN CLOCK, not on the number of open
   // tasks: tasks on different artifacts may legitimately run at once, and a read-only task claims nothing.
@@ -2945,15 +2945,40 @@ function openDecisionSources(tasks) {
   return open;
 }
 
-// A task every open row of which waits on a decision another task raised: `{ cause, tasks, rows }` naming the
-// source tasks and rows, else `null`. A row with no subject never waits, so one such open row keeps the task
-// startable.
-function decisionHold(task, tasks) {
+// The ids of the tasks whose rows cite each subject, whatever those rows' outcomes.
+function subjectCiters(tasks) {
+  const citers = new Map();
+  for (const t of tasks) {
+    for (const r of t.rows || []) {
+      if (!r.subject) continue;
+      if (!citers.has(r.subject)) citers.set(r.subject, new Set());
+      citers.get(r.subject).add(t.id);
+    }
+  }
+  return citers;
+}
+
+// One read of the open decision subjects for a whole folder, shared by every task one pass evaluates.
+function decisionIndex(tasks) {
+  return { sources: openDecisionSources(tasks), citers: subjectCiters(tasks) };
+}
+
+// The open source rows a task's row on `subject` waits on. A subject no other task cites holds nothing, so a
+// task's own needs-decision row holds it only while another task shares that subject.
+function waitedSources(task, subject, index) {
+  const shared = [...(index.citers.get(subject) || [])].some((id) => id !== task.id);
+  return shared ? index.sources.get(subject) || [] : [];
+}
+
+// A task every open row of which waits on an open decision on a subject another task shares:
+// `{ cause, tasks, rows }` naming the source tasks and rows, else `null`. A row with no subject never waits, so one
+// such open row keeps the task startable.
+function decisionHold(task, index) {
   const open = (task.rows || []).filter((r) => !r.outcomeKind || r.outcomeKind === O_NOT_BUILT);
   if (!open.length || open.some((r) => !r.subject)) return null;
-  const sources = openDecisionSources(tasks.filter((x) => x.id !== task.id));
-  if (!open.every((r) => sources.has(r.subject))) return null;
-  const rows = [...new Set(open.flatMap((r) => sources.get(r.subject)))];
+  const waits = open.map((r) => waitedSources(task, r.subject, index));
+  if (waits.some((w) => !w.length)) return null;
+  const rows = [...new Set(waits.flat())];
   return { cause: HOLD_DECISION, tasks: [...new Set(rows.map((x) => x.task))], rows };
 }
 
@@ -3504,8 +3529,9 @@ export function startableTasks(set, dir) {
 
   const startable = [], withheld = [];
   const claimed = new Map();   // artifact → the member of THIS answer that already writes it
+  const decisions = decisionIndex(tasks);
   for (const t of candidates) {
-    const blocker = startBlocker(t, tasks, running);
+    const blocker = startBlocker(t, tasks, running, decisions);
     if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file, rows: blocker.rows }); continue; }
     const owner = t.writesTo ? claimed.get(t.writesTo) : null;
     if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }

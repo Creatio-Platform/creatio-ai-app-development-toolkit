@@ -2970,7 +2970,7 @@ function startRefusalText(set, startId, dir) {
   }
   if (set.blockedByDecision) {
     dispatchGateFailure = { startRefusal: true, dir };
-    return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on a decision another task raised:\n`
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on an open decision on a subject another task shares:\n`
       + decisionSourceLines(set.blockedByDecision.rows).join("\n")
       + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
       + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"

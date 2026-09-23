@@ -6847,7 +6847,7 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => /\[dec-waiting\] — every open row waits on a decision/.test(nextOut) && new RegExp(`dec-source row ${n}:`).test(nextOut),
     () => nextOut);
   check("--start (CLI): the decision hold refuses with exit 2 and names the source row",
-    () => startCli.status === 2 && /waits on a decision another task raised/.test(startCli.stdout || "")
+    () => startCli.status === 2 && /waits on an open decision on a subject another task shares/.test(startCli.stdout || "")
       && new RegExp(`dec-source row ${n}:`).test(startCli.stdout || ""),
     () => ({ status: startCli.status, stdout: startCli.stdout, stderr: startCli.stderr }));
   check("--next and --start (CLI): the decision hold also names re-opening the source row as a release",
@@ -6894,7 +6894,7 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
       const mixed = task("wait", [{ label: "B", subject: "card:C1" }, { label: "C" }]);
       return cause(mixed, [source(), mixed]) === null;
     });
-  check("decision hold: a task's own needs-decision row never holds that task",
+  check("decision hold: a task's own needs-decision row on a subject no other task cites never holds that task",
     () => {
       const own = task("own", [{ label: "A", subject: "card:C1", ...NEEDS }, { label: "B", subject: "card:C1" }]);
       return cause(own, [own]) === null;
@@ -6907,6 +6907,30 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => startBlocker(waiting, [source({}, { residual: "closed" }), waiting]));
   check("decision hold: a source row whose repair round is still open keeps the hold",
     () => cause(waiting, [source({}, { residual: "open" }), waiting]) === HOLD_DECISION);
+
+  // A row `--decide` wrote: a `wont-do` cell and a `decisions:` entry, its subject unchanged.
+  const DECIDED = { outcome: "wont-do — handled elsewhere (D4)", outcomeKind: "wont-do", outcomeCause: null };
+  const decidedSource = () => task("src", [{ label: "A", subject: "card:C1", ...DECIDED }],
+    { status: "partial", decisions: new Map([[1, "D4"]]) });
+  const ownUndecided = () => task("wait", [{ label: "B", subject: "card:C1", ...NEEDS }, { label: "C", subject: "card:C1" }]);
+  check("decision hold: deciding another task's row on a shared subject keeps a task whose own row on it is undecided",
+    () => {
+      const wait = ownUndecided();
+      const hold = startBlocker(wait, [decidedSource(), wait]);
+      return hold?.cause === HOLD_DECISION && hold.rows.some((r) => r.task.id === "wait" && r.n === 1);
+    },
+    () => { const wait = ownUndecided(); return startBlocker(wait, [decidedSource(), wait]); });
+  check("decision hold: two todo tasks on one subject stay held until each one's own row is decided",
+    () => {
+      const x = task("x", [{ label: "A", subject: "card:C1", ...DECIDED }, { label: "B", subject: "card:C1" }],
+        { decisions: new Map([[1, "D4"]]) });
+      const y = task("y", [{ label: "C", subject: "card:C1", ...NEEDS }, { label: "D", subject: "card:C1" }]);
+      const yDecided = task("y", [{ label: "C", subject: "card:C1", ...DECIDED }, { label: "D", subject: "card:C1" }],
+        { decisions: new Map([[1, "D4"]]) });
+      return cause(x, [x, y]) === HOLD_DECISION && cause(y, [x, y]) === HOLD_DECISION
+        && cause(x, [x, yDecided]) === null && cause(yDecided, [x, yDecided]) === null;
+    });
+
 }
 
 // A card cited on two pages: the repair round on the source page is sequenced behind that page only, so it can

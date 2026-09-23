@@ -508,8 +508,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
    artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
-   single sub-agent hold both and sign each correctly. It also refuses a task every open row of which waits on a
-   decision another task raised. **Every reason it refuses exits `2`** — a broken ledger, a
+   single sub-agent hold both and sign each correctly. It also refuses a task every open row of which waits on an
+   open decision on a subject another task shares. **Every reason it refuses exits `2`** — a broken ledger, a
    status that is a decision, an unclosed dependency, an open decision, an artifact already being written, a file
    the engine cannot parse, an id the folder does not hold. No clock was opened in any of them, so do not dispatch the task: the
    sub-agent would hold no token for it and its closure would fail the dispatch gate.

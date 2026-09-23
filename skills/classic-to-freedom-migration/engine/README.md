@@ -165,10 +165,12 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   before handlers. A bucket that fits one chunk keeps the plan's row order.
 - **A task whose open rows all wait on an open decision is held (`HOLD_DECISION`).** Each row carries a decision
   subject: its card, else its confirm evidence id, else its fold-chain root. A `not-built — needs-decision` row
-  with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject in
-  another task is withheld by `--next` and refused by `--start`, naming the source task and row. `--decide` on
-  the source row releases it, and so does re-opening that row (its `Outcome` cell cleared, its task back to
-  `todo`) or a repair round that builds it. A row with no subject never waits.
+  with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject that
+  another task also cites is withheld by `--next` and refused by `--start`, naming the source task and row. The
+  task's own undecided rows count as sources, so deciding one task's row on a shared subject does not release
+  another task whose row on it is still undecided. `--decide` on the source row releases it, and so does
+  re-opening that row (its `Outcome` cell cleared, its task back to `todo`) or a repair round that builds it. A
+  row with no subject never waits, and a subject no other task cites holds nothing.
 - **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
   exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
   rule protects nothing while every extra task pays a fresh context that re-reads what the last one read. Measured
