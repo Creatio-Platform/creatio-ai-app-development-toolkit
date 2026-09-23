@@ -40,7 +40,8 @@ and the rows came back. A row whose recorded and evidence cells are identical to
 opens no round at all: closed `built` it is reported DISPUTED (the check is in question), closed `not-built`
 STALLED; neither is verified, and a changed row opens a new round. A row routed from a build agent's `not-built`
 record (every `--route` round) is compared without the engine's `recorded on <file>, row <n>` pointer; a match is
-STALLED. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
+STALLED, until another task on its page (not a repair task of the same round) is dispatched and closed after that
+round. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
 three sub-agents have failed at it, so the plan, the stand or the expectation is wrong, not the build. A repair file
 is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
 never reported stale.
@@ -404,8 +405,9 @@ whose `condition`/`actions` carry it as a whole token in any of those forms — 
 (verbatim from get-page) the engine resolves `handler` rows (method name · folded caller · a branch on the method's
 Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
 (side profile / tab found by caption words — a `#ResourceString(K)#` caption resolved through `.resources` when
-the entry carries them — or, failing any caption match, by holding every field the row names, or for a row with no
-field names by the one tab whose content matches it exactly, else ☐ confirm on-stand / header, measured
+the entry carries them — or, failing any caption match, by holding exactly the fields the row names and no other
+field, or for a row with no field names by the one tab whose content matches it exactly, else ☐ confirm on-stand /
+header, measured
 inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
 informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`
 row exists.

@@ -81,7 +81,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => r6[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r6[1]) && /matched by the 7 plan field\(s\)/.test(r6[1]),
       () => r6);
     check("layout: the field-identity match is CLAIMED like a caption match — a second row naming the same fields finds no unclaimed tab and falls to confirm-on-stand",
-      () => M6(basic)[2] === "skip" && /no unclaimed tab holds all 7 of its fields/.test(M6(basic)[1]), () => M6(basic));
+      () => M6(basic)[2] === "skip" && /no unclaimed tab holds exactly its 7 fields/.test(M6(basic)[1]), () => M6(basic));
     const M6b = T(tabsPage([general, { type: "crt.TabContainer", name: "BasicTab", caption: "Basic information", items: fieldsOf(["Name"]) }]));
     const r6b = M6b(basic);
     check("layout (guard): a tab whose CAPTION matches still wins over one that only holds the fields — the field rule scores below every caption match",
@@ -89,7 +89,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const r6c = T(tabsPage([{ ...general, items: fieldsOf(SEVEN.slice(0, 6)) }]))(basic);
     const r6d = T(tabsPage([general]))({ caption: "Basic information", fields: 7 });
     check("layout (guard): holding 6 of the 7 fields is no match (confirm-on-stand, not the content fit), and a row that publishes no field names is judged by the exact content fit instead",
-      () => r6c[2] === "skip" && /no unclaimed tab holds all 7/.test(r6c[1])
+      () => r6c[2] === "skip" && /no unclaimed tab holds exactly its 7/.test(r6c[1])
         && r6d[0] === "✅ Done" && /matched by content/.test(r6d[1]) && !/plan field/.test(r6d[1]),
       () => [r6c, r6d]);
     // The built shape of a renamed template tab: the plan's fields plus a widget, inside a same-content grid.
@@ -98,6 +98,16 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const r6e = T(wrapped)(basic);
     check("layout: a tab holding the plan's fields plus a widget, inside a wrapper grid with the same content, matches by field identity — the tab, not the wrapper",
       () => r6e[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r6e[1]) && /matched by the 7 plan field/.test(r6e[1]), () => r6e);
+    // A plan tab that was never built, its fields placed in another tab's grid: neither row reads green, in either order.
+    const DETAILS = ["Notes", "Budget"];
+    const merged = () => tabsPage([{ ...general, items: [{ type: "crt.GridContainer", name: "GeneralInfoTabContainer",
+      items: fieldsOf([...SEVEN, ...DETAILS]) }] }]);
+    const details = { caption: "Payment details", fields: 2, names: DETAILS };
+    const M6h = T(merged()), M6i = T(merged());
+    const hA = M6h(basic), hB = M6h(details);
+    const iB = M6i(details), iA = M6i(basic);
+    check("layout (guard): a tab also holding another plan tab's fields matches neither row by field identity, and a grid inside a tab is never a tab candidate — whichever row resolves first",
+      () => [hA, hB, iB, iA].every((r) => r[2] === "skip" && !/Done/.test(r[0])), () => [hA, hB, iB, iA]);
     const wrong = tabsPage([{ ...general, items: fieldsOf(["A", "B", "C", "D", "E", "F", "G"]) }]);
     const r6f = T(wrong)(basic);
     check("layout (guard): a tab with the plan's field COUNT but other fields is not closed — a row with field names never falls to the count-based content fit",

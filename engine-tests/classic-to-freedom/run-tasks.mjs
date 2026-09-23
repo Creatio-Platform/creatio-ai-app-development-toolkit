@@ -3956,9 +3956,9 @@ console.log("\n===== the residual is ROUTED: a not-built row becomes a repair ro
 
 // A folder whose one `Quality gates` deliverable the build agent recorded as NOT BUILT — dispatched, signed and
 // closed the way a real run closes it, because the residual's closure is checked against the dispatch record.
-const partialFolder = (name, notBuilt = [1]) => {
+const partialFolder = (name, notBuilt = [1], [pageKey, group] = ["child:G1", "Quality gates"]) => {
   const d = tmp(name);
-  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
+  const tgt = taskAt(syncTaskDir(d, RUN, OPTS), pageKey, group);
   clearDepsOf(d, tgt.id, RUN, OPTS);
   const token = `tok-${tgt.id}`;
   startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(40));
@@ -6681,7 +6681,7 @@ console.log("\n===== an UNCHANGED row opens no new round: disputed when it close
     check("repair: a held row spends no attempt and leaves nothing pending, and it is the VERIFIER's row, so the page stays open",
       () => again.parked.length === 0 && again.pending.length === 0
         && again.disputed.every((h) => SAME["child:G1"].openRows.some((r) => r.deliverable === h.row.deliverable))
-        && again.disputed.every((h) => /^task-repair-round1-/.test(h.task.file)),
+        && again.disputed.every((h) => h.task.file.startsWith("task-repair-round1-")),
       () => ({ parked: again.parked, pending: again.pending, files: (again.disputed || []).map((h) => h.task.file) }));
     const lines = repairRoundLines(again, d, "verify");
     check("repair: the round report names the disputed rows on their OWN line and never says the run left no row open",
@@ -6760,6 +6760,30 @@ console.log("\n===== an UNCHANGED row opens no new round: disputed when it close
     check("repair (--route): the routed round's report names the stalled row on its own line",
       () => lines.some((l) => /STALLED — 1 row\(s\)/.test(l)) && !lines.some((l) => /nothing there is waiting/.test(l)), () => lines);
     fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    // A residual row a round closed `not-built`, then another task on the same page dispatched and closed.
+    const pageMoved = (name, otherAt) => {
+      const { d } = partialFolder(name, [1], ["main", "Page build"]);
+      syncRepairDir(d, RUN, {}, OPTS);
+      runRepairs(d, NOT_BUILT_BLOCKED);
+      const held = syncRepairDir(d, RUN, {}, OPTS);
+      const other = taskAt(held.set, ...otherAt);
+      clearDepsOf(d, other.id, RUN, OPTS, nextMin());
+      runTask(d, other.id, RUN, OPTS, nextMin());
+      return { d, held, other, again: syncRepairDir(d, RUN, {}, OPTS) };
+    };
+    const { d, held, other, again } = pageMoved("residual-page-moved", ["main", "Quality gates"]);
+    check("repair: a STALLED row opens the next round once another task on its page was dispatched and closed after the round that last closed it",
+      () => held.stalled.length === 1 && !!other && again.stalled.length === 0
+        && again.written.length === 1 && again.written[0].repairRound === 2,
+      () => ({ other: other?.id, held: held.stalled.length, written: again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (again.stalled || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+    const elsewhere = pageMoved("residual-page-elsewhere", ["list", "Page build"]);
+    check("repair (guard): a task closed on ANOTHER page after the round does not reopen a STALLED row",
+      () => elsewhere.held.stalled.length === 1 && elsewhere.again.stalled.length === 1 && elsewhere.again.written.length === 0,
+      () => ({ written: elsewhere.again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (elsewhere.again.stalled || []).length }));
+    fs.rmSync(elsewhere.d, { recursive: true, force: true });
   }
   {
     const { d } = partialFolder("residual-changed");

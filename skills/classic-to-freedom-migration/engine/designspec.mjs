@@ -3886,13 +3886,16 @@ function tabMatch(container, caption) {
   const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
   return words.every((w) => toks.has(w)) ? 2 : 0;
 }
-// Truthy when the container holds EVERY field the plan puts on this tab, by the Fields row's identity rule
-// (`maxFieldMatch`); extra content does not disqualify it. A TAB PANEL is excluded: it holds every tab's fields.
+// Truthy when a TAB (a `crt.TabContainer`, or a direct child of a `crt.TabPanel`) holds exactly the fields the plan
+// puts on it, by the Fields row's identity rule (`maxFieldMatch`): every plan field and no other field. Related
+// lists and widgets do not count. A tab also holding another tab's fields is no match, whichever row resolves first.
 const TAB_BY_FIELDS = 1;
 function holdsAllFields(container, names) {
   const want = [...new Set(names || [])];
-  if (!want.length || /TabPanel/i.test(container.type)) return 0;
-  return maxFieldMatch(want, container.fieldOps || []).size === want.length ? TAB_BY_FIELDS : 0;
+  const isTab = container.type === "crt.TabContainer" || container.parentType === "crt.TabPanel";
+  const ops = container.fieldOps || [];
+  if (!want.length || !isTab || ops.length !== want.length) return 0;
+  return maxFieldMatch(want, ops).size === want.length ? TAB_BY_FIELDS : 0;
 }
 // A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
 function judgeRegion(c, where, vk, want) {
@@ -3957,7 +3960,7 @@ function resolveLayoutTab(vk, ctx, judge) {
   const byCaption = (c) => Math.max(tabMatch(c, vk.caption), tabMatch({ ...c, caption: c.rawCaption }, vk.caption));
   const captioned = tabs.map((c) => ({ c, score: byCaption(c) })).filter((x) => x.score > 0 && unclaimed(x.c)).sort(bestFit);
   if (captioned.length) return claim(captioned[0].c, "");
-  // 2. A row that publishes its field names: the tab holding every one of them, by the Fields row's identity rule.
+  // 2. A row that publishes its field names: the tab holding exactly those fields, by the Fields row's identity rule.
   if ((vk.names || []).length) {
     const holders = tabs.map((c) => ({ c, score: holdsAllFields(c, vk.names) })).filter((x) => x.score > 0 && unclaimed(x.c)).sort(bestFit);
     if (holders.length) return claim(holders[0].c, ` (caption "${esc(holders[0].c.caption)}" differs; matched by the ${vk.names.length} plan field(s) it holds)`);
@@ -3973,7 +3976,7 @@ function resolveLayoutTab(vk, ctx, judge) {
   // the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
   let why = "and no single tab fits its content exactly";
-  if ((vk.names || []).length) why = `and no unclaimed tab holds all ${vk.names.length} of its fields`;
+  if ((vk.names || []).length) why = `and no unclaimed tab holds exactly its ${vk.names.length} fields`;
   else if (fits.length > 1) why = "and more than one tab could hold it by content";
   return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
@@ -4195,18 +4198,18 @@ function pageContainersOf(entry) {
   const e = entryObject(entry);
   const out = [];
   if (e?.viewConfig == null) return out;
-  const walk = (node) => {
-    if (Array.isArray(node)) { for (const n of node) { walk(n); } return; }
+  const walk = (node, parentType) => {
+    if (Array.isArray(node)) { for (const n of node) { walk(n, parentType); } return; }
     if (!node || typeof node !== "object") return;
     if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
       // `caption` is the resolved text; `rawCaption` keeps the binding, whose key words still identify the tab.
-      out.push({ name: String(node.name), type: String(node.type || ""), caption: builtCaption(node.caption, e.resources),
+      out.push({ name: String(node.name), type: String(node.type || ""), parentType, caption: builtCaption(node.caption, e.resources),
         rawCaption: String(node.caption ?? ""),
         ...collectLayout(node.items, { fields: [], fieldOps: [], lists: [], widgets: [] }) });
     }
-    walk(node.items);
+    walk(node.items, String(node.type || ""));
   };
-  walk(e.viewConfig);
+  walk(e.viewConfig, "");
   return out;
 }
 export function verifyCtx(root, pageKey) {

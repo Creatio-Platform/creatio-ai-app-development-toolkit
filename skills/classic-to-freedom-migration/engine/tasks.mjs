@@ -338,8 +338,8 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // The VERIFIER PAYLOAD is digested alongside the label because a rename moves neither count nor caption: the
 // coverage row still reads `Fields — 12 expected` when a field has been renamed under it, and digesting the label
 // alone reported no drift on exactly the change a built page has to be re-checked against.
-// A layout row's field `names` are left out: they restate the Fields row's names, which the digest already carries,
-// so they add no drift signal of their own.
+// A layout row's field `names` are left out, so moving fields between tabs while every tab keeps its field count
+// does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 const digestVk = (vk) => (vk?.type === "layout" && vk.names ? { ...vk, names: undefined } : vk);
 const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}`).join(" "));
 
@@ -1598,12 +1598,15 @@ function sansRecordedPointer(evidence, files) {
 // The row to compare is the VERIFIER'S when it reported one. A residual row (no verifier row) names the newest
 // file that recorded it, so on that path the pointer is removed from both sides and only the rest is compared;
 // such a match is STALLED, since only a round that closed the row `not-built` leaves it residual.
-function unchangedSinceLastRound(last, key, row, verifiedRow, files) {
+// A residual row also counts as changed once another task on its page (not a repair task of the same round) was
+// dispatched and closed after that round: the work it was blocked on may exist now.
+function unchangedSinceLastRound(last, key, row, verifiedRow, files, pageMovedSince) {
   const prev = last.get(key);
   if (!prev?.hold) return null;
   if (verifiedRow) {
     return inputCell(verifiedRow.status) === prev.recorded && inputCell(verifiedRow.evidence) === prev.evidence ? prev : null;
   }
+  if (pageMovedSince(prev.task)) return null;
   const sameEvidence = inputCell(sansRecordedPointer(inputCell(row.evidence), files))
     === inputCell(sansRecordedPointer(prev.evidence, files));
   return inputCell(row.status) === prev.recorded && sameEvidence ? { ...prev, hold: "stalled" } : null;
@@ -2400,6 +2403,42 @@ function readExisting(dir) {
     .map((f) => ({ file: f, ...parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")) }));
 }
 
+// The open rows of each page with the decision-settled rows (`boundaries`) and the rows unchanged since the round
+// that closed them (`disputed` / `stalled`) taken out; what is left is `gated`, the rows a round may be opened for.
+// Whether a task on the round's page, other than a repair task of the same round, closed after it, by the order of
+// the timings ledger's close samples. A round with no sample has no close to compare against.
+function pageMovedSinceFor(tasks, samples) {
+  const closedAt = new Map(samples.map((x, i) => [x.id, i]));
+  return (round) => {
+    const since = closedAt.get(round.id);
+    if (since === undefined) return false;
+    const sibling = (t) => t.kind === REPAIR_KIND && (t.repairRound || 1) === (round.repairRound || 1);
+    return tasks.some((t) => t.id !== round.id && t.pageKey === round.pageKey && !sibling(t)
+      && ROUND_ATTEMPTED.has(t.status) && (closedAt.get(t.id) ?? -1) > since);
+  };
+}
+function holdBackRows(tasks, existing, residual, verifyPages, samples) {
+  const settled = settledBoundaries(tasks);
+  const last = lastRoundRows(tasks, existing);
+  const files = new Set(existing.map((e) => e.file));
+  const pageMovedSince = pageMovedSinceFor(tasks, samples);
+  const boundaries = [], disputed = [], stalled = [];
+  const gated = {};
+  for (const [pageKey, page] of Object.entries(mergePages({ residual, verified: verifyPages }))) {
+    const keep = [];
+    const verifiedRows = new Map((verifyPages[pageKey]?.openRows || []).map((r) => [coverKey(r.deliverable), r]));
+    for (const row of page.openRows || []) {
+      const key = `${pageKey} ${coverKey(row.deliverable)}`;
+      const hit = settled.get(key);
+      if (hit) { boundaries.push({ pageKey, row, task: hit.task, reason: hit.row.outcomeReason }); continue; }
+      const same = unchangedSinceLastRound(last, key, row, verifiedRows.get(coverKey(row.deliverable)), files, pageMovedSince);
+      if (same) { (same.hold === "disputed" ? disputed : stalled).push({ pageKey, row, task: same.task }); continue; }
+      keep.push(row);
+    }
+    gated[pageKey] = { ...page, openRows: keep };
+  }
+  return { gated, boundaries, disputed, stalled };
+}
 // Writes the folder and returns what it wrote. Engine tasks are rewritten (the rows are the plan's), orchestrator
 // tasks are left exactly as they are, a file the engine could not read in full is never touched, and nothing is
 // ever deleted.
@@ -2423,24 +2462,7 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // Filtered against what the ledger has already settled by decision, and against the round that last closed
   // each row. Nothing is dropped silently: a decision-settled row is returned as `boundaries` and named on the
   // index; an unchanged row as `disputed` or `stalled`, which the round report names.
-  const settled = settledBoundaries(mergedForResidual.tasks);
-  const last = lastRoundRows(mergedForResidual.tasks, existing);
-  const files = new Set(existing.map((e) => e.file));
-  const boundaries = [], disputed = [], stalled = [];
-  const gated = {};
-  for (const [pageKey, page] of Object.entries(mergePages({ residual, verified: verifyPages }))) {
-    const keep = [];
-    const verifiedRows = new Map((verifyPages[pageKey]?.openRows || []).map((r) => [coverKey(r.deliverable), r]));
-    for (const row of page.openRows || []) {
-      const key = `${pageKey} ${coverKey(row.deliverable)}`;
-      const hit = settled.get(key);
-      if (hit) { boundaries.push({ pageKey, row, task: hit.task, reason: hit.row.outcomeReason }); continue; }
-      const same = unchangedSinceLastRound(last, key, row, verifiedRows.get(coverKey(row.deliverable)), files);
-      if (same) { (same.hold === "disputed" ? disputed : stalled).push({ pageKey, row, task: same.task }); continue; }
-      keep.push(row);
-    }
-    gated[pageKey] = { ...page, openRows: keep };
-  }
+  const { gated, boundaries, disputed, stalled } = holdBackRows(mergedForResidual.tasks, existing, residual, verifyPages, readTimingsFile(dir).samples);
   const { tasks, parked, pending } = buildRepairTasks(result, gated, opts, existing);
   const onDisk = new Set(existing.map((e) => e.file));
   fs.mkdirSync(dir, { recursive: true });
