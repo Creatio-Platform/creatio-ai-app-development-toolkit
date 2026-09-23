@@ -3835,7 +3835,10 @@ export function resolveVmAttrVk(vk, ctx) {
   // with a virtual attribute whose payload predates the reads contract — a false hard block, not a false green.
   if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
   if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
-  if (ctx.ops.some((o) => o.name === vk.name || o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  // The bare-name leg requires a FIELD type: a `crt.Button` / container / menu item that merely shares the
+  // attribute's name is not a binding, and must not close the row (the `bound` and `<Name>Field` legs already
+  // target field bindings). `crt.ComboBox` and the other real field types still pass.
+  if (ctx.ops.some((o) => (o.name === vk.name && VERIFY_FIELD_RE.test(o.type || "")) || o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
   return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
 }
 // The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
@@ -3915,15 +3918,20 @@ function resolveLayoutTab(vk, ctx, judge) {
     .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
     .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
   const tab = cand[0]?.c;
+  if (tab) { ctx.claimedContainers.add(tab.name); return judge(tab, `in tab \`${esc(tab.name)}\``); }
+  // The caption did not word-match — a built tab's caption is usually an unresolved `#ResourceString(<key>)#` macro
+  // (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template renames
+  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT: an unclaimed tab whose fields / lists
+  // / widgets satisfy the want closes the row and is claimed (best size-fit first). This closes the correctly-built
+  // renamed tab and, because a genuinely missing tab has no content that fits, still never reads green for one.
+  const fit = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && judge(c, "")[2] === "ok")
+    .sort((a, b) => Math.abs(size(a) - wantCount) - Math.abs(size(b) - wantCount))[0];
+  if (fit) { ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
+  // No word match and no content fit: which tab holds these is a placement fact to confirm on the stand, not a
+  // machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists rows
+  // still gate whether the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  // No word match is NON-gating (F17): a built tab's caption is usually an unresolved `#ResourceString(<key>)#`
-  // macro (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template
-  // renames tabs ("Basic information" → `GeneralInfoTab`). The page-wide Fields / Related-lists rows already gate
-  // the CONTENT; which tab holds it is a placement fact to confirm on the stand, never a machine failure that
-  // spawns a repair task against a correctly built page.
-  if (!tab) return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words (tab captions are often localized \`#ResourceString#\` macros or renamed by the Freedom template) — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
-  ctx.claimedContainers.add(tab.name);
-  return judge(tab, `in tab \`${esc(tab.name)}\``);
+  return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words or by content — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
 // The template's native card controls, by the element names it ships them under.
 // Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
@@ -4007,15 +4015,17 @@ function pushWalkNode(node, out) {
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
+  // A node carrying a `name` OR a `type` is a component (the childpage structural row treats any returned node as
+  // proof the page was built).
   if (node.name != null || node.type != null) pushWalkNode(node, out);
-  // Recurse into EVERY nested array/object child, not only `items`. Native controls — menu items, toolbar buttons,
-  // card actions — live under other keys (`menuItems`, `menu`, `actions`, …); walking `items` alone made them
-  // invisible (F15: `resolveCardNativeVk` could not see `ReloadDataMenuItem`, so a built Reload control read as
-  // missing). `columns` is skipped: it is grid DATA read separately (columnsOf / findGridNodes), not page components.
+  // Recurse into ARRAY children only — component lists (`items`, `menuItems`, `menu`, `actions`, toolbar rows, …);
+  // walking `items` alone left native controls under other arrays invisible (a built `ReloadDataMenuItem` read as
+  // missing). Object-valued keys hold CONFIG (`clicked`, `params`, `layoutConfig`, `_filterOptions`, series specs),
+  // not components, so a `name` buried in config never enters the op list and cannot widen a name-based check.
+  // `columns` is grid DATA, read separately (columnsOf / findGridNodes).
   for (const k of Object.keys(node)) {
     if (k === "columns") continue;
-    const v = node[k];
-    if (v && typeof v === "object") walkViewConfig(v, out);
+    if (Array.isArray(node[k])) walkViewConfig(node[k], out);
   }
   return out;
 }

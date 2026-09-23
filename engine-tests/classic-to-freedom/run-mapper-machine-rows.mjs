@@ -254,4 +254,42 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     check("fields: crt.PhoneInput / crt.EmailInput are field types — a side profile holding exactly those two resolves 2 fields ✅, not an under-count",
       () => st(r) === "✅ Done" && /2 fields/.test(ev(r)), () => r);
   }
+  // A caption word-miss falls back to a CONTENT FIT: an unclaimed tab whose fields/lists/widgets satisfy the want
+  // closes ✅ and is claimed (the renamed / localized-caption tab). A want no tab can satisfy stays confirm-on-stand.
+  {
+    const c = verifyCtx({ pages: { main: page() } }, "main");   // GeneralInfoTab holds 1 field (NotesField)
+    const hit = resolveVk({ type: "layout", region: "tab", caption: "Zzz No Words Match", fields: 1, lists: 0, widgets: [] }, c);
+    const miss = resolveVk({ type: "layout", region: "tab", caption: "Payments Nowhere", fields: 3, lists: 2, widgets: [] }, c);
+    check("layout tab content-fit: a caption matching no tab by words but whose want an unclaimed tab satisfies closes ✅ (matched by content); a want no tab satisfies stays confirm-on-stand, never green",
+      () => hit[2] === "ok" && /matched by content/.test(hit[1]) && miss[2] === "skip",
+      () => [hit, miss]);
+  }
+  // The bare-name vmattr leg is type-guarded: a NON-field element sharing the attribute name (a crt.Button named
+  // `StaffUnit`) does not close the row.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.Button", name: "StaffUnit" }] }, viewModelConfig: { attributes: { Other: {} } } }) } }, "main");
+    const r = resolveVk({ type: "vmattr", name: "StaffUnit" }, c);
+    check("vmattr (guard): a non-field element (crt.Button) named exactly as the attribute does NOT close the row — the bare-name leg requires a field type",
+      () => r[2] === "unverified", () => r);
+  }
+  // walkViewConfig recurses ARRAY children only: a `name` buried in a config OBJECT (`clicked.params`) is not an op,
+  // so it cannot satisfy a name-based check; a control under a `menuItems` ARRAY still is.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.Button", name: "SomeButton", clicked: { request: "usr.X", params: { name: "ReloadData" } } }] } }) } }, "main");
+    const r = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
+    check("walkViewConfig (guard): a `name` inside a config object (`clicked.params`) is NOT collected — a cardnative `ReloadData` is not closed by it (only components under array children count)",
+      () => r[2] === "unverified" && /missing: ReloadData/.test(r[1]), () => r);
+  }
+  // The `columns` skip is load-bearing: grid column DATA must not enter the op list, while a sibling under `items` must.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.DataGrid", name: "Grid", columns: [{ code: "PDS_x", name: "ReloadData" }], items: [{ type: "crt.MenuItem", name: "TagSelectItem" }] }] } }) } }, "main");
+    const colProbe = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
+    const sibProbe = resolveVk({ type: "cardnative", names: ["Tag"] }, c);
+    check("walkViewConfig (guard): grid `columns` DATA does not enter the op list (a column named `ReloadData` does not close a cardnative row), while a sibling control under `items` does",
+      () => colProbe[2] === "unverified" && sibProbe[2] === "ok",
+      () => [colProbe, sibProbe]);
+  }
 }
