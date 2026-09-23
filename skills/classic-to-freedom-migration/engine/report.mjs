@@ -90,6 +90,25 @@ function decisionTitle(raw) {
   if (dot >= 15) t = t.slice(0, dot);
   return t.trim().slice(0, 120).trim();
 }
+// `references/migration-documentation.md` sanctions three shapes. STRUCTURED decisions — a markdown HEADING
+// (`## D1 — …`) or a TABLE ROW (`| D1 | **title** | … |`) — are authoritative and read first; a plain dated line
+// (`D1 — …` / `D1: …`) is read ONLY when the file carries no structured decisions, so a prose line like
+// `D2 — still waiting` inside a heading/table file cannot register a decision. Extracted so readDecisions stays
+// under Sonar's cognitive-complexity ceiling.
+function readDecisionsMd(text, addHeading, add) {
+  const lines = text.split(/\r?\n/);
+  let structured = false;
+  for (const dl of lines) {
+    const h = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
+    if (h) { addHeading(h[1], h[2]); structured = true; continue; }
+    const t = /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl);   // table row — second cell is the title ([^|] can't cross the cell)
+    if (t) { add(t[1], t[2]); structured = true; }
+  }
+  if (!structured) for (const dl of lines) {
+    const p = /^\s*D(\d+)[)\s—–:.-]+([^)\s—–:.-].*)$/.exec(dl);   // one separator run, then capture from the first real char
+    if (p) add(p[1], p[2]);
+  }
+}
 function readDecisions(migrationDir) {
   const out = new Map();
   // A heading keeps its title verbatim (bar the leading separator); a table cell / plain line goes through
@@ -98,23 +117,7 @@ function readDecisions(migrationDir) {
   const addHeading = (id, raw) => { const t = String(raw || "").replace(/^[\s—–:.-]+/, "").trim(); if (t) out.set(`D${id}`, t); };
   const add = (id, raw) => { const k = `D${id}`; const t = decisionTitle(raw); if (t && !out.has(k)) out.set(k, t); };
   try {
-    const text = fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8");
-    const lines = text.split(/\r?\n/);
-    // `references/migration-documentation.md` sanctions three shapes. STRUCTURED decisions — a markdown HEADING
-    // (`## D1 — …`) or a TABLE ROW (`| D1 | **title** | … |`) — are authoritative and are read first.
-    let structured = false;
-    for (const dl of lines) {
-      const h = /^#{1,4}\s+D(\d+)\b(.*)$/.exec(dl);
-      if (h) { addHeading(h[1], h[2]); structured = true; continue; }
-      const t = /^\s*\|\s*D(\d+)\s*\|([^|]*)\|/.exec(dl);   // table row — second cell is the title ([^|] can't cross the cell)
-      if (t) { add(t[1], t[2]); structured = true; }
-    }
-    // A plain dated line (`D1 — …` / `D1: …`) is read ONLY when the file carries no structured decisions, so a prose
-    // line like `D2 — still waiting on the user` inside a heading/table file cannot register a decision.
-    if (!structured) for (const dl of lines) {
-      const p = /^\s*D(\d+)[)\s—–:.-]+([^)\s—–:.-].*)$/.exec(dl);   // one separator run, then capture from the first real char
-      if (p) add(p[1], p[2]);
-    }
+    readDecisionsMd(fs.readFileSync(path.join(migrationDir, "decisions.md"), "utf8"), addHeading, add);
   } catch { /* no decisions file — every reference is then "not found", which the report says */ }
   try {
     const plan = fs.readFileSync(path.join(migrationDir, "plan.md"), "utf8");
