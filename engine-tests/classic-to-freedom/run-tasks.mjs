@@ -6072,15 +6072,8 @@ console.log("\n===== review coverage gaps (Group D) =====");
   // m8: renderDestination free-text branch. A destination that is NOT a Jira issue key (like a plain
   // sentence with a pipe) must render as escaped text — no Jira link, and the pipe escaped inside the
   // Carry-over table cell (otherwise the table breaks).
-  const base = tmp("m8-freetext");
-  const migrationDir = base;
-  const dir = path.join(base, "build-tasks");
-  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D19 — defer to backlog\n");
+  const { base, dir, t } = decideFixtureB("m8-freetext", "## D19 — defer to backlog\n");
   const decisions = new Map([["D19", "defer to backlog"]]);
-  const set = syncTaskDir(dir, RUN, OPTS);
-  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
   if (t) {
     applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
       destination: "Q4 2026 | backlog", taskId: t.id, decisions });
@@ -6106,15 +6099,8 @@ console.log("\n===== review coverage gaps (Group D) =====");
     () => renderDecisionsMap(m));
   // m9: --revoke over a file with one valid + one malformed entry must not crash — the malformed entry
   // is dropped by parseDecisionsMap, and the valid one is cleared normally.
-  const base = tmp("m9-revoke-malformed");
-  const migrationDir = base;
-  const dir = path.join(base, "build-tasks");
-  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13 — legit\n");
+  const { base, dir, t } = decideFixtureB("m9-revoke-malformed", "## D13 — legit\n");
   const decisions = new Map([["D13", "legit"]]);
-  const set = syncTaskDir(dir, RUN, OPTS);
-  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
   if (t) {
     applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: t.id, decisions });
     // Corrupt the decisions: line: keep the valid entry, add a malformed one.
@@ -6138,15 +6124,8 @@ console.log("\n===== review coverage gaps (Group D) =====");
 console.log("\n===== cell round-trip edge cases (Group B) =====");
 {
   // m3: title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
-  const base = tmp("m3-titleless-dn");
-  const migrationDir = base;
-  const dir = path.join(base, "build-tasks");
-  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13\n");
+  const { base, dir, t } = decideFixtureB("m3-titleless-dn", "## D13\n");
   const decisions = new Map([["D13", ""]]);   // title-less
-  const set = syncTaskDir(dir, RUN, OPTS);
-  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
   if (t) {
     const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "postponed",
       destination: "ENG-9999", taskId: t.id, decisions });
@@ -6212,6 +6191,14 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     fs.writeFileSync(path.join(migrationDir, "decisions.md"),
       "## D13 — descope the typed forms (CLI test)\n\nDetails go here.\n");
     return { base, migrationDir, dir };
+  };
+  // A CLI-sliced folder (default budget collapses this fixture into whole-run tasks, so `allowRun`) plus the
+  // `--task` target resolved off it. `checklistOpts(MANIFEST)` matches the slice the CLI wrote so the ids agree.
+  const cliDecideFixture = (label) => {
+    const { base, dir } = setup(label);
+    cliTasks(["--tasks", dir], MANIFEST);
+    const t = planTaskOf(readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST)).tasks, { allowRun: true });
+    return { base, dir, t };
   };
 
   // --- refusal shapes: every combination the parser rejects, asserted through the CLI ---------------------
@@ -6326,18 +6313,9 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     // Happy path: --decide --wont-do --task <id>, then --revoke. `--task` addressing avoids the pageKey
     // guessing --pages needs (the fixture's exact page keys are an implementation detail; the CLI
     // contract is what this test asserts).
-    const { base, dir } = setup("cli-decide-happy");
-    cliTasks(["--tasks", dir], MANIFEST);
-    // First non-refs, non-boundary plan task with real rows — same finder the mechanism tests use. Use
-    // checklistOpts(MANIFEST) so slicing matches what the CLI wrote (task ids are content-derived, and
-    // the two callers must agree on the opts or the ids diverge).
-    const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
-    // `allowRun`, unlike the blocks that slice with `OPTS`: the CLI slices with the DEFAULT budget, which
-    // collapses this fixture into whole-run tasks whose pageKey IS "run". A collapsed run task is a valid
-    // `--task` target, so keeping it in scope is what makes this CLI coverage run at all.
-    const t = planTaskOf(merged.tasks, { allowRun: true });
+    const { base, dir, t } = cliDecideFixture("cli-decide-happy");
     check("M2: fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
-      () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
+      () => !!t, () => ({ found: !!t }));
     if (t) {
       const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
       check("M2: happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",
@@ -6355,12 +6333,9 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
   // fail the dispatch gate. The gate demands a dispatch record for a closed task; a person's descope was
   // never a build the engine dispatched, so it is exempt — proven by the `decisions:` map, not the status.
   {
-    const { base, dir } = setup("cli-descope-exit0");
-    cliTasks(["--tasks", dir], MANIFEST);
-    const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
-    const t = planTaskOf(merged.tasks, { allowRun: true });
+    const { base, dir, t } = cliDecideFixture("cli-descope-exit0");
     check("descope: fixture: the descope target task was found — without it the check below is a silent skip",
-      () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
+      () => !!t, () => ({ found: !!t }));
     if (t) {
       const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
       // The re-run is a plain `--tasks` audit pass: it re-slices and reports the dispatch gate. A descoped
