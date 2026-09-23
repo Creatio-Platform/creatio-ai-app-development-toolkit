@@ -1563,7 +1563,11 @@ function latestPerDeliverable(items) {
 // `not-built` by design, so a surface reading `notBuiltRows` raw prints a deliverable that is finished, and a
 // list a reader learns to distrust is worse than no list.
 export const notBuiltOpenItems = (tasks) =>
-  latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
+  latestPerDeliverable(notBuiltRows(tasks).filter((it) => !settledByRound(it)));
+
+// A row whose repair round has built it. Its Outcome cell keeps its `not-built` word, so every reader of open
+// rows filters on this.
+const settledByRound = (row) => row.residual === "closed";
 
 // point 3 / AC 8: a `needs-decision` row is NOT open work for the router — it is the build agent
 // raising a question, and only a person's `--decide` can settle it. Feeding it to the repair rounds today
@@ -2779,14 +2783,15 @@ export function startBlocker(task, tasks, running = {}) {
   return null;
 }
 
-// The rows marked `not-built — needs-decision` with no `--decide` entry, by the subject each one opens.
+// The rows marked `not-built — needs-decision` with no `--decide` entry and not built by a repair round, by the
+// subject each one opens.
 function openDecisionSources(tasks) {
   const open = new Map();
   for (const t of tasks) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
       if (!r.subject || r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
-      if (map?.has(i + 1)) return;
+      if (map?.has(i + 1) || settledByRound(r)) return;
       if (!open.has(r.subject)) open.set(r.subject, []);
       open.get(r.subject).push({ task: t, n: i + 1, label: r.label });
     });

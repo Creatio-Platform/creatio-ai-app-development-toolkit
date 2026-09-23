@@ -6789,6 +6789,19 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => startCli.status === 2 && /waits on a decision another task raised/.test(startCli.stdout || "")
       && new RegExp(`dec-source row ${n}:`).test(startCli.stdout || ""),
     () => ({ status: startCli.status, stdout: startCli.stdout, stderr: startCli.stderr }));
+  check("--next and --start (CLI): the decision hold also names re-opening the source row as a release",
+    () => /re-opening it to build it/.test(nextOut) && /re-open it: clear its `Outcome` cell/.test(startCli.stdout || ""),
+    () => ({ next: nextOut, start: startCli.stdout }));
+  const reopened = tmp("decision-hold-reopen");
+  fs.cpSync(dir, reopened, { recursive: true });
+  const srcFile = taskFilePath(reopened, "dec-source");
+  fs.writeFileSync(srcFile, setOutcome(fs.readFileSync(srcFile, "utf8"), n, ""));
+  editFrontMatter(reopened, "dec-source", "status", "todo");
+  const afterReopen = startableTasks(syncTaskDir(reopened, CARD_RUN, { ...opts, now: AT(min + 1) }), reopened);
+  fs.rmSync(reopened, { recursive: true, force: true });
+  check("re-opening the source row releases the decision hold; the task then waits on the source task as a dependency",
+    () => afterReopen.withheld.find((w) => w.task.id === "dec-waiting")?.cause === HOLD_DEPS,
+    () => afterReopen.withheld.map((w) => `${w.task.id}:${w.cause}`));
   const dec = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
     rowRef: { taskId: "dec-source", n: String(n) }, decisions: new Map([["D4", "handled elsewhere"]]) });
   const released = startableTasks(syncTaskDir(dir, CARD_RUN, { ...opts, now: AT(min + 2) }), dir);
@@ -6796,6 +6809,84 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => !dec.refused && released.startable.some((t) => t.id === "dec-waiting"),
     () => ({ refused: dec.problems, verdict: released.verdict, startable: released.startable.map((t) => t.id),
       withheld: released.withheld.map((w) => `${w.task.id}:${w.cause}`) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// The decision-hold rules on hand-built tasks: which rows open a subject, and which open rows wait on one.
+{
+  const NEEDS = { outcome: "not-built — needs-decision", outcomeKind: "not-built", outcomeCause: "needs-decision" };
+  const task = (id, rows, extra = {}) => ({ id, status: "todo", dependsOn: [], rows, ...extra });
+  const source = (extra = {}, rowExtra = {}) =>
+    task("src", [{ label: "A", subject: "card:C1", ...NEEDS, ...rowExtra }], { status: "partial", ...extra });
+  const waiting = task("wait", [{ label: "B", subject: "card:C1" }]);
+  const cause = (t, tasks) => startBlocker(t, tasks)?.cause ?? null;
+  check("decision hold: a task whose only open row shares the subject of another task's undecided row is held",
+    () => cause(waiting, [source(), waiting]) === HOLD_DECISION, () => startBlocker(waiting, [source(), waiting]));
+  check("decision hold: one open row with no subject keeps the task startable",
+    () => {
+      const mixed = task("wait", [{ label: "B", subject: "card:C1" }, { label: "C" }]);
+      return cause(mixed, [source(), mixed]) === null;
+    });
+  check("decision hold: a task's own needs-decision row never holds that task",
+    () => {
+      const own = task("own", [{ label: "A", subject: "card:C1", ...NEEDS }, { label: "B", subject: "card:C1" }]);
+      return cause(own, [own]) === null;
+    });
+  check("decision hold: a source row with a decisions entry opens no subject",
+    () => cause(waiting, [source({ decisions: new Map([[1, "D4"]]) }), waiting]) === null,
+    () => startBlocker(waiting, [source({ decisions: new Map([[1, "D4"]]) }), waiting]));
+  check("decision hold: a source row a repair round built opens no subject",
+    () => cause(waiting, [source({}, { residual: "closed" }), waiting]) === null,
+    () => startBlocker(waiting, [source({}, { residual: "closed" }), waiting]));
+  check("decision hold: a source row whose repair round is still open keeps the hold",
+    () => cause(waiting, [source({}, { residual: "open" }), waiting]) === HOLD_DECISION);
+}
+
+// A card cited on two pages: the repair round on the source page is sequenced behind that page only, so it can
+// build the source row while the other page's task is still held.
+{
+  const childWithHandler = { ...C1_BUNDLE, schemas: [{ pkg: "P", body: C1_BUNDLE.schemas[0].body
+    .replace("]};});", '],methods:{onChildC7:function(){return this.get("x");}}};});') }] };
+  const manifest = { ...manifestOf({ bulk: 2 }), childPageSchemas: { C1Page: childWithHandler },
+    behaviourIndex: { onBulk0: { card: "C7", ac: ["AC-1"] }, "C1Page::onChildC7": { card: "C7", ac: ["AC-2"] } } };
+  const opts = { ...optsOf(manifest), taskBudget: { run: 0, chunk: 8 } };
+  const decLabelOf = (m) => `Handler — \`${m}\``;
+  const run = runMigration(manifest);
+  const groups = checklistGroups(run, opts);
+  const waitLabel = groups.flatMap((g) => g.rows).find((r) => r.card === "C7" && /onChildC7/.test(r.label))?.label;
+  const isReview = (g) => g.baseTitle === "Quality gates";
+  const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g)).flatMap((g) => g.rows.map((r) => r.label));
+  const childKey = groups.find((g) => g.rows.some((r) => r.label === waitLabel))?.pageKey;
+  const split = { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap((k) => (k === "main"
+    ? [splitItem("x-source", "main", "main", rowsOf("main", (g) => !isReview(g))), splitItem("x-review", "main", "main", rowsOf("main", isReview))]
+    : k === childKey
+      ? [splitItem("x-waiting", k, k, [waitLabel]), splitItem("x-child", k, k, rowsOf(k).filter((l) => l !== waitLabel))]
+      : [splitItem(`x-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  const base = tmp("decision-hold-cross-page");
+  const dir = path.join(base, "build-tasks");
+  freezeSplit(dir, JSON.stringify(split));
+  const first = syncTaskDir(dir, run, opts);
+  const n = (first.tasks.find((t) => t.id === "x-source")?.rows || []).findIndex((r) => r.label === decLabelOf("onBulk0")) + 1;
+  let min = clearDepsOf(dir, "x-source", run, opts);
+  startTask(dir, "x-source", run, { ...opts, dispatchToken: "tok-x-source" }, null, AT(min));
+  closeCells(dir, "x-source", (i) => (i === n ? "not-built — needs-decision" : "built"));
+  editFrontMatter(dir, "x-source", "agentNonce", "tok-x-source");
+  min += 1;
+  const withheldAs = (set) => startableTasks(set, dir).withheld.find((w) => w.task.id === "x-waiting")?.cause ?? null;
+  const heldBefore = withheldAs(syncTaskDir(dir, run, { ...opts, now: AT(min) }));
+  runTask(dir, "x-review", run, opts, (min += 2));
+  const miss = { main: { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, decLabelOf("onBulk0"))] } };
+  const round = syncRepairDir(dir, run, miss, opts);
+  for (const t of round.written) runTask(dir, t.id, run, opts, (min += 2));
+  const after = syncTaskDir(dir, run, { ...opts, now: AT(min + 2) });
+  const srcRow = after.tasks.find((t) => t.id === "x-source")?.rows[n - 1];
+  const released = startableTasks(after, dir);
+  check("decision hold (pipeline): a source row a repair round built releases the held task on another page",
+    () => waitLabel && n > 0 && heldBefore === HOLD_DECISION && round.written.length > 0
+      && srcRow?.outcomeCause === "needs-decision" && srcRow?.residual === "closed"
+      && released.startable.some((t) => t.id === "x-waiting"),
+    () => ({ waitLabel, childKey, n, heldBefore, repairs: round.written.map((t) => t.id), residual: srcRow?.residual,
+      startable: released.startable.map((t) => t.id), withheld: released.withheld.map((w) => `${w.task.id}:${w.cause}`) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
