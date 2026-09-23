@@ -47,7 +47,7 @@ const metaPage = (j) => (j && typeof j === "object" && j.page && typeof j.page =
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 const META_FIELDS = ["schemaName", "schemaUId", "packageName", "packageUId", "parentSchemaName"];
-const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers"];
+const BUNDLE_FIELDS = ["viewConfig", "modelConfig", "viewModelConfig", "handlers", "resources"];
 
 // The entity the page's PRIMARY data source is bound to, for `--verify`'s entity row. `modelConfig` names the
 // primary source; that source's config names the entity. Derived rather than asked of the agent — "read two

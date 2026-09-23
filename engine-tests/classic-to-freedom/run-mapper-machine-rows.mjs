@@ -65,6 +65,64 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
         && payments[2] === "skip" && /no built tab matched the plan caption "Payments" by words/.test(payments[1]),
       () => [basic, history, next, payments]);
   }
+  // A plan tab whose built twin carries another caption and holds exactly the plan's fields.
+  {
+    const SEVEN = ["Name", "Birthday", "Gender", "Email", "Phone", "City", "Position"];
+    const fieldsOf = (names) => names.map((n) => ({ type: "crt.Input", name: `${n}Field`, control: `$${n}` }));
+    const tabsPage = (tabs, extra = {}) => ({ ...page(), viewConfig: { items: [{ type: "crt.TabPanel", name: "Tabs", items: tabs }] }, ...extra });
+    const general = { type: "crt.TabContainer", name: "GeneralInfoTab", caption: "#ResourceString(GeneralInfoTabCaption)#", items: fieldsOf(SEVEN) };
+    const other = { type: "crt.TabContainer", name: "OtherTab", caption: "#ResourceString(OtherTabCaption)#", items: fieldsOf(["Notes", "Name"]) };
+    const T = (entry) => { const c = verifyCtx({ pages: { main: entry } }, "main");
+      return (vk) => resolveVk({ type: "layout", region: "tab", fields: 0, lists: 0, widgets: [], ...vk }, c); };
+    const basic = { caption: "Basic information", fields: 7, names: SEVEN };
+    const M6 = T(tabsPage([other, general], { resources: { GeneralInfoTabCaption: "Основная информация" } }));
+    const r6 = M6(basic);
+    check("layout: a built tab whose caption differs from the plan's but holds EVERY field the plan puts on that tab matches it, and the evidence says it matched by fields",
+      () => r6[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r6[1]) && /matched by the 7 plan field\(s\)/.test(r6[1]),
+      () => r6);
+    check("layout: the field-identity match is CLAIMED like a caption match — a second row naming the same fields finds no unclaimed tab and falls to confirm-on-stand",
+      () => M6(basic)[2] === "skip" && /no unclaimed tab holds all 7 of its fields/.test(M6(basic)[1]), () => M6(basic));
+    const M6b = T(tabsPage([general, { type: "crt.TabContainer", name: "BasicTab", caption: "Basic information", items: fieldsOf(["Name"]) }]));
+    const r6b = M6b(basic);
+    check("layout (guard): a tab whose CAPTION matches still wins over one that only holds the fields — the field rule scores below every caption match",
+      () => /in tab `BasicTab`/.test(r6b[1]) && !/matched by/.test(r6b[1]), () => r6b);
+    const r6c = T(tabsPage([{ ...general, items: fieldsOf(SEVEN.slice(0, 6)) }]))(basic);
+    const r6d = T(tabsPage([general]))({ caption: "Basic information", fields: 7 });
+    check("layout (guard): holding 6 of the 7 fields is no match (confirm-on-stand, not the content fit), and a row that publishes no field names is judged by the exact content fit instead",
+      () => r6c[2] === "skip" && /no unclaimed tab holds all 7/.test(r6c[1])
+        && r6d[0] === "✅ Done" && /matched by content/.test(r6d[1]) && !/plan field/.test(r6d[1]),
+      () => [r6c, r6d]);
+    // The built shape of a renamed template tab: the plan's fields plus a widget, inside a same-content grid.
+    const wrapped = tabsPage([{ ...general, items: [{ type: "crt.GridContainer", name: "GeneralInfoTabContainer",
+      items: [...fieldsOf(SEVEN), { type: "crt.ApprovalList", name: "Approvals" }] }] }]);
+    const r6e = T(wrapped)(basic);
+    check("layout: a tab holding the plan's fields plus a widget, inside a wrapper grid with the same content, matches by field identity — the tab, not the wrapper",
+      () => r6e[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r6e[1]) && /matched by the 7 plan field/.test(r6e[1]), () => r6e);
+    const wrong = tabsPage([{ ...general, items: fieldsOf(["A", "B", "C", "D", "E", "F", "G"]) }]);
+    const r6f = T(wrong)(basic);
+    check("layout (guard): a tab with the plan's field COUNT but other fields is not closed — a row with field names never falls to the count-based content fit",
+      () => r6f[2] === "skip" && !/Done/.test(r6f[0]), () => r6f);
+    const listsTab = { type: "crt.TabContainer", name: "StagesTab", caption: "#ResourceString(StagesTabCaption)#", items: [{ type: "crt.DataGrid", name: "GridStages", items: "$Stages" }] };
+    const r6g = T(tabsPage([listsTab, other]))({ caption: "Recruiting stages", lists: 1 });
+    check("layout: a related-list-only tab row (no field names) still matches by the unique exact content fit",
+      () => r6g[0] === "✅ Done" && /in tab `StagesTab` \(matched by content/.test(r6g[1]), () => r6g);
+    const mainTab = { type: "crt.TabContainer", name: "MainTab", caption: "#ResourceString(MainTabCaption)#", items: fieldsOf(["Name"]) };
+    const r7 = T(tabsPage([mainTab], { resources: { MainTabCaption: "Basic information" } }))({ caption: "Basic information", fields: 1 });
+    const r7raw = T(tabsPage([mainTab]))({ caption: "Basic information", fields: 1 });
+    // get-page's own `bundle.resources` shape.
+    const bundleTab = { ...mainTab, name: "GeneralInfoTab", caption: "#ResourceString(BasicInfoTab_caption)#" };
+    const r7b = T(tabsPage([bundleTab], { resources: { strings: { BasicInfoTab_caption: { "en-US": "Basic information" },
+      GeneralInfoTab_caption: { "ru-RU": "Основная информация", "en-US": "General information" } } } }))({ caption: "Basic information", fields: 1 });
+    const keyTab = { ...mainTab, name: "KeyTab", caption: "#ResourceString(BasicInformationTabCaption)#" };
+    const r7key = T(tabsPage([keyTab], { resources: { BasicInformationTabCaption: "Profile" } }))({ caption: "Basic information", fields: 1 });
+    check("layout (guard): a caption binding whose KEY matches the plan's words still matches by caption when its resolved text reads otherwise",
+      () => r7key[0] === "✅ Done" && /in tab `KeyTab`/.test(r7key[1]) && !/matched by/.test(r7key[1]), () => r7key);
+    check("layout: a built caption `#ResourceString(K)#` resolves through the page's `resources` before the caption match — flat or get-page's `{ strings: { K: { en-US } } }` — and the same macro without them matches nothing",
+      () => r7[0] === "✅ Done" && /in tab `MainTab`/.test(r7[1]) && !/matched by/.test(r7[1])
+        && r7b[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r7b[1]) && !/matched by/.test(r7b[1])
+        && /matched by content/.test(r7raw[1]),
+      () => [r7, r7b, r7raw]);
+  }
   check("layout: the header is judged by its widgets anywhere on the page; a payload with NO containers (the legacy flat ops shape) is judged page-wide and SAYS so — every fixture built that way stays green",
     () => {
       if (st(L({ region: "header", widgets: ["crt.EntityStageProgressBar", "crt.Feed"] })) !== "✅ Done") return false;
@@ -86,6 +144,18 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       && g.filter((r) => r.label.startsWith("Handler — ")).every((r) => r.vk?.type === "handler" && Array.isArray(r.vk.triggers))
       && g.filter((r) => r.label.startsWith("Card actions — native")).every((r) => r.vk?.type === "cardnative"),
     () => g.filter((r) => /^(Side profile|Tab · |Header|Handler|Card actions — native)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
+  {
+    const tabResult = { entity: "X", changeSet: { resources: { BasicTabCaption: "Basic information" }, viewConfigDiff: [
+      { name: "Name", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
+      { name: "Name_2", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
+      { name: "BasicGroup", parentName: "BasicTab", values: { type: "crt.GridContainer" } },
+      { name: "BasicTab", parentName: "Tabs", propertyName: "items", values: { type: "crt.TabContainer", caption: "#ResourceString(BasicTabCaption)#" } },
+    ], standardFeatures: [], details: [], cardActions: [], needsDecision: [] } };
+    const tabRow = checklistGroups(tabResult, {}).flatMap((x) => x.rows).find((r) => r.vk?.type === "layout" && r.vk.region === "tab");
+    check("checklist: a Tab layout row publishes its fields' element NAMES, one per counted field — what the tab-by-fields match reads",
+      () => tabRow?.vk.caption === "Basic information" && tabRow.vk.fields === 2 && tabRow.vk.names.join(",") === "Name,Name_2",
+      () => tabRow);
+  }
   // A result carrying a module-dep member: its checklist row is informational and renders ℹ noted, NOT confirm.
   // Self-contained (does not depend on the shared fixture producing one), so the info path is actually exercised.
   {

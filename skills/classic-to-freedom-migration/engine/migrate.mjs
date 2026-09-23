@@ -2687,7 +2687,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at the checklist's page keys because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes>, "resources": <get-page bundle.resources — OPTIONAL; a built tab caption `#ResourceString(K)#` resolves through it> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -3269,8 +3269,11 @@ const ROUND_EMPTY = {
     + " recorded as NOT BUILT already has a repair task (or its cause is parked).",
 };
 
+// `deliverable` (page) on file, per held-back row.
+const heldRows = (held) => held.map((h) => `\`${h.row.deliverable}\` (${h.pageKey}) on ${h.task.file}`).join(" | ");
+
 // The round's report, identical for both entry points except for where its rows came from.
-function repairRoundLines(res, dir, kind) {
+export function repairRoundLines(res, dir, kind) {
   const lines = [];
   // A row held back because the ledger settled it by decision is NOT written as a round, so this is the only
   // place the caller hears about it.
@@ -3278,6 +3281,20 @@ function repairRoundLines(res, dir, kind) {
     lines.push(`migrate.mjs: NOT routed — \`${b.row.deliverable}\` (${b.pageKey}) was closed \`not-applicable\` with a reason`
       + ` on ${b.task.file}, and a verify run re-opened it. The decision stands: confirm the boundary, or record`
       + ` the row \`not-built\` to schedule the work.`);
+  }
+  // A row whose check inputs match the round that closed it is not handed out again: a sub-agent could only
+  // re-derive the same answer. Neither kind counts as verified — the page stays open and so does the gate.
+  if (res.disputed?.length) {
+    lines.push(`migrate.mjs: DISPUTED check — ${res.disputed.length} row(s) a repair round closed \`built\` read open again`
+      + ` on the SAME recorded status and evidence: ${heldRows(res.disputed)}. No round was opened for them: the`
+      + ` verifier is in question, not the page. Check the rows on the stand and fix the check, or record why it`
+      + ` cannot see them; they stay open until the verifier confirms them.`);
+  }
+  if (res.stalled?.length) {
+    lines.push(`migrate.mjs: STALLED — ${res.stalled.length} row(s) a repair round closed \`not-built\` read open again`
+      + ` on the SAME recorded status and evidence: ${heldRows(res.stalled)}. No round was opened for them: nothing`
+      + ` changed for another sub-agent to act on. Take them to the user — the plan, the stand or the expectation`
+      + ` has to move first.`);
   }
   if (res.written.length) {
     const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
@@ -3297,7 +3314,8 @@ function repairRoundLines(res, dir, kind) {
       + ` was opened for them: a round is an ATTEMPT, not a verify run, so re-verifying an unchanged page does not`
       + ` manufacture one (and would otherwise burn the ${REPAIR_ROUND_CAP}-round cap with nobody having run).`);
   }
-  if (!res.written.length && !res.parked.length && !res.pending.length) lines.push(`migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+  if (!res.written.length && !res.parked.length && !res.pending.length
+    && !res.disputed?.length && !res.stalled?.length) lines.push(`migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
   if (res.parked.length) {
     const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
     lines.push(`migrate.mjs: ⛔ ${res.parked.length} cause(s) PARKED after ${REPAIR_ROUND_CAP} rounds — ${what}.`
@@ -3363,7 +3381,7 @@ function runRepairMode(result, dir, verifyRes, opts) {
   const stillOpen = unroutedNotBuilt(res.set.tasks);
   partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
   return { note: repairRoundLines(res, dir, "verify").join("\n") + "\n", set: res.set,
-    repair: { written: res.written, pending: res.pending, parked: res.parked } };
+    repair: { written: res.written, pending: res.pending, parked: res.parked, disputed: res.disputed, stalled: res.stalled } };
 }
 
 // `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`

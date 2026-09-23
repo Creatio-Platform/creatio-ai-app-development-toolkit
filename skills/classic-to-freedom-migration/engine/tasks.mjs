@@ -338,7 +338,10 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // The VERIFIER PAYLOAD is digested alongside the label because a rename moves neither count nor caption: the
 // coverage row still reads `Fields — 12 expected` when a field has been renamed under it, and digesting the label
 // alone reported no drift on exactly the change a built page has to be re-checked against.
-const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.stringify(r.vk ?? null)}`).join(" "));
+// A layout row's field `names` are left out: they restate the Fields row's names, which the digest already carries,
+// so they add no drift signal of their own.
+const digestVk = (vk) => (vk?.type === "layout" && vk.names ? { ...vk, names: undefined } : vk);
+const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}`).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -1009,9 +1012,12 @@ function headerColumns(lines, headed = true) {
     // the header word derives nothing from them. `Outcome` has no alias: without that column there is nothing to
     // read either way, and such a file is named as an unreadable ledger.
     const label = at("deliverable");
-    return { label: label < 0 ? at("row") : label, outcome: at("outcome"), at: at_ };
+    // A repair table's two input cells, -1 on any other shape.
+    return { label: label < 0 ? at("row") : label, outcome: at("outcome"), at: at_,
+      recorded: at("what was recorded"), evidence: at("evidence behind it") };
   }
-  return headed ? { label: PLAN_LABEL_COL, outcome: PLAN_OUTCOME_COL, at: -1 } : { label: -1, outcome: -1, at: -1 };
+  return headed ? { label: PLAN_LABEL_COL, outcome: PLAN_OUTCOME_COL, at: -1, recorded: -1, evidence: -1 }
+    : { label: -1, outcome: -1, at: -1, recorded: -1, evidence: -1 };
 }
 
 // The rendered table read back in ORDER, so the read-only path (`--verify`) sees the same rows and numbers the
@@ -1046,7 +1052,13 @@ function tableRows(bodyLines) {
     // empty cell IS the outcome, so rejoining puts a typed pipe back; `uncell` undoes the escaping the engine
     // writes on its own re-render.
     const outcome = cells.slice(col.outcome, -1).join("|");
-    out.push({ label: uncell(cells[col.label].trim()), mark: parseOutcome(uncell(outcome.trim())) });
+    const row = { label: uncell(cells[col.label].trim()), mark: parseOutcome(uncell(outcome.trim())) };
+    // Both input cells sit before the Outcome column, so a typed pipe in the outcome cannot shift them.
+    if (col.recorded > 0 && col.evidence > 0) {
+      row.recorded = uncell(cells[col.recorded].trim());
+      row.evidence = uncell(cells[col.evidence].trim());
+    }
+    out.push(row);
   }
   return out;
 }
@@ -1497,6 +1509,11 @@ export const notBuiltOpenItems = (tasks) =>
 // may clear the technical obstacle it named.
 const ROUTABLE_NOT_BUILT_CAUSES = new Set([CAUSE_BLOCKED]);
 
+// The evidence of a residual row: the file and row that recorded it. Engine-written, so it is read back by
+// this same format (`sansRecordedPointer`).
+const RECORDED_ON = "recorded on ", RECORDED_ROW = ", row ";
+const recordedPointer = (file, n) => `${RECORDED_ON}${file}${RECORDED_ROW}${n}`;
+
 export function notBuiltOpenRows(tasks) {
   const items = notBuiltOpenItems(tasks);
   const pages = {};
@@ -1515,7 +1532,7 @@ export function notBuiltOpenRows(tasks) {
       // What the agent wrote in the Outcome cell, verbatim, and where it wrote it. A blank cell is a row the task
       // closed without accounting for, which the repair round has to be told rather than left to infer.
       status: it.row.outcome || "left blank — the task closed without accounting for this row",
-      evidence: `recorded on ${it.task.file}, row ${it.n}`,
+      evidence: recordedPointer(it.task.file, it.n),
     });
   }
   return pages;
@@ -1542,6 +1559,54 @@ function settledBoundaries(tasks) {
     }
   }
   return out;
+}
+
+// A ROW NOTHING HAS CHANGED SINCE THE ROUND THAT CLOSED IT IS NOT REPAIR WORK. Its check inputs — the
+// `What was recorded` and `Evidence behind it` cells — are what the next round would be handed again, so a
+// sub-agent sent to it can only re-derive the same answer. Keyed per ROW on the highest round that covers it,
+// not per (page, kind): a sibling row may have opened a later round of the same kind without this one.
+// An entry exists only for a round that was ATTEMPTED and DISPATCHED (`roundCoverage` credits nothing else)
+// and whose row closed `built` (the verifier is in question: DISPUTED) or `not-built` (the round got nowhere:
+// STALLED). Any other outcome, or a row whose cells did not parse, opens a round.
+const inputCell = (s) => String(s ?? "").replace(/\s+/g, " ").trim() || "—";
+const ROUND_HOLD = { [O_BUILT]: "disputed", [O_NOT_BUILT]: "stalled" };
+function lastRoundRows(tasks, existing) {
+  const tableOf = new Map(existing.map((e) => [e.file, e.table]));
+  const latest = new Map();
+  for (const t of tasks || []) {
+    if (t.kind !== REPAIR_KIND) continue;
+    const round = t.repairRound || 1;
+    const closed = ROUND_ATTEMPTED.has(t.status) && t.dispatched === "yes";
+    for (const r of tableOf.get(t.file) || []) {
+      const key = `${t.pageKey} ${coverKey(r.label)}`;
+      if (latest.has(key) && latest.get(key).round >= round) continue;
+      const hold = closed && r.recorded !== undefined ? ROUND_HOLD[r.mark?.outcome] : null;
+      latest.set(key, { round, hold, task: t, recorded: inputCell(r.recorded), evidence: inputCell(r.evidence) });
+    }
+  }
+  return latest;
+}
+// An evidence cell that is exactly a `recordedPointer` to a file in the folder reads as empty; any other text is
+// returned unchanged.
+function sansRecordedPointer(evidence, files) {
+  const s = String(evidence ?? "");
+  const at = s.lastIndexOf(RECORDED_ROW);
+  if (!s.startsWith(RECORDED_ON) || at < 0) return s;
+  const file = s.slice(RECORDED_ON.length, at), n = s.slice(at + RECORDED_ROW.length);
+  return files.has(file) && /^[1-9]\d*$/.test(n) && s === recordedPointer(file, Number(n)) ? "" : s;
+}
+// The row to compare is the VERIFIER'S when it reported one. A residual row (no verifier row) names the newest
+// file that recorded it, so on that path the pointer is removed from both sides and only the rest is compared;
+// such a match is STALLED, since only a round that closed the row `not-built` leaves it residual.
+function unchangedSinceLastRound(last, key, row, verifiedRow, files) {
+  const prev = last.get(key);
+  if (!prev?.hold) return null;
+  if (verifiedRow) {
+    return inputCell(verifiedRow.status) === prev.recorded && inputCell(verifiedRow.evidence) === prev.evidence ? prev : null;
+  }
+  const sameEvidence = inputCell(sansRecordedPointer(inputCell(row.evidence), files))
+    === inputCell(sansRecordedPointer(prev.evidence, files));
+  return inputCell(row.status) === prev.recorded && sameEvidence ? { ...prev, hold: "stalled" } : null;
 }
 
 const mergePages = ({ residual = {}, verified = {} }) => {
@@ -2348,23 +2413,30 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // does not exist. `taskSetFor` falls back to `buildTaskSet` on its own when there is no split.
   const fresh = taskSetFor(dir, result, opts);
   // A refused split writes NOTHING, for the reason `syncTaskDir` refuses: half a folder schedules half a plan.
-  if (fresh.refused) return { ...fresh, written: [], parked: [], pending: [], set: { ...fresh, tasks: [] } };
+  if (fresh.refused) return { ...fresh, written: [], parked: [], pending: [], disputed: [], stalled: [], set: { ...fresh, tasks: [] } };
   const existing = readExisting(dir);
   // The rows a BUILD agent recorded as not built are routed here too, and only here: one trigger, one grouping,
   // one round cap for both kinds of open row. Read off the merged set because the Outcome cells live in the
   // files, and a task is only `partial` once those cells have been parsed back.
   const mergedForResidual = resolvePartials(attachDispatch(mergeTaskSet(fresh, existing), dir));
   const residual = notBuiltOpenRows(mergedForResidual.tasks);
-  // Filtered against what the ledger has already settled by decision. Nothing is dropped silently: every row
-  // held back is returned as `boundaries` and named on the index.
+  // Filtered against what the ledger has already settled by decision, and against the round that last closed
+  // each row. Nothing is dropped silently: a decision-settled row is returned as `boundaries` and named on the
+  // index; an unchanged row as `disputed` or `stalled`, which the round report names.
   const settled = settledBoundaries(mergedForResidual.tasks);
-  const boundaries = [];
+  const last = lastRoundRows(mergedForResidual.tasks, existing);
+  const files = new Set(existing.map((e) => e.file));
+  const boundaries = [], disputed = [], stalled = [];
   const gated = {};
   for (const [pageKey, page] of Object.entries(mergePages({ residual, verified: verifyPages }))) {
     const keep = [];
+    const verifiedRows = new Map((verifyPages[pageKey]?.openRows || []).map((r) => [coverKey(r.deliverable), r]));
     for (const row of page.openRows || []) {
-      const hit = settled.get(`${pageKey} ${coverKey(row.deliverable)}`);
+      const key = `${pageKey} ${coverKey(row.deliverable)}`;
+      const hit = settled.get(key);
       if (hit) { boundaries.push({ pageKey, row, task: hit.task, reason: hit.row.outcomeReason }); continue; }
+      const same = unchangedSinceLastRound(last, key, row, verifiedRows.get(coverKey(row.deliverable)), files);
+      if (same) { (same.hold === "disputed" ? disputed : stalled).push({ pageKey, row, task: same.task }); continue; }
       keep.push(row);
     }
     gated[pageKey] = { ...page, openRows: keep };
@@ -2387,12 +2459,25 @@ export function syncRepairDir(dir, result, verifyPages, opts = {}) {
   // `resolvePartials`, which only lets a DISPATCHED closure resolve a residual.
   attachDispatch(merged, dir);
   resolvePartials(merged);
+  unrouteStalled(merged, stalled);
   // Opening a round changes the residual coverage of every task whose rows it covers, so their files are
   // re-written here too and not only the index.
   // ATTACHED BEFORE THE WRITE, or the index on disk carries none of the held-back rows.
   merged.boundariesHeldBack = boundaries;
   persistTaskSet(dir, merged);
-  return { written, parked, pending, boundaries, set: merged };
+  return { written, parked, pending, boundaries, disputed, stalled, set: merged };
+}
+
+// A STALLED ROW IS NOT SCHEDULED WORK. No round is opened for it, so its owed rows read unrouted (as a parked
+// row does) and every gate that counts unrouted not-built rows keeps failing on it.
+function unrouteStalled(set, stalled) {
+  const keys = new Set(stalled.map((h) => `${h.pageKey} ${coverKey(h.row.deliverable)}`));
+  if (!keys.size) return;
+  for (const t of set.tasks || []) {
+    for (const o of owedRows(t)) {
+      if (o.row.residual === "open" && keys.has(`${t.pageKey} ${coverKey(o.row.label)}`)) o.row.residual = null;
+    }
+  }
 }
 
 // THE FOLDER AS IT STANDS, merged with the plan and READ-ONLY. The final report reads the ledger

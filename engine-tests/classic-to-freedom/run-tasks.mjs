@@ -9,7 +9,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration, checklistOpts, repairRoundLines } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
@@ -180,6 +180,9 @@ const AT = (min) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const taskFilePath = (dir, id) => path.join(dir, fs.readdirSync(dir).find((x) => x.endsWith(".md")
   && x !== TASK_INDEX_FILE && new RegExp(String.raw`^id: ${id}\s*$`, "m").test(fs.readFileSync(path.join(dir, x), "utf8"))));
 const NOT_BUILT_BLOCKED = "not-built — blocked";
+// The same outcome in a different recorded text: a round closed with it has CHANGED the row's record, so the next
+// round opens rather than reading the row as stalled.
+const NOT_BUILT_BLOCKED_ALT = "not-built - blocked";
 const rowCount = (text) => text.split("\n").filter((l) => { const c = l.split(/(?<!\\)\|/); return c.length >= 7 && /^\s*\d+\s*$/.test(c[1]); }).length;
 const allBuilt = (text) => {
   let t = text;
@@ -4223,34 +4226,34 @@ check("a round that fixed SOME of its rows closes those and only those — the w
   () => {
     const { d, tgt } = partialFolder("repair-cells-some", [1, 2]);
     syncRepairDir(d, RUN, {}, OPTS);
-    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual).filter(Boolean));
     return backAt(set, tgt.id).status === "partial"
       && residuals.has("closed") && residuals.has("open");
   }, () => { const { d, tgt } = partialFolder("repair-cells-some-d", [1, 2]);
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     return backAt(syncRepairDir(d, RUN, {}, OPTS).set, tgt.id).rows.map((r) => [r.outcome, r.residual]); });
 
 check("the rows a round could not fix open the NEXT round, and the cap does not reset behind them — a row routed as `unverified:…` comes back recorded `not-built:…`, so a cap keyed on the whole cause is a fresh bucket at round 1 and three agents quietly become six",
   () => {
     const { d } = partialFolder("repair-cap-lineage");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);
     const res = syncRepairDir(d, RUN, {}, OPTS);
     return res.written.length === 1 && res.written[0].repairRound === 2;
   }, () => { const { d } = partialFolder("repair-cap-lineage-d");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);
     return syncRepairDir(d, RUN, {}, OPTS).written.map((t) => `${t.cause} r${t.repairRound}`); });
 
 check("a deliverable is routed ONCE however many files record it — a `partial` round leaves the row open in its own table AND in the task it came from, whose cell keeps reading `not-built` by design, so routing per source doubles every round and puts two rows with one label in one agent's table",
   () => {
     const { d } = partialFolder("repair-dedupe");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);
     const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
     return r2.rows.length === 1 && r2.covers.length === 1
       && new Set(r2.covers).size === r2.covers.length;
   }, () => { const { d } = partialFolder("repair-dedupe-d");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);
     const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
     return { rows: r2.rows.length, covers: r2.covers }; });
 
@@ -4258,7 +4261,7 @@ check("a row a round has SETTLED stops being named as NOT BUILT — its own Outc
   () => {
     const { d, tgt } = partialFolder("notbuilt-settled", [1, 2]);
     syncRepairDir(d, RUN, {}, OPTS);
-    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const residuals = new Set(backAt(set, tgt.id).rows.map((r) => r.residual));
     const idxLines = renderTaskIndex(set).split("\n").filter((l) => /row \d+ — \*\*not built\*\*/.test(l));
@@ -4271,7 +4274,7 @@ check("a row a round has SETTLED stops being named as NOT BUILT — its own Outc
       && /⚠ NOT BUILT — 1 deliverable\(s\)/.test(renderProgress(set, d))
       && idxLines.length === 1;
   }, () => { const { d } = partialFolder("notbuilt-settled-d", [1, 2]);
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED));
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, (n) => (n === 1 ? "built" : NOT_BUILT_BLOCKED_ALT));
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { progress: renderProgress(s, d).split("\n").filter((l) => /NOT BUILT/.test(l)),
       attention: renderTaskIndex(s).split("\n").filter((l) => /\*\*not built\*\*/.test(l)) }; });
@@ -4282,7 +4285,7 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
     for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
       const res = syncRepairDir(d, RUN, {}, OPTS);
       if (!res.written.length) break;
-      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+      for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
     }
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const items = notBuiltOpenItems(set.tasks);
@@ -4293,7 +4296,7 @@ check("a row the cap has EXHAUSTED fails the gate instead of passing as schedule
     for (let r = 1; r <= REPAIR_ROUND_CAP + 1; r++) {
       const res = syncRepairDir(d, RUN, {}, OPTS);
       if (!res.written.length) break;
-      for (const t of res.written) runRepair(d, t.id, NOT_BUILT_BLOCKED);
+      for (const t of res.written) runRepair(d, t.id, r % 2 ? NOT_BUILT_BLOCKED_ALT : NOT_BUILT_BLOCKED);
     }
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
     return { parent: backAt(s, tgt.id).status, residuals: backAt(s, tgt.id).rows.map((r) => r.residual),
@@ -4371,14 +4374,14 @@ check("a repair round's COMPUTED status is written back into its front matter �
 check("the round that started the chain closes when a LATER round fixes its rows — its own cells still read `not-built` forever, so the latest round to speak about a row is the authority; taking any open mark over any closed one holds the row open for as long as the folder exists",
   () => {
     const { d, tgt } = partialFolder("repair-chain");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);   // round 1 fails
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);   // round 1 fails
     const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
     runRepair(d, r2.id, "built");                                         // round 2 fixes it
     const set = syncRepairDir(d, RUN, {}, OPTS).set;
     const rounds = set.tasks.filter((t) => t.kind === "repair").map((t) => t.status);
     return backAt(set, tgt.id).status === "done" && rounds.every((s) => s === "done");
   }, () => { const { d, tgt } = partialFolder("repair-chain-d");
-    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED);
+    syncRepairDir(d, RUN, {}, OPTS); runRepairs(d, NOT_BUILT_BLOCKED_ALT);
     const r2 = syncRepairDir(d, RUN, {}, OPTS).written[0];
     runRepair(d, r2.id, "built");
     const s = syncRepairDir(d, RUN, {}, OPTS).set;
@@ -6639,6 +6642,147 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
         repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
   }
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== an UNCHANGED row opens no new round: disputed when it closed built, stalled when it closed not-built =====");
+{
+  // Ten rows of one cause and two of others on one page; re-verifying hands back the same cells.
+  const TEN = Array.from({ length: 10 }, (_, i) => openRow(i + 1, `Handler — \`onThing${i}\``, "missing",
+    "❌ MISSING", `handler \`onThing${i}\` | not among the 4 handlers on the built page`));
+  const TWO = [openRow(11, "Business rules × 2", "missing", "❌ MISSING", "0 of 2 rule identities on the built page"),
+    openRow(12, "Card action — `Print`", "missing", "❌ MISSING", "no `crt.Button` named `Print` on the built page")];
+  const pagesOf = (rows) => ({ "child:G1": { missing: rows.length, unverified: 0, complete: false, openRows: rows } });
+  const SAME = pagesOf([...TEN, ...TWO]);
+  const isHandler = (h) => h.row.deliverable.startsWith("Handler —");
+  // Round 1 written from the verify run, dispatched, and closed with `mark` on every row, through real files.
+  const closedRound1 = (name, mark, pages = SAME) => {
+    const d = tmp(name);
+    syncTaskDir(d, RUN, OPTS);
+    const first = syncRepairDir(d, RUN, pages, OPTS);
+    // In queue order: the rounds share the page's write chain, and clearing one's dependencies must not close
+    // another round with a mark this fixture did not choose.
+    const queued = syncTaskDir(d, RUN, OPTS).tasks.filter((t) => t.kind === "repair").map((t) => t.id);
+    for (const id of queued) { repairMin = clearDepsOf(d, id, RUN, OPTS, nextMin()); runRepair(d, id, mark); }
+    return { d, first };
+  };
+  const rowsOf = (held) => (held || []).map((h) => h.row.deliverable).sort();
+  {
+    const { d, first } = closedRound1("unchanged-built", "built");
+    const again = syncRepairDir(d, RUN, SAME, OPTS);
+    const r2 = repairFiles(d).filter((f) => f.startsWith("task-repair-round2-"));
+    check("repair: rows a round closed `built` whose recorded and evidence cells come back identical open NO round 2 — they are reported DISPUTED and not dispatched",
+      () => first.written.length >= 2 && again.written.length === 0 && r2.length === 0
+        && again.disputed.filter(isHandler).length === 10 && again.stalled.length === 0,
+      () => ({ first: first.written.map((t) => t.file), again: again.written.map((t) => t.file), r2,
+        disputed: rowsOf(again.disputed), stalled: rowsOf(again.stalled) }));
+    check("repair: unchanged rows of every cause on the page are held, not only the largest one",
+      () => again.disputed.filter((h) => !isHandler(h)).length === 2 && !again.written.some((t) => t.repairRound === 2),
+      () => rowsOf(again.disputed));
+    check("repair: a held row spends no attempt and leaves nothing pending, and it is the VERIFIER's row, so the page stays open",
+      () => again.parked.length === 0 && again.pending.length === 0
+        && again.disputed.every((h) => SAME["child:G1"].openRows.some((r) => r.deliverable === h.row.deliverable))
+        && again.disputed.every((h) => /^task-repair-round1-/.test(h.task.file)),
+      () => ({ parked: again.parked, pending: again.pending, files: (again.disputed || []).map((h) => h.task.file) }));
+    const lines = repairRoundLines(again, d, "verify");
+    check("repair: the round report names the disputed rows on their OWN line and never says the run left no row open",
+      () => lines.some((l) => /DISPUTED check — 12 row\(s\)/.test(l) && l.includes("Handler — `onThing0`"))
+        && !lines.some((l) => /left no row open|STALLED/.test(l)),
+      () => lines);
+    const third = syncRepairDir(d, RUN, SAME, OPTS);
+    check("repair: re-verifying the same page again still opens nothing and names the same rows",
+      () => third.written.length === 0 && third.disputed.length === 12,
+      () => ({ written: third.written.length, disputed: (third.disputed || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    const { d } = closedRound1("unchanged-one-changed", "built");
+    const moved = pagesOf([...TEN.map((r, i) => (i === 3 ? { ...r, evidence: "handler `onThing3` | found under another name" } : r)), ...TWO]);
+    const again = syncRepairDir(d, RUN, moved, OPTS);
+    check("repair: a row whose evidence CHANGED opens round 2 with that row only; the unchanged rows are disputed",
+      () => again.written.length === 1 && again.written[0].repairRound === 2
+        && again.written[0].rows.length === 1 && again.written[0].rows[0].label === "Handler — `onThing3`"
+        && again.disputed.length === 11,
+      () => ({ written: again.written.map((t) => ({ round: t.repairRound, rows: t.rows.map((r) => r.label) })), disputed: (again.disputed || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    // ONE cause: a round closed `not-built` stays `partial`, and a later round in the same write chain cannot be
+    // dispatched behind it.
+    const { d } = closedRound1("unchanged-not-built", NOT_BUILT_BLOCKED, pagesOf(TEN));
+    const again = syncRepairDir(d, RUN, pagesOf(TEN), OPTS);
+    check("repair: rows a round closed `not-built` that come back on identical cells are STALLED and not dispatched — the verifier's row is compared, not the residual row that points at the newest file",
+      () => again.written.length === 0 && again.stalled.length === 10 && again.disputed.length === 0,
+      () => ({ written: again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (again.stalled || []).length, disputed: (again.disputed || []).length }));
+    check("repair: verifier rows held as STALLED read unrouted too — the not-built gate keeps failing on them",
+      () => notBuiltOpenItems(again.set.tasks).filter((it) => !it.residual).length === 10,
+      () => notBuiltOpenItems(again.set.tasks).map((it) => [it.row.label, it.residual]));
+    const lines = repairRoundLines(again, d, "verify");
+    check("repair: the round report names the stalled rows on their OWN line",
+      () => lines.some((l) => /STALLED — 10 row\(s\)/.test(l)) && !lines.some((l) => /DISPUTED|left no row open/.test(l)),
+      () => lines);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    const { d, first } = closedRound1("unchanged-no-table", "built");
+    // The round's body lost its table: the status word is the only record, so nothing says the rows are unchanged.
+    for (const f of repairFiles(d)) {
+      const fp = path.join(d, f);
+      const text = fs.readFileSync(fp, "utf8").split("\n").filter((l) => !l.startsWith("|")).join("\n");
+      fs.writeFileSync(fp, text.replace(/^status: .*$/m, "status: done"));
+    }
+    const again = syncRepairDir(d, RUN, SAME, OPTS);
+    check("repair: a prior round whose file carries NO table opens round 2 — an unreadable round is not evidence of an unchanged row",
+      () => again.written.length === first.written.length && again.written.every((t) => t.repairRound === 2)
+        && again.disputed.length === 0 && again.stalled.length === 0,
+      () => ({ written: again.written.map((t) => `${t.cause} r${t.repairRound}`), disputed: (again.disputed || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    const { d } = partialFolder("residual-unchanged");
+    const first = syncRepairDir(d, RUN, {}, OPTS);
+    runRepairs(d, NOT_BUILT_BLOCKED);
+    const r1 = first.written[0];
+    const r1Evidence = parseTaskFile(fs.readFileSync(path.join(d, r1.file), "utf8")).table[0].evidence;
+    const again = syncRepairDir(d, RUN, {}, OPTS);
+    check("repair (--route): a round closed `not-built` whose record comes back the same opens no new round — the row is STALLED, not dispatched, and spends no attempt",
+      () => first.written.length === 1 && again.written.length === 0 && again.pending.length === 0 && again.parked.length === 0
+        && again.stalled.length === 1 && again.disputed.length === 0
+        && !repairFiles(d).some((f) => f.startsWith("task-repair-round2-")),
+      () => ({ written: again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (again.stalled || []).length }));
+    check("repair (--route): the pointer to the file that recorded the row is not a change — the next round's evidence would name the round-1 file, round 1's names the source task, and the row still reads unchanged",
+      () => r1Evidence.startsWith("recorded on ") && !r1Evidence.includes(r1.file)
+        && again.stalled[0]?.row.evidence.includes(r1.file) && again.stalled[0]?.row.evidence !== r1Evidence,
+      () => ({ r1Evidence, now: again.stalled?.[0]?.row.evidence }));
+    check("repair: a STALLED row is not scheduled work — it reads unrouted, so the not-built gate keeps failing on it",
+      () => notBuiltOpenItems(again.set.tasks).filter((it) => !it.residual).length === 1,
+      () => notBuiltOpenItems(again.set.tasks).map((it) => [it.row.label, it.residual]));
+    const lines = repairRoundLines(again, d, "route");
+    check("repair (--route): the routed round's report names the stalled row on its own line",
+      () => lines.some((l) => /STALLED — 1 row\(s\)/.test(l)) && !lines.some((l) => /nothing there is waiting/.test(l)), () => lines);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    const { d } = partialFolder("residual-changed");
+    syncRepairDir(d, RUN, {}, OPTS);
+    runRepairs(d, NOT_BUILT_BLOCKED_ALT);
+    const again = syncRepairDir(d, RUN, {}, OPTS);
+    check("repair (--route): a residual row whose recorded text changed opens the next round",
+      () => again.written.length === 1 && again.written[0].repairRound === 2 && again.stalled.length === 0,
+      () => ({ written: again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (again.stalled || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    // An undispatched closure is not credited anywhere else, so it cannot hold a row back here either.
+    const d = tmp("unchanged-undispatched");
+    syncTaskDir(d, RUN, OPTS);
+    const first = syncRepairDir(d, RUN, SAME, OPTS);
+    for (const id of repairIds(d)) closeCells(d, id, "built");
+    const again = syncRepairDir(d, RUN, SAME, OPTS);
+    check("repair: a round closed `built` with no dispatch record holds nothing back — its rows open round 2",
+      () => again.disputed.length === 0 && again.written.length === first.written.length,
+      () => ({ written: again.written.length, disputed: (again.disputed || []).length }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);

@@ -317,6 +317,8 @@ function summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repai
     if (repair.written?.length) parts.push(`wrote ${plural(repair.written.length, "repair task")}`);
     if (repair.pending?.length) parts.push(`${plural(repair.pending.length, "cause")} already have an open repair task`);
     if (repair.parked?.length) parts.push(`⛔ ${plural(repair.parked.length, "cause")} PARKED after the round cap — take to the user`);
+    if (repair.disputed?.length) parts.push(`${plural(repair.disputed.length, "row")} DISPUTED — closed \`built\`, re-opened on unchanged evidence; the check is in question`);
+    if (repair.stalled?.length) parts.push(`⛔ ${plural(repair.stalled.length, "row")} STALLED — closed \`not-built\`, re-opened on unchanged evidence; take to the user`);
     if (parts.length) L.push(`| Repair round (this run) | ${parts.join(" · ")} |`);
   }
   return L;

@@ -76,23 +76,24 @@ export function captionGroupLabel(o, resources) {
   const looksNoise = !!hexRun && /\d/.test(hexRun[0]);
   return (resolved || !looksNoise) ? esc(t) : null;
 }
+// a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
+// (the plan stays readable) — fall back to the key when the text is not resolved.
+// A caption reaches here in ONE of two localizable forms and they normalize differently:
+//   group / field : `$Resources.Strings.<key>`      -> resourceKey() (which also strips a `#en-US` culture anchor)
+//   TAB           : `#ResourceString(<key>)#`       -> the key is INSIDE the delimiters
+// `resourceKey` strips everything from the first `#`, so a tab caption would normalize to "" and every tab
+// Region would render as a bare `Tab · `. Match the tab form FIRST and leave `resourceKey` alone — its
+// `#`-strip is the culture-anchor rule a live golden pins (`$Resources.Strings.Foo#en-US` -> `Foo`).
+// Shared by the plan side (`regionResolver`) and the verify side (`pageContainersOf`).
+const RESOURCE_STRING_CALL = /^#ResourceString\(([^)]+)\)#$/;
+function captionKeyOf(raw) {
+  const m = RESOURCE_STRING_CALL.exec(String(raw ?? "").trim());
+  return m ? m[1].trim() : resourceKey(raw);
+}
+const capText = (raw, resources = {}) => { const k = captionKeyOf(raw); return resources[k] ?? k; };
 function regionResolver(viewConfigDiff, resources = {}) {
   const byName = new Map(viewConfigDiff.map((o) => [o.name, o]));
-  // a caption is a `$Resources.Strings.<key>` binding; show its human text from the resource map
-  // (the plan stays readable) — fall back to the key when the text is not resolved.
-  // A caption reaches here in ONE of two localizable forms and they normalize differently:
-  //   group / field : `$Resources.Strings.<key>`      -> resourceKey() (which also strips a `#en-US` culture anchor)
-  //   TAB           : `#ResourceString(<key>)#`       -> the key is INSIDE the delimiters
-  // `resourceKey` strips everything from the first `#`, so a tab caption would normalize to "" and every tab
-  // Region would render as a bare `Tab · `. Match the tab form FIRST and leave `resourceKey` alone — its
-  // `#`-strip is the culture-anchor rule a live golden pins (`$Resources.Strings.Foo#en-US` -> `Foo`).
-  const RESOURCE_STRING_CALL = /^#ResourceString\(([^)]+)\)#$/;
-  const captionKeyOf = (raw) => {
-    const m = RESOURCE_STRING_CALL.exec(String(raw ?? "").trim());
-    return m ? m[1].trim() : resourceKey(raw);
-  };
-  const capText = (raw) => { const k = captionKeyOf(raw); return resources[k] ?? k; };
-  const label = (o) => esc(o.values?.caption ? capText(o.values.caption) : o.name);
+  const label = (o) => esc(o.values?.caption ? capText(o.values.caption, resources) : o.name);
   // a profile island container often has NO caption (it is a visual grouping, e.g. `ContactContainer`) but is
   // a DISTINCT `crt.GridContainer` — keep the islands apart in the Region by falling back to its own name
   // (minus the `Container` suffix) when no captioned group is found, so the 2 islands don't collapse to one flat
@@ -2209,13 +2210,13 @@ function buildLayoutGroupRows(cs, regionOf) {
   // on-stand" while the same fields and grids stood confirmed on the page as a whole.
   const add = (region, label, extra = {}) => {
     const k = top(region);
-    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, lists: 0, widgets: [], items: [] }); order.push(k); }
+    if (!byRegion.has(k)) { byRegion.set(k, { fields: 0, names: [], lists: 0, widgets: [], items: [] }); order.push(k); }
     const e = byRegion.get(k);
-    if (label) e.items.push(label); else e.fields++;
+    if (label) e.items.push(label); else { e.fields++; if (extra.name) e.names.push(extra.name); }
     if (extra.list) e.lists++;
     if (extra.widgetType) e.widgets.push(extra.widgetType);
   };
-  for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
+  for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null, { name: f.name });
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`, { list: true });
   for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget), { widgetType: layoutWidgetType(w) });
   for (const w of cs.cardWidgets || []) {
@@ -2230,7 +2231,10 @@ function buildLayoutGroupRows(cs, regionOf) {
     if (k.startsWith("Side profile")) region = "side";
     else if (k === "Header") region = "header";
     else if (k.startsWith("Tab · ")) { region = "tab"; caption = k.slice(6).replace(/\(new\)$/, "").trim(); }
-    const vk = region ? { type: "layout", region, caption, fields: e.fields, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
+    // A tab row also carries its fields' element names (the Fields row's identity), so a built tab whose caption
+    // differs from the plan's can still be recognised by what it holds.
+    const names = region === "tab" && e.names.length ? { names: e.names } : {};
+    const vk = region ? { type: "layout", region, caption, fields: e.fields, ...names, lists: e.lists, widgets: e.widgets.filter(Boolean) } : undefined;
     return { label: `${k} — ${parts.join(" · ")}`, ...(vk ? { vk } : {}) };
   });
 }
@@ -3882,6 +3886,14 @@ function tabMatch(container, caption) {
   const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
   return words.every((w) => toks.has(w)) ? 2 : 0;
 }
+// Truthy when the container holds EVERY field the plan puts on this tab, by the Fields row's identity rule
+// (`maxFieldMatch`); extra content does not disqualify it. A TAB PANEL is excluded: it holds every tab's fields.
+const TAB_BY_FIELDS = 1;
+function holdsAllFields(container, names) {
+  const want = [...new Set(names || [])];
+  if (!want.length || /TabPanel/i.test(container.type)) return 0;
+  return maxFieldMatch(want, container.fieldOps || []).size === want.length ? TAB_BY_FIELDS : 0;
+}
 // A region judged against a built container's contents — extracted so resolveLayoutVk stays under Sonar's ceiling.
 function judgeRegion(c, where, vk, want) {
   // Nothing machine-measurable (no fields, lists or recognised widgets) must NOT read ✅ — an empty `short` would
@@ -3938,28 +3950,31 @@ function resolveLayoutTab(vk, ctx, judge) {
   // Claim at most one container per region row (the discipline resolveFieldsByIdentity uses for fields), so two
   // similarly-captioned tabs cannot both close against one big built tab. Ties: best fit, then higher score.
   ctx.claimedContainers = ctx.claimedContainers || new Set();
-  const cand = tabs.map((c) => ({ c, score: tabMatch(c, vk.caption) }))
-    .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
-    .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
-  const tab = cand[0]?.c;
-  if (tab) { ctx.claimedContainers.add(tab.name); return judge(tab, `in tab \`${esc(tab.name)}\``); }
-  // The caption did not word-match — a built tab's caption is usually an unresolved `#ResourceString(<key>)#` macro
-  // (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template renames
-  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT, but accept it only when it is
-  // UNAMBIGUOUS: exactly one unclaimed non-`crt.TabPanel` tab whose content count is EXACTLY the want and whose
-  // region satisfies the want (judge ok). Exact count is the guard — a tab that merely CONTAINS the want among more
-  // fields (a misplaced tab whose fields landed in a bigger sibling) has size > want and does not qualify, and two
-  // tabs that both fit exactly are ambiguous. Either way the row falls to confirm-on-stand, so a missing or
-  // misplaced tab never reads green; only the correctly-built renamed tab that holds exactly this content closes ✅.
-  // (Exact-size fits are order-independent; matching all captions first and content-fitting only leftovers, ideally
-  // on published field identities rather than counts, is the follow-up.)
-  const fits = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && size(c) === wantCount && judge(c, "")[2] === "ok");
-  if (fits.length === 1) { const fit = fits[0]; ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
-  // No word match and no unambiguous content fit: which tab holds these is a placement fact to confirm on the stand,
-  // not a machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists
-  // rows still gate whether the CONTENT exists at all.
+  const unclaimed = (c) => !ctx.claimedContainers.has(c.name);
+  const bestFit = (a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount));
+  const claim = (c, how) => { ctx.claimedContainers.add(c.name); return judge(c, `in tab \`${esc(c.name)}\`${how}`); };
+  // 1. The caption, resolved through the page's resources, or the raw binding's key words.
+  const byCaption = (c) => Math.max(tabMatch(c, vk.caption), tabMatch({ ...c, caption: c.rawCaption }, vk.caption));
+  const captioned = tabs.map((c) => ({ c, score: byCaption(c) })).filter((x) => x.score > 0 && unclaimed(x.c)).sort(bestFit);
+  if (captioned.length) return claim(captioned[0].c, "");
+  // 2. A row that publishes its field names: the tab holding every one of them, by the Fields row's identity rule.
+  if ((vk.names || []).length) {
+    const holders = tabs.map((c) => ({ c, score: holdsAllFields(c, vk.names) })).filter((x) => x.score > 0 && unclaimed(x.c)).sort(bestFit);
+    if (holders.length) return claim(holders[0].c, ` (caption "${esc(holders[0].c.caption)}" differs; matched by the ${vk.names.length} plan field(s) it holds)`);
+  }
+  // 3. A row with no field names (related lists, widgets): a CONTENT FIT, accepted only when UNAMBIGUOUS — exactly
+  // one unclaimed non-`crt.TabPanel` tab whose content count is EXACTLY the want and whose region satisfies it.
+  // A tab holding the want among more content, or two tabs that fit exactly, do not qualify.
+  const fits = (vk.names || []).length ? []
+    : tabs.filter((c) => c.type !== "crt.TabPanel" && unclaimed(c) && size(c) === wantCount && judge(c, "")[2] === "ok");
+  if (fits.length === 1) return claim(fits[0], " (matched by content — its caption did not word-match)");
+  // 4. No match: which tab holds these is a placement fact to confirm on the stand, not a machine failure that
+  // spawns a repair against a correctly built page. The page-wide Fields / Related-lists rows still gate whether
+  // the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  const why = fits.length > 1 ? "and more than one tab could hold it by content" : "and no single tab fits its content exactly";
+  let why = "and no single tab fits its content exactly";
+  if ((vk.names || []).length) why = `and no unclaimed tab holds all ${vk.names.length} of its fields`;
+  else if (fits.length > 1) why = "and more than one tab could hold it by content";
   return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
 // The template's native card controls, by the element names it ships them under.
@@ -4150,10 +4165,31 @@ function collectLayout(node, acc) {
   if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
   if (!node || typeof node !== "object") return acc;
   const t = String(node.type || "");
-  if (LAYOUT_FIELD_RE.test(t)) acc.fields.push(node.name);
+  if (LAYOUT_FIELD_RE.test(t)) {
+    acc.fields.push(node.name);
+    if (acc.fieldOps) { const attr = boundAttributeOf(node); acc.fieldOps.push({ name: node.name, ...(attr ? { bound: attr } : {}) }); }
+  }
   else if (t === "crt.DataGrid") acc.lists.push(node.name);
   else if (LAYOUT_WIDGETS.has(t)) acc.widgets.push(t);
   return collectLayout(node.items, acc);
+}
+// A caption macro resolves through the page's own `resources` when the payload carries them: get-page's
+// `bundle.resources` (`{ strings: { <key>: { "en-US": … } } }`, en-US first — the culture the plan's captions are
+// read in) or a flat `{ <key>: "<text>" }`. Otherwise, or for a key they do not hold, the raw binding is kept.
+function resourceText(resources, key) {
+  if (!resources || typeof resources !== "object") return undefined;
+  const flat = Object.hasOwn(resources, key) ? resources[key] : undefined;
+  if (typeof flat === "string") return flat;
+  const strings = resources.strings && typeof resources.strings === "object" ? resources.strings : {};
+  const byCulture = Object.hasOwn(strings, key) ? strings[key] : undefined;
+  if (typeof byCulture === "string") return byCulture;
+  if (!byCulture || typeof byCulture !== "object") return undefined;
+  return typeof byCulture["en-US"] === "string" ? byCulture["en-US"] : Object.values(byCulture).find((v) => typeof v === "string");
+}
+function builtCaption(raw, resources) {
+  const text = String(raw ?? "");
+  const hit = resourceText(resources, captionKeyOf(text));
+  return hit?.trim() ? hit : text;
 }
 function pageContainersOf(entry) {
   const e = entryObject(entry);
@@ -4163,7 +4199,10 @@ function pageContainersOf(entry) {
     if (Array.isArray(node)) { for (const n of node) { walk(n); } return; }
     if (!node || typeof node !== "object") return;
     if (node.name && Array.isArray(node.items) && /Container|Tab|Panel/.test(String(node.type || ""))) {
-      out.push({ name: String(node.name), type: String(node.type || ""), caption: String(node.caption ?? ""), ...collectLayout(node.items, { fields: [], lists: [], widgets: [] }) });
+      // `caption` is the resolved text; `rawCaption` keeps the binding, whose key words still identify the tab.
+      out.push({ name: String(node.name), type: String(node.type || ""), caption: builtCaption(node.caption, e.resources),
+        rawCaption: String(node.caption ?? ""),
+        ...collectLayout(node.items, { fields: [], fieldOps: [], lists: [], widgets: [] }) });
     }
     walk(node.items);
   };
