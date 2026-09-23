@@ -374,19 +374,20 @@ function namedIn(text, id) {
   }
   return false;
 }
-// NULL is not the empty list: null is "no decision log was read", which states nothing about ownership, and the
-// empty list is "read, and it names no row". A reader that cannot tell them apart holds open every row a run
-// without a decision log ever raised a finding on.
+// COMPOSING THE LIST IS THE ANSWER, so a folder with no decision log claims NOTHING and says so with an empty
+// list. The absent field means something else entirely — a payload composed before this existed, which states
+// nothing about ownership — and only a replayed payload can carry that, never a run that looked. Null is for the
+// one case where the engine did not look: no published id to look for.
 function decisionClaims(dir, evidenceIds, problems) {
   if (!Array.isArray(evidenceIds) || !evidenceIds.length) return null;
-  let text = "", read = false;
+  let text = "";
   for (const f of DECISION_FILES) {
     const full = path.join(dir, f);
     if (!fs.existsSync(full)) continue;
-    try { text += fs.readFileSync(full, "utf8") + "\n"; read = true; }
+    try { text += fs.readFileSync(full, "utf8") + "\n"; }
     catch (e) { problems.push({ file: f, what: "the decision log", why: `not readable (${e.message}) — no row can be shown as owned while it cannot be read` }); }
   }
-  return read ? evidenceIds.filter((id) => namedIn(text, id)) : null;
+  return evidenceIds.filter((id) => namedIn(text, id));
 }
 export function assembleBuilt(dir, expect = null) {
   const problems = [];
