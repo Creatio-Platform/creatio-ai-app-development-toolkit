@@ -6794,18 +6794,25 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-// A task whose open rows all wait on a decision another task raised is held until that decision is recorded.
-{
-  const labelOf = (m) => `Handler — \`${m}\``;
+// A split of the card fixture: `onBulk5` alone in `other`, the rest of `main` in `<prefix>-source`, the review rows
+// in `<prefix>-review`, and one item per other page. `onBulk0` and `onBulk5` share card C7.
+const cardLabel = (m) => `Handler — \`${m}\``;
+function cardSplit(prefix, other) {
   const rowsOf = (k, keep = () => true) => CARD_GROUPS.filter((g) => g.pageKey === k && keep(g))
     .flatMap((g) => g.rows.map((r) => r.label));
   const isReview = (g) => g.baseTitle === "Quality gates";
   const pages = [...new Set(CARD_GROUPS.map((g) => g.pageKey))];
-  const split = { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
-    ? [splitItem("dec-source", "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== labelOf("onBulk5"))),
-      splitItem("dec-waiting", "main", "main", [labelOf("onBulk5")]),
-      splitItem("dec-review", "main", "main", rowsOf("main", isReview))]
-    : [splitItem(`dec-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  return { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
+    ? [splitItem(`${prefix}-source`, "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== cardLabel("onBulk5"))),
+      splitItem(other, "main", "main", [cardLabel("onBulk5")]),
+      splitItem(`${prefix}-review`, "main", "main", rowsOf("main", isReview))]
+    : [splitItem(`${prefix}-${slugKey(k)}`, k, k, rowsOf(k))])) };
+}
+
+// A task whose open rows all wait on a decision another task raised is held until that decision is recorded.
+{
+  const labelOf = cardLabel;
+  const split = cardSplit("dec", "dec-waiting");
   const base = tmp("decision-hold");
   const dir = path.join(base, "build-tasks");
   freezeSplit(dir, JSON.stringify(split));
@@ -7493,16 +7500,8 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
 // `--decide` names the open rows on other tasks that share a subject with a row it decided, and closes none of them.
 {
-  const labelOf = (m) => `Handler — \`${m}\``;
-  const rowsOf = (k, keep = () => true) => CARD_GROUPS.filter((g) => g.pageKey === k && keep(g))
-    .flatMap((g) => g.rows.map((r) => r.label));
-  const isReview = (g) => g.baseTitle === "Quality gates";
-  const pages = [...new Set(CARD_GROUPS.map((g) => g.pageKey))];
-  const split = { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
-    ? [splitItem("sib-source", "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== labelOf("onBulk5"))),
-      splitItem("sib-other", "main", "main", [labelOf("onBulk5")]),
-      splitItem("sib-review", "main", "main", rowsOf("main", isReview))]
-    : [splitItem(`sib-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  const labelOf = cardLabel;
+  const split = cardSplit("sib", "sib-other");
   const opts = optsOf(CARD_MANIFEST);
   const D4 = new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]]);
   const fixture = (label) => {
@@ -7541,7 +7540,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
       "--row", `sib-source:${n}`], { encoding: "utf8" });
     const cmds = (out.stdout || "").split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
     const decidedRows = () => readTaskDir(dir).flatMap((t) => (t.rows || [])
-      .map((r, i) => (r.outcomeKind === "wont-do" ? `${t.id}:${i + 1}` : null)).filter(Boolean)).sort();
+      .map((r, i) => (r.outcomeKind === "wont-do" ? `${t.id}:${i + 1}` : null)).filter(Boolean)).sort((a, b) => a.localeCompare(b));
     const before = decidedRows();
     const runs = cmds.map((c) => spawnSync(c, { encoding: "utf8", shell: true }));
     const after = decidedRows();
@@ -7549,7 +7548,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
       () => out.status === 0 && cmds.length === 1 && cmds[0].includes("sib-other:1") && /--wont-do/.test(cmds[0]),
       () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
     check("--decide (CLI): the printed command closes exactly the listed rows",
-      () => runs.every((r) => r.status === 0) && after.join(",") === [...before, "sib-other:1"].sort().join(",")
+      () => runs.every((r) => r.status === 0) && after.join(",") === [...before, "sib-other:1"].sort((a, b) => a.localeCompare(b)).join(",")
         && /^decisions: 1:D4$/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
       () => ({ before, after, runs: runs.map((r) => `${r.status} ${r.stderr}`) }));
     fs.rmSync(base, { recursive: true, force: true });
