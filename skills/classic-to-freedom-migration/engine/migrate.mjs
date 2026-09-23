@@ -3618,7 +3618,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
-  let output, verifyIncomplete = false, verifyRes = null;
+  let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else if (checklistMode) output = result.checklist + "\n";
@@ -3815,7 +3815,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
     // a reader holding it must be able to tell a row nobody could read from a row nobody built.
     output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
-    verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
+    verifyIncomplete = verifyRes.missing > 0 || verifyRes.unverified > 0; // rows short on the page ⇒ the BUILD leg
+    // Its own leg: a record filed under an id the run does not publish is a FILING fault, and telling a builder to
+    // "build the missing pieces" over one sends it to repair a page that is not short.
+    orphanEvidence = verifyRes.orphans || [];
     if (tasksMode) {
       // an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
       // The table's verdict reads only the built pages; the task ledger records what the build agents did NOT
@@ -3866,6 +3869,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
   const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
+    || orphanEvidence.length > 0
     || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
     || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
     || startRefusalFailure;
@@ -3934,6 +3938,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (listGateBad) process.stderr.write("migrate.mjs: ⛔ LIST GATE BLOCKED — the list page is NOT approvable (the form page may still be). " + result.listGate.reasons.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
+  if (orphanEvidence.length) {
+    const named = orphanEvidence.slice(0, 6).map((k) => "`" + k + "`").join(" | ");
+    const more = orphanEvidence.length > 6 ? " | …and " + (orphanEvidence.length - 6) + " more (see the table)" : "";
+    process.stderr.write("migrate.mjs: ⛔ EVIDENCE MIS-FILED — " + orphanEvidence.length
+      + " evidence/judge record(s) are filed under id(s) this run does not publish, so nothing reads them: "
+      + named + more + ". Not a build gap: the page is not short, the records are in the wrong place. Either the"
+      + " id was invented — re-file under the id its row names, and take a page key several tasks share to the user"
+      + " — or the plan moved and the key belongs to a row this run no longer publishes, which is settled by"
+      + " dropping it." + "\n");
+  }
   // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
   // EVERY mode and describe the PLAN: a builder cannot build its way out of them, so "loop until --verify is
   // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS

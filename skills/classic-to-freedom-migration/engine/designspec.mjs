@@ -3676,10 +3676,34 @@ function resolveEvidenceJudgedPart(vk, ctx) {
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  // A VERDICT IS ABOUT A RECORD, so there must be one. Checked BEFORE the verdict closes the row, the way the
+  // filed half and the combined row already check it: a `convincing: true` filed under an id carrying no complete
+  // record closes a row over nothing.
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) {
+    return ["⚠ verify", judged === true
+      ? `a verdict was filed under ${need} but no complete evidence record was — there is nothing for it to be about`
+      : `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`,
+    "unverified", "verifier"];
+  }
+  // A RAISED FINDING IS OWNED BY A DECISION, NOT BY THE RECORD THAT RAISED IT. The row's label allows a finding to
+  // be raised rather than fixed, so the question is not whether findings exist but whether anyone took them: the
+  // decision log claims a row by naming its published id, and a record that raises findings under a row no
+  // decision names leaves the work with nobody. Read only when the engine composed the claim list — a payload
+  // assembled before it existed says nothing about ownership and must not be read as saying "none".
+  if (judged === true && Array.isArray(ctx.root?.decisionClaims)
+      && declaresFindings(rec) && !ctx.root.decisionClaims.includes(vk.id)) {
+    return ["⚠ verify", `the record under ${need} raises findings and no decision in \`decisions.md\` /`
+      + " `findings.md` names this row — a finding raised rather than fixed is closed by a decision that takes it,"
+      + " not by a verdict", "unverified", "verifier"];
+  }
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
-  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
 }
+// Does the record RAISE a finding — one it did not fix, which someone therefore has to own? Only `findingsRaised`
+// answers that: `findings` is the pass's own record of what it looked at and settled, and a pass that fixed what it
+// found owes nobody a decision. A LIST with entries is the only form that raises anything; the same field is also
+// written as prose ("None requiring a fix."), which states no finding to own.
+const declaresFindings = (rec) => Array.isArray(rec?.findingsRaised) && rec.findingsRaised.length > 0;
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
 // The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all
 // counted as a complete record and closed the row — a record that names no page and lists no component proves
@@ -3835,7 +3859,10 @@ export function resolveVmAttrVk(vk, ctx) {
   // with a virtual attribute whose payload predates the reads contract — a false hard block, not a false green.
   if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
   if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
-  if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  // The bare-name leg requires a FIELD type: a `crt.Button` / container / menu item that merely shares the
+  // attribute's name is not a binding, and must not close the row (the `bound` and `<Name>Field` legs already
+  // target field bindings). `crt.ComboBox` and the other real field types still pass.
+  if (ctx.ops.some((o) => (o.name === vk.name && VERIFY_FIELD_RE.test(o.type || "")) || o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
   return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
 }
 // The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
@@ -3915,10 +3942,25 @@ function resolveLayoutTab(vk, ctx, judge) {
     .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
     .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
   const tab = cand[0]?.c;
+  if (tab) { ctx.claimedContainers.add(tab.name); return judge(tab, `in tab \`${esc(tab.name)}\``); }
+  // The caption did not word-match — a built tab's caption is usually an unresolved `#ResourceString(<key>)#` macro
+  // (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template renames
+  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT, but accept it only when it is
+  // UNAMBIGUOUS: exactly one unclaimed non-`crt.TabPanel` tab whose content count is EXACTLY the want and whose
+  // region satisfies the want (judge ok). Exact count is the guard — a tab that merely CONTAINS the want among more
+  // fields (a misplaced tab whose fields landed in a bigger sibling) has size > want and does not qualify, and two
+  // tabs that both fit exactly are ambiguous. Either way the row falls to confirm-on-stand, so a missing or
+  // misplaced tab never reads green; only the correctly-built renamed tab that holds exactly this content closes ✅.
+  // (Exact-size fits are order-independent; matching all captions first and content-fitting only leftovers, ideally
+  // on published field identities rather than counts, is the follow-up.)
+  const fits = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && size(c) === wantCount && judge(c, "")[2] === "ok");
+  if (fits.length === 1) { const fit = fits[0]; ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
+  // No word match and no unambiguous content fit: which tab holds these is a placement fact to confirm on the stand,
+  // not a machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists
+  // rows still gate whether the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabList}`, "unverified"];
-  ctx.claimedContainers.add(tab.name);
-  return judge(tab, `in tab \`${esc(tab.name)}\``);
+  const why = fits.length > 1 ? "and more than one tab could hold it by content" : "and no single tab fits its content exactly";
+  return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
 // The template's native card controls, by the element names it ships them under.
 // Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
@@ -3989,20 +4031,32 @@ export function boundAttributeOf(node) {
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
   return m ? m[1] : attr;
 }
+// One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
+// component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
+// never the children array); a FIELD keeps `bound` (the column identity the fields row reads). Extracted so
+// walkViewConfig stays under Sonar's cognitive-complexity ceiling.
+function pushWalkNode(node, out) {
+  const cols = columnsOf(node);
+  const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
+  const attr = boundAttributeOf(node);
+  out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
+}
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) {
-    // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
-    // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
-    // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
-    // A FIELD component keeps a third: the attribute it binds (`bound`), the column identity the fields row reads.
-    const cols = columnsOf(node);
-    const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    const attr = boundAttributeOf(node);
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
+  // A node carrying a `name` OR a `type` is a component (the childpage structural row treats any returned node as
+  // proof the page was built).
+  if (node.name != null || node.type != null) pushWalkNode(node, out);
+  // Recurse into ARRAY children only — component lists (`items`, `menuItems`, `menu`, `actions`, toolbar rows, …);
+  // walking `items` alone left native controls under other arrays invisible (a built `ReloadDataMenuItem` read as
+  // missing). Object-valued keys hold CONFIG (`clicked`, `params`, `layoutConfig`, `_filterOptions`, series specs),
+  // not components, so a `name` buried in config never enters the op list and cannot widen a name-based check.
+  // `columns` is grid DATA, read separately (columnsOf / findGridNodes).
+  for (const k of Object.keys(node)) {
+    if (k === "columns") continue;
+    if (Array.isArray(node[k])) walkViewConfig(node[k], out);
   }
-  return walkViewConfig(node.items, out);
+  return out;
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
 // DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
@@ -4081,7 +4135,7 @@ function reachabilityValue(root, key) {
   const v = root?.reachability?.[key];
   return v === undefined ? root?.[key] : v;
 }
-const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|PhoneInput|EmailInput)$/;
 // ONE ctx per page (D8). It carries BOTH this page's record and the payload ROOT: `placement` and every
 // count/structural check read the PAGE (so a child's field count can never be closed by the parent's
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
@@ -4090,7 +4144,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
 // what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
 // matched loosely by the caption words the plan published.
-const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput|PhoneInput|EmailInput)$/;
 const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
 function collectLayout(node, acc) {
   if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
@@ -4196,9 +4250,13 @@ export function planGaps(result) {
   if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   return g;
 }
-function verifyVerdict(missing, unverified) {
+// THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
+// A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
+// positive beside the banner that blocks it.
+function verifyVerdict(missing, unverified, orphans = 0) {
   if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
+  if (orphans > 0) return `⛔ **EVIDENCE MIS-FILED — ${orphans} record(s) filed under id(s) this run does not publish** (re-file them under the id each row names, or drop a key the plan no longer has)`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
 }
 // The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
@@ -4244,6 +4302,26 @@ function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
 // plan walk unchanged — no registry means no filter, and every plan row is measured as before.
 export const normalizeVerifyLabel = (s) => String(s || "").replaceAll("ˋ", "`").replace(/\s+/g, " ").trim();
 export const verifyRowKey = (pageKey, label) => `${pageKey}::${normalizeVerifyLabel(label)}`;
+// The evidence/judge keys a payload carries that the engine does not publish. Sorted so two runs over the same
+// folder name them in the same order, and deduped across the two maps — one mis-named id is one fault, not two.
+function orphanEvidenceKeys(root, derived) {
+  const seen = new Set();
+  for (const map of [root?.evidence, root?.judge]) {
+    if (!map || typeof map !== "object") continue;
+    for (const k of Object.keys(map)) if (!derived.has(k)) seen.add(k);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+function orphanBanner(orphans) {
+  if (!orphans.length) return [];
+  const named = orphans.slice(0, 12).map((k) => "`" + esc(k) + "`").join(", ");
+  const rest = orphans.length > 12 ? ` (+${orphans.length - 12} more)` : "";
+  return ["", `> ⛔ **${orphans.length} evidence/judge record(s) filed under id(s) this run does not publish**`
+    + ` — nothing reads them and the design pass they record counts for nothing: ${named}${rest}.`
+    + " Either the id was invented — re-file under the id the row names, and where several tasks share one page key"
+    + " take the collision to the user rather than appending a suffix — or the plan moved and the key belongs to a row"
+    + " this run no longer publishes, which is settled by dropping it, not by building anything."];
+}
 export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -4262,9 +4340,13 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
   // the report's Carry-over section (postponed) or as decided boundaries (wont-do / not-applicable) —
   // nothing is dropped in silence; the LIST just changes source.
   const decided = [];
+  const derivedEvidenceIds = new Set();
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
+      // Registered whether or not the row is decided below: a decided row is still a PLAN row, so its
+      // evidence id is one the run publishes, and an evidence record under it is not an orphan.
+      if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
       // The row's OWN page (a whole-run task's rows carry it), else the group's page — same rule
       // `buildVerifyRow` applies inside.
       const rowPage = r.pageKey || g.pageKey || "main";
@@ -4277,17 +4359,25 @@ export function renderVerify(result, opts = {}, built = {}, decidedKeys = null) 
       L.push(tableLine);
     }
   }
+  // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
+  // skeletons, so a key matching none of them resolves to nothing and the design pass it records counts for
+  // nothing. A RUN-level fault, never rows: it is the FILING that is wrong, not the build, and a row count these
+  // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
+  // every other page's id would read as an orphan of the scope rather than of the run.
+  const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
   const { missing, unverified, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified);
+  const verdict = verifyVerdict(missing, unverified, orphans.length);
   const decidedBanner = decided.length
     ? [`> ℹ ${decided.length} plan row(s) closed by a recorded decision are OUT of this table — the task registry`
-        + " is the single source of what is owed (ENG-99749). See the migration result report's Carry-over"
+        + " is the single source of what is owed. See the migration result report's Carry-over"
         + " section for the postponed ones and section 2 for the wont-do / not-applicable ones."]
     : [];
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...decidedBanner,
     ...planGapBanner(result),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows, decided };
+    ...orphanBanner(orphans),
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans)].join("\n");
+  return { markdown: md, missing, unverified, builderOpen,
+    complete: missing === 0 && unverified === 0 && orphans.length === 0, orphans, pages, rows, decided };
 }

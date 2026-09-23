@@ -60,9 +60,9 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const history = M({ region: "tab", caption: "History", lists: 1 });
     const next = M({ region: "tab", caption: "Next steps", widgets: ["crt.NextSteps"] });
     const payments = M({ region: "tab", caption: "Payments", fields: 1 });
-    check("layout: a tab is found by the plan's CAPTION WORDS against the built tab's caption binding or name (Basic information -> BasicInformationTabCaption) and measured inside it — fields, related lists, widgets; an unknown caption is unverified naming the tabs that exist",
+    check("layout: a tab is found by the plan's CAPTION WORDS against the built tab's caption binding or name (Basic information -> BasicInformationTabCaption) and measured inside it — fields, related lists, widgets; an unmatched caption is NON-gating confirm-on-stand (F17: tab captions are localized macros / template-renamed, so a word miss is a placement question, not a machine failure that spawns a repair)",
       () => basic[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(basic[1]) && history[0] === "✅ Done" && next[0] === "✅ Done"
-        && /no unclaimed tab whose caption or name matches "Payments"/.test(payments[1]),
+        && payments[2] === "skip" && /no built tab matched the plan caption "Payments" by words/.test(payments[1]),
       () => [basic, history, next, payments]);
   }
   check("layout: the header is judged by its widgets anywhere on the page; a payload with NO containers (the legacy flat ops shape) is judged page-wide and SAYS so — every fixture built that way stays green",
@@ -225,5 +225,96 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     check("(memoize): two handler rows against ONE page ctx both resolve ✅, and codeOnly is computed once (ctx._codeOnly cached after the first row) — no per-row recompute, outcomes unchanged",
       () => st(r1) === "✅ Done" && st(r2) === "✅ Done" && cachedAfterFirst,
       () => [r1, r2, cachedAfterFirst]);
+  }
+  // A virtual attribute whose element is named EXACTLY as the attribute — bare, no `Field` suffix, and NOT the
+  // bound column (`StaffUnit` bound `$PDS_RequestStaffUnit_<hash>`) — still closes.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.ComboBox", name: "StaffUnit", control: "$PDS_RequestStaffUnit_ab12cd" }] }, viewModelConfig: { attributes: { Other: {} } } }) } }, "main");
+    const r = resolveVk({ type: "vmattr", name: "StaffUnit" }, c);
+    check("vmattr: an element named EXACTLY the attribute (bare `StaffUnit`, bound `$PDS_RequestStaffUnit_<hash>`) closes ✅ — the fallback matches the bare name, not only `<Name>Field` / the bound column",
+      () => st(r) === "✅ Done", () => r);
+  }
+  // A native control built as a `crt.MenuItem` under a NON-`items` array (`menuItems` / a button menu) is seen:
+  // walkViewConfig recurses every nested child, not only `items`.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.Button", name: "CardActionsButton", menuItems: [{ type: "crt.MenuItem", name: "ReloadDataMenuItem" }] }] } }) } }, "main");
+    const r = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
+    check("cardnative: a `ReloadDataMenuItem` built under `menuItems` (not `items`) is found — walkViewConfig walks every child array, so a built menu control is not reported missing",
+      () => st(r) === "✅ Done", () => r);
+  }
+  // crt.PhoneInput and crt.EmailInput are field types (the plan's "↳ linked (read-only)" MobilePhone/Email recipe):
+  // a side profile of exactly those two reads 2 fields.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.FlexContainer", name: "SideContainer", items: [
+        { type: "crt.PhoneInput", name: "MobilePhone" }, { type: "crt.EmailInput", name: "Email" }] }] } }) } }, "main");
+    const r = resolveVk({ type: "layout", region: "side", fields: 2, lists: 0, widgets: [] }, c);
+    check("fields: crt.PhoneInput / crt.EmailInput are field types — a side profile holding exactly those two resolves 2 fields ✅, not an under-count",
+      () => st(r) === "✅ Done" && /2 fields/.test(ev(r)), () => r);
+  }
+  // A caption word-miss falls back to a CONTENT FIT: an unclaimed tab whose fields/lists/widgets satisfy the want
+  // closes ✅ and is claimed (the renamed / localized-caption tab). A want no tab can satisfy stays confirm-on-stand.
+  {
+    const c = verifyCtx({ pages: { main: page() } }, "main");   // GeneralInfoTab holds 1 field (NotesField)
+    const hit = resolveVk({ type: "layout", region: "tab", caption: "Zzz No Words Match", fields: 1, lists: 0, widgets: [] }, c);
+    const miss = resolveVk({ type: "layout", region: "tab", caption: "Payments Nowhere", fields: 3, lists: 2, widgets: [] }, c);
+    check("layout tab content-fit: a caption matching no tab by words but whose want an unclaimed tab satisfies EXACTLY closes ✅ (matched by content); a want no tab satisfies stays confirm-on-stand, never green",
+      () => hit[2] === "ok" && /matched by content/.test(hit[1]) && miss[2] === "skip",
+      () => [hit, miss]);
+  }
+  // Content fit is UNAMBIGUOUS-only: a plan tab whose fields merely LAND inside a bigger built sibling (a misplaced /
+  // missing tab) must never read green. Page: GeneralInfoTab holds exactly 7 fields; DetailsTab holds 5 fields (3 of
+  // them Payments' own); no Payments tab exists. "Basic information" (7) closes ✅ against GeneralInfoTab (exact 7);
+  // "Payments" (3) finds no tab whose count is exactly 3 — DetailsTab's 5 does not qualify — so it stays confirm-on-
+  // stand. The result is the same whichever row resolves first (exact-size fit is order-independent).
+  {
+    const f7 = Array.from({ length: 7 }, (_, i) => ({ type: "crt.Input", name: `Gen${i}`, control: `$Gen${i}` }));
+    const f5 = Array.from({ length: 5 }, (_, i) => ({ type: "crt.Input", name: `Det${i}`, control: `$Det${i}` }));
+    const twoTabs = () => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: "X", schemaUId: "11111111-1111-4111-8111-111111111111",
+      viewConfig: { items: [{ type: "crt.TabPanel", name: "Tabs", items: [
+        { type: "crt.TabContainer", name: "GeneralInfoTab", caption: "#ResourceString(BasicInformationTabCaption)#", items: f7 },
+        { type: "crt.TabContainer", name: "DetailsTab", caption: "#ResourceString(DetailsTabCaption)#", items: f5 }] }] } });
+    const R = (ctx0, cap, fields) => resolveVk({ type: "layout", region: "tab", caption: cap, fields, lists: 0, widgets: [] }, ctx0);
+    const a = verifyCtx({ pages: { main: twoTabs() } }, "main");
+    const basic = R(a, "Basic information", 7);
+    const pay = R(a, "Payments", 3);
+    const b = verifyCtx({ pages: { main: twoTabs() } }, "main");   // reverse the order — result must not flip
+    const payFirst = R(b, "Payments", 3);
+    const basicSecond = R(b, "Basic information", 7);
+    check("layout tab content-fit (unambiguous-only): a plan tab whose fields merely land inside a bigger built sibling does not read green — Basic information (7) closes ✅ on the exact-7 tab, Payments (3) finds no exact-count tab and stays confirm-on-stand, and reversing the resolution order gives the same verdicts",
+      () => basic[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(basic[1])
+        && pay[2] === "skip" && !/✅/.test(pay[0]) && /no single tab fits its content exactly/.test(pay[1])
+        && payFirst[2] === "skip" && basicSecond[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(basicSecond[1]),
+      () => [basic, pay, payFirst, basicSecond]);
+  }
+  // The bare-name vmattr leg is type-guarded: a NON-field element sharing the attribute name (a crt.Button named
+  // `StaffUnit`) does not close the row.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.Button", name: "StaffUnit" }] }, viewModelConfig: { attributes: { Other: {} } } }) } }, "main");
+    const r = resolveVk({ type: "vmattr", name: "StaffUnit" }, c);
+    check("vmattr (guard): a non-field element (crt.Button) named exactly as the attribute does NOT close the row — the bare-name leg requires a field type",
+      () => r[2] === "unverified", () => r);
+  }
+  // walkViewConfig recurses ARRAY children only: a `name` buried in a config OBJECT (`clicked.params`) is not an op,
+  // so it cannot satisfy a name-based check; a control under a `menuItems` ARRAY still is.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.Button", name: "SomeButton", clicked: { request: "usr.X", params: { name: "ReloadData" } } }] } }) } }, "main");
+    const r = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
+    check("walkViewConfig (guard): a `name` inside a config object (`clicked.params`) is NOT collected — a cardnative `ReloadData` is not closed by it (only components under array children count)",
+      () => r[2] === "unverified" && /missing: ReloadData/.test(r[1]), () => r);
+  }
+  // The `columns` skip is load-bearing: grid column DATA must not enter the op list, while a sibling under `items` must.
+  {
+    const c = verifyCtx({ pages: { main: page({ viewConfig: { items: [
+      { type: "crt.DataGrid", name: "Grid", columns: [{ code: "PDS_x", name: "ReloadData" }], items: [{ type: "crt.MenuItem", name: "TagSelectItem" }] }] } }) } }, "main");
+    const colProbe = resolveVk({ type: "cardnative", names: ["ReloadData"] }, c);
+    const sibProbe = resolveVk({ type: "cardnative", names: ["Tag"] }, c);
+    check("walkViewConfig (guard): grid `columns` DATA does not enter the op list (a column named `ReloadData` does not close a cardnative row), while a sibling control under `items` does",
+      () => colProbe[2] === "unverified" && sibProbe[2] === "ok",
+      () => [colProbe, sibProbe]);
   }
 }
