@@ -58,7 +58,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
-  readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
+  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
@@ -3860,6 +3860,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // reused for the post-round report, because `runRepairMode`/`syncRepairDir` write repair task files
       // between the two and a reused set would render a stale folder.
       const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+      // ONE SET, TWO DOCUMENTS. A round that ran already wrote the index from `rep.set`; a refused one wrote nothing,
+      // so the index is re-derived from the same set the report is about to read, or the two disagree on every row
+      // recorded since the last `--tasks` run. Not under a PLAN-level gap: that refusal must leave the index as the
+      // last gap-free slice wrote it. `refreshTaskIndex` also leaves it alone when the set names task files the folder
+      // does not hold, so the index never lists work that was never written.
+      if (!rep.set && !planGaps(result).length) refreshTaskIndex(tasksDir, set);
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
       finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
