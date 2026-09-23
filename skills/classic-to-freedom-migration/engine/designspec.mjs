@@ -3921,17 +3921,22 @@ function resolveLayoutTab(vk, ctx, judge) {
   if (tab) { ctx.claimedContainers.add(tab.name); return judge(tab, `in tab \`${esc(tab.name)}\``); }
   // The caption did not word-match — a built tab's caption is usually an unresolved `#ResourceString(<key>)#` macro
   // (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template renames
-  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT: an unclaimed tab whose fields / lists
-  // / widgets satisfy the want closes the row and is claimed (best size-fit first). This closes the correctly-built
-  // renamed tab and, because a genuinely missing tab has no content that fits, still never reads green for one.
-  const fit = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && judge(c, "")[2] === "ok")
-    .sort((a, b) => Math.abs(size(a) - wantCount) - Math.abs(size(b) - wantCount))[0];
-  if (fit) { ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
-  // No word match and no content fit: which tab holds these is a placement fact to confirm on the stand, not a
-  // machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists rows
-  // still gate whether the CONTENT exists at all.
+  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT, but accept it only when it is
+  // UNAMBIGUOUS: exactly one unclaimed non-`crt.TabPanel` tab whose content count is EXACTLY the want and whose
+  // region satisfies the want (judge ok). Exact count is the guard — a tab that merely CONTAINS the want among more
+  // fields (a misplaced tab whose fields landed in a bigger sibling) has size > want and does not qualify, and two
+  // tabs that both fit exactly are ambiguous. Either way the row falls to confirm-on-stand, so a missing or
+  // misplaced tab never reads green; only the correctly-built renamed tab that holds exactly this content closes ✅.
+  // (Exact-size fits are order-independent; matching all captions first and content-fitting only leftovers, ideally
+  // on published field identities rather than counts, is the follow-up.)
+  const fits = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && size(c) === wantCount && judge(c, "")[2] === "ok");
+  if (fits.length === 1) { const fit = fits[0]; ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
+  // No word match and no unambiguous content fit: which tab holds these is a placement fact to confirm on the stand,
+  // not a machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists
+  // rows still gate whether the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words or by content — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
+  const why = fits.length > 1 ? "and more than one tab could hold it by content" : "and no single tab fits its content exactly";
+  return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
 // The template's native card controls, by the element names it ships them under.
 // Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`

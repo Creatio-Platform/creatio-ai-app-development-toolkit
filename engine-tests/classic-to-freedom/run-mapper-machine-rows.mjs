@@ -260,9 +260,34 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const c = verifyCtx({ pages: { main: page() } }, "main");   // GeneralInfoTab holds 1 field (NotesField)
     const hit = resolveVk({ type: "layout", region: "tab", caption: "Zzz No Words Match", fields: 1, lists: 0, widgets: [] }, c);
     const miss = resolveVk({ type: "layout", region: "tab", caption: "Payments Nowhere", fields: 3, lists: 2, widgets: [] }, c);
-    check("layout tab content-fit: a caption matching no tab by words but whose want an unclaimed tab satisfies closes ✅ (matched by content); a want no tab satisfies stays confirm-on-stand, never green",
+    check("layout tab content-fit: a caption matching no tab by words but whose want an unclaimed tab satisfies EXACTLY closes ✅ (matched by content); a want no tab satisfies stays confirm-on-stand, never green",
       () => hit[2] === "ok" && /matched by content/.test(hit[1]) && miss[2] === "skip",
       () => [hit, miss]);
+  }
+  // Content fit is UNAMBIGUOUS-only: a plan tab whose fields merely LAND inside a bigger built sibling (a misplaced /
+  // missing tab) must never read green. Page: GeneralInfoTab holds exactly 7 fields; DetailsTab holds 5 fields (3 of
+  // them Payments' own); no Payments tab exists. "Basic information" (7) closes ✅ against GeneralInfoTab (exact 7);
+  // "Payments" (3) finds no tab whose count is exactly 3 — DetailsTab's 5 does not qualify — so it stays confirm-on-
+  // stand. The result is the same whichever row resolves first (exact-size fit is order-independent).
+  {
+    const f7 = Array.from({ length: 7 }, (_, i) => ({ type: "crt.Input", name: `Gen${i}`, control: `$Gen${i}` }));
+    const f5 = Array.from({ length: 5 }, (_, i) => ({ type: "crt.Input", name: `Det${i}`, control: `$Det${i}` }));
+    const twoTabs = () => ({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", entitySchemaName: "X", schemaUId: "11111111-1111-4111-8111-111111111111",
+      viewConfig: { items: [{ type: "crt.TabPanel", name: "Tabs", items: [
+        { type: "crt.TabContainer", name: "GeneralInfoTab", caption: "#ResourceString(BasicInformationTabCaption)#", items: f7 },
+        { type: "crt.TabContainer", name: "DetailsTab", caption: "#ResourceString(DetailsTabCaption)#", items: f5 }] }] } });
+    const R = (ctx0, cap, fields) => resolveVk({ type: "layout", region: "tab", caption: cap, fields, lists: 0, widgets: [] }, ctx0);
+    const a = verifyCtx({ pages: { main: twoTabs() } }, "main");
+    const basic = R(a, "Basic information", 7);
+    const pay = R(a, "Payments", 3);
+    const b = verifyCtx({ pages: { main: twoTabs() } }, "main");   // reverse the order — result must not flip
+    const payFirst = R(b, "Payments", 3);
+    const basicSecond = R(b, "Basic information", 7);
+    check("layout tab content-fit (unambiguous-only): a plan tab whose fields merely land inside a bigger built sibling does not read green — Basic information (7) closes ✅ on the exact-7 tab, Payments (3) finds no exact-count tab and stays confirm-on-stand, and reversing the resolution order gives the same verdicts",
+      () => basic[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(basic[1])
+        && pay[2] === "skip" && !/✅/.test(pay[0]) && /no single tab fits its content exactly/.test(pay[1])
+        && payFirst[2] === "skip" && basicSecond[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(basicSecond[1]),
+      () => [basic, pay, payFirst, basicSecond]);
   }
   // The bare-name vmattr leg is type-guarded: a NON-field element sharing the attribute name (a crt.Button named
   // `StaffUnit`) does not close the row.
