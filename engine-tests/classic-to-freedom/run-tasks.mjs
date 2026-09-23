@@ -7019,7 +7019,7 @@ console.log("\n===== build order: virtual attributes are declared before the han
     // of the page dispatched: its rows and the rows of the page's other tasks, in queue order.
     const d = tmp("vmattr-stalled-handler");
     const ordered = () => [...syncTaskDir(d, attrRun, attrOpts).tasks].sort((x, y) => x.order - y.order);
-    const handlerTask = ordered().filter((t) => t.pageKey === "main" && t.rows.some((r) => r.vk === "handler")).pop();
+    const handlerTask = ordered().findLast((t) => t.pageKey === "main" && t.rows.some((r) => r.vk === "handler"));
     const handlerRows = handlerTask.rows.map((r, i) => (r.vk === "handler" ? i + 1 : 0)).filter(Boolean);
     // Dispatched, every row closed with `mark` (a value or a function of the row number), signed and closed.
     const dispatch = (t, mark) => {
