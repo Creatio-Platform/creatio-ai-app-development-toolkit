@@ -6309,6 +6309,59 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
+
+  // A whole-task descope closes through the engine: a task nobody started, closed by `--decide`, must not
+  // fail the dispatch gate. The gate demands a dispatch record for a closed task; a person's descope was
+  // never a build the engine dispatched, so it is exempt — proven by the `decisions:` map, not the status.
+  {
+    const { base, dir } = setup("cli-descope-exit0");
+    cliTasks(["--tasks", dir], MANIFEST);
+    const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
+    const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    check("descope: fixture: the descope target task was found — without it the check below is a silent skip",
+      () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
+    if (t) {
+      const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
+      // The re-run is a plain `--tasks` audit pass: it re-slices and reports the dispatch gate. A descoped
+      // task nobody dispatched must NOT make it exit 2.
+      const audit = cliTasks(["--tasks", dir], MANIFEST);
+      check("descope: a task descoped by `--decide` (nobody dispatched) does NOT fail the dispatch gate — a re-run of `--tasks` exits 0, not 2, and does not tell the operator to build the descoped task",
+        () => decide.status === 0 && audit.status === 0
+          && !/DISPATCH GATE/.test(audit.stdout || "") && !/DISPATCH GATE/.test(audit.stderr || "")
+          && !/never STARTED/.test(audit.stdout || ""),
+        () => ({ decideStatus: decide.status, auditStatus: audit.status,
+          auditStdout: (audit.stdout || "").slice(0, 400), auditStderr: (audit.stderr || "").slice(0, 400) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // In-process anti-vacuity: the exemption is keyed on the decisions MAP, so a task computing `wont-do`
+  // from a hand-typed cell with a fake `(D<N>)` and NO map entry is still held to the dispatch record.
+  {
+    const base = tmp("descope-fake-marker");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    if (t) {
+      // Hand-type a fake closure into EVERY row: no --decide ran, so `decisions:` stays empty.
+      let fp = path.join(dir, t.file);
+      let text = fs.readFileSync(fp, "utf8");
+      for (let i = 1; i <= t.rows.length; i++) text = setOutcome(text, i, `wont-do — made up (D99)`);
+      fs.writeFileSync(fp, text);
+      const audit = readMergedTaskDir(dir, RUN, OPTS);
+      const at = audit.tasks.find((x) => x.id === t.id);
+      check("descope (anti-vacuity): a task whose every row is a hand-typed `wont-do` with a fake `(D<N>)` and NO `decisions:` map entry is NOT exempt — the dispatch gate still holds it, because the exemption is keyed on the provenance map, not the status word",
+        () => audit.dispatch?.never?.some((x) => x.id === t.id)
+          && audit.dispatch?.failing?.some((x) => x.id === t.id),
+        () => ({ never: audit.dispatch?.never?.map((x) => x.id), status: at?.status,
+          kinds: at?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 }
 
 

@@ -2896,6 +2896,9 @@ export function readTaskDir(dir) {
         cause: e.meta.cause || null,
         repairRound: Number(e.meta.repairRound) || 0,
         covers: (e.meta.covers || "").split(/\s+/).filter(Boolean),
+        // The provenance map both readers need: the dispatch gate exempts a task whose closure a person
+        // authored, and that is proven by the map, not by the status word.
+        decisions: parseDecisionsMap(e.meta.decisions),
       };
     });
   // ONE READER. This path resolves residuals exactly as the merged path does, so a row a round has settled reads
@@ -2911,6 +2914,21 @@ export function readTaskDir(dir) {
 // THE REASON IS WHAT BUYS THE EXEMPTION: `not-applicable` is the one closure that needs no sub-agent, so a
 // `not-applicable` with nothing under `## Notes` is a task closed with neither a builder nor a justification,
 // and it is the cheapest way to write off every remaining row at once.
+// A person's descope needs no builder: every row that is not built is either the plan's own boundary or a
+// decision the person recorded through `--decide`, and the `decisions:` map is what proves the latter. Keyed
+// on the map, not on the status word, because a hand-typed cell carrying a fake `(D<N>)` computes `wont-do`
+// yet has no map entry — it is not a descope and stays held to the dispatch record. An empty map is never a
+// descope: an all-built task with nobody dispatched is exactly the record this gate exists to demand.
+function isDecidedDescope(t) {
+  const rows = t.rows || [];
+  if (!rows.length) return false;
+  const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+  if (!map?.size) return false;
+  return rows.every((r, i) => r.outcomeKind === O_BUILT
+    || (r.outcomeKind === O_NOT_APPLICABLE && r.na)
+    || map.has(i + 1));
+}
+
 function classifyUndispatched(t, out) {
   // EVERY CLOSURE IS HELD TO A DISPATCH RECORD, whoever filed the task and whether or not it writes: a verdict
   // filed by the context that did the work is the failure this gate exists for, and a review is no exception.
@@ -2918,6 +2936,9 @@ function classifyUndispatched(t, out) {
   // ONE EXEMPTION, FOR A FOLDER THAT PREDATES THE GATE: an adopted file carrying neither `declared:` nor
   // `statusFrom:` closed under the rule in force when it was written. It retires as folders turn over.
   if (t.origin !== TASK_ORIGIN_ENGINE && t.legacyShape) return;
+  // A whole-task descope a person authored through `--decide` closes without a builder — the same exemption
+  // `not-applicable` has, earned by the decisions map rather than by the plan.
+  if (isDecidedDescope(t)) return;
   if (t.status !== S_NOT_APPLICABLE) { out.never.push(t); return; }
   ((t.notes || "").trim() ? out.naUndispatched : out.naNoReason).push(t);
 }
