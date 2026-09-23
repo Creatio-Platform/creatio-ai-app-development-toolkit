@@ -6023,7 +6023,7 @@ const decideFixtureB = (label, md = null) => {
 // ============================================================================================================
 console.log("\n===== review coverage gaps (Group D) =====");
 {
-  // m6: three-colour verdict — GREEN branch. A synthetic set with nothing open and nothing postponed must
+  // Three-colour verdict, GREEN branch. A synthetic set with nothing open and nothing postponed must
   // render 🟢 (not 🟡 or 🔴) and NOT emit a Carry-over section.
   const set = { planVersion: RUN.planVersion, tasks: [
     { id: "done-only", file: "d.md", group: "Custom methods", pageKey: "main", status: "done",
@@ -6041,7 +6041,7 @@ console.log("\n===== review coverage gaps (Group D) =====");
     () => ({ colour: rep.verdictColour, head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
 }
 {
-  // m6: three-colour verdict — RED branch. A synthetic set with one not-built row (no postponed) must
+  // Three-colour verdict, RED branch. A synthetic set with one not-built row (no postponed) must
   // render 🔴, carry non-empty reasons, and NOT display the 🟡 wording.
   const set = { planVersion: RUN.planVersion, tasks: [
     { id: "notbuilt-only", file: "nb.md", group: "Custom methods", pageKey: "main", status: "partial",
@@ -6061,7 +6061,7 @@ console.log("\n===== review coverage gaps (Group D) =====");
       head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
 }
 {
-  // m7: --pages addressing. Close every task on ONE page; assert every task on that page gets touched
+  // `--pages` addressing. Close every task on ONE page; assert every task on that page gets touched
   // and no task on OTHER pages does.
   const base = tmp("m7-pages");
   const migrationDir = base;
@@ -6105,7 +6105,7 @@ console.log("\n===== review coverage gaps (Group D) =====");
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
-  // m8: renderDestination free-text branch. A destination that is NOT a Jira issue key (like a plain
+  // renderDestination free-text branch. A destination that is NOT a Jira issue key (like a plain
   // sentence with a pipe) must render as escaped text — no Jira link, and the pipe escaped inside the
   // Carry-over table cell (otherwise the table breaks).
   const { base, dir, t } = decideFixtureB("m8-freetext", "## D19 — defer to backlog\n");
@@ -6127,13 +6127,13 @@ console.log("\n===== review coverage gaps (Group D) =====");
   fs.rmSync(base, { recursive: true, force: true });
 }
 {
-  // m9: renderDecisionsMap emits pairs sorted by numeric key — a stable diff invariant. Feed unsorted
+  // renderDecisionsMap emits pairs sorted by numeric key — a stable diff invariant. Feed unsorted
   // input and assert the output is sorted 1, 2, 10 (not lexicographic 1, 10, 2).
   const m = new Map([[10, "D42"], [1, "D7"], [2, "D3"]]);
   check("decisions-map: renderDecisionsMap sorts entries by NUMERIC row key — lexicographic sort would put 10 before 2 and break stable diffs",
     () => renderDecisionsMap(m) === "1:D7 2:D3 10:D42",
     () => renderDecisionsMap(m));
-  // m9: --revoke over a file with one valid + one malformed entry must not crash — the malformed entry
+  // `--revoke` over a file with one valid + one malformed entry must not crash — the malformed entry
   // is dropped by parseDecisionsMap, and the valid one is cleared normally.
   const { base, dir, t } = decideFixtureB("m9-revoke-malformed", "## D13 — legit\n");
   const decisions = new Map([["D13", "legit"]]);
@@ -6159,7 +6159,7 @@ console.log("\n===== review coverage gaps (Group D) =====");
 // ============================================================================================================
 console.log("\n===== cell round-trip edge cases (Group B) =====");
 {
-  // m3: title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
+  // A title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
   const { base, dir, t } = decideFixtureB("m3-titleless-dn", "## D13\n");
   const decisions = new Map([["D13", ""]]);   // title-less
   if (t) {
@@ -6179,7 +6179,7 @@ console.log("\n===== cell round-trip edge cases (Group B) =====");
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
-// m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
+// parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
 check("decisions-map: parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
   () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
   () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
@@ -6190,7 +6190,7 @@ check("decisions-map: parseDecisionsMap drops every malformed entry (`x:D3` non-
   },
   () => JSON.stringify([...parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42").entries()]));
 {
-  // m11: a decision title containing `→` must not leak into the destination. parsePostponedCell is
+  // A decision title containing `→` must not leak into the destination. parsePostponedCell is
   // module-internal, so assert through the report — the observable end-state.
   const set = { planVersion: RUN.planVersion, tasks: [
     { id: "postpone-title-arrow", file: "p.md", group: "Business rules", pageKey: "main", status: "partial",
