@@ -29,7 +29,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { esc, planGaps } from "./designspec.mjs";
 import { unreadableLedger, notBuiltOpenItems, assertedBoundaryRows, statusMark, ARTIFACT_REFS,
-  S_DONE, S_NA, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE } from "./tasks.mjs";
+  S_DONE, S_NOT_APPLICABLE, S_WONT_DO, S_POSTPONED, S_PARTIAL, S_IN_PROGRESS, S_TODO, S_BLOCKED, REFUSED_UNREADABLE,
+  O_BUILT, O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED } from "./tasks.mjs";
 
 const brief = (s, n = 110) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -109,7 +110,7 @@ function readDecisionsMd(text, addHeading, add) {
     if (p) add(p[1], p[2]);
   }
 }
-function readDecisions(migrationDir) {
+export function readDecisions(migrationDir) {
   const out = new Map();
   // A heading keeps its title verbatim (bar the leading separator); a table cell / plain line goes through
   // decisionTitle, which lifts the bold lead and caps a long cell. Headings are last-wins (a later heading refines
@@ -193,24 +194,41 @@ function planTasks(tasks) {
   return (tasks || []).filter((t) => t.artifact !== ARTIFACT_REFS)
     .sort((a, b) => Number(a.step ?? a.order) - Number(b.step ?? b.order));
 }
+// A `partial` task whose only remaining un-built rows are `postponed` is not open work — its debt is a
+// person's decision with a destination, so it belongs on the 🟡 side of the verdict rather than the 🔴
+// "tasks not closed" reason. Under point 6 that keeps 🟡 honest: 🟡 means "the machine has
+// nothing left to do, the person has a debt", and the debt is the postponed row.
+function isPostponedDerivedPartial(t) {
+  if (t.status !== S_PARTIAL) return false;
+  const rows = t.rows || [];
+  if (!rows.length) return false;
+  return rows.every((r) => r.outcomeKind === O_BUILT || r.outcomeKind === O_NOT_APPLICABLE
+    || r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED)
+    && rows.some((r) => r.outcomeKind === O_POSTPONED);
+}
+const COUNT_BUCKET = new Map([
+  [S_DONE, "done"], [S_NOT_APPLICABLE, "na"], [S_WONT_DO, "wontDo"], [S_POSTPONED, "postponed"],
+  [S_IN_PROGRESS, "inProgress"], [S_TODO, "todo"], [S_BLOCKED, "blocked"],
+]);
+// A partial task whose debt is postponed rows counts as a postponed-derived task, not as open work.
+function countBucket(t) {
+  if (t.unread) return "unread";
+  if (t.status === S_PARTIAL) return isPostponedDerivedPartial(t) ? "postponed" : "partial";
+  return COUNT_BUCKET.get(t.status) || "other";
+}
 function taskCounts(tasks) {
-  const c = { total: tasks.length, done: 0, na: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
-  for (const t of tasks) {
-    if (t.unread) { c.unread++; continue; }
-    if (t.status === S_DONE) c.done++;
-    else if (t.status === S_NA) c.na++;
-    else if (t.status === S_PARTIAL) c.partial++;
-    else if (t.status === S_IN_PROGRESS) c.inProgress++;
-    else if (t.status === S_TODO) c.todo++;
-    else if (t.status === S_BLOCKED) c.blocked++;
-    else c.other++;
-  }
+  const c = { total: tasks.length, done: 0, na: 0, wontDo: 0, postponed: 0, partial: 0, inProgress: 0, todo: 0, blocked: 0, unread: 0, other: 0 };
+  for (const t of tasks) c[countBucket(t)]++;
+  // `postponed` is not open work — it is a debt with a destination — so it does not count against a run's
+  // open total the way `partial` does. The three-colour verdict treats it as scheduled elsewhere.
   c.open = c.partial + c.inProgress + c.todo + c.blocked + c.unread + c.other;
   return c;
 }
 const statusParts = (tc) => {
   const p = [`✅ done ${tc.done}`];
-  if (tc.na) p.push(`— n/a ${tc.na}`);
+  if (tc.na) p.push(`— not-applicable ${tc.na}`);
+  if (tc.wontDo) p.push(`⊘ wont-do ${tc.wontDo}`);
+  if (tc.postponed) p.push(`⏸ postponed ${tc.postponed}`);
   if (tc.partial) p.push(`◐ partial ${tc.partial}`);
   if (tc.inProgress) p.push(`▶ in progress ${tc.inProgress}`);
   if (tc.todo) p.push(`☐ queued ${tc.todo}`);
@@ -219,9 +237,10 @@ const statusParts = (tc) => {
   return p;
 };
 
-// A `needs-decision` row that a LATER row (a repair round) closed `n-a` citing a recorded decision is decided —
-// the decision exists, the person made it, only the ledger has not caught up (the repair task closes its source
-// row when it closes). Such an item is reported under the boundaries WITH a decision, not as an open question.
+// A `needs-decision` row that a LATER row (a repair round) closed as a plan boundary (`not-applicable`) citing
+// a recorded decision, or as `wont-do` / `postponed` through `--decide`, is decided — the decision exists, the
+// person made it, only the ledger has not caught up (the repair task closes its source row when it closes).
+// Such an item is reported under the boundaries WITH a decision, not as an open question.
 function splitDecided(notBuilt, boundaries) {
   const decidedBy = new Map();
   for (const b of boundaries) if (b.refs.resolved.length) decidedBy.set(`${b.task.pageKey} ${labelKey(b.row.label)}`, b);
@@ -261,7 +280,7 @@ function verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps }) {
     R.push(`${plural(openNotBuilt.length, "plan item")} recorded NOT BUILT (${nd} need${nd === 1 ? "s" : ""} a decision${blockedNote})`);
   }
   if (unbackedBoundaries.length) R.push(`${plural(unbackedBoundaries.length, "boundary", "boundaries")} closed by the agent with NO recorded decision`);
-  if (tc.open) R.push(`${plural(tc.open, "task")} not closed (${statusParts(tc).filter((s) => !s.startsWith("✅") && !s.startsWith("— n/a")).join(" · ")})`);
+  if (tc.open) R.push(`${plural(tc.open, "task")} not closed (${statusParts(tc).filter((s) => !s.startsWith("✅") && !s.startsWith("— not-applicable") && !s.startsWith("⊘ wont-do") && !s.startsWith("⏸ postponed")).join(" · ")})`);
   if (rc.missing) R.push(`${plural(rc.missing, "machine-checked plan item")} MISSING from the built page(s)`);
   if (rc.unverified) R.push(`${plural(rc.unverified, "machine row")} not confirmed`);
   return R;
@@ -312,7 +331,7 @@ function repairBuiltIndex(tasks) {
   const idx = new Map();
   for (const t of tasks) {
     if (!(t.kind === "repair" || Number(t.repairRound) > 0)) continue;
-    for (const r of t.rows || []) if (r.outcomeKind === "built") idx.set(`${t.pageKey} ${labelKey(r.label)}`, t);
+    for (const r of t.rows || []) if (r.outcomeKind === O_BUILT) idx.set(`${t.pageKey} ${labelKey(r.label)}`, t);
   }
   return idx;
 }
@@ -326,7 +345,7 @@ function decisionsSection(open, pageName, repairBuilt) {
     const later = repairBuilt.get(`${it.task.pageKey} ${labelKey(it.row.label)}`);
     const laterNote = later ? ` ⏳ *${cell(later.group || later.id)} has since recorded it **built**; this row closes when that task closes — check the stand before deciding.*` : "";
     let text;
-    if (it.row?.naNoReason) text = "the row was closed `n-a` with NO reason — decide whether it is a boundary or a row to build";
+    if (it.row?.naNoReason) text = "the row was closed `not-applicable` with NO reason — decide whether it is a boundary or a row to build";
     else if (it.cause === "blocked") text = "none — the stand or a service was unreachable; a re-run may clear it";
     else if (!it.cause) text = "the task closed without accounting for this row — decide whether it was built";
     else {
@@ -347,7 +366,7 @@ function boundariesSection(boundaries, decidedNotBuilt, pageName) {
   const withRef = boundaries.filter((b) => b.refs.resolved.length && !deciding.has(b));
   const without = boundaries.filter((b) => !b.refs.resolved.length);
   const L = [`## 2. Boundaries the agent closed (${withRef.length + without.length + decidedNotBuilt.length})`, ""];
-  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `n-a` in the folder is a boundary the plan itself approved."); return L; }
+  if (!boundaries.length && !decidedNotBuilt.length) { L.push("None — every `not-applicable` in the folder is a boundary the plan itself approved."); return L; }
   if (without.length) {
     L.push(`**Without a recorded decision (${without.length}) — confirm each, or send it back as a row to build.**`
       + " Nothing was built for these and nobody but the agent said there was nothing to build.", "",
@@ -389,6 +408,20 @@ function openMachineSection(rows, pageName) {
 // States: machine / judge (confirmed) · hand (a plan item only a person can confirm) · extra (a row that is not a
 // plan item — an orchestrator-authored repair task's own checklist; recorded by its agent, nothing verifies it) ·
 // not-built / decided / boundary / na · open (no outcome yet, or the machine could not confirm it).
+const DECIDED_ROW_KINDS = new Set([O_NOT_BUILT, O_NOT_APPLICABLE, O_WONT_DO, O_POSTPONED]);
+// ORDER IS THE RULE HERE: a row can satisfy several of these at once, and the earlier answer is the more
+// specific one. A decided row reported as merely `na` would lose the person's decision from the report.
+function rowReportState(r, hv, inSet, keys) {
+  if (inSet(keys.notBuilt) && r.outcomeKind === O_NOT_BUILT) return "not-built";
+  if (inSet(keys.decided) && DECIDED_ROW_KINDS.has(r.outcomeKind)) return "decided";
+  if (r.outcomeKind === O_NOT_APPLICABLE) return inSet(keys.unbacked) ? "boundary" : "na";
+  if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) return "decided";
+  if (r.na || r.info || hv.how === "na") return "na";
+  if (!r.outcomeKind) return "open";
+  if (hv.how === "hand") return "hand";
+  if (hv.how === "unknown") return "extra";
+  return hv.ok ? hv.how : "open";
+}
 function taskRows(t, vidx, keys) {
   return (t.rows || []).map((r, i) => {
     const lk = labelKey(r.label);
@@ -399,17 +432,9 @@ function taskRows(t, vidx, keys) {
     const wholeRun = (r.pageKey || t.pageKey) === "run";
     const v = vidx.byKey.get(key) || (wholeRun ? vidx.byLabel.get(lk) : undefined);
     const hv = howVerified(v);
-    let state;
     const inSet = (set) => set.has(key) || (wholeRun && !!set.hasLabel?.has(lk));
-    if (inSet(keys.notBuilt) && r.outcomeKind === "not-built") state = "not-built";
-    else if (inSet(keys.decided) && (r.outcomeKind === "not-built" || r.outcomeKind === "n-a")) state = "decided";
-    else if (r.outcomeKind === "n-a") state = inSet(keys.unbacked) ? "boundary" : "na";
-    else if (r.na || r.info || hv.how === "na") state = "na";
-    else if (!r.outcomeKind) state = "open";
-    else if (hv.how === "hand") state = "hand";
-    else if (hv.how === "unknown") state = "extra";
-    else state = hv.ok ? hv.how : "open";
-    return { n: i + 1, label: r.label, outcome: r.outcome || "—", v, hv, state };
+    return { n: i + 1, label: r.label, outcome: r.outcome || "—", v, hv,
+      state: rowReportState(r, hv, inSet, keys) };
   });
 }
 const num = (secNo, title) => `## ${secNo}. ${title}`;
@@ -476,6 +501,67 @@ function detailsSection(tasks, perTask, pageName, secNo) {
   return L;
 }
 
+// point 6 helpers — the carry-over row-level list of every postponed item, with its decision and
+// destination parsed out of the cell text. `--decide --postponed` writes cells shaped `postponed — <reason>
+// (D<N>) → <destination>`; the regex below picks D<N> out and anchors the destination on the LAST `→`
+// The LAST arrow, because a decision title may itself carry one — a reference like `see D3 → D4` — and
+// anchoring on the first would swallow it into the destination and break the Jira-link render.
+const POSTPONED_DECISION_RE = /\(D(\d{1,3})\)/;
+function parsePostponedCell(text) {
+  const s = String(text || "");
+  const dmatch = POSTPONED_DECISION_RE.exec(s);
+  const decision = dmatch ? `D${dmatch[1]}` : null;
+  const lastArrow = s.lastIndexOf("→");
+  const destination = lastArrow < 0 ? null : s.slice(lastArrow + 1).trim() || null;
+  return { decision, destination };
+}
+function collectPostponedRows(tasks) {
+  const out = [];
+  for (const t of tasks || []) {
+    if (t.unread) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.outcomeKind !== O_POSTPONED) return;
+      const { decision, destination } = parsePostponedCell(r.outcome);
+      out.push({ task: t, row: r, n: i + 1, decision, destination });
+    });
+  }
+  return out;
+}
+function postponedGroups(items) {
+  const by = new Map();
+  for (const it of items) {
+    const key = `${it.decision || "?"} → ${it.destination || "?"}`;
+    if (!by.has(key)) by.set(key, { decision: it.decision, destination: it.destination, rows: [] });
+    by.get(key).rows.push(it);
+  }
+  return [...by.values()];
+}
+// A destination that reads as an issue key (`PROJ-42`, `ABC-7`) is rendered as a link into the same
+// Jira/GitHub tracker the plan lives in; free text passes through as-is. The link target uses a per-project
+// convention (`https://…/browse/<KEY>`) that the reader's environment resolves — the report is markdown, so
+// this is just a hint rather than a hard reference.
+const ISSUE_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+const renderDestination = (d) => {
+  const s = String(d || "").trim();
+  if (!s) return "—";
+  if (ISSUE_KEY_RE.test(s)) return `[${cell(s)}](https://creatio.atlassian.net/browse/${encodeURIComponent(s)})`;
+  return cell(s);
+};
+function carryOverSection(items, pageName) {
+  if (!items.length) return [];
+  const L = [`## Carry-over — postponed items (${items.length})`, "",
+    "Rows a person deferred through `--decide --postponed`. Each is a DEBT with a destination — not a real"
+    + " miss (the verdict stays 🟡, not 🔴), but they are not done either and belong on a backlog. Use this"
+    + " list to file follow-up work; the destination is what the person named when they decided.",
+    "", "| # | Page | Plan item | Decision | Destination | Recorded in |",
+    "| --- | --- | --- | --- | --- | --- |"];
+  items.forEach((it, i) => {
+    const dec = it.decision ? `**${it.decision}**` : "⚠ no D<N> found in the cell";
+    L.push(`| ${i + 1} | ${pageName(it.row.pageKey || it.task.pageKey)} | ${cell(it.row.label)} | ${dec} | ${renderDestination(it.destination)} | [${cell(it.task.group || it.task.id)}](${enc(it.task.file)}), row ${it.n} |`);
+  });
+  return L;
+}
+
 // `set` is the MERGED task set (`syncRepairDir(...).set` or `readMergedTaskDir`) — never raw `readTaskDir` output,
 // whose rows carry no plan `na` and would report every approved boundary as agent-asserted. `dir` is the task
 // folder (decisions.md / plan.md are read from its parent); `dirLabel` is only what the report prints for it.
@@ -490,6 +576,44 @@ function ledgerReason(set) {
     + " and re-verified";
 }
 
+// The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read
+// from `result`, the dispatch gate passed in from migrate.mjs — so the report can never read COMPLETE on a
+// rejected run.
+function gateReasons(result, gates) {
+  const out = [];
+  if (result?.gate?.blocked) out.push("the build gate is BLOCKED — the plan is not approvable");
+  if (result?.structure && !result.structure.complete) out.push("the plan STRUCTURE is incomplete — not ready to build");
+  if (result?.coverage && !result.coverage.complete) out.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
+  if (result?.listGate?.blocked) out.push("the LIST page gate is BLOCKED — the list page is not approvable");
+  if (gates?.dispatchFailed) out.push("the DISPATCH gate failed — a task was closed with no dispatch token");
+  return out;
+}
+// A task computed `not-applicable` is the plan's own boundary: every row of it is a plan-boundary row, and the
+// engine writes that outcome only from `r.na`. One with rows the plan did NOT mark that way is a person's
+// decision written as a plan fact, so it has to cite a recorded decision and must not leave plan rows
+// unaccounted while the run reads COMPLETE.
+function naUnbackedReasons(tasks, decisions) {
+  const naUnbacked = tasks.filter((t) => t.status === S_NOT_APPLICABLE
+    && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
+  return naUnbacked.length
+    ? [`${plural(naUnbacked.length, "task")} closed not-applicable with no recorded decision (or with rows left unaccounted)`]
+    : [];
+}
+// AC 13 — 🟡 IS GRANTED ONLY OVER DECISIONS THAT STILL RESOLVE. `collectPostponedRows` parses the cell TEXT,
+// so it accepts a `(D<N>)` naming a decision renamed or deleted from decisions.md after the cell was written,
+// and a cell carrying no destination at all. Neither is a person's answer: one points at nothing, the other
+// names no debt to carry. Routing them here is what makes the verdict compute RED through the path every other
+// shortfall already takes — and, because an unbacked row always lands on `reasons`, `complete` implies EVERY
+// postponed row carries a resolvable decision and a destination, which is what makes the headline safe to
+// interpolate without a guard.
+function postponedUnbackedReasons(postponedRows, decisions) {
+  const unbacked = postponedRows.filter((p) => !p.decision || !decisions.has(p.decision) || !p.destination);
+  if (!unbacked.length) return [];
+  const where = unbacked.map((p) => `\`${esc(p.task.file)}\` row ${p.n}`).join(", ");
+  return [`${plural(unbacked.length, "row")} postponed without a resolvable \`D<N>\` and a destination`
+    + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
+    + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`];
+}
 export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
   const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
@@ -517,25 +641,35 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
   const reasons = verdictReasons({ tc, openNotBuilt, unbackedBoundaries, rc, gaps });
   reasons.push(...unreadableLedgerReasons(tasks), ...driftedSettledReasons(tasks));
   if (ledgerRefused) reasons.unshift(ledgerRefused);
-  // A task closed `n/a` is the agent's own decision (like a row-level n-a boundary): it must cite a recorded decision
-  // and must not leave plan rows unaccounted while the run reads COMPLETE.
-  const naUnbacked = tasks.filter((t) => t.status === S_NA
-    && (!decisionRefs(t.notes || "", decisions).resolved.length || (t.rows || []).some((r) => !r.outcomeKind && !r.na)));
-  if (naUnbacked.length) reasons.push(`${plural(naUnbacked.length, "task")} closed n/a with no recorded decision (or with rows left unaccounted)`);
-  // The verdict is the CONJUNCTION over every gate the CLI exits 2 on — gate / structure / coverage / list read from
-  // `result`, the dispatch gate passed in from migrate.mjs — so the report can never read ✅ COMPLETE on a rejected run.
-  if (result?.gate?.blocked) reasons.push("the build gate is BLOCKED — the plan is not approvable");
-  if (result?.structure && !result.structure.complete) reasons.push("the plan STRUCTURE is incomplete — not ready to build");
-  if (result?.coverage && !result.coverage.complete) reasons.push("schema members are UNACCOUNTED — no Freedom artifact and no decision");
-  if (result?.listGate?.blocked) reasons.push("the LIST page gate is BLOCKED — the list page is not approvable");
-  if (gates?.dispatchFailed) reasons.push("the DISPATCH gate failed — a task was closed with no dispatch token");
+  reasons.push(...naUnbackedReasons(tasks, decisions), ...gateReasons(result, gates));
+  // Postponed rows are a DEBT with a destination — not a real miss and not a done row — so the verdict can tell
+  // "the machine has nothing left to do, the person has a debt" from "someone still has work here".
+  const postponedRows = collectPostponedRows(tasks);
+  reasons.push(...postponedUnbackedReasons(postponedRows, decisions));
   const complete = reasons.length === 0;
   const manualNote = handLeft ? `; ${plural(handLeft, "plan item")} still to confirm manually on the stand (see Task details)` : "";
-  const verdict = complete
-    ? `✅ **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`
-    : `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}`;
+  const postponedCount = postponedRows.length;
+  const postponedNote = postponedCount ? `; ${plural(postponedCount, "row")} postponed — see the carry-over section` : "";
+  let verdict;
+  if (!complete) {
+    // One real miss makes the whole verdict red — postponed items are LISTED alongside, never a way to
+    // hide a shortfall.
+    verdict = `⛔ **NOT COMPLETE** — ${reasons.join(" · ")}${postponedNote}`;
+  } else if (postponedCount) {
+    // The 🟡 wording names one decision + destination if every postponed row shares one (the common
+    // case — a whole page deferred as one debt), else a plain "N items postponed" summary. The carry-over
+    // section carries the full list; this line is the headline.
+    const grouped = postponedGroups(postponedRows);
+    const headline = grouped.length === 1
+      ? `${plural(postponedCount, "item")} postponed per ${grouped[0].decision} → ${grouped[0].destination}`
+      : `${plural(postponedCount, "item")} postponed across ${plural(grouped.length, "decision")} — see the carry-over section`;
+    verdict = `🟡 **COMPLETE FOR THIS PHASE** — ${headline}${manualNote}`;
+  } else {
+    verdict = `🟢 **COMPLETE** — every task closed, every machine-checked plan item present${manualNote}`;
+  }
   const entity = result?.entity ? ` — ${esc(String(result.entity))}` : "";
   const machineOpen = openMachineSection(verifyRes?.rows, pageName);
+  const carryOver = carryOverSection(postponedRows, pageName);
   let sec = 3;
   const md = [
     `# Migration result${entity}`, "",
@@ -547,10 +681,14 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),
     "", ...decisionsSection(openNotBuilt, pageName, repairBuilt),
     "", ...boundariesSection(boundaries, decidedNotBuilt, pageName),
+    ...(carryOver.length ? ["", ...carryOver] : []),
     ...(machineOpen.length ? ["", ...machineOpen] : []),
     "", ...tasksSection(tasks, perTask, pageName, machineOpen.length ? ++sec : sec),
     "", ...detailsSection(tasks, perTask, pageName, sec + 1),
   ].join("\n");
-  return { markdown: md, complete, reasons,
-    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft } };
+  let verdictColour = "green";
+  if (!complete) verdictColour = "red";
+  else if (postponedCount) verdictColour = "yellow";
+  return { markdown: md, complete, reasons, postponed: postponedRows, verdictColour,
+    counts: { tasks: tc, rows: rc, openNotBuilt: openNotBuilt.length, decidedNotBuilt: decidedNotBuilt.length, boundaries: boundaries.length, unbackedBoundaries: unbackedBoundaries.length, handLeft, postponed: postponedCount } };
 }

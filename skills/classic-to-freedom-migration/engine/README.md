@@ -18,6 +18,8 @@ node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it w
 node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
+node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves as a heading in decisions.md — it never creates a decision, and that refusal IS the safeguard
+node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
@@ -175,9 +177,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   read-only predicate over the task files plus `timings.json`: `--start` refuses to open a new clock while it
   fails, plain `--tasks` exits 2 with the folder still written, and `--verify --tasks` exits 2 and writes no
   repair round. It separates a task that was never dispatched (re-open and rebuild) from one whose clock is still
-  open (re-run the mode) from one signed with the wrong token. `status: n/a` is the one closure that needs no
-  sub-agent, and the reason under `## Notes` is what earns it that: an `n/a` with nothing written there fails,
-  because otherwise flipping every open task to `n/a` writes off a run in one edit. A sample whose duration rounds
+  open (re-run the mode) from one signed with the wrong token. `not-applicable` is the one closure that needs no
+  sub-agent — it is the PLAN's own boundary, never a word an agent may assert — and the reason under `## Notes` is
+  what earns it that: one with nothing written there fails, because otherwise flipping every open task to it
+  writes off a run in one edit. A PERSON's scope decision is a different thing and does not go here: it reaches
+  the cells only through `--decide`, which refuses unless its `D<N>` already resolves. A sample whose duration rounds
   to zero is still a dispatch record — only the forecast filters it out.
 - **`--next` ANSWERS what `--start` would accept, instead of making the caller find out by being refused.** The
   folder already published everything the answer needs (`status`, `dependsOn`, `writesTo`, the clocks) and
@@ -214,7 +218,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   the index changes nothing.
 - **The engine owns the deliverable rows AND `status:`; the caller owns the `Outcome` column, `declared:` and
   `## Notes`.** `status` is derived from the cells on every pass and written back; `declared` holds the caller's two
-  words, `blocked` and `n/a`. A re-run rewrites the rows from the current plan (they are the plan's) and never
+  word, `blocked` — the only status an agent may assert. A re-run rewrites the rows from the current plan (they are the plan's) and never
   touches the caller's three. An adopted file — a repair round's or one declared through `--tasks --add` — is
   neither rewritten nor removed: only its `status:` line moves.
 - **Ids are content-derived — not positional, and not count-derived** — a short hash over (the page's
@@ -240,10 +244,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   stderr and left byte for byte as it is — its task simply gets no file that run. Rewriting it would destroy the
   `## Notes` that may be the only record of work already done on a stand. An orchestrator file carrying an engine
   task's id (the natural result of copying a task file as a template) is refused for the same reason.
-- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `blocked` / `n/a` / `partial`); an
-  unrecognised one is reported, never read as "not done". `done` and `partial` are COMPUTED from the `Outcome`
-  column of the task's `## Deliverables` table and written into the front matter; `blocked` and `n/a` are the
-  agent's own and are never computed over. A `partial` task's unbuilt rows are routed into the SAME repair
+- Statuses are a checked vocabulary (`todo` / `in-progress` / `done` / `partial` / `blocked` / `not-applicable` /
+  `wont-do` / `postponed`); an unrecognised one is reported, never read as "not done". Every word but `blocked` is
+  COMPUTED from the `Outcome` column of the task's `## Deliverables` table and written into the front matter;
+  `blocked` is the agent's ONLY status input. `wont-do` and `postponed` are a person's scope decision and reach
+  the cells through `--decide` alone; `not-applicable` is the plan's own boundary. A `partial` task's unbuilt rows are routed into the SAME repair
   machinery a short `--verify` uses — grouped by (page, cause), one task per cause, one round per attempt — and
   the task computes `done` once that repair task closes. A row with no repair task open against it (none yet, or
   the round came back `blocked`) is what fails the run. **`--tasks <dir> --route` is how a run in flight routes
@@ -380,7 +385,7 @@ conjunction — `✅ COMPLETE` only when every task is closed and dispatched, no
 `not-built`, and every machine-checked row is present; otherwise `⛔ NOT COMPLETE — <every reason>`, exit 2 with a
 `⛔ RUN NOT COMPLETE` stderr line. Written in the plan's vocabulary (*plan item*, pages by `--built.pages[k].schemaName`),
 sections in the order a person acts on them: summary → **1** plan items recorded not built that need a decision
-(quoting the agent's `Decision needed (row N):` line from `## Notes`) → **2** boundaries the agent closed `n-a`,
+(quoting the agent's `Decision needed (row N):` line from `## Notes`) → **2** boundaries closed `not-applicable`,
 split by whether the reason cites a recorded decision (`## D<N> — …` in `decisions.md`, `N. **…**` under the plan's
 Adjustments) → **3** machine rows still open (omitted when none) → **4** the task ledger with per-task Machine /
 Evidence + judge / By hand counts (the reference-cache task is not a plan task and is not listed; dispatch is not

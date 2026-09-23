@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
@@ -19,7 +19,9 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   dispatchAudit, readTaskDir,
   startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
-  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows, cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
+  REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
+  cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
+  applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -552,12 +554,6 @@ check("renderTaskFile: every deliverable row of the task is in the rendered tabl
     && SAMPLE.rows.some((r) => r.vk)
     && SAMPLE.rows.filter((r) => r.vk).every((r) => SAMPLE_TEXT.includes("`--verify` (`" + r.vk + "`)")),
   () => SAMPLE_TEXT);
-check("renderTaskFile: a row with no machine verifier is closed by an evidence record plus a judge verdict, and an approved-boundary row is marked N/A — the mechanism is stated per row, never left to the builder",
-  () => {
-    const t = { ...SAMPLE, rows: [{ label: "prose row", group: "Form — Logic", vk: null, na: null }, { label: "out of scope", group: "Pages", vk: null, na: "agreed boundary" }] };
-    const text = renderTaskFile(t, SET);
-    return text.includes("| an evidence record + a judge verdict |") && text.includes("| N/A — agreed boundary |");
-  }, () => renderTaskFile({ ...SAMPLE, rows: [{ label: "prose row" }, { label: "out of scope", na: "agreed boundary" }] }, SET));
 check("renderTaskFile: the deliverable block is marked engine-owned EXCEPT the Outcome column, and the notes block is marked as the caller's — the ownerships are stated in the file, not only in the module",
   /ENGINE-OWNED except the `Outcome` column, which is YOURS/.test(SAMPLE_TEXT) && /YOURS\. Never rewritten/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT);
@@ -703,12 +699,12 @@ check("drift: an UNCHANGED `done` task is NOT flagged — the signal is the chan
   () => taskAt(mergeTaskSet(SET, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]), "main", DRIFT_GROUP).drifted === false,
   () => taskAt(mergeTaskSet(SET, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: "done" })]), "main", DRIFT_GROUP));
 check("drift: EVERY status the caller recorded is falsified by a row change, not only `done` — `in-progress`, `blocked` and `n/a` were all recorded against the older deliverables too, and the Attention line says which one it was",
-  () => ["in-progress", "blocked", "n/a"].every((s) => {
+  () => ["in-progress", "blocked"].every((s) => {
     const t = driftedOn(s);
     return t.drifted === true
       && renderTaskIndex(mergeTaskSet(SET3, [asExisting(taskAt(SET, "main", DRIFT_GROUP), { status: s })]))
         .includes(`status \`${s}\` was recorded against an OLDER set of deliverables`);
-  }), () => ["in-progress", "blocked", "n/a"].map((s) => ({ s, drifted: driftedOn(s).drifted })));
+  }), () => ["in-progress", "blocked"].map((s) => ({ s, drifted: driftedOn(s).drifted })));
 check("drift: a task back at `todo` is NOT flagged and ADOPTS the current rows — reopening a task is what clears the held digest, so a re-opened task does not carry a warning about work nobody claims any more",
   () => {
     const t = driftedOn("todo");
@@ -1660,7 +1656,7 @@ check("repair: a round that was ATTEMPTED and came back opens the next one — `
     const asFile = (status) => ({ file: first.file, notes: "", malformed: null,
       meta: { id: first.id, status, origin: "engine", pageKey: "main", kind: "repair",
         cause: first.cause, repairRound: "1" } });
-    const opened = ["done", "n/a"].every((st) =>
+    const opened = ["done", "not-applicable"].every((st) =>
       buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]).tasks.some((t) => t.cause === "missing:handlers"));
     const held = ["todo", "in-progress", "blocked"].every((st) => {
       const r = buildRepairTasks(RUN, VERIFY_PAGES, OPTS, [asFile(st)]);
@@ -1908,7 +1904,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^declared: .*$/m, `declared: ${s}`));
     };
     // Fixed tokens so the assertions can name them; a real dispatch mints its own.
-    const CLOSED_FOR_TEST = new Set(["done", "n/a"]);
+    const CLOSED_FOR_TEST = new Set(["done", "not-applicable"]);
     const TOK_A = "tok-alpha", TOK_BUILDER = "tok-builder", TOK_REVIEW = "tok-review", TOK_OPEN = "tok-open";
     const setNonce = (d, id, n) => {
       const f = fileOf(d, id);
@@ -1935,24 +1931,10 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
         () => ({ running: readTimingsFile(d).running }));
     }
 
-    // ---- `n/a` is the ONE closure that legitimately has no sub-agent, and the REASON is what earns that ----
-    {
-      const d = gateDir();
-      const id = idOf2(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
-      setStatus(d, id, "n/a");
-      const bare = syncTaskDir(d, RUN, { ...OPTS, now: at(12) });
-      check("gate: `n/a` with no dispatch record and NOTHING under `## Notes` FAILS — otherwise flipping every remaining task to `n/a` writes off a whole run in one edit, which is cheaper than any other way past the gate",
-        () => bare.dispatch.failing.some((t) => t.id === id) && bare.dispatch.naNoReason.some((t) => t.id === id),
-        () => ({ failing: bare.dispatch.failing.map((t) => t.id), naNoReason: bare.dispatch.naNoReason.map((t) => t.id) }));
-      fs.appendFileSync(fileOf(d, id), "\nThe section this task scaffolds already exists on the stand.\n");
-      const set = syncTaskDir(d, RUN, { ...OPTS, now: at(13) });
-      check("gate: `status: n/a` with a WRITTEN REASON and no clock does NOT fail — a row that does not apply is closed without anyone building it, so requiring a dispatch record for it would make the gate unpassable",
-        () => set.dispatch.failing.length === 0 && set.dispatch.naUndispatched.some((t) => t.id === id),
-        () => ({ failing: set.dispatch.failing.map((t) => t.id), na: set.dispatch.naUndispatched.map((t) => t.id) }));
-      check("gate: it is still NAMED on Attention — the one closure that needs no sub-agent is reported rather than silent, so the reason gets read",
-        () => /recorded `n\/a` with no dispatch record/.test(readIndex(d)),
-        () => readIndex(d).split("## Attention")[1]?.slice(0, 300));
-    }
+    // removed: the `n/a` dispatch-gate tests are gone — task-level `not-applicable` is no
+    // longer a hand-declared status (it is computed only when every row is a plan boundary), so the
+    // "one-edit-writes-off-the-run" attack surface those tests protected against is now closed by
+    // construction. The new-contract equivalents live in the test block at the end of the file.
 
     // ---- the queue order, and one writer per artifact, enforced where the token is ISSUED ----
     {
@@ -2235,7 +2217,7 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
           const tasks = readTaskDir(dir);
           const next = tasks.find((t) => t.status === "todo" && t.dependsOn.every((d) => {
             const dep = tasks.find((x) => x.id === d);
-            return !dep || dep.status === "done" || dep.status === "n/a";
+            return !dep || dep.status === "done" || dep.status === "not-applicable";
           }));
           if (!next) return;
           const started = cli(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -2750,10 +2732,6 @@ check("a task still IN PROGRESS with only some rows filled stays `in-progress` �
   () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: in-progress")).status === "in-progress",
   () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, "built").replace("status: todo", "status: in-progress")).status);
 
-check("`n/a` survives an outcome cell — it is the one closure that legitimately has no builder, it is earned by the reason under `## Notes` that the dispatch gate reads, and a stale cell must not take that exemption away",
-  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: n/a")).status === "n/a",
-  () => reread(SAMPLE, SET, (t) => setOutcome(t, 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: n/a")).status);
-
 check("`blocked` survives an outcome cell too — it is the only HALT an agent can reach (rule 5 asks for it when migrated content reads like an instruction), and since `partial` releases dependents, computing `partial` over it would walk the queue past a stop set on purpose",
   () => {
     const t = reread(SAMPLE, SET, (x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, "declared: blocked"));
@@ -2862,10 +2840,10 @@ check("hand-written: `not built` as PROSE under `## Notes` computes nothing — 
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done").status === "done",
   () => handWritten((x) => allBuilt(x) + "\n\nrow 1 was not built — not-built — blocked, see above\n", "done"));
 
-check("hand-written: `blocked` and `n/a` are never computed over — the two words an agent chooses deliberately keep meaning what they say",
-  () => ["blocked", "n/a"].every((w) =>
+check("hand-written: `blocked` is never computed over — it is the ONE word an agent chooses deliberately, and it keeps meaning what it says. retired `n/a` from this list: a whole-task scope decision is a person's answer, recorded through `--decide`, and a folder still declaring it reads as unrecognised.",
+  () => ["blocked"].every((w) =>
     handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status === w),
-  () => ["blocked", "n/a"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
+  () => ["blocked"].map((w) => handWritten((x) => setOutcome(allBuilt(x), 1, NOT_BUILT_BLOCKED).replace(/^declared: *$/m, `declared: ${w}`), "done").status));
 
 check("hand-written: a task still OPEN is left alone — a `not-built` recorded while its sub-agent is still filling cells is not yet a verdict, and routing a round at it would send a second agent at a row somebody is holding",
   () => {
@@ -2910,7 +2888,7 @@ check("declared: the engine WRITES the field into every task file it renders, em
   () => /^declared: *$/m.test(renderTaskFile(SAMPLE, SET)) && /^status: todo$/m.test(renderTaskFile(SAMPLE, SET)),
   () => renderTaskFile(SAMPLE, SET).split("\n").slice(0, 6).join("\n"));
 
-for (const word of ["blocked", "n/a"]) {
+for (const word of ["blocked"]) {
   check(`declared: \`${word}\` is an INPUT to the derivation, not an exception inside it - it stands over cells that would otherwise compute \`done\``,
     () => withDeclared((x) => allBuilt(x), word).status === word,
     () => withDeclared((x) => allBuilt(x), word).status);
@@ -3303,7 +3281,7 @@ const boundaryFolder = (name) => {
   const token = `tok-${tgt.id}`;
   startTask(d, tgt.id, RUN, { ...OPTS, dispatchToken: token }, null, AT(40));
   const f = taskFilePath(d, tgt.id);
-  fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, "n-a \u2014 approved boundary, per D1"));
+  fs.writeFileSync(f, setOutcome(allBuilt(fs.readFileSync(f, "utf8")), 1, "not-applicable \u2014 approved boundary, per D1"));
   editFrontMatter(d, tgt.id, "agentNonce", token);
   const label = syncTaskDir(d, RUN, { ...OPTS, now: AT(41) }).tasks.find((t) => t.id === tgt.id).rows[0].label;
   const res = syncRepairDir(d, RUN, { "child:G1": { missing: 1, unverified: 0, complete: false,
@@ -3436,7 +3414,7 @@ check("blank: a task nobody has started is untouched — every `todo` task is al
   () => typedOverBlank("todo").status);
 
 check("blank: a DECLARED halt stands — `declared:` is read before the cells, so a declaration is never computed over",
-  () => ["blocked", "n/a"].every((w) => {
+  () => ["blocked"].every((w) => {
     const d = tmp("blank-decl-" + w.replace("/", ""));
     const tgt = taskAt(syncTaskDir(d, RUN, OPTS), "child:G1", "Quality gates");
     editFrontMatter(d, tgt.id, "declared", w);
@@ -3444,8 +3422,8 @@ check("blank: a DECLARED halt stands — `declared:` is read before the cells, s
   }), "a declaration in its own field must stand over an empty column");
 
 check("blank: a declarable word TYPED into `status:` is still read as a declaration — the engine only writes `blocked`/`n/a` there alongside a matching `declared:`, so one that does not match its stamp came from an agent and must keep halting",
-  () => ["blocked", "n/a"].every((w) => typedOverBlank(w).status === w),
-  () => ["blocked", "n/a"].map((w) => `${w}->${typedOverBlank(w).status}`));
+  () => ["blocked"].every((w) => typedOverBlank(w).status === w),
+  () => ["blocked"].map((w) => `${w}->${typedOverBlank(w).status}`));
 
 
 console.log("\n===== one reader: every path derives the same word for one folder =====");
@@ -3539,7 +3517,7 @@ const haltedRepair = (name, word) => {
   return { d, rep, pass1, pass2, file: fs.readFileSync(taskFilePath(d, rep.id), "utf8") };
 };
 
-for (const word of ["blocked", "n/a"]) {
+for (const word of ["blocked"]) {
   check(`halt: \`status: ${word}\` typed on an ADOPTED file survives the pass that honours it — the promotion is written into \`declared:\`, so the re-stamp that removes the evidence cannot drop the halt`,
     () => { const r = haltedRepair("halt-" + word.replace("/", ""), word); return r.pass1 === word && r.pass2 === word; },
     () => { const r = haltedRepair("halt-d-" + word.replace("/", ""), word); return { pass1: r.pass1, pass2: r.pass2 }; });
@@ -3736,7 +3714,7 @@ console.log("\n===== end to end through the CLI: the run FAILS and the list is g
       const tasks = readTaskDir(dir);
       const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
         const dep = tasks.find((x) => x.id === d);
-        return !dep || dep.status === "done" || dep.status === "n/a";
+        return !dep || dep.status === "done" || dep.status === "not-applicable";
       }));
       if (!next) break;
       const started = cliT(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -3862,27 +3840,27 @@ check("MID-FLIGHT: once the LAST blank cell is filled the same `not-built` compu
 check("`n-a` WITHOUT a reason counts as `not-built` — a row closed without being built and without a reason is a self-certified skip, and it must not compute `done` the way the task-level `n/a` must carry a reason to skip its dispatch record",
   () => {
     let t = renderTaskFile(SAMPLE, SET);
-    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "not-applicable");
     const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0];
     return m.status === "partial" && notBuiltRows([m]).length === SAMPLE.rows.length;
   }, () => {
     let t = renderTaskFile(SAMPLE, SET);
-    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "n-a");
+    for (let i = 1; i <= SAMPLE.rows.length; i++) t = setOutcome(t, i, "not-applicable");
     return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
   });
 
 check("`n-a` WITH a reason closes its row, but on a row the plan did not mark N/A it is named on Attention — the plan's own boundaries are approved and silent; an agent asserting one is a claim someone should see",
   () => {
     let t = allBuilt(renderTaskFile(SAMPLE, SET));
-    t = setOutcome(t, 1, "n-a — no Freedom analog, confirmed with the user");
+    t = setOutcome(t, 1, "not-applicable — no Freedom analog, confirmed with the user");
     const set = mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]);
     const m = set.tasks[0];
     const idx = renderTaskIndex(set);
     return m.status === "done" && !SAMPLE.rows[0].na
       && assertedBoundaryRows([m]).length === 1
-      && /recorded `n-a` on a row the plan did NOT mark N\/A/.test(idx);
+      && /recorded `not-applicable` on a row the plan did NOT mark/.test(idx);
   }, () => {
-    let t = setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, "n-a — no Freedom analog, confirmed with the user");
+    let t = setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, "not-applicable — no Freedom analog, confirmed with the user");
     return mergeTaskSet({ ...SET, tasks: [SAMPLE] }, [{ file: SAMPLE.file, ...parseTaskFile(t) }]).tasks[0].status;
   });
 
@@ -3910,16 +3888,16 @@ check("a `|` in a Classic caption does not shift the Outcome cell — deliverabl
 
 check("a `|` typed INSIDE the Outcome cell keeps the whole reason — the agent hand-types free prose there (`n-a — <reason>`, the reason is REQUIRED), so a raw pipe is already in the file and cannot be escaped away on write; truncating at it left a HALF reason that still read as a validly-reasoned, accounted skip",
   () => {
-    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const reason = "not-applicable — approved per CRM-123, replaces the A | B filter";
     const m = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
       [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]).tasks[0];
     return m.rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter" && !m.rows[0].naNoReason;
-  }, () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "n-a — approved per CRM-123, replaces the A | B filter"))
+  }, () => reread(SAMPLE, SET, (t) => setOutcome(allBuilt(t), 1, "not-applicable — approved per CRM-123, replaces the A | B filter"))
     .rows.map((r) => [r.outcomeKind, r.outcomeReason]));
 
 check("that reason SURVIVES the re-render — the engine escapes the cell on the way back out, so a second pass reads the same text rather than splitting it further each time the folder is re-sliced",
   () => {
-    const reason = "n-a — approved per CRM-123, replaces the A | B filter";
+    const reason = "not-applicable — approved per CRM-123, replaces the A | B filter";
     const once = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
       [{ file: SAMPLE.file, ...parseTaskFile(setOutcome(allBuilt(renderTaskFile(SAMPLE, SET)), 1, reason)) }]);
     const twice = mergeTaskSet({ ...SET, tasks: [SAMPLE] },
@@ -3927,12 +3905,12 @@ check("that reason SURVIVES the re-render — the engine escapes the cell on the
     return twice.tasks[0].rows[0].outcomeReason === "approved per CRM-123, replaces the A | B filter";
   }, "the Outcome cell must round-trip a typed pipe");
 
-check("the generated task body names `declared:` as the agent's only status input and never instructs a `status:` write — the file IS the sub-agent's prompt, so guidance that names the engine's own field is guidance that loses a halt",
+check("the generated task body names `declared:` as the agent's only status input and never instructs a `status:` write — the file IS the sub-agent's prompt, so guidance that names the engine's own field is guidance that loses a halt. Under the new vocab `declared:` takes ONE word (`blocked`); a scope decision goes through `--decide D<N>`.",
   () => /Never write `status:`/.test(SAMPLE_TEXT)
-    && /`declared: blocked`/.test(SAMPLE_TEXT) && /`declared: n\/a`/.test(SAMPLE_TEXT)
+    && /`declared: blocked`/.test(SAMPLE_TEXT)
+    && /--decide D<N>/.test(SAMPLE_TEXT)
     && !/Do \*\*not\*\* set `status:`/.test(SAMPLE_TEXT)
-    && !/those you DO write/.test(SAMPLE_TEXT)
-    && /reason is REQUIRED/.test(SAMPLE_TEXT),
+    && !/those you DO write/.test(SAMPLE_TEXT),
   () => SAMPLE_TEXT.slice(SAMPLE_TEXT.indexOf("How you close this task"), SAMPLE_TEXT.indexOf("How you close this task") + 900));
 
 
@@ -3942,7 +3920,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
     const s1 = syncTaskDir(d, RUN, OPTS);
     const tgt = taskAt(s1, "child:G1", "Quality gates");
     const fp = path.join(d, tgt.file);
-    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — no Freedom equivalent, my call"));
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     const s2 = syncTaskDir(d, RUN, OPTS);
     const prog = renderProgress(s2, d);
     const back = s2.tasks.find((t) => t.id === tgt.id);
@@ -3955,7 +3933,7 @@ check("an agent-asserted boundary reaches the PROGRESS BLOCK, not just `index.md
     const s1 = syncTaskDir(d, RUN, OPTS);
     const tgt = taskAt(s1, "child:G1", "Quality gates");
     const fp = path.join(d, tgt.file);
-    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — no Freedom equivalent, my call"));
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — no Freedom equivalent, my call"));
     return renderProgress(syncTaskDir(d, RUN, OPTS), d);
   });
 
@@ -3965,7 +3943,7 @@ check("an asserted boundary does NOT fail the run — gating it is the open deci
     const s1 = syncTaskDir(d, RUN, OPTS);
     const tgt = taskAt(s1, "child:G1", "Quality gates");
     const fp = path.join(d, tgt.file);
-    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "n-a — approved boundary"));
+    fs.writeFileSync(fp, setOutcome(allBuilt(fs.readFileSync(fp, "utf8")), 1, "not-applicable — approved boundary"));
     const s2 = syncTaskDir(d, RUN, OPTS);
     return notBuiltRows(s2.tasks).length === 0 && assertedBoundaryRows(s2.tasks).length === 1;
   }, "an asserted boundary must not enter notBuiltRows, which is what sets the exit-2 gate");
@@ -4596,7 +4574,7 @@ console.log("\n===== the migration result report — one artifact, computed from
       const tasks = readTaskDir(dir);
       const next = tasks.find((t) => t.status === "todo" && (t.dependsOn || []).every((d) => {
         const dep = tasks.find((x) => x.id === d);
-        return !dep || dep.status === "done" || dep.status === "n/a";
+        return !dep || dep.status === "done" || dep.status === "not-applicable";
       }));
       if (!next) break;
       const started = cliR(["--tasks", dir, "--start", next.id], MANIFEST);
@@ -4741,23 +4719,23 @@ console.log("\n===== the migration result report — one artifact, computed from
     () => openRep.markdown.slice(openRep.markdown.indexOf("## 4.")));
   const dNone = tmp("result-report-empty");
   const doneRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [], planVersion: RUN.planVersion }, dir: dNone });
-  check("renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS ✅ COMPLETE — and it still names how many plan items need a check by hand, so ✅ never reads as 'nothing left to look at'",
-    () => doneRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
+  check("renderFinalReport: with every task closed, nothing recorded not built and every machine row present, the verdict IS 🟢 COMPLETE — and it still names how many plan items need a check by hand, so it never reads as 'nothing left to look at'",
+    () => doneRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(doneRep.markdown) && /1 plan item still to confirm manually on the stand/.test(doneRep.markdown),
     () => ({ complete: doneRep.complete, reasons: doneRep.reasons, head: doneRep.markdown.split("\n")[2] }));
   // RC-9: the combined gate can PASS on a REAL, non-empty closed ledger — every task done,
-  // its rows built, a green machine table, a gate-clean run ⇒ complete:true / ✅ COMPLETE with no gate/dispatch/n-a
+  // its rows built, a green machine table, a gate-clean run ⇒ complete:true / 🟢 COMPLETE with no gate/dispatch/not-applicable
   // reason (the pass path every CLI golden's exit-2 assertion left unproven).
   const closedSet = { planVersion: RUN.planVersion, tasks: [
     { id: "c-a", file: "c-a.md", group: "Form build", pageKey: "main", status: "done", notes: "", rows: [{ label: "Form page", outcomeKind: "built", outcome: "built" }] },
     { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
   ] };
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
-  check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, ✅ COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
-    () => passRep.complete === true && /✅ \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
+  check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, 🟢 COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
+    () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
     () => ({ complete: passRep.complete, reasons: passRep.reasons }));
 
   // TWO WAYS A CLOSED TASK CAN CARRY A WORD NOTHING STANDS BEHIND, neither of which the machine leg can see. The
-  // set they are measured against is `closedSet` above, which the check before this one proves reads ✅ COMPLETE.
+  // set they are measured against is `closedSet` above, which the check before this one proves reads 🟢 COMPLETE.
   // `DRIFT` is the real thing, merged out of a folder recorded against SET's rows and re-read against SET3's.
   const driftedSet = { planVersion: RUN.planVersion, tasks: [...closedSet.tasks, DRIFT] };
   const driftRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: driftedSet, dir: tmp("result-report-drift") });
@@ -4775,15 +4753,15 @@ console.log("\n===== the migration result report — one artifact, computed from
       && unreadRep.reasons.some((r) => /could not be read/.test(r) && /o-x\.md/.test(r)),
     () => ({ complete: unreadRep.complete, reasons: unreadRep.reasons }));
 
-  // A task closed `n/a` with a plan row left unaccounted (no outcomeKind, not a boundary)
+  // A task closed `not-applicable` with a plan row left unaccounted (no outcomeKind, not a boundary)
   // must NOT let the run read COMPLETE — the same self-assertion guard the row-level n-a boundary already carries.
   const naSet = { planVersion: RUN.planVersion, tasks: [
-    { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "n/a", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
+    { id: "na-x", file: "na-x.md", group: "Custom methods", pageKey: "main", status: "not-applicable", notes: "", rows: [{ label: "Handler — `onSaved`", outcome: "" }] },
   ] };
   const naRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: naSet, dir: tmp("result-report-na") });
-  check("renderFinalReport (RC-7): a task waved off `n/a` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task n/a to bypass the conjunction gate",
+  check("renderFinalReport : a task waved off `not-applicable` with an unaccounted plan row is NOT COMPLETE — the verdict names it, so a sub-agent cannot close a task not-applicable to bypass the conjunction gate",
     () => naRep.complete === false && /⛔ \*\*NOT COMPLETE\*\*/.test(naRep.markdown)
-      && naRep.reasons.some((r) => /closed n\/a with no recorded decision/.test(r)),
+      && naRep.reasons.some((r) => /closed not-applicable with no recorded decision/.test(r)),
     () => ({ complete: naRep.complete, reasons: naRep.reasons }));
 
   // a COLLAPSED whole-run task (pageKey "run") whose rows now carry their OWN
@@ -4817,7 +4795,7 @@ console.log("\n===== the migration result report — one artifact, computed from
     fs.writeFileSync(path.join(baseG, "decisions.md"), "# Decisions\n\n## D7 — dash title\n\n### D8: colon title\n\n#### D9 space title\n\n## D10. dot title\n");
     const dG = path.join(baseG, "build-tasks");
     const bnd = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+      rows: [{ label: `Card action ${id}`, outcomeKind: "not-applicable", outcome: `not-applicable — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repG = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bnd("b7", "D7"), bnd("b8", "D8"), bnd("b9", "D9"), bnd("b10", "D10")] }, dir: dG });
     check("(readDecisions grammar): D-heading variants `## D7 — …`, `### D8: …`, `#### D9 …`, `## D10. …` all parse, so boundaries citing D7–D10 are backed (0 unbacked) and each renders with its title",
       () => repG.counts.unbackedBoundaries === 0
@@ -4834,7 +4812,7 @@ console.log("\n===== the migration result report — one artifact, computed from
       "# decisions.md\n\n| # | Decision | Answered by |\n|---|---|---|\n| D1 | **Section boundary — Requests stay Classic.** keeps opening the Classic page | User |\n| D2 | **Section host — new app.** primary package UsrX | User |\n\nD9 — still waiting on the user, not decided yet\n");
     const dT = path.join(baseT, "build-tasks");
     const bndT = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+      rows: [{ label: `Card action ${id}`, outcomeKind: "not-applicable", outcome: `not-applicable — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repT = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndT("t1", "D1"), bndT("t2", "D2")] }, dir: dT });
     check("readDecisions table rows: `| D1 | **title** | … |` parses (bold lead as the title), so boundaries citing D1/D2 are backed (0 unbacked) and each renders with its title",
       () => repT.counts.unbackedBoundaries === 0
@@ -4853,7 +4831,7 @@ console.log("\n===== the migration result report — one artifact, computed from
     fs.writeFileSync(path.join(baseP, "decisions.md"), "# decisions.md\n\nD3 — plain dated line boundary decision\nD4: another decision\n");
     const dP = path.join(baseP, "build-tasks");
     const bndP = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+      rows: [{ label: `Card action ${id}`, outcomeKind: "not-applicable", outcome: `not-applicable — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
     const repP = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndP("p3", "D3"), bndP("p4", "D4")] }, dir: dP });
     check("readDecisions plain lines: in a file with no heading/table, `D3 — …` and `D4: …` parse, so boundaries citing them are backed (0 unbacked)",
       () => repP.counts.unbackedBoundaries === 0
@@ -4889,8 +4867,8 @@ console.log("\n===== the migration result report — one artifact, computed from
     const t2 = readTaskDir(d2).find((t) => t.rows.length >= 3);
     const f2 = path.join(d2, t2.file);
     let text2 = setOutcome(allBuilt(fs.readFileSync(f2, "utf8")), 1, "not-built — needs-decision");
-    text2 = setOutcome(text2, 2, "n-a — approved by D7, see decisions");
-    text2 = setOutcome(text2, 3, "n-a — nothing to build here, D99 says so");
+    text2 = setOutcome(text2, 2, "not-applicable — approved by D7, see decisions");
+    text2 = setOutcome(text2, 3, "not-applicable — nothing to build here, D99 says so");
     text2 += "\nDecision needed (row 1): keep the Classic allow-list behaviour (a) or drop it as inert in Freedom (b)?\nCheck on stand (row 1): open any record → the field is read-only.\n";
     fs.writeFileSync(f2, text2);
     const set2 = readMergedTaskDir(d2, RUN, OPTS);
@@ -4914,7 +4892,7 @@ console.log("\n===== the migration result report — one artifact, computed from
       const A = { id: "bd-a", file: "bd-a.md", group: "Build", pageKey: "main", status: "partial", notes: "",
         rows: [{ label: shared, outcomeKind: "not-built", outcomeCause: "needs-decision", outcome: "not-built — needs-decision", outcomeReason: "" }] };
       const B = { id: "bd-b", file: "bd-b.md", group: "Repair round 1", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-        rows: [{ label: shared, outcomeKind: "n-a", outcome: "n-a — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
+        rows: [{ label: shared, outcomeKind: "not-applicable", outcome: "not-applicable — superseded, per D7", outcomeReason: "superseded, per D7", na: null }] };
       const rep4 = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [A, B], planVersion: RUN.planVersion }, dir: d2 });
       const sec1 = rep4.markdown.slice(rep4.markdown.indexOf("## 1."), rep4.markdown.indexOf("## 2."));
       check("splitDecided: a not-built row whose same deliverable is n-a'd with a recorded decision elsewhere is 'not built BY DECISION' (section 2), NOT an open question (section 1)",
@@ -4927,7 +4905,7 @@ console.log("\n===== the migration result report — one artifact, computed from
       // the boundary stays a question (unbacked) even though decisions.md records D7 — while a real "per D7" does
       // authorise it. Guards against an accidental/parallel mention flipping a boundary to closed.
       const boundary = (reason) => ({ id: "bx", file: "bx.md", group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
-        rows: [{ label: "Card action - Export", outcomeKind: "n-a", outcome: "n-a - " + reason, outcomeReason: reason, na: null }] });
+        rows: [{ label: "Card action - Export", outcomeKind: "not-applicable", outcome: "not-applicable - " + reason, outcomeReason: reason, na: null }] });
       const repIncidental = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build, like D7 in the Leads section")], planVersion: RUN.planVersion }, dir: d2 });
       const repCited = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { tasks: [boundary("nothing to build here, per D7")], planVersion: RUN.planVersion }, dir: d2 });
       check("decisionRefs (B): an incidental 'like D7' does NOT authorise a boundary (stays a question / verdict reason); a load-bearing 'per D7' does",
@@ -5586,6 +5564,1085 @@ console.log("\n===== migrate.mjs --tasks <dir> --next (CLI) =====");
     () => ({ status: res.status, stdout: res.stdout, exists: fs.existsSync(dir) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
+
+// ============================================================================================================
+// the NEW scope-decision vocabulary. `--decide D<N>` writes wont-do / postponed cells under a
+// recorded decision; `--revoke D<N>` reverses them; the cascade reaches repair tasks; the verdict is three-
+// coloured; and a folder still carrying the retired `n/a` reads as unrecognised and lands on Attention.
+// ============================================================================================================
+console.log("\n===== --decide / --revoke and the three-colour verdict =====");
+// The blocks below repeated two fixture shapes verbatim — a fresh folder plus the first plan task that suits the
+// block — which is also what the duplication gate reports over this file's new code. The PREDICATES are carried
+// across unchanged on purpose: they decide which task a block runs against, so tightening or merging them here
+// would quietly re-point assertions at a different task.
+const decideFixtureA = (label, minRows = 1) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const t = set.tasks.find((x) => x.rows && x.rows.length >= minRows && !x.unread
+    && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
+  return { base, dir, set, t };
+};
+// The first engine-authored plan task with real, non-boundary rows — the target every decide/revoke
+// fixture needs. `allowRun` keeps a collapsed whole-run task (pageKey "run") in scope, which the CLI's
+// default budget produces and a `--task` addressing accepts.
+const planTaskOf = (tasks, { allowRun = false, minRows = 1 } = {}) =>
+  (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.artifact !== ARTIFACT_REFS
+    && (allowRun || x.pageKey !== "run") && (x.rows || []).length >= minRows && !(x.rows || []).some((r) => r.na));
+// The cascade fixtures need a task on `main` specifically (a repair task mirrors one of its rows on the
+// same page), and one with two rows to prove the OTHER row stays untouched.
+const mainPlanTaskOf = (tasks, minRows = 1) =>
+  (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
+    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= minRows && !(x.rows || []).some((r) => r.na));
+// A folder with a plan task on `main` and a repair task mirroring that task's first row on the same page —
+// the two-task join the cascade acts on, plus a `decisions.md` the decide can resolve. `minRows` forces a
+// task with a second row where the fixture needs to prove that row stays untouched.
+const repairMirrorFixture = (label, decision, title, minRows = 1) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), `## ${decision} — ${title}\n`);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const src = mainPlanTaskOf(set.tasks, minRows);
+  const shared = src?.rows?.[0]?.label;
+  const rep = src ? syncRepairDir(dir, RUN, { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } }, OPTS)
+    .written.find((t) => t.cause) : null;
+  return { base, dir, set, decisions: new Map([[decision, title]]), src, shared, rep };
+};
+const decideFixtureB = (label, md = null) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  return { base, dir, set, t: planTaskOf(set.tasks) };
+};
+
+{
+  const decisionsMap = () => new Map([["D13", "descope the typed forms — Marharyta 2026-09-21"],
+    ["D19", "defer dashboards to the next phase — Kateryna 2026-09-22"]]);
+
+  // ---- --decide refuses when D<N> does not resolve ---------------------------------------------------------
+  {
+    const base = tmp("decide-refuse");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D999", mode: "wont-do",
+      pages: ["main"], decisions: decisionsMap() });
+    check("-decide refuses when D<N> is not in the decisions map — nothing is written; the caller must add the decision first",
+      () => bad.refused && bad.problems?.some((p) => /D999.*does not resolve/.test(p)),
+      () => ({ refused: bad.refused, problems: bad.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --postponed refuses without --to -----------------------------------------------------------
+  {
+    const base = tmp("decide-postponed-no-to");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      pages: ["main"], decisions: decisionsMap() });
+    check("-decide --postponed refuses without a destination — an issue key or free text; \"later\" is not an answer",
+      () => bad.refused && bad.problems?.some((p) => /postponed.*--to/.test(p)),
+      () => ({ refused: bad.refused, problems: bad.problems }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide addresses one row inside a task; every other row of that task is untouched -----------------
+  {
+    const base = tmp("decide-row");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = set.tasks.find((x) => x.rows && x.rows.length >= 2 && !x.unread
+      && x.origin === "engine" && x.kind !== "repair");
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: "1" }, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("-decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
+        () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"
+          && rr?.rows?.[1]?.outcome === "" && rr?.rows?.[1]?.outcomeKind === null,
+        () => ({ touched: res.touched?.length, row0: rr?.rows?.[0]?.outcome, row1: rr?.rows?.[1]?.outcome }));
+      // AC 5's second half — "the task's status recomputes on its own" — asserted as the exact word `partial`,
+      // not as a negative list that also passes for `todo`, `in-progress` and `blocked`. It is asserted on a
+      // FULLY ACCOUNTED task on purpose: while any cell is still blank `computeStatus` returns the CARRIED
+      // word, so that a fresh task cannot read `partial` off one filled cell. A half-filled fixture would
+      // therefore assert the carried word rather than the recomputed one, which is the same class of mistake
+      // as the negative list it replaces.
+      const fpRow = path.join(dir, t.file);
+      let rowTxt = fs.readFileSync(fpRow, "utf8");
+      for (let i = 2; i <= t.rows.length; i++) {
+        rowTxt = setOutcome(rowTxt, i, i === t.rows.length ? "not-built — blocked" : "built");
+      }
+      fs.writeFileSync(fpRow, rowTxt);
+      const rrFull = readTaskDir(dir).find((x) => x.id === t.id);
+      check("AC 5: with every other row accounted for, the one decided row leaves the task `partial` — a single decision does not close a task that still owes work",
+        () => rrFull?.status === "partial" && rrFull?.rows?.[0]?.outcomeKind === "wont-do",
+        () => ({ status: rrFull?.status, kinds: rrFull?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --task closes every row of a task; the task computes wont-do -------------------------------
+  {
+    const { base, dir, t } = decideFixtureA("decide-task");
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        taskId: t.id, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("-decide --task fills every Outcome cell of the addressed task; the task's status computes to `wont-do`",
+        () => !res.refused && rr?.status === "wont-do"
+          && rr.rows.every((r) => r.outcomeKind === "wont-do"),
+        () => ({ status: rr?.status, kinds: rr?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --decide --postponed writes the destination into the cell -------------------------------------------
+  {
+    const { base, dir, t } = decideFixtureA("decide-postponed");
+    if (t) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+        destination: "ENG-12345", taskId: t.id, decisions: decisionsMap() });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      const c = rr?.rows?.[0]?.outcome || "";
+      check("-decide --postponed writes `postponed — <reason> (D<N>) → <destination>` into the cell, and the task computes `partial` (postponed is a DEBT, not a closure)",
+        () => !res.refused && /^postponed — .* \(D19\) → ENG-12345$/.test(c)
+          && rr?.status === "partial",
+        () => ({ cell: c, status: rr?.status }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- --revoke undoes exactly the cells that D<N> wrote ---------------------------------------------------
+  {
+    const { base, dir, t } = decideFixtureA("revoke");
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        taskId: t.id, decisions: decisionsMap() });
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("-revoke D<N> clears every cell that decision wrote; the task's rows re-enter the verification list",
+        () => !rev.refused && rev.cleared.length >= 1
+          && rr.rows.every((r) => !r.outcomeKind || r.na)
+          && rr.status !== "wont-do",
+        () => ({ cleared: rev.cleared.length, status: rr?.status, kinds: rr?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // Three DISTINGUISHABLE rows in one task — row 1 under D13, row 2 under D19, row 3 the agent's own `built` —
+  // because the check above cannot tell selective clearing from blanket clearing: `cleared.length >= 1` plus
+  // "every row is blank" both hold for an implementation that blanks the whole folder, which is the very
+  // failure the `decisions:` provenance map exists to prevent.
+  {
+    const { base, dir, set, t } = decideFixtureA("revoke-identity", 3);
+    // Without this, a finder that stops resolving turns every assertion below into a silent skip and the suite
+    // still reports green.
+    check("fixture: a task with three or more rows was found to revoke against",
+      () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: 1 }, decisions: decisionsMap() });
+      applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed", destination: "ENG-12345",
+        rowRef: { taskId: t.id, n: 2 }, decisions: decisionsMap() });
+      // Row 3 is the agent's own record — the one mark this codebase treats as unrecoverable.
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 3, "built"));
+      const before = readTaskDir(dir).find((x) => x.id === t.id);
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const after = readTaskDir(dir).find((x) => x.id === t.id);
+      const fm = fs.readFileSync(fp, "utf8");
+      check("AC 7: -revoke D13 clears EXACTLY the cell D13 wrote — the D19 row keeps its cell byte-for-byte and the agent's own `built` row is untouched",
+        () => !rev.refused && rev.cleared.length === 1 && rev.cleared[0].n === 1
+          && !after?.rows?.[0]?.outcomeKind
+          && after?.rows?.[1]?.outcomeKind === "postponed"
+          && after?.rows?.[1]?.outcome === before?.rows?.[1]?.outcome
+          && after?.rows?.[2]?.outcomeKind === "built",
+        () => ({ cleared: rev.cleared.map((c) => c.n), kinds: after?.rows?.slice(0, 3).map((r) => r.outcomeKind),
+          row2Before: before?.rows?.[1]?.outcome, row2After: after?.rows?.[1]?.outcome }));
+      check("AC 7: the `decisions:` front matter keeps D19's pairing and loses only D13's — the map is the provenance stamp, so a revoke that reached the wrong cell shows up here",
+        () => /^decisions:.*\b2:D19\b/m.test(fm) && !/\b1:D13\b/.test(fm),
+        () => ({ decisionsLine: fm.split("\n").find((l) => l.startsWith("decisions:")) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // The case position keying actually loses: the map says D13 wrote row 1, the cell says the AGENT built it.
+  // `carryOver` copies `decisions:` verbatim onto rows re-sliced from the current plan while re-attaching every
+  // other mark by label, so one inserted or dropped row upstream is all it takes to produce this state — and a
+  // revoke that trusted the number would destroy a `built` record to undo a decision that never wrote it.
+  {
+    const { base, dir, set, t } = decideFixtureA("revoke-stale-map", 2);
+    check("fixture: a task with two or more rows was found for the stale-map check",
+      () => !!t, () => ({ sizes: set.tasks.map((x) => (x.rows || []).length) }));
+    if (t) {
+      applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed", destination: "ENG-12345",
+        rowRef: { taskId: t.id, n: 2 }, decisions: decisionsMap() });
+      const fp = path.join(dir, t.file);
+      let text = setOutcome(fs.readFileSync(fp, "utf8"), 1, "built");
+      text = text.replace(/^decisions:.*$/m, "decisions: 1:D13 2:D19");
+      fs.writeFileSync(fp, text);
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const after = readTaskDir(dir).find((x) => x.id === t.id);
+      check("AC 7: a STALE `decisions:` entry pointing at an agent's `built` cell is refused, not blanked — --revoke proves the cell is the one that decision wrote before it touches anything, and says which entries it skipped",
+        () => !rev.refused && rev.cleared.length === 0
+          && (rev.skipped || []).some((s) => s.n === 1)
+          && after?.rows?.[0]?.outcomeKind === "built"
+          && after?.rows?.[1]?.outcomeKind === "postponed",
+        () => ({ cleared: rev.cleared?.map((c) => c.n), skipped: (rev.skipped || []).map((s) => `${s.n}: ${s.why}`),
+          kinds: after?.rows?.slice(0, 2).map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const base = tmp("legacy-na");
+    const dir = path.join(base, "build-tasks");
+    syncTaskDir(dir, RUN, OPTS);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== TASK_INDEX_FILE);
+    check("AC 16: fixture: a task file was found to plant the retired token in",
+      () => files.length > 0, () => ({ files: files.length }));
+    if (files.length) {
+      // `status:`, not `declared:`. The engine's loud path is `taskAttention`'s "unrecognised status" line and it
+      // fires on `status:` — the replaced check edited `declared:`, so it could not reach the behaviour AC 16
+      // names. It then asserted `!TASK_STATUSES.includes("n/a")`, which is a statement about an imported constant
+      // array that holds no matter what the engine does to the folder, plus the ABSENCE of a string, which passes
+      // equally if the value was reported, coerced, or silently dropped. Neither could fail for the reason the AC
+      // cares about. All three positive facts are asserted here instead.
+      const f = path.join(dir, files[0]);
+      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status:.*$/m, "status: n/a"));
+      syncTaskDir(dir, RUN, OPTS);
+      const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
+      const onDisk = fs.readFileSync(f, "utf8");
+      check("AC 16: a folder still carrying `status: n/a` FAILS LOUDLY — the index names the file under Attention with `unrecognised status `n/a``, prints the vocabulary it must use instead, and the word is left on disk verbatim rather than coerced to anything the engine would act on",
+        () => /## Attention/.test(idx)
+          && idx.includes("unrecognised status `n/a`")
+          && idx.includes(TASK_STATUSES.join(" / "))
+          && /^status: n\/a$/m.test(onDisk),
+        () => ({ attention: /## Attention/.test(idx), named: idx.includes("unrecognised status `n/a`"),
+          verbatim: /^status: n\/a$/m.test(onDisk),
+          attentionBlock: idx.split("## Attention")[1]?.slice(0, 300) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // The ROW-level half of AC 16: `parseOutcome` does not recognise `n-a`, so such a cell reads as
+  // cell must read as UNACCOUNTED — it cannot close its row, and the task cannot compute a closed word over it.
+  // "Unaccounted" and "loudly rejected" look identical to a reader of a green suite unless this is pinned.
+  {
+    const { base, dir, set, t } = decideFixtureA("legacy-na-row", 1);
+    check("AC 16: fixture: a plan task was found to plant the retired row token in",
+      () => !!t, () => ({ tasks: set.tasks.length }));
+    if (t) {
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "n-a — the old token"));
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("AC 16: an Outcome cell still reading `n-a — <reason>` parses as UNACCOUNTED, never as a settled outcome — the retired token cannot close a row, and the task cannot read `done` or `not-applicable` over it",
+        () => !rr?.rows?.[0]?.outcomeKind
+          && !["done", "not-applicable", "wont-do"].includes(rr?.status),
+        () => ({ kind: rr?.rows?.[0]?.outcomeKind, cell: rr?.rows?.[0]?.outcome, status: rr?.status }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- three-colour verdict: 🟡 when every remaining reason is a postponed row -----------------------------
+  // Synthetic set: one closed task + one task with a postponed row. Every other verdict input is clean
+  // (no gate blocks, no machine misses, no unbacked boundaries), so the only reason the run is not 🟢 is
+  // the debt on that one row.
+  {
+    // AC 13 requires the decision to RESOLVE, not merely to appear in the cell, so the fixture is a real
+    // migration folder: `decisions.md` beside a `build-tasks/` dir, which is the shape
+    // `readDecisions(path.join(dir, ".."))` reads. A bare `tmp()` dir would put decisions.md in the shared
+    // system temp root and resolve nothing — and 🟡 granted over a decision that resolves nowhere is exactly
+    // the defect AC 13 names.
+    const vbase = tmp("verdict-yellow");
+    const vdir = path.join(vbase, "build-tasks");
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vbase, "decisions.md"), "## D19 — defer to backlog\n");
+    const setWith = (outcome) => ({ planVersion: RUN.planVersion, tasks: [
+      { id: "closed-a", file: "a.md", group: "Custom methods", pageKey: "main", status: "done",
+        origin: "engine", notes: "", rows: [
+          { label: "Handler — `built`", outcomeKind: "built", outcome: "built", outcomeReason: "" },
+        ], dispatched: "yes", agentNonce: "tok-a" },
+      { id: "postpone-b", file: "b.md", group: "Business rules", pageKey: "main", status: "partial",
+        origin: "engine", notes: "", rows: [
+          { label: "Rule — `Deferred`", outcomeKind: "postponed", outcome,
+            outcomeReason: outcome.replace("postponed — ", "") },
+        ], dispatched: "yes", agentNonce: "tok-b" },
+    ] });
+    const reportFor = (outcome) => renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: setWith(outcome), dir: vdir, built: {}, repair: null });
+    const verdictLine = (r) => r.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) || "";
+    const rep = reportFor("postponed — deferred, per decision (D19) → ENG-99999");
+    check("AC 13: three-colour verdict — a postponed row with a D<N> and a destination renders 🟡 COMPLETE FOR THIS PHASE, not 🔴 or 🟢",
+      () => /🟡 \*\*COMPLETE FOR THIS PHASE\*\*/.test(rep.markdown)
+        && rep.verdictColour === "yellow"
+        && rep.counts.postponed >= 1,
+      () => ({ colour: rep.verdictColour, postponed: rep.counts.postponed, headSnippet: verdictLine(rep) }));
+    check("AC 14: the report carries a row-level Carry-over section for postponed items with the decision + destination",
+      () => /## Carry-over — postponed items/.test(rep.markdown)
+        && /\*\*D19\*\*/.test(rep.markdown)
+        && /ENG-99999/.test(rep.markdown),
+      () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+  // The two shapes that must compute RED rather than 🟡. Both are reachable without a
+    // hand edit: `D999` is a decision deleted or renamed in decisions.md AFTER the cell was written, and the
+    // destination-less cell is what `--to "   "` leaves behind (the CLI guard tests truthiness, so a
+    // whitespace-only value passes it and `decideCellText` then trims it away).
+    const repUnresolvable = reportFor("postponed — deferred, per decision (D999) → ENG-99999");
+    check("AC 13: a postponed row whose `(D<N>)` does NOT resolve in decisions.md computes RED — a token pointing at nothing is not a person's answer, and 🟡 over it would hide a shortfall behind it",
+      () => repUnresolvable.verdictColour === "red"
+        && /⛔ \*\*NOT COMPLETE\*\*/.test(repUnresolvable.markdown)
+        && /resolvable/.test(repUnresolvable.markdown)
+        && !/COMPLETE FOR THIS PHASE/.test(verdictLine(repUnresolvable)),
+      () => ({ colour: repUnresolvable.verdictColour, headSnippet: verdictLine(repUnresolvable) }));
+    const repNoDest = reportFor("postponed — deferred, per decision (D19)");
+    check("AC 13: a postponed row carrying NO destination computes RED, and the headline can never interpolate a literal `null` — AC 13 requires a destination, because a debt with nowhere to go is not a carry-over",
+      () => repNoDest.verdictColour === "red" && !/null/.test(verdictLine(repNoDest)),
+      () => ({ colour: repNoDest.verdictColour, headSnippet: verdictLine(repNoDest) }));
+    fs.rmSync(vbase, { recursive: true, force: true });
+  }
+
+  // ---- (M1) hand-typed wont-do/postponed cells bypass the --decide gate — the two guards -------------------
+  // parseOutcome downgrades a cell WITHOUT `(D<N>)` to `not-built — needs-decision` (the row stays open,
+  // visibly). A cell WITH a `(D<N>)` marker but whose row index is not in the task's `decisions:` map
+  // (the engine's own provenance stamp) is caught by Attention via `undecidedDecisionCells`, and
+  // `decidedRowKeys` refuses to hide it from `--verify`.
+  {
+    // Guard A: a plain "wont-do — I don't feel like building this" cell (no parens, no D<N>).
+    // parseOutcome must downgrade it to `not-built — needs-decision`, keeping the row open.
+    const { base, dir, t } = decideFixtureB("m1-handtyped-bare");
+    if (t) {
+      const fp = path.join(dir, t.file);
+      // Hand-edit: put an unauthorised closure in row 1's Outcome cell (no D<N> marker).
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — I skipped this row"));
+      const rr = readTaskDir(dir).find((x) => x.id === t.id);
+      check("M1a: a hand-typed `wont-do — <reason>` cell WITHOUT a `(D<N>)` marker is downgraded to `not-built — needs-decision` by parseOutcome — the row stays open, visibly, and no closure sneaks through the gate `--decide` was built to police",
+        () => rr?.rows?.[0]?.outcomeKind === "not-built"
+          && rr?.rows?.[0]?.outcomeCause === "needs-decision"
+          && rr?.rows?.[0]?.naNoReason === true
+          && rr?.status !== "wont-do" && rr?.status !== "done",
+        () => ({ kind: rr?.rows?.[0]?.outcomeKind, cause: rr?.rows?.[0]?.outcomeCause,
+          status: rr?.status, cell: rr?.rows?.[0]?.outcome }));
+      // The row must ALSO stay in --verify's list (registry says the row is still owed).
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      check("M1a: the downgraded row stays in `--verify`'s list — decidedRowKeys does not hide a row parseOutcome refused to close",
+        () => decKeys.size === 0,
+        () => ({ decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Guard B: a spoofed cell WITH a fake `(D<N>)` marker but no matching `decisions:` map entry (the
+    // engine writes both together through `--decide`, so the missing map entry is the tell). parseOutcome
+    // accepts it as `wont-do`, but the Attention pass names the file and decidedRowKeys keeps the row in
+    // the verify list — the second guard behind the first.
+    const { base, dir, t } = decideFixtureB("m1-handtyped-spoof");
+    if (t) {
+      const fp = path.join(dir, t.file);
+      // Hand-edit: write a plausible closure with fake D<N> — but never run --decide, so `decisions:` stays empty.
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "wont-do — I made this up (D99)"));
+      syncTaskDir(dir, RUN, OPTS);
+      const idx = fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8");
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      check("M1b: a hand-typed `wont-do` cell WITH a `(D<N>)` marker but WITHOUT a matching `decisions:` map entry is named on Attention — the map is the engine's provenance stamp (only `--decide` writes both together), so a cell present without its entry is a hand edit",
+        () => /but the row is NOT in this task's `decisions:` map/.test(idx),
+        () => idx.split("## Attention")[1]?.slice(0, 400));
+      check("M1b: the spoofed row is NOT hidden from `--verify` — decidedRowKeys requires the same provenance stamp Attention checks, so the two guards agree",
+        () => decKeys.size === 0,
+        () => ({ decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Guard C: `not-applicable` is the PLAN's word. An agent typing `not-applicable — <reason>` onto a
+    // row the plan did NOT mark as a boundary (`!r.na`) must NOT hide the row from `--verify` — otherwise a
+    // MISSING row drops out of the gate with no builder and no plan authority, the same shape M1 closed for
+    // `wont-do` / `postponed`. A resolvable citation makes the leak worse: the report would file the row
+    // under boundaries-with-a-decision. `decidedRowKeys` keys the not-applicable exemption on `r.na`, so an
+    // agent-asserted one stays measured (and is named on Attention by assertedBoundaryRows).
+    const { base, dir, t } = decideFixtureB("m2-na-agent-row", "## D4 — an unrelated heading\n");
+    if (t) {
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "not-applicable — covered elsewhere per D4"));
+      syncTaskDir(dir, RUN, OPTS);
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const at = preMerged.tasks.find((x) => x.id === t.id);
+      const decKeys = decidedRowKeys(preMerged);
+      check("M2: an agent-typed `not-applicable` on a row the plan did NOT mark as a boundary (`!r.na`) does NOT hide the row from `--verify` — the not-applicable exemption is keyed on `r.na`, so an agent cannot assert the plan's own word to drop a row out of the gate",
+        () => at?.rows?.[0]?.outcomeKind === "not-applicable" && !at?.rows?.[0]?.na
+          && decKeys.size === 0,
+        () => ({ kind: at?.rows?.[0]?.outcomeKind, na: at?.rows?.[0]?.na, decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // ---- (AC 12) --verify sources rows from the task registry ------------------------------------------------
+  // A row the registry has closed by decision must not appear in --verify's table, its verdict, or its
+  // pages map — even if the built payload is empty (so the plan walk alone would report it MISSING).
+  {
+    const { base, dir, t } = decideFixtureB("verify-from-registry");
+    if (t) {
+      const closedLabel = t.rows[0].label;
+      const decisions = new Map([["D42", "descoped for AC 12 test"]]);
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D42", mode: "wont-do",
+        taskId: t.id, decisions });
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const decKeys = decidedRowKeys(preMerged);
+      const withoutFilter = renderVerify(RUN, OPTS, {});
+      const withFilter = renderVerify(RUN, OPTS, {}, decKeys);
+      const decidedLabels = new Set((res.touched || []).map((x) => x.task.rows[x.n - 1].label));
+      check("AC 12: a row closed by decision drops out of `--verify`'s row list — decidedKeys filters the plan walk, so the deliverable is not in the rendered table",
+        () => !res.refused && decKeys.size >= 1
+          && withoutFilter.rows.some((r) => r.deliverable === closedLabel)
+          && !withFilter.rows.some((r) => r.deliverable === closedLabel)
+          && withFilter.decided?.some((r) => r.deliverable === closedLabel)
+          // Membership, not arithmetic: the replaced conjunct equated a PLAN-walk row count with a TASK row
+          // count, which diverge as soon as two tasks cover one deliverable or the cascade touches a row the
+          // plan lists once — a drift that would fail while saying nothing about the filter. What the filter
+          // promises is that it removes the DECIDED deliverables (this block closes the whole task, so there
+          // are several) and leaves every other row of the walk exactly where it was.
+          && withoutFilter.rows.every((r) => decidedLabels.has(r.deliverable)
+            || withFilter.rows.some((w) => w.deliverable === r.deliverable && w.pageKey === r.pageKey)),
+        () => ({ touched: res.touched?.length, decKeys: decKeys.size,
+          before: withoutFilter.rows.length, after: withFilter.rows.length,
+          decided: withFilter.decided?.length, closedLabel }));
+      check("AC 12: the verify markdown carries a banner naming the decided rows kept out of the table — nothing is dropped in silence",
+        () => /plan row\(s\) closed by a recorded decision are OUT of this table/.test(withFilter.markdown)
+          && !/plan row\(s\) closed by a recorded decision/.test(withoutFilter.markdown),
+        () => withFilter.markdown.split("###")[0]);
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+// ============================================================================================================
+// review Group D: test coverage the review named (m6 red/green verdict branches, m7 --pages
+// addressing + refusal, m8 free-text destination + escaped pipe, m9 parseDecisionsMap/renderDecisionsMap
+// direct invariants). Each closes a coverage gap where a one-character change would slip through unnoticed.
+// ============================================================================================================
+console.log("\n===== review coverage gaps (Group D) =====");
+{
+  // m6: three-colour verdict — GREEN branch. A synthetic set with nothing open and nothing postponed must
+  // render 🟢 (not 🟡 or 🔴) and NOT emit a Carry-over section.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "done-only", file: "d.md", group: "Custom methods", pageKey: "main", status: "done",
+      origin: "engine", notes: "", rows: [
+        { label: "Handler — `built`", outcomeKind: "built", outcome: "built", outcomeReason: "" },
+      ], dispatched: "yes", agentNonce: "tok-d" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("verdict-green"), built: {}, repair: null });
+  check("m6: three-colour verdict — GREEN: nothing open, nothing postponed renders 🟢 COMPLETE and no Carry-over section",
+    () => rep.verdictColour === "green"
+      && /🟢 \*\*COMPLETE\*\*/.test(rep.markdown)
+      && !/🟡/.test(rep.markdown) && !/🔴/.test(rep.markdown)
+      && !/## Carry-over/.test(rep.markdown),
+    () => ({ colour: rep.verdictColour, head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+}
+{
+  // m6: three-colour verdict — RED branch. A synthetic set with one not-built row (no postponed) must
+  // render 🔴, carry non-empty reasons, and NOT display the 🟡 wording.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "notbuilt-only", file: "nb.md", group: "Custom methods", pageKey: "main", status: "partial",
+      origin: "engine", notes: "", rows: [
+        { label: "Handler — `blocked`", outcomeKind: "not-built", outcome: "not-built — needs-decision",
+          outcomeCause: "needs-decision", outcomeReason: "" },
+      ], dispatched: "yes", agentNonce: "tok-nb" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("verdict-red"), built: {}, repair: null });
+  check("m6: three-colour verdict — RED: a not-built row with no postponed items renders 🔴 NOT COMPLETE, reasons non-empty, no 🟡 wording",
+    () => rep.verdictColour === "red"
+      && /⛔ \*\*NOT COMPLETE\*\*/.test(rep.markdown)
+      && rep.reasons.length >= 1
+      && !/🟡/.test(rep.markdown) && !/COMPLETE FOR THIS PHASE/.test(rep.markdown),
+    () => ({ colour: rep.verdictColour, reasons: rep.reasons,
+      head: rep.markdown.split("\n").find((l) => l.startsWith("**Verdict:**")) }));
+}
+{
+  // m7: --pages addressing. Close every task on ONE page; assert every task on that page gets touched
+  // and no task on OTHER pages does.
+  const base = tmp("m7-pages");
+  const migrationDir = base;
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(migrationDir, "decisions.md"), "## D13 — descope for --pages test\n");
+  const decisions = new Map([["D13", "descope for --pages test"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  // Pick a pageKey that has at least one plan task with rows, then pick a DIFFERENT pageKey as the control.
+  const targetPage = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
+    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na))?.pageKey;
+  const controlPage = targetPage && set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
+    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run" && x.pageKey !== targetPage
+    && (x.rows || []).length >= 1)?.pageKey;
+  if (targetPage) {
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+      pages: [targetPage], decisions });
+    const rr = readMergedTaskDir(dir, RUN, OPTS);
+    const touchedIds = new Set(res.touched.map((x) => x.task.id));
+    const targetTasks = rr.tasks.filter((t) => t.pageKey === targetPage && t.origin === "engine"
+      && t.kind !== "repair" && t.artifact !== ARTIFACT_REFS && (t.rows || []).length);
+    const controlTasks = controlPage ? rr.tasks.filter((t) => t.pageKey === controlPage) : [];
+    check("m7: -decide --pages closes every task on the addressed pageKey — the ticket's headline case (D13 descoping the typed forms)",
+      () => !res.refused && targetTasks.length >= 1
+        && targetTasks.every((t) => t.rows.every((r) => r.outcomeKind === "wont-do" || r.na)),
+      () => ({ target: targetPage, touched: res.touched?.length,
+        targetTaskKinds: targetTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
+    if (controlTasks.length) {
+      check("m7: -decide --pages touches NO task on a different pageKey — the addressing is pageKey-scoped, not global",
+        () => controlTasks.every((t) => (t.rows || []).every((r) => !r.outcomeKind || r.outcomeKind === "not-applicable" || r.na))
+          && controlTasks.every((t) => !touchedIds.has(t.id)),
+        () => ({ control: controlPage, kinds: controlTasks.map((t) => t.rows.map((r) => r.outcomeKind)) }));
+    }
+  }
+  // Refusal on a nonexistent pageKey: --decide names nothing and writes nothing.
+  const bad = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+    pages: ["totally-not-a-page-key-9999"], decisions });
+  check("m7: -decide --pages with a nonexistent pageKey is refused — nothing to write, and the problem names the missing key",
+    () => bad.refused && bad.problems?.some((p) => /totally-not-a-page-key-9999/.test(p)),
+    () => ({ refused: bad.refused, problems: bad.problems }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // m8: renderDestination free-text branch. A destination that is NOT a Jira issue key (like a plain
+  // sentence with a pipe) must render as escaped text — no Jira link, and the pipe escaped inside the
+  // Carry-over table cell (otherwise the table breaks).
+  const { base, dir, t } = decideFixtureB("m8-freetext", "## D19 — defer to backlog\n");
+  const decisions = new Map([["D19", "defer to backlog"]]);
+  if (t) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "Q4 2026 | backlog", taskId: t.id, decisions });
+    const rr = readMergedTaskDir(dir, RUN, OPTS);
+    const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: rr, dir, built: {}, repair: null });
+    const carry = rep.markdown.split("## Carry-over")[1] || "";
+    check("m8: renderDestination free-text branch: a destination that is NOT an issue-key shape renders as escaped text, not as a Jira link — ISSUE_KEY_RE gates the linkification",
+      () => /Q4 2026/.test(carry) && !/https:\/\/creatio\.atlassian\.net\/browse\/Q4/.test(carry),
+      () => carry.slice(0, 600));
+    check("m8: a raw `|` in a free-text destination is escaped inside the Carry-over table cell — otherwise the pipe would shift every column after it",
+      () => /Q4 2026 \\\| backlog/.test(carry),
+      () => carry.slice(0, 600));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // m9: renderDecisionsMap emits pairs sorted by numeric key — a stable diff invariant. Feed unsorted
+  // input and assert the output is sorted 1, 2, 10 (not lexicographic 1, 10, 2).
+  const m = new Map([[10, "D42"], [1, "D7"], [2, "D3"]]);
+  check("m9: renderDecisionsMap sorts entries by NUMERIC row key — lexicographic sort would put 10 before 2 and break stable diffs",
+    () => renderDecisionsMap(m) === "1:D7 2:D3 10:D42",
+    () => renderDecisionsMap(m));
+  // m9: --revoke over a file with one valid + one malformed entry must not crash — the malformed entry
+  // is dropped by parseDecisionsMap, and the valid one is cleared normally.
+  const { base, dir, t } = decideFixtureB("m9-revoke-malformed", "## D13 — legit\n");
+  const decisions = new Map([["D13", "legit"]]);
+  if (t) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: t.id, decisions });
+    // Corrupt the decisions: line: keep the valid entry, add a malformed one.
+    const fp = path.join(dir, t.file);
+    fs.writeFileSync(fp, fs.readFileSync(fp, "utf8").replace(/^decisions: .*$/m, (line) => `${line} x:junk 2:D-1`));
+    // --revoke must not crash on the malformed tail; the valid entry still clears.
+    let rev;
+    try { rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" }); }
+    catch (e) { rev = { threw: e.message }; }
+    check("m9: -revoke over a decisions: map with malformed entries (`x:junk 2:D-1`) does NOT crash — parseDecisionsMap silently drops them, revoke clears the valid ones",
+      () => !rev.threw && !rev.refused && rev.cleared?.length >= 1,
+      () => rev);
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// ============================================================================================================
+// review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
+// non-integer row keys, m11 last-arrow anchoring).
+// ============================================================================================================
+console.log("\n===== cell round-trip edge cases (Group B) =====");
+{
+  // m3: title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
+  const { base, dir, t } = decideFixtureB("m3-titleless-dn", "## D13\n");
+  const decisions = new Map([["D13", ""]]);   // title-less
+  if (t) {
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "postponed",
+      destination: "ENG-9999", taskId: t.id, decisions });
+    const rr = readTaskDir(dir).find((x) => x.id === t.id);
+    check("m3: a decision without a title still writes a cell that carries `(D<N>)` — the round-trip needs it, parsePostponedCell reads only the parenthesised shape",
+      () => !res.refused && /\(D13\)/.test(rr?.rows?.[0]?.outcome || ""),
+      () => rr?.rows?.[0]?.outcome);
+    // And the report renders **D13** (not the ⚠-fallback) — the round-trip is the whole point.
+    const set2 = readMergedTaskDir(dir, RUN, OPTS);
+    const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+      set: set2, dir, built: {}, repair: null });
+    check("m3: the Carry-over section renders **D13** for a title-less decision — the round-trip is complete, no `⚠ no D<N>` fallback fires",
+      () => /\*\*D13\*\*/.test(rep.markdown) && !/⚠ no D<N> found in the cell/.test(rep.markdown),
+      () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+// m10: parseDecisionsMap rejects `3.5:D13`, `x:D3`, `2:E3`, `2:D`, `2:D-1`.
+check("m10: parseDecisionsMap drops non-integer row keys (Number.isInteger, not Number.isFinite): `3.5:D13` is dropped, so it never becomes a live entry --revoke cannot reach",
+  () => !parseDecisionsMap("3.5:D13").has(3.5) && parseDecisionsMap("3.5:D13").size === 0,
+  () => JSON.stringify([...parseDecisionsMap("3.5:D13").entries()]));
+check("m10: parseDecisionsMap drops every malformed entry (`x:D3` non-numeric, `2:E3` wrong prefix, `2:D` no number, `2:D-1` negative) and keeps the valid `4:D42`",
+  () => {
+    const m = parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42");
+    return m.size === 1 && m.get(4) === "D42";
+  },
+  () => JSON.stringify([...parseDecisionsMap("x:D3 2:E3 2:D 2:D-1 4:D42").entries()]));
+{
+  // m11: a decision title containing `→` must not leak into the destination. parsePostponedCell is
+  // module-internal, so assert through the report — the observable end-state.
+  const set = { planVersion: RUN.planVersion, tasks: [
+    { id: "postpone-title-arrow", file: "p.md", group: "Business rules", pageKey: "main", status: "partial",
+      origin: "engine", notes: "", rows: [
+        { label: "Rule — `Cross-ref`", outcomeKind: "postponed",
+          // The title itself contains `→` — a reference like "see D3 → D4". The parser MUST anchor on the
+          // LAST arrow, or the destination becomes garbage and the Jira link is lost.
+          outcome: "postponed — see D3 → D4, defer (D19) → ENG-12345",
+          outcomeReason: "see D3 → D4, defer (D19) → ENG-12345" },
+      ], dispatched: "yes", agentNonce: "tok" },
+  ] };
+  const rep = renderFinalReport({ result: RUN, verifyRes: { rows: [], complete: true },
+    set, dir: tmp("m11-title-arrow"), built: {}, repair: null });
+  check("m11: a decision title containing `→` (e.g. `see D3 → D4`) does not leak into the destination — the parser anchors on the LAST arrow, the Jira link renders on the real key",
+    () => /ENG-12345/.test(rep.markdown)
+      && /https:\/\/creatio\.atlassian\.net\/browse\/ENG-12345/.test(rep.markdown)
+      && !/browse\/D4/.test(rep.markdown),
+    () => rep.markdown.split("## Carry-over")[1]?.slice(0, 500));
+}
+
+// ============================================================================================================
+// review M2: spawnSync coverage for the --decide / --revoke CLI parser. Every other CLI mode
+// (--next, --verify, --start, --split, --add) is exercised through spawnSync; this one was going through
+// applyDecision / revokeDecision directly and left the parser silent. Fixing that here.
+// ============================================================================================================
+console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
+{
+  const setup = (label) => {
+    const base = tmp(label);
+    const migrationDir = base;   // manifest baseDir = folder we call from
+    const dir = path.join(base, "build-tasks");
+    // A live `decisions.md` under the parent so --decide can resolve D13. `readDecisions` reads from
+    // path.join(dir, "..") which is `migrationDir`.
+    fs.writeFileSync(path.join(migrationDir, "decisions.md"),
+      "## D13 — descope the typed forms (CLI test)\n\nDetails go here.\n");
+    return { base, migrationDir, dir };
+  };
+  // A CLI-sliced folder (default budget collapses this fixture into whole-run tasks, so `allowRun`) plus the
+  // `--task` target resolved off it. `checklistOpts(MANIFEST)` matches the slice the CLI wrote so the ids agree.
+  const cliDecideFixture = (label) => {
+    const { base, dir } = setup(label);
+    cliTasks(["--tasks", dir], MANIFEST);
+    const t = planTaskOf(readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST)).tasks, { allowRun: true });
+    return { base, dir, t };
+  };
+
+  // --- refusal shapes: every combination the parser rejects, asserted through the CLI ---------------------
+  {
+    // No --tasks: --decide needs a folder to write into.
+    const { base } = setup("cli-decide-no-tasks");
+    const r = cliTasks(["--decide", "D13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("M2: -decide without --tasks exits 1 and names the missing flag",
+      () => r.status === 1 && /`--decide`.*only means something with `--tasks/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Bad D<N> shape.
+    const { base, dir } = setup("cli-decide-bad-dn");
+    const r = cliTasks(["--tasks", dir, "--decide", "d13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("M2: -decide with a lower-case `d13` (bad shape) exits 1 and prints the expected D<N> shape",
+      () => r.status === 1 && /needs a decision id shaped D<N>/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --decide + --revoke: two opposite operations, mutually exclusive.
+    const { base, dir } = setup("cli-decide-revoke-mutex");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--revoke", "D13", "--wont-do", "--pages", "main"], MANIFEST);
+    check("M2: -decide and --revoke together exit 1 — opposite operations, run them as separate commands",
+      () => r.status === 1 && /`--decide`.*`--revoke`.*opposite operations/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --decide + --verify: cross-mode refusal — verify writes/moves the folder, so both together would
+    // describe a state the reader cannot identify.
+    const { base, dir, migrationDir } = setup("cli-decide-verify-cross");
+    const builtFile = path.join(migrationDir, "built.json");
+    fs.writeFileSync(builtFile, "{}");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--pages", "main",
+      "--verify", "--built", builtFile], MANIFEST);
+    check("M2: -decide + --verify exit 1 — the two write / move the folder in different ways; cannot combine",
+      () => r.status === 1 && /`--decide`.*writes into the folder/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --wont-do + --postponed: two answers to one question, pick one.
+    const { base, dir } = setup("cli-wontdo-postponed-mutex");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--postponed",
+      "--to", "ENG-1", "--pages", "main"], MANIFEST);
+    check("M2: -wont-do and --postponed together exit 1 — two answers to one question",
+      () => r.status === 1 && /`--wont-do`.*`--postponed`.*two answers to one question/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --postponed requires --to.
+    const { base, dir } = setup("cli-postponed-no-to");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--postponed", "--pages", "main"], MANIFEST);
+    check("M2: -postponed without --to exits 1 and names the destination requirement",
+      () => r.status === 1 && /`--postponed`.*`--to <destination>`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --wont-do refuses --to (a decision that closes the debt goes nowhere).
+    const { base, dir } = setup("cli-wontdo-with-to");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--to", "ENG-1", "--pages", "main"], MANIFEST);
+    check("M2: -wont-do + --to exit 1 — a closure has no destination",
+      () => r.status === 1 && /`--to` only means something with `--postponed`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // No addressing at all.
+    const { base, dir } = setup("cli-decide-no-addr");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do"], MANIFEST);
+    check("M2: -decide with no addressing exits 1 — needs one of --pages / --task / --row",
+      () => r.status === 1 && /--decide.*needs one of/.test(r.stderr || "")
+        && /--pages/.test(r.stderr || "") && /--task/.test(r.stderr || "") && /--row/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Two addressings at once.
+    const { base, dir } = setup("cli-decide-two-addr");
+    const r = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do",
+      "--pages", "main", "--task", "some-id"], MANIFEST);
+    check("M2: -decide with two addressings (--pages + --task) exits 1 — pick one",
+      () => r.status === 1 && /three addressings for ONE decision — pick one/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // --revoke refuses addressing / value flags — the subject is the decision, not what it touched.
+    const { base, dir } = setup("cli-revoke-with-addr");
+    const r = cliTasks(["--tasks", dir, "--revoke", "D13", "--pages", "main"], MANIFEST);
+    check("M2: -revoke with an addressing flag exits 1 — the subject is the decision; no addressing to give",
+      () => r.status === 1 && /`--pages` does not go with `--revoke`/.test(r.stderr || ""),
+      () => ({ status: r.status, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Missing D<N> in decisions.md: the refusal is the safeguard the ticket names.
+    const { base, dir } = setup("cli-decide-missing-dn");
+    cliTasks(["--tasks", dir], MANIFEST);   // slice the folder so --decide has something to look at
+    const r = cliTasks(["--tasks", dir, "--decide", "D999", "--wont-do", "--pages", "main"], MANIFEST);
+    check("M2: -decide with a D<N> not in decisions.md exits 1 and prints how to add it — the safeguard AC 3 names",
+      () => r.status === 1 && /D999.*does not resolve/.test(r.stdout || "" + (r.stderr || "")),
+      () => ({ status: r.status, stdout: r.stdout, stderr: r.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // Happy path: --decide --wont-do --task <id>, then --revoke. `--task` addressing avoids the pageKey
+    // guessing --pages needs (the fixture's exact page keys are an implementation detail; the CLI
+    // contract is what this test asserts).
+    const { base, dir, t } = cliDecideFixture("cli-decide-happy");
+    check("M2: fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
+      () => !!t, () => ({ found: !!t }));
+    if (t) {
+      const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
+      check("M2: happy path: --decide --wont-do --task <id> exits 0 and prints the touched-row list",
+        () => decide.status === 0 && /wont-do \d+ row\(s\) under D13/.test(decide.stdout || ""),
+        () => ({ status: decide.status, stdout: decide.stdout, stderr: decide.stderr }));
+      const revoke = cliTasks(["--tasks", dir, "--revoke", "D13"], MANIFEST);
+      check("M2: happy path: --revoke D13 exits 0 and prints the cleared-cell count",
+        () => revoke.status === 0 && /revoked D13 — cleared \d+ cell\(s\)/.test(revoke.stdout || ""),
+        () => ({ status: revoke.status, stdout: revoke.stdout, stderr: revoke.stderr }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // A whole-task descope closes through the engine: a task nobody started, closed by `--decide`, must not
+  // fail the dispatch gate. The gate demands a dispatch record for a closed task; a person's descope was
+  // never a build the engine dispatched, so it is exempt — proven by the `decisions:` map, not the status.
+  {
+    const { base, dir, t } = cliDecideFixture("cli-descope-exit0");
+    check("descope: fixture: the descope target task was found — without it the check below is a silent skip",
+      () => !!t, () => ({ found: !!t }));
+    if (t) {
+      const decide = cliTasks(["--tasks", dir, "--decide", "D13", "--wont-do", "--task", t.id], MANIFEST);
+      // The re-run is a plain `--tasks` audit pass: it re-slices and reports the dispatch gate. A descoped
+      // task nobody dispatched must NOT make it exit 2.
+      const audit = cliTasks(["--tasks", dir], MANIFEST);
+      check("descope: a task descoped by `--decide` (nobody dispatched) does NOT fail the dispatch gate — a re-run of `--tasks` exits 0, not 2, and does not tell the operator to build the descoped task",
+        () => decide.status === 0 && audit.status === 0
+          && !/DISPATCH GATE/.test(audit.stdout || "") && !/DISPATCH GATE/.test(audit.stderr || "")
+          && !/never STARTED/.test(audit.stdout || ""),
+        () => ({ decideStatus: decide.status, auditStatus: audit.status,
+          auditStdout: (audit.stdout || "").slice(0, 400), auditStderr: (audit.stderr || "").slice(0, 400) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // In-process anti-vacuity: the exemption is keyed on the decisions MAP, so a task computing `wont-do`
+  // from a hand-typed cell with a fake `(D<N>)` and NO map entry is still held to the dispatch record.
+  {
+    const base = tmp("descope-fake-marker");
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = planTaskOf(set.tasks);
+    if (t) {
+      // Hand-type a fake closure into EVERY row: no --decide ran, so `decisions:` stays empty.
+      let fp = path.join(dir, t.file);
+      let text = fs.readFileSync(fp, "utf8");
+      for (let i = 1; i <= t.rows.length; i++) text = setOutcome(text, i, `wont-do — made up (D99)`);
+      fs.writeFileSync(fp, text);
+      const audit = readMergedTaskDir(dir, RUN, OPTS);
+      const at = audit.tasks.find((x) => x.id === t.id);
+      check("descope (anti-vacuity): a task whose every row is a hand-typed `wont-do` with a fake `(D<N>)` and NO `decisions:` map entry is NOT exempt — the dispatch gate still holds it, because the exemption is keyed on the provenance map, not the status word",
+        () => audit.dispatch?.never?.some((x) => x.id === t.id)
+          && audit.dispatch?.failing?.some((x) => x.id === t.id),
+        () => ({ never: audit.dispatch?.never?.map((x) => x.id), status: at?.status,
+          kinds: at?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  // A BUILT row disqualifies the descope exemption: a builder that ran leaves a clock, so a task with a
+  // built row and no dispatch record is what the gate exists to catch — one row's decision must not clear
+  // the failure the built rows raised.
+  {
+    const base = tmp("descope-built-plus-decided");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope one row\n");
+    const decisions = new Map([["D13", "descope one row"]]);
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = planTaskOf(set.tasks, { minRows: 3 });
+    if (t) {
+      // Rows 1-2 hand-typed `built` (a builder's mark) with NO dispatch record; row 3 `not-built` so the
+      // task is `partial` (settled) and the dispatch gate audits it — the state Marharyta reproduced.
+      const fp = path.join(dir, t.file);
+      let text = fs.readFileSync(fp, "utf8");
+      text = setOutcome(setOutcome(setOutcome(text, 1, "built"), 2, "built"), 3, "not-built — needs-decision");
+      fs.writeFileSync(fp, text);
+      const before = readMergedTaskDir(dir, RUN, OPTS);
+      const failedBefore = before.dispatch?.failing?.some((x) => x.id === t.id);
+      // Decide ONLY row 3. Its map entry must not turn the whole task into a descope while rows 1-2 are built.
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", rowRef: { taskId: t.id, n: 3 }, decisions });
+      const after = readMergedTaskDir(dir, RUN, OPTS);
+      check("descope: a decision on ONE row does NOT switch off the dispatch gate for hand-written `built` rows on the same task — a built row means a builder ran, so the task still owes a dispatch record",
+        () => failedBefore && after.dispatch?.failing?.some((x) => x.id === t.id),
+        () => ({ failedBefore, failedAfter: after.dispatch?.failing?.some((x) => x.id === t.id),
+          kinds: after.tasks.find((x) => x.id === t.id)?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+
+console.log("\n===== the cascade and the adopted-body writer (repair tasks) =====");
+// Every block above filters `kind !== "repair"`, so none of them reaches `setAdoptedRowOutcomes` —
+// the in-place cell writer a decision uses on a body the engine must keep byte-for-byte. AC 9, AC 10 and AC 11
+// are all about that path, and it had no coverage at all.
+{
+  const base = tmp("rc9-repair");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n## D19 — defer to next phase\n");
+  const decisions = new Map([["D13", "descope the handlers"], ["D19", "defer to next phase"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const round1 = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS);
+  const handlers = round1.written.find((t) => t.cause === "missing:handlers");
+  check("fixture: a real repair task was written, so the adopted-body path below is actually exercised",
+    () => !!handlers && handlers.rows.length > 1,
+    () => ({ written: round1.written.map((t) => `${t.cause}:${t.rows.length}`) }));
+  if (handlers) {
+    const fp = path.join(dir, handlers.file);
+    const before = fs.readFileSync(fp, "utf8").split("\n");
+
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "ENG-1", taskId: handlers.id, decisions });
+    const after = fs.readFileSync(fp, "utf8").split("\n");
+    const rr = readTaskDir(dir).find((x) => x.id === handlers.id);
+    check("AC 11: a repair task can be decided `postponed` on its own — every Outcome cell is written in place through the adopted-body writer, and the task computes `partial` because a postponed row is a DEBT, not a closure",
+      () => !res.refused && (res.unplaced || []).length === 0
+        && res.touched.length === handlers.rows.length
+        && (rr?.rows || []).every((r) => r.outcomeKind === "postponed")
+        && (rr?.rows?.[0]?.outcome || "").endsWith("→ ENG-1")
+        && rr?.status === "partial",
+      () => ({ refused: res.refused, unplaced: res.unplaced?.length, touched: res.touched?.length,
+        status: rr?.status, cell0: rr?.rows?.[0]?.outcome }));
+
+    // An adopted body is the orchestrator's and is never re-authored: only the Outcome cells and the three
+    // front-matter fields the engine owns may differ. Anything else means the writer rewrote a file it was
+    // supposed to edit in place.
+    const strayEdits = [];
+    for (let i = 0; i < Math.max(before.length, after.length); i++) {
+      if (before[i] === after[i]) continue;
+      const line = after[i] ?? "";
+      if (/^\s*\|/.test(line)) continue;
+      if (/^(status|statusFrom|decisions):/.test(line)) continue;
+      strayEdits.push(`${i}: ${before[i]} -> ${line}`);
+    }
+    check("AC 9: the decision edits ONLY the Outcome cells and the engine's own front-matter fields — the rest of an adopted body stays byte-identical, which is the guarantee that makes a repair body safe to decide over",
+      () => strayEdits.length === 0 && before.length === after.length,
+      () => ({ strayEdits: strayEdits.slice(0, 5), beforeLines: before.length, afterLines: after.length }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The writer walks the table with the parser's own split, so a cell already holding a RAW `|` — a shape
+  // explicitly supports, since it rejoins everything from the Outcome column to the trailing cell — stopped the
+  // walk at that pipe, left the old text in place and still reported success. The decision was then recorded in
+  // `decisions:` for a cell the body never received.
+  const base = tmp("rc9-rawpipe");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope\n");
+  const decisions = new Map([["D13", "descope"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const written = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written;
+  const target = written.find((t) => t.cause === "missing:handlers");
+  check("fixture: a repair task was found to plant the raw-pipe cell in",
+    () => !!target, () => ({ written: written.map((t) => t.cause) }));
+  if (target) {
+    const fp = path.join(dir, target.file);
+    const RAW = "not-built — blocked by a|b pipe";
+    const planted = fs.readFileSync(fp, "utf8").split("\n").map((l) => {
+      if (!/^\s*\|\s*1\s*\|/.test(l)) return l;
+      const cells = l.split(/(?<!\\)\|/);
+      return `${cells.slice(0, -2).join("|")}| ${RAW} |`;
+    });
+    fs.writeFileSync(fp, planted.join("\n"));
+    const parsedBefore = readTaskDir(dir).find((x) => x.id === target.id);
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+      taskId: target.id, decisions });
+    const rr = readTaskDir(dir).find((x) => x.id === target.id);
+    const fm = fs.readFileSync(fp, "utf8");
+    check("a decision lands on a cell that already held a RAW `|` — the writer rebuilds the row through the same split the parser uses, so the cell really changes and can never be recorded as written while the body still holds the old text",
+      // The planted cell must really carry the raw pipe, or this check pins nothing: the parser rejoins
+      // everything from the Outcome column, so `a|b` surviving the read is what proves the shape.
+      () => (parsedBefore?.rows?.[0]?.outcome || "").startsWith("not-built")
+        && /a\|b/.test(parsedBefore?.rows?.[0]?.outcome || "")
+        && !res.refused && (res.unplaced || []).length === 0
+        && rr?.rows?.[0]?.outcomeKind === "wont-do"
+        && /\(D13\)/.test(rr?.rows?.[0]?.outcome || "")
+        && /^decisions:.*\b1:D13\b/m.test(fm),
+      () => ({ plantedCell: parsedBefore?.rows?.[0]?.outcome, unplaced: res.unplaced?.length,
+        afterKind: rr?.rows?.[0]?.outcomeKind, afterCell: rr?.rows?.[0]?.outcome,
+        decisionsLine: fm.split("\n").find((l) => l.startsWith("decisions:")) }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // AC 10 is observable only in this shape: a cause whose rows are ALL closed never asks for another round, so
+  // the cap and the round NUMBER are both invisible until the page reports a NEW gap of the same kind.
+  const base = tmp("cap-after-decision");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope the handlers\n");
+  const decisions = new Map([["D13", "descope the handlers"]]);
+  syncTaskDir(dir, RUN, OPTS);
+  const first = syncRepairDir(dir, RUN, VERIFY_PAGES, OPTS).written.find((t) => t.cause === "missing:handlers");
+  check("AC 10 fixture: round 1 exists for the handlers cause, so the round below is a SECOND one",
+    () => first?.repairRound === 1, () => ({ round: first?.repairRound, id: first?.id }));
+  if (first) {
+    applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: first.id, decisions });
+    const widened = { main: { ...VERIFY_PAGES.main,
+      openRows: [...VERIFY_PAGES.main.openRows, openRow(20, "Handler — `onBrandNew`")] } };
+    const next = syncRepairDir(dir, RUN, widened, OPTS).written.find((t) => t.cause === "missing:handlers");
+    const onDisk = fs.readdirSync(dir).filter((f) => f.includes("missing-handlers"));
+    // The round NUMBER has to advance even though the cap was not spent: a repair task's id is derived from
+    // (page, cause, round, chunk) and not from its rows, so re-issuing round 1 would mint the id of the file
+    // already on disk, `syncRepairDir` would skip the write, and the open rows would never be routed again.
+    check("AC 10: a round closed by a DECISION does not spend one of the three attempts, and the next genuine gap still opens a NEW round with a file of its own — the cap counts attempts, the number keeps counting rounds",
+      () => next?.repairRound === 2 && next.id !== first.id && onDisk.length === 2,
+      () => ({ nextRound: next?.repairRound, firstId: first.id, nextId: next?.id, onDisk }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // The cascade is what AC 9 is about, and it only shows on a deliverable TWO tasks carry: a plan task owns the
+  // row, a repair task covers the same label on the same page. The verify fixture is built from a real plan row
+  // so the two sides share a label, which is the join the cascade makes.
+  const { base, dir, set, decisions, src, shared, rep } = repairMirrorFixture("cascade-cross-task", "D13", "descope", 2);
+  check("AC 9 fixture: a plan task on `main` was found whose first row can be mirrored into a repair task",
+    () => !!src, () => ({ tasks: set.tasks.map((x) => `${x.id}:${x.pageKey}:${(x.rows || []).length}`).slice(0, 6) }));
+  if (src) {
+    check("AC 9 fixture: the repair task really carries the SAME deliverable as the plan row, so the cascade has something to join on",
+      () => !!rep && (rep.rows || []).some((r) => r.label === shared),
+      () => ({ repair: rep?.id, rows: (rep?.rows || []).map((r) => r.label) }));
+    if (rep) {
+      const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: src.id, n: 1 }, decisions });
+      const repAfter = readTaskDir(dir).find((x) => x.id === rep.id);
+      const srcAfter = readTaskDir(dir).find((x) => x.id === src.id);
+      check("AC 9: deciding ONE row of a plan task cascades the same outcome into the row a DIFFERENT task covers — the closure is reported on `cascaded`, the repair row carries the decision, and the plan task's other rows stay untouched",
+        () => !res.refused
+          && (res.cascaded || []).some((c) => c.task.id === rep.id)
+          && repAfter?.rows?.some((r) => r.label === shared && r.outcomeKind === "wont-do")
+          && srcAfter?.rows?.[0]?.outcomeKind === "wont-do"
+          && !srcAfter?.rows?.[1]?.outcomeKind,
+        () => ({ cascaded: (res.cascaded || []).map((c) => `${c.task.id}:${c.n}`),
+          repairKinds: (repAfter?.rows || []).map((r) => r.outcomeKind),
+          srcKinds: (srcAfter?.rows || []).map((r) => r.outcomeKind) }));
+      // Direction §3: `--revoke` reverses the decision a person addressed directly, but a repair task the
+      // cascade closed is NOT revived — the next `--verify` measures the page as it then stands. The
+      // cascade cell carries a `+` marker in the `decisions:` map, so revoke skips it while clearing the
+      // source row.
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
+      const srcRevoked = readTaskDir(dir).find((x) => x.id === src.id);
+      check("§3: --revoke clears the DIRECTLY-decided source row but does NOT revive the repair task the cascade closed — the cascade cell is skipped, named on `skipped`, and its Outcome stays `wont-do`",
+        () => !rev.refused
+          && rev.cleared?.some((c) => c.task.id === src.id)
+          && !rev.cleared?.some((c) => c.task.id === rep.id)
+          && rev.skipped?.some((s) => s.task.id === rep.id && /cascade/.test(s.why))
+          && !srcRevoked?.rows?.[0]?.outcomeKind
+          && repRevoked?.rows?.some((r) => r.label === shared && r.outcomeKind === "wont-do"),
+        () => ({ cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
+          skipped: (rev.skipped || []).map((s) => `${s.task.id}:${s.n} ${s.why}`).slice(0, 4),
+          repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind),
+          srcKinds: (srcRevoked?.rows || []).map((r) => r.outcomeKind) }));
+      // AC 7: the revoked deliverable must go BACK into the verification list. The cascade repair row keeps
+      // its `wont-do` (§3), but a cascade-marked entry must NOT contribute the row's hide-key — otherwise
+      // the source row, cleared by revoke, stays hidden under the repair row's key. So after revoke the
+      // shared key is gone from `decidedRowKeys` and `renderVerify` measures the row again.
+      const mergedRevoked = readMergedTaskDir(dir, RUN, OPTS);
+      const keysRevoked = decidedRowKeys(mergedRevoked);
+      const sharedKey = verifyRowKey("main", shared);
+      const measuredAgain = renderVerify(RUN, OPTS, {}, keysRevoked).rows.some((r) => r.deliverable === shared);
+      check("§3 / AC 7: after --revoke the cascade repair row keeps `wont-do`, but its cascade-marked key is NOT in `decidedRowKeys`, so the revoked deliverable re-enters the verification list and `renderVerify` measures it again",
+        () => !keysRevoked.has(sharedKey) && measuredAgain,
+        () => ({ sharedKey, hasKey: keysRevoked.has(sharedKey), measuredAgain,
+          keys: [...keysRevoked].slice(0, 6) }));
+    }
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+{
+  // A repair task decided `postponed` on its OWN (a direct `--decide --task <repair-id>`), not by cascade,
+  // must stay revokable — its map entry carries no cascade marker. This is the case the plain skip-repair-
+  // tasks approach would have broken.
+  const { base, dir, decisions, rep } = repairMirrorFixture("revoke-standalone-repair", "D19", "defer");
+  if (rep) {
+    // Decide the repair task DIRECTLY (not via a plan-row cascade): its entry has no `+` marker.
+    const dec = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "ENG-42", taskId: rep.id, decisions });
+    const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D19" });
+    const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
+    check("§3: a repair task decided `postponed` DIRECTLY (not by cascade) stays revokable — --revoke clears it, because only cascade-written cells carry the marker",
+      () => !dec.refused
+        && rev.cleared?.some((c) => c.task.id === rep.id)
+        && (repRevoked?.rows || []).every((r) => !r.outcomeKind),
+      () => ({ decided: dec.touched?.map((t) => `${t.task.id}:${t.n}`),
+        cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
+        repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
