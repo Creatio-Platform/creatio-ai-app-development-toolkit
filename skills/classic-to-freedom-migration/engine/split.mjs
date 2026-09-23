@@ -137,8 +137,8 @@ function planIndex(groups) {
 // 282 custom methods on one typed form and 188 on another; its checklist runs to several hundred rows, and a split
 // that had to name each of them verbatim would be a file nobody could author and one typo could refuse whole.
 //
-//   `@Form — Logic`        every row of that group not already claimed
-//   `@Form — Logic[50]`    the next 50 unclaimed rows of it, in PLAN ORDER
+//   `@Form — Custom methods`      every row of that group not already claimed
+//   `@Form — Custom methods[50]`  the next 50 unclaimed rows of it, in PLAN ORDER
 //
 // Entries resolve in the order the file lists them, so three `[50]` claims cut one long group across three items
 // and a bare `@…` afterwards sweeps the remainder. Naming individual rows still works and still wins — that is how
