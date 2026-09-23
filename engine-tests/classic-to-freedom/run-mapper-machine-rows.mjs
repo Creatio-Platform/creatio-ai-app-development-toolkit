@@ -127,10 +127,10 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const r7key = T(tabsPage([keyTab], { resources: { BasicInformationTabCaption: "Profile" } }))({ caption: "Basic information", fields: 1 });
     check("layout (guard): a caption binding whose KEY matches the plan's words still matches by caption when its resolved text reads otherwise",
       () => r7key[0] === "✅ Done" && /in tab `KeyTab`/.test(r7key[1]) && !/matched by/.test(r7key[1]), () => r7key);
-    check("layout: a built caption `#ResourceString(K)#` resolves through the page's `resources` before the caption match — flat or get-page's `{ strings: { K: { en-US } } }` — and the same macro without them matches nothing",
+    check("layout: a built caption `#ResourceString(K)#` resolves through the page's `resources` before the caption match — flat or get-page's `{ strings: { K: { en-US } } }` — and without them the macro matches no caption, so the row falls to the content fit",
       () => r7[0] === "✅ Done" && /in tab `MainTab`/.test(r7[1]) && !/matched by/.test(r7[1])
         && r7b[0] === "✅ Done" && /in tab `GeneralInfoTab`/.test(r7b[1]) && !/matched by/.test(r7b[1])
-        && /matched by content/.test(r7raw[1]),
+        && r7raw[0] === "✅ Done" && /matched by content/.test(r7raw[1]) && !/matched by the .* plan field/.test(r7raw[1]),
       () => [r7, r7b, r7raw]);
   }
   check("layout: the header is judged by its widgets anywhere on the page; a payload with NO containers (the legacy flat ops shape) is judged page-wide and SAYS so — every fixture built that way stays green",

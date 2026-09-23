@@ -515,6 +515,19 @@ check("ids: a RENAMED field moves the `rowsDigest` while the id stands still —
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP)?.rowsDigest, d: taskAt(SET4, "main", DRIFT_GROUP)?.rowsDigest,
     labelsEqual: taskAt(SET, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|")
       === taskAt(SET4, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|") }));
+{
+  // The plan's layout rows given field `names`, as a tab row carries them, and its Fields rows with one field renamed.
+  const GROUPS = checklistGroups(RUN, OPTS);
+  const withVk = (edit) => buildTaskSet(RUN, OPTS, GROUPS.map((g) => ({ ...g, rows: g.rows.map((r) => (r.vk ? { ...r, vk: edit(r.vk) } : r)) })));
+  const tabNames = (names) => withVk((vk) => (vk.type === "layout" ? { ...vk, names } : vk));
+  const renamed = withVk((vk) => (vk.type === "fields" ? { ...vk, names: vk.names.map((n) => `${n}Renamed`) } : vk));
+  const digests = (set) => set.tasks.map((t) => `${t.id}:${t.rowsDigest}`).join(" ");
+  const layoutRows = GROUPS.flatMap((g) => g.rows).filter((r) => r.vk?.type === "layout").length;
+  check("rowsDigest: a layout row's field names are not digested — the fields a tab row names can change with every task's digest unchanged, while a renamed field in a Fields row changes it",
+    () => layoutRows > 0 && digests(tabNames(["A", "B"])) === digests(tabNames(["B", "C"]))
+      && digests(tabNames(["A", "B"])) === digests(SET) && digests(renamed) !== digests(SET),
+    () => ({ layoutRows, ab: digests(tabNames(["A", "B"])) === digests(tabNames(["B", "C"])), renamed: digests(renamed) !== digests(SET) }));
+}
 check("taskFileName: the file name carries the id as well as a slug — non-Latin captions all strip to the same characters, so a slug ALONE would be many-to-one",
   () => SET.tasks.every((t) => t.file === taskFileName(t) && t.file.endsWith(`-${t.id}.md`))
     && new Set(SET.tasks.map((t) => t.file)).size === SET.tasks.length
@@ -2624,6 +2637,48 @@ console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): the repair round 
         && !/no longer in the plan/.test(fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8"))
         && res.status === 0;
     }, () => fs.readFileSync(path.join(dir, TASK_INDEX_FILE), "utf8").slice(-900));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log("\n===== migrate.mjs --verify --tasks <dir> (CLI): a DISPUTED row keeps the page open =====");
+{
+  const base = tmp("cli-disputed");
+  const dir = path.join(base, "build-tasks");
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const isRepair = (t) => t.file.startsWith("task-repair-");
+  // Dispatched through `--start`, every row closed `built`, signed, and closed by a `--tasks` pass.
+  const closeAllBuilt = (pick) => {
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const t of readTaskDir(dir).filter((x) => x.status === "todo" && pick(x))) {
+        const tok = /DISPATCH TOKEN for `[^`]+`: (\S+)/.exec(cliTasks(["--tasks", dir, "--start", t.id], MANIFEST).stdout || "")?.[1];
+        if (!tok) continue;
+        const fp = path.join(dir, t.file);
+        fs.writeFileSync(fp, allBuilt(fs.readFileSync(fp, "utf8")).replace(/^agentNonce:.*$/m, `agentNonce: ${tok}`));
+        cliTasks(["--tasks", dir], MANIFEST);
+        moved = true;
+      }
+    }
+  };
+  cliTasks(["--tasks", dir], MANIFEST);
+  closeAllBuilt((t) => !isRepair(t));
+  const first = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
+  closeAllBuilt(isRepair);
+  const round1 = readTaskDir(dir).filter(isRepair);
+  const labels = round1.flatMap((t) => t.rows.map((r) => r.label));
+  const again = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
+  const out = again.stdout || "";
+  const report = out.split("migrate.mjs: DISPUTED check")[0];
+  const unconfirmed = Number(/## 3\. The machine could not confirm \((\d+)\)/.exec(report)?.[1] ?? -1);
+  check("migrate.mjs --verify --tasks: rows a round closed `built` that read open again on the same cells open no round, are named on the DISPUTED line, and stay in the report as rows the machine could not confirm, with the verdict still failing",
+    () => /wrote \d+ repair task\(s\) \(round 1\)/.test(first.stdout || "")
+      && round1.length > 0 && round1.every((t) => t.status === "done")
+      && new RegExp(String.raw`DISPUTED check — ${labels.length} row\(s\)`).test(out)
+      && !fs.readdirSync(dir).some((f) => f.startsWith("task-repair-round2-"))
+      && unconfirmed >= labels.length && /⛔/.test(report) && again.status === 2,
+    () => ({ status: again.status, disputed: labels.length, unconfirmed,
+      round2: fs.readdirSync(dir).filter((f) => f.startsWith("task-repair-round2-")), tail: out.slice(-1200) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
@@ -6678,9 +6733,8 @@ console.log("\n===== an UNCHANGED row opens no new round: disputed when it close
     check("repair: unchanged rows of every cause on the page are held, not only the largest one",
       () => again.disputed.filter((h) => !isHandler(h)).length === 2 && !again.written.some((t) => t.repairRound === 2),
       () => rowsOf(again.disputed));
-    check("repair: a held row spends no attempt and leaves nothing pending, and it is the VERIFIER's row, so the page stays open",
+    check("repair: a held row spends no attempt, leaves nothing pending, and names the round that last closed it",
       () => again.parked.length === 0 && again.pending.length === 0
-        && again.disputed.every((h) => SAME["child:G1"].openRows.some((r) => r.deliverable === h.row.deliverable))
         && again.disputed.every((h) => h.task.file.startsWith("task-repair-round1-")),
       () => ({ parked: again.parked, pending: again.pending, files: (again.disputed || []).map((h) => h.task.file) }));
     const lines = repairRoundLines(again, d, "verify");
@@ -6827,6 +6881,42 @@ console.log("\n===== an UNCHANGED row opens no new round: disputed when it close
       () => again.disputed.length === 0 && again.written.length === first.written.length,
       () => ({ written: again.written.length, disputed: (again.disputed || []).length }));
     fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    // Verifier rows a round closed with `mark`, re-verified on identical cells after another task on the same page
+    // closed; `close` is how that task is closed.
+    const ROWS = TEN.slice(0, 2);
+    const MAIN = { main: { missing: ROWS.length, unverified: 0, complete: false, openRows: ROWS } };
+    const verifierPageMoved = (name, mark, close) => {
+      const { d } = closedRound1(name, mark, MAIN);
+      const held = syncRepairDir(d, RUN, MAIN, OPTS);
+      const other = taskAt(held.set, "main", "Quality gates");
+      const before = other?.status;
+      clearDepsOf(d, other.id, RUN, OPTS, nextMin());
+      close(d, other.id);
+      return { d, held, before, again: syncRepairDir(d, RUN, MAIN, OPTS) };
+    };
+    const dispatched = (d, id) => runTask(d, id, RUN, OPTS, nextMin());
+    const stalledV = verifierPageMoved("verifier-page-moved", NOT_BUILT_BLOCKED, dispatched);
+    check("repair: a STALLED verifier row opens the next round once another task on its page was dispatched and closed after the round that last closed it, though its own cells are unchanged",
+      () => stalledV.before === "todo" && stalledV.held.stalled.length === ROWS.length
+        && stalledV.again.stalled.length === 0 && stalledV.again.written.some((t) => t.repairRound === 2),
+      () => ({ before: stalledV.before, held: stalledV.held.stalled.length, stalled: stalledV.again.stalled.length,
+        written: stalledV.again.written.map((t) => `${t.cause} r${t.repairRound}`) }));
+    fs.rmSync(stalledV.d, { recursive: true, force: true });
+    const disputedV = verifierPageMoved("verifier-page-moved-disputed", "built", dispatched);
+    check("repair (guard): a DISPUTED verifier row stays disputed after another task on its page closes — the check is in question, not the page",
+      () => disputedV.held.disputed.length === ROWS.length && disputedV.again.disputed.length === ROWS.length
+        && disputedV.again.written.length === 0,
+      () => ({ held: disputedV.held.disputed.length, disputed: disputedV.again.disputed.length,
+        written: disputedV.again.written.map((t) => `${t.cause} r${t.repairRound}`) }));
+    fs.rmSync(disputedV.d, { recursive: true, force: true });
+    const undispatchedV = verifierPageMoved("verifier-page-undispatched", NOT_BUILT_BLOCKED, (d, id) => closeCells(d, id, "built"));
+    check("repair (guard): a task on the page closed with no dispatch record does not reopen a STALLED row",
+      () => undispatchedV.held.stalled.length === ROWS.length && undispatchedV.again.stalled.length === ROWS.length
+        && undispatchedV.again.written.length === 0,
+      () => ({ stalled: undispatchedV.again.stalled.length, written: undispatchedV.again.written.map((t) => `${t.cause} r${t.repairRound}`) }));
+    fs.rmSync(undispatchedV.d, { recursive: true, force: true });
   }
 }
 

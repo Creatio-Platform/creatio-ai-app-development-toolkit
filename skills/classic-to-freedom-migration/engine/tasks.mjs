@@ -1598,12 +1598,13 @@ function sansRecordedPointer(evidence, files) {
 // The row to compare is the VERIFIER'S when it reported one. A residual row (no verifier row) names the newest
 // file that recorded it, so on that path the pointer is removed from both sides and only the rest is compared;
 // such a match is STALLED, since only a round that closed the row `not-built` leaves it residual.
-// A residual row also counts as changed once another task on its page was dispatched and closed after that round:
-// the work it was blocked on may exist now.
+// A STALLED row, verifier or residual, also counts as changed once another task on its page was dispatched and
+// closed after that round: the work it was blocked on may exist now. A DISPUTED row is compared on its cells alone.
 function unchangedSinceLastRound(last, key, row, verifiedRow, files, pageMovedSince) {
   const prev = last.get(key);
   if (!prev?.hold) return null;
   if (verifiedRow) {
+    if (prev.hold === "stalled" && pageMovedSince(prev.task)) return null;
     return inputCell(verifiedRow.status) === prev.recorded && inputCell(verifiedRow.evidence) === prev.evidence ? prev : null;
   }
   if (pageMovedSince(prev.task)) return null;
@@ -2403,19 +2404,20 @@ function readExisting(dir) {
     .map((f) => ({ file: f, ...parseTaskFile(fs.readFileSync(path.join(dir, f), "utf8")) }));
 }
 
-// The open rows of each page with the decision-settled rows (`boundaries`) and the rows unchanged since the round
-// that closed them (`disputed` / `stalled`) taken out; what is left is `gated`, the rows a round may be opened for.
-// Whether another task on the round's page closed after it, by the order of the timings ledger's close samples.
-// A round with no sample has no close to compare against.
+// Whether another task on the round's page was dispatched and closed after it, by the order of the timings
+// ledger's close samples. A close sample is the dispatch record: a held round always has one, and a task without
+// one was not dispatched.
 function pageMovedSinceFor(tasks, samples) {
   const closedAt = new Map(samples.map((x, i) => [x.id, i]));
   return (round) => {
     const since = closedAt.get(round.id);
     if (since === undefined) return false;
-    return tasks.some((t) => t.id !== round.id && t.pageKey === round.pageKey
+    return tasks.some((t) => t.id !== round.id && t.pageKey === round.pageKey && t.dispatched === "yes"
       && ROUND_ATTEMPTED.has(t.status) && (closedAt.get(t.id) ?? -1) > since);
   };
 }
+// The open rows of each page with the decision-settled rows (`boundaries`) and the rows unchanged since the round
+// that closed them (`disputed` / `stalled`) taken out; what is left is `gated`, the rows a round may be opened for.
 function holdBackRows(tasks, existing, residual, verifyPages, samples) {
   const settled = settledBoundaries(tasks);
   const last = lastRoundRows(tasks, existing);

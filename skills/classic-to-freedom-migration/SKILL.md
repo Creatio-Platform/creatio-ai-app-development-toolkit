@@ -636,8 +636,8 @@ they write, so the queue sequences them behind that page's build rather than bes
   verified and the gate keeps failing; each is named on its own line of the round report. A row whose evidence
   changed opens a new round. A row routed from a build agent's `not-built` record (every `--route` round) is
   compared the same way, minus the engine's `recorded on <file>, row <n>` pointer, which names a different file
-  each round; a match is STALLED. Such a row opens a round again once another task on its page, a repair task
-  included, was dispatched and closed after the round that last closed it.
+  each round; a match is STALLED. A STALLED row opens a round again once another task on its page, a repair task
+  included, was dispatched and closed after the round that last closed it; a DISPUTED row does not.
 - **Three rounds, then PARKED.** After three attempts at one KIND of row on one page the engine writes no fourth
   task and says so. The cap counts the kind, not the cause: a row `--verify` could not confirm comes back from
   the round that failed to fix it recorded as not built, and counting those separately is three more agents.
