@@ -6840,12 +6840,16 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   const cliCopy = tmp("decision-hold-cli");
   fs.cpSync(dir, cliCopy, { recursive: true });
   const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", cliCopy, ...args], { encoding: "utf8" });
-  const nextOut = cli("--next").stdout || "";
+  const nextCli = cli("--next");
+  const nextOut = nextCli.stdout || "";
   const startCli = cli("--start", "dec-waiting");
   fs.rmSync(cliCopy, { recursive: true, force: true });
   check("--next (CLI): the decision hold names the source task and row",
     () => /\[dec-waiting\] — every open row waits on a decision/.test(nextOut) && new RegExp(`dec-source row ${n}:`).test(nextOut),
     () => nextOut);
+  check("--next (CLI): a decision hold beside a startable task answers `startable` and exits 0",
+    () => held.verdict === NEXT_STARTABLE && nextCli.status === 0,
+    () => ({ verdict: held.verdict, status: nextCli.status, stderr: nextCli.stderr }));
   check("--start (CLI): the decision hold refuses with exit 2 and names the source row",
     () => startCli.status === 2 && /waits on an open decision on a subject another task shares/.test(startCli.stdout || "")
       && new RegExp(`dec-source row ${n}:`).test(startCli.stdout || ""),
@@ -6931,6 +6935,21 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
         && cause(x, [x, yDecided]) === null && cause(yDecided, [x, yDecided]) === null;
     });
 
+  // One task, two hold causes: `startBlocker` reports the first in its order, deps → decision → overlap.
+  check("decision hold: a held task with an open dependency reports `deps`",
+    () => {
+      const dep = task("dep", [{ label: "D" }]);
+      const wait = task("wait", [{ label: "B", subject: "card:C1" }], { dependsOn: ["dep"] });
+      return cause(wait, [source(), dep, wait]) === HOLD_DEPS;
+    });
+  check("decision hold: a held task whose artifact another dispatched task writes reports `decision`",
+    () => {
+      const busy = task("busy", [{ label: "D" }], { status: "in-progress", writesTo: "page:main" });
+      const wait = task("wait", [{ label: "B", subject: "card:C1" }], { writesTo: "page:main" });
+      const all = [source(), busy, wait];
+      return startBlocker(wait, all, { busy: { startedAt: "t" } })?.cause === HOLD_DECISION
+        && startBlocker(task("free", [{ label: "E" }], { writesTo: "page:main" }), all, { busy: { startedAt: "t" } })?.cause === HOLD_OVERLAP;
+    });
 }
 
 // A card cited on two pages: the repair round on the source page is sequenced behind that page only, so it can
