@@ -10,7 +10,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runMigration, checklistOpts } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { checklistGroups, subPageNodes, planGaps, LIST_PAGE_KEY, renderVerify, verifyRowKey } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { renderFinalReport } from "../../skills/classic-to-freedom-migration/engine/report.mjs";
 import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIndex, syncTaskDir, notBuiltRows, notBuiltOpenRows, notBuiltOpenItems, NOT_BUILT_CAUSES, assertedBoundaryRows,
   taskFileName, addTasks, unreadableLedger, TASK_STATUSES, TASK_ORIGINS, TASK_INDEX_FILE, TASK_BUDGET,
@@ -5550,9 +5550,9 @@ const decideFixtureA = (label, minRows = 1) => {
 // The first engine-authored plan task with real, non-boundary rows — the target every decide/revoke
 // fixture needs. `allowRun` keeps a collapsed whole-run task (pageKey "run") in scope, which the CLI's
 // default budget produces and a `--task` addressing accepts.
-const planTaskOf = (tasks, { allowRun = false } = {}) =>
+const planTaskOf = (tasks, { allowRun = false, minRows = 1 } = {}) =>
   (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.artifact !== ARTIFACT_REFS
-    && (allowRun || x.pageKey !== "run") && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    && (allowRun || x.pageKey !== "run") && (x.rows || []).length >= minRows && !(x.rows || []).some((r) => r.na));
 // The cascade fixtures need a task on `main` specifically (a repair task mirrors one of its rows on the
 // same page), and one with two rows to prove the OTHER row stays untouched.
 const mainPlanTaskOf = (tasks, minRows = 1) =>
@@ -6374,6 +6374,35 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
+  // A BUILT row disqualifies the descope exemption: a builder that ran leaves a clock, so a task with a
+  // built row and no dispatch record is what the gate exists to catch — one row's decision must not clear
+  // the failure the built rows raised.
+  {
+    const base = tmp("descope-built-plus-decided");
+    const dir = path.join(base, "build-tasks");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope one row\n");
+    const decisions = new Map([["D13", "descope one row"]]);
+    const set = syncTaskDir(dir, RUN, OPTS);
+    const t = planTaskOf(set.tasks, { minRows: 3 });
+    if (t) {
+      // Rows 1-2 hand-typed `built` (a builder's mark) with NO dispatch record; row 3 `not-built` so the
+      // task is `partial` (settled) and the dispatch gate audits it — the state Marharyta reproduced.
+      const fp = path.join(dir, t.file);
+      let text = fs.readFileSync(fp, "utf8");
+      text = setOutcome(setOutcome(setOutcome(text, 1, "built"), 2, "built"), 3, "not-built — needs-decision");
+      fs.writeFileSync(fp, text);
+      const before = readMergedTaskDir(dir, RUN, OPTS);
+      const failedBefore = before.dispatch?.failing?.some((x) => x.id === t.id);
+      // Decide ONLY row 3. Its map entry must not turn the whole task into a descope while rows 1-2 are built.
+      applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", rowRef: { taskId: t.id, n: 3 }, decisions });
+      const after = readMergedTaskDir(dir, RUN, OPTS);
+      check("descope: a decision on ONE row does NOT switch off the dispatch gate for hand-written `built` rows on the same task — a built row means a builder ran, so the task still owes a dispatch record",
+        () => failedBefore && after.dispatch?.failing?.some((x) => x.id === t.id),
+        () => ({ failedBefore, failedAfter: after.dispatch?.failing?.some((x) => x.id === t.id),
+          kinds: after.tasks.find((x) => x.id === t.id)?.rows?.map((r) => r.outcomeKind) }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 }
 
 
@@ -6538,6 +6567,18 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
           skipped: (rev.skipped || []).map((s) => `${s.task.id}:${s.n} ${s.why}`).slice(0, 4),
           repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind),
           srcKinds: (srcRevoked?.rows || []).map((r) => r.outcomeKind) }));
+      // AC 7: the revoked deliverable must go BACK into the verification list. The cascade repair row keeps
+      // its `wont-do` (§3), but a cascade-marked entry must NOT contribute the row's hide-key — otherwise
+      // the source row, cleared by revoke, stays hidden under the repair row's key. So after revoke the
+      // shared key is gone from `decidedRowKeys` and `renderVerify` measures the row again.
+      const mergedRevoked = readMergedTaskDir(dir, RUN, OPTS);
+      const keysRevoked = decidedRowKeys(mergedRevoked);
+      const sharedKey = verifyRowKey("main", shared);
+      const measuredAgain = renderVerify(RUN, OPTS, {}, keysRevoked).rows.some((r) => r.deliverable === shared);
+      check("§3 / AC 7: after --revoke the cascade repair row keeps `wont-do`, but its cascade-marked key is NOT in `decidedRowKeys`, so the revoked deliverable re-enters the verification list and `renderVerify` measures it again",
+        () => !keysRevoked.has(sharedKey) && measuredAgain,
+        () => ({ sharedKey, hasKey: keysRevoked.has(sharedKey), measuredAgain,
+          keys: [...keysRevoked].slice(0, 6) }));
     }
   }
   fs.rmSync(base, { recursive: true, force: true });

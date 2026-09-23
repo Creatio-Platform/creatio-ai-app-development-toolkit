@@ -2922,19 +2922,25 @@ export function readTaskDir(dir) {
 // THE REASON IS WHAT BUYS THE EXEMPTION: `not-applicable` is the one closure that needs no sub-agent, so a
 // `not-applicable` with nothing under `## Notes` is a task closed with neither a builder nor a justification,
 // and it is the cheapest way to write off every remaining row at once.
-// A person's descope needs no builder: every row that is not built is either the plan's own boundary or a
-// decision the person recorded through `--decide`, and the `decisions:` map is what proves the latter. Keyed
-// on the map, not on the status word, because a hand-typed cell carrying a fake `(D<N>)` computes `wont-do`
-// yet has no map entry — it is not a descope and stays held to the dispatch record. An empty map is never a
-// descope: an all-built task with nobody dispatched is exactly the record this gate exists to demand.
+// A person's descope needs no builder: every row is either the plan's own boundary or a decision the person
+// recorded through `--decide`, and the `decisions:` map is what proves the latter. Keyed on the map, not on
+// the status word, because a hand-typed cell carrying a fake `(D<N>)` computes `wont-do` yet has no map
+// entry — it is not a descope and stays held to the dispatch record.
+//
+// A BUILT row disqualifies the whole task: a builder that ran leaves a clock, so a task with a built row and
+// no dispatch record is exactly what this gate exists to catch — one row's decision must not clear the
+// failure the built rows raised. And a map entry only counts when the row actually holds the decision it
+// claims (`wont-do` / `postponed`): a stale entry left after an edit cannot earn the exemption on its own.
 function isDecidedDescope(t) {
   const rows = t.rows || [];
   if (!rows.length) return false;
   const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
   if (!map?.size) return false;
-  return rows.every((r, i) => r.outcomeKind === O_BUILT
-    || (r.outcomeKind === O_NOT_APPLICABLE && r.na)
-    || map.has(i + 1));
+  return rows.every((r, i) => {
+    if (r.outcomeKind === O_BUILT) return false;
+    if (r.outcomeKind === O_NOT_APPLICABLE && r.na) return true;
+    return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && map.has(i + 1);
+  });
 }
 
 function classifyUndispatched(t, out) {
@@ -3260,8 +3266,15 @@ export function startableTasks(set, dir) {
 // verify list (named on Attention by `assertedBoundaryRows`). Trusting the word alone would let either
 // closure drop a machine row out of the gate with no builder and no authority.
 const DECIDED_ROW_KINDS = new Set([O_WONT_DO, O_POSTPONED, O_NOT_APPLICABLE]);
+// A row hides its deliverable from `--verify` only under the decision that DIRECTLY addressed it. A cascade
+// closure (`D<N>+`) is kept on the repair task so `--revoke` does not revive it, but it must not hold the
+// deliverable's key: while the direct decision stands, the source row supplies that key, and once the direct
+// decision is revoked the deliverable has to re-enter the verification list. A cascade entry contributing the
+// key would keep the source row hidden after its own decision was cleared.
 function rowClosureIsAuthored(r, i, map) {
-  if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) return !!map?.has(i + 1);
+  if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) {
+    return !!map?.has(i + 1) && !isCascadeDecision(map.get(i + 1));
+  }
   if (r.outcomeKind === O_NOT_APPLICABLE) return !!r.na;
   return false;
 }
