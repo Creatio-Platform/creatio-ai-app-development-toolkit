@@ -657,7 +657,15 @@ const carriedOf = (meta = {}) => meta.status || S_TODO;
 // customer captions, up to a paragraph long, and the front matter is read by a person.
 const REPAIR_KEYS = ["kind", "cause", "repairRound", "covers"];
 
-// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>">.
+// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>" | "D<N>+">, where a
+// trailing `+` marks a cell the CASCADE wrote (the deliverable was closed by deciding a matching row on
+// another task) as opposed to one a person addressed directly. `--revoke` reverses the direct decision but
+// leaves the cascade closures standing, so the two are distinguished here, at the one place the provenance
+// is persisted.
+const CASCADE_MARK = "+";
+export const decisionOf = (v) => String(v || "").replace(/\+$/, "");
+export const isCascadeDecision = (v) => String(v || "").endsWith(CASCADE_MARK);
+export const markCascade = (decision) => `${decision}${CASCADE_MARK}`;
 export const renderDecisionsMap = (m) => {
   if (!m || (m instanceof Map ? m.size === 0 : Object.keys(m).length === 0)) return "";
   const entries = m instanceof Map ? [...m.entries()] : Object.entries(m);
@@ -671,8 +679,8 @@ export const parseDecisionsMap = (s) => {
     // review m10: `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
     // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
     // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
-    // decision entry the engine cannot reach.
-    if (Number.isInteger(num) && num >= 1 && /^D\d+$/.test(String(d || ""))) out.set(num, d);
+    // decision entry the engine cannot reach. The value keeps its cascade `+` marker verbatim.
+    if (Number.isInteger(num) && num >= 1 && /^D\d+\+?$/.test(String(d || ""))) out.set(num, d);
   }
   return out;
 };
@@ -3244,13 +3252,19 @@ export function startableTasks(set, dir) {
 // `renderVerify` matches. `not-built` is NOT here — a `not-built — needs-decision` row is a question, not
 // a closure, and the machine gate still measures whether the stand has it (usually not).
 //
-// review M1: `wont-do` / `postponed` only hide a row from `--verify` when the ENGINE wrote them.
-// The task's `decisions:` map is the provenance stamp (`--decide` writes cell + map together through
-// `persistTaskSet`), so a `wont-do` cell whose row index is NOT in the map is a hand-typed spoof — it
-// stays in the verify list and is named on Attention by `undecidedDecisionCells`. `not-applicable` is
-// exempt from this check: it is either the plan's own boundary (r.na set) or an agent-typed one
-// (already caught by `assertedBoundaryRows` on the Attention pass), and neither uses the decisions map.
+// A row hides from `--verify` only when its closure has the provenance that earns it. `wont-do` /
+// `postponed` are the person's, proven by the task's `decisions:` map: a cell whose row index is not in
+// the map is a hand-typed spoof — it stays in the verify list and is named on Attention by
+// `undecidedDecisionCells`. `not-applicable` is the PLAN's word, proven by `r.na`: a `not-applicable`
+// cell on a row the plan did not mark as a boundary is an agent asserting one, and it too stays in the
+// verify list (named on Attention by `assertedBoundaryRows`). Trusting the word alone would let either
+// closure drop a machine row out of the gate with no builder and no authority.
 const DECIDED_ROW_KINDS = new Set([O_WONT_DO, O_POSTPONED, O_NOT_APPLICABLE]);
+function rowClosureIsAuthored(r, i, map) {
+  if (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) return !!map?.has(i + 1);
+  if (r.outcomeKind === O_NOT_APPLICABLE) return !!r.na;
+  return false;
+}
 export function decidedRowKeys(set) {
   const keys = new Set();
   for (const t of set?.tasks || []) {
@@ -3258,7 +3272,7 @@ export function decidedRowKeys(set) {
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
       if (!DECIDED_ROW_KINDS.has(r.outcomeKind)) return;
-      if ((r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && !map?.has(i + 1)) return;
+      if (!rowClosureIsAuthored(r, i, map)) return;
       const rowPage = r.pageKey || t.pageKey;
       if (!rowPage) return;
       keys.add(verifyRowKey(rowPage, r.label));
@@ -3388,7 +3402,7 @@ function cascadeDecision(merged, touched, writeCell) {
       if (!touchedKeys.has(keys[i])) continue;
       // Do not re-hit a source row we already touched: `touched` names it by (task, n).
       if (touched.some((x) => x.task === t && x.n === i + 1)) continue;
-      if (writeCell(t, i)) cascaded.push({ task: t, n: i + 1 });
+      if (writeCell(t, i, true)) cascaded.push({ task: t, n: i + 1 });
     }
   }
   return cascaded;
@@ -3426,7 +3440,7 @@ export function applyDecision(dir, result, opts = {}) {
 
   const touched = [];
   const skipped = [];
-  const writeCell = (task, idx) => {
+  const writeCell = (task, idx, cascade = false) => {
     const row = task.rows[idx];
     // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
     // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
@@ -3444,7 +3458,9 @@ export function applyDecision(dir, result, opts = {}) {
     row.outcomeReason = outcomeReason;
     row.naNoReason = false;
     task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
-    task.decisions.set(idx + 1, decision);
+    // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
+    // round measures the page as it then stands and re-opens what still needs work.
+    task.decisions.set(idx + 1, cascade ? markCascade(decision) : decision);
     // A dirty flag for `persistTaskSet` — plan tasks are fully re-rendered from `task.rows`, so nothing extra
     // is needed for them. Adopted (repair / orchestrator) tasks keep their bodies byte-for-byte, so the
     // in-place cell writer in `persistTaskSet` picks these indices up.
@@ -3514,7 +3530,11 @@ function revokeInTask(t, decision, cleared, skipped) {
   // A SNAPSHOT, because the loop deletes from `map` as it clears cells.
   const entries = [...map.entries()];
   for (const [n, d] of entries) {
-    if (d !== decision) continue;
+    if (decisionOf(d) !== decision) continue;
+    // A cascade closure stays. `--revoke` reverses the decision a person addressed directly; a repair
+    // task the cascade closed is not revived, because the next `--verify` round measures the page as it
+    // then stands and re-opens what still needs work. Leaving the entry in the map keeps that record.
+    if (isCascadeDecision(d)) { skipped.push({ task: t, n, why: `closed by the cascade of ${decision}, not addressed directly — a cascade closure is not revived; the next \`--verify\` re-opens what still needs work` }); continue; }
     const idx = n - 1;
     const why = revokeSkipReason(t.rows?.[idx], decision);
     if (why) { skipped.push({ task: t, n, why }); continue; }

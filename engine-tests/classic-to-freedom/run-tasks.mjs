@@ -5896,6 +5896,28 @@ const decideFixtureB = (label, md = null) => {
     }
     fs.rmSync(base, { recursive: true, force: true });
   }
+  {
+    // Guard C: `not-applicable` is the PLAN's word. An agent typing `not-applicable — <reason>` onto a
+    // row the plan did NOT mark as a boundary (`!r.na`) must NOT hide the row from `--verify` — otherwise a
+    // MISSING row drops out of the gate with no builder and no plan authority, the same shape M1 closed for
+    // `wont-do` / `postponed`. A resolvable citation makes the leak worse: the report would file the row
+    // under boundaries-with-a-decision. `decidedRowKeys` keys the not-applicable exemption on `r.na`, so an
+    // agent-asserted one stays measured (and is named on Attention by assertedBoundaryRows).
+    const { base, dir, t } = decideFixtureB("m2-na-agent-row", "## D4 — an unrelated heading\n");
+    if (t) {
+      const fp = path.join(dir, t.file);
+      fs.writeFileSync(fp, setOutcome(fs.readFileSync(fp, "utf8"), 1, "not-applicable — covered elsewhere per D4"));
+      syncTaskDir(dir, RUN, OPTS);
+      const preMerged = readMergedTaskDir(dir, RUN, OPTS);
+      const at = preMerged.tasks.find((x) => x.id === t.id);
+      const decKeys = decidedRowKeys(preMerged);
+      check("M2: an agent-typed `not-applicable` on a row the plan did NOT mark as a boundary (`!r.na`) does NOT hide the row from `--verify` — the not-applicable exemption is keyed on `r.na`, so an agent cannot assert the plan's own word to drop a row out of the gate",
+        () => at?.rows?.[0]?.outcomeKind === "not-applicable" && !at?.rows?.[0]?.na
+          && decKeys.size === 0,
+        () => ({ kind: at?.rows?.[0]?.outcomeKind, na: at?.rows?.[0]?.na, decKeys: decKeys.size }));
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 
   // ---- (AC 12) --verify sources rows from the task registry ------------------------------------------------
   // A row the registry has closed by decision must not appear in --verify's table, its verdict, or its
@@ -6517,10 +6539,63 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
         () => ({ cascaded: (res.cascaded || []).map((c) => `${c.task.id}:${c.n}`),
           repairKinds: (repAfter?.rows || []).map((r) => r.outcomeKind),
           srcKinds: (srcAfter?.rows || []).map((r) => r.outcomeKind) }));
+      // Direction §3: `--revoke` reverses the decision a person addressed directly, but a repair task the
+      // cascade closed is NOT revived — the next `--verify` measures the page as it then stands. The
+      // cascade cell carries a `+` marker in the `decisions:` map, so revoke skips it while clearing the
+      // source row.
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D13" });
+      const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
+      const srcRevoked = readTaskDir(dir).find((x) => x.id === src.id);
+      check("§3: --revoke clears the DIRECTLY-decided source row but does NOT revive the repair task the cascade closed — the cascade cell is skipped, named on `skipped`, and its Outcome stays `wont-do`",
+        () => !rev.refused
+          && rev.cleared?.some((c) => c.task.id === src.id)
+          && !rev.cleared?.some((c) => c.task.id === rep.id)
+          && rev.skipped?.some((s) => s.task.id === rep.id && /cascade/.test(s.why))
+          && !srcRevoked?.rows?.[0]?.outcomeKind
+          && repRevoked?.rows?.some((r) => r.label === shared && r.outcomeKind === "wont-do"),
+        () => ({ cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
+          skipped: (rev.skipped || []).map((s) => `${s.task.id}:${s.n} ${s.why}`).slice(0, 4),
+          repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind),
+          srcKinds: (srcRevoked?.rows || []).map((r) => r.outcomeKind) }));
     }
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
+{
+  // A repair task decided `postponed` on its OWN (a direct `--decide --task <repair-id>`), not by cascade,
+  // must stay revokable — its map entry carries no cascade marker. This is the case the plain skip-repair-
+  // tasks approach would have broken.
+  const base = tmp("revoke-standalone-repair");
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), "## D19 — defer\n");
+  const decisions = new Map([["D19", "defer"]]);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const src = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
+    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  if (src) {
+    const shared = src.rows[0].label;
+    const rep = syncRepairDir(dir, RUN, { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } }, OPTS)
+      .written.find((t) => t.cause);
+    if (rep) {
+      // Decide the repair task DIRECTLY (not via a plan-row cascade): its entry has no `+` marker.
+      const dec = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+        destination: "ENG-42", taskId: rep.id, decisions });
+      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D19" });
+      const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
+      check("§3: a repair task decided `postponed` DIRECTLY (not by cascade) stays revokable — --revoke clears it, because only cascade-written cells carry the marker",
+        () => !dec.refused
+          && rev.cleared?.some((c) => c.task.id === rep.id)
+          && (repRevoked?.rows || []).every((r) => !r.outcomeKind),
+        () => ({ decided: dec.touched?.map((t) => `${t.task.id}:${t.n}`),
+          cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
+          repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
+    }
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
