@@ -3051,12 +3051,27 @@ function resolveStructuralVk(vk, ctx) {
 // yielded NO components at all was checked and is genuinely empty — the honest report there is "0/N present,
 // missing: …", which names the shortfall. Only a page that returned components while NONE of them carries a
 // `name` is the uncheckable case.
-function resolveFieldsByIdentity(vk, names, ops) {
+function resolveFieldsByIdentity(vk, names, ctx) {
+  const ops = ctx.ops;
   const builtNames = new Set(ops.filter((o) => o.name).map((o) => o.name));
   if (ops.length && !builtNames.size) return ["⚠ verify",
     `identity NOT checked — the built page returned ${ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected field(s) could be matched by name (a matching count of field-typed components is not evidence they are the expected fields); re-run get-page and pass \`bundle.viewConfig\` VERBATIM, where every component keeps its \`name\``, "unverified"];
   const missing = names.filter((n) => !builtNames.has(n));
   const b = names.length - missing.length;
+  // ENG-99192 — in `classic-layout` the page's fields must be EXACTLY the plan's set: a field CONTROL on the built
+  // page that is not in the plan is a base field the mode was supposed to REMOVE, and a documentation-only QA note
+  // did not make it happen (measured: the sub-agents asserted "base non-plan elements removed" and emitted no
+  // removes). This is the machine gate that forces it — a value-add widget (Feed, Dashboards, ApprovalList,
+  // compact profile, DCM bar, DataGrid) is not a field type, so FIELD_RE excludes it and it is never flagged.
+  if (ctx.reconcileMode === "classic-layout") {
+    const expected = new Set(names);
+    const extras = ops.filter((o) => o.name && ctx.FIELD_RE.test(o.type || "") && !expected.has(o.name)).map((o) => o.name);
+    if (extras.length) {
+      const ov = extras.length > 8 ? "…" : "";
+      const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";
+      return ["❌ EXTRA", `${extras.length} base field control(s) still on the page but NOT in the plan — classic-layout must REMOVE them (the on-page control only, never the entity column/data): ${extras.slice(0, 8).map((n) => esc(String(n))).join(", ")}${ov}${alsoMissing}`, "missing"];
+    }
+  }
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields matched BY NAME on the built page`, "ok"];
   const overflow = missing.length > 8 ? "…" : "";
   const miss = missing.length ? ` — missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}${overflow}` : "";
@@ -3071,7 +3086,7 @@ function resolveFieldsByIdentity(vk, names, ops) {
 function resolveFieldsVk(vk, ctx) {
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.n} expected field(s)`);
   const names = [...new Set(vk.names || [])];
-  if (names.length) return resolveFieldsByIdentity(vk, names, ctx.ops);
+  if (names.length) return resolveFieldsByIdentity(vk, names, ctx);
   const b = ctx.ops.filter((o) => ctx.FIELD_RE.test(o.type || "")).length;
   if (b >= vk.n) return ["✅ Done", `${b} of ${vk.n} expected fields present by TYPE — this deliverable published no expected field names, so identity was not checkable`, "ok"];
   return ["⚠ verify", `${b}/${vk.n} components of a field type present — this deliverable published no expected field names, so identity was not checkable`, "unverified"];
@@ -3713,12 +3728,16 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
 // records are run-level, not page-level). `parentTpl` has NO plan fallback — reading the PLANNED template here
 // let `dcm-bar` show ✅ Done off a template nobody built while the `template` row went ⚠ on the same input.
-export function verifyCtx(root, pageKey) {
+export function verifyCtx(root, pageKey, reconcileMode = null) {
   const page = pageEntryOf(root, pageKey);
   const ops = pageOpsOf(page);
   const typeCount = (t) => ops.filter((o) => (o.type || "") === t).length;
   return {
     pageKey, page, root, ops, typeCount,
+    // ENG-99192 — the frozen reconcile mode (from the task folder, or null). Only `classic-layout` turns on the
+    // EXTRA-field check in resolveFieldsByIdentity: a field CONTROL on the built page that is not in the plan is a
+    // base field the mode was supposed to REMOVE. null (overlay / no reconcile / verify without --tasks) skips it.
+    reconcileMode,
     // The built page's GRID COLUMN codes — read once per page, like `ops`, so the list-column resolver measures the
     // page instead of trusting a report about it. `.anchored` says whether they came from the grid node itself.
     gridColumns: pageGridColumnsOf(page),
@@ -3731,10 +3750,10 @@ export function verifyCtx(root, pageKey) {
     parentTpl: entryObject(page)?.parentSchemaName || "",
   };
 }
-function verifyCtxFactory(root) {
+function verifyCtxFactory(root, reconcileMode = null) {
   const cache = new Map();
   return (pageKey) => {
-    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey));
+    if (!cache.has(pageKey)) cache.set(pageKey, verifyCtx(root, pageKey, reconcileMode));
     return cache.get(pageKey);
   };
 }
@@ -3800,7 +3819,7 @@ function planGapBanner(result) {
 
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
-  const ctxFor = verifyCtxFactory(root);
+  const ctxFor = verifyCtxFactory(root, opts.reconcileMode || null);
   const tally = verifyTally();
   // `opts.scopePageKey` narrows the table AND the verdict to ONE page — the in-context single-unit gate's view
   // (ENG-95469), the same scoping `renderChecklist` already applies. The UNSCOPED sweep is the post-hoc gate and is

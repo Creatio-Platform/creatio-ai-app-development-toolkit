@@ -3258,7 +3258,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by.");
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built);
+    // ENG-99192 — on `--verify --tasks <dir>` carry the folder's frozen reconcile mode into verify, so the
+    // classic-layout EXTRA-field gate (a base field still on the page but not in the plan) actually fires. Without
+    // `--tasks` there is no folder to read it from, so the gate stays off (overlay-equivalent), as before.
+    const verifyMode2 = tasksMode ? readFrozenMode(tasksDir) : null;
+    verifyRes = renderVerify(result, { ...checklistOpts(manifest), reconcileMode: verifyMode2 }, built);
     output = verifyRes.markdown + "\n";
     verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
     if (tasksMode) repairNote = runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));

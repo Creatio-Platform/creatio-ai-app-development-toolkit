@@ -11604,5 +11604,30 @@ check("ENG-94756 RETRACTION (negative control): the pattern matches a derived ju
     () => !/\| required \|/.test(s));
 }
 
+/* ENG-99192 Step 5 — the classic-layout EXTRA-field verify gate. A base field CONTROL on the built page that is not
+   in the plan is a base field the mode was meant to REMOVE; a documentation-only QA note did not make it happen
+   (measured), so `--verify` (with the folder's frozen mode) now flags it ❌ EXTRA and blocks. Value-add widgets are
+   not field-typed, so they are never flagged. Overlay / no-mode never flag. */
+{
+  const rn = runMigration({ entity: "X", entityColumns: { A: { type: "Text" }, B: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}},{operation:"insert",name:"B",parentName:"Header",propertyName:"items",values:{bindTo:"B"}}]};});` }] }, { baseDir: FIX });
+  const builtWithExtra = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" },
+    { name: "Owner", type: "crt.ComboBox" }, { name: "ESNFeed", type: "crt.Feed" }] } } } };
+  const vClassic = renderVerify(rn, { reconcileMode: "classic-layout" }, builtWithExtra);
+  check("ENG-99192 verify: classic-layout flags a base field NOT in the plan as ❌ EXTRA and blocks (complete=false)",
+    () => /❌ EXTRA/.test(vClassic.markdown) && /Owner/.test(vClassic.markdown) && vClassic.complete === false,
+    () => vClassic.markdown.split("\n").filter((l) => /Fields|EXTRA/.test(l)));
+  check("ENG-99192 verify: a value-add widget (crt.Feed) is NOT counted as an extra field",
+    () => !/ESNFeed/.test((vClassic.markdown.match(/❌ EXTRA[^|]*/) || [""])[0]));
+  check("ENG-99192 verify: overlay does NOT flag the base field (base positions/extras kept by design)",
+    () => !/❌ EXTRA/.test(renderVerify(rn, { reconcileMode: "overlay" }, builtWithExtra).markdown));
+  check("ENG-99192 verify: no mode (verify without --tasks) does NOT flag extras",
+    () => !/❌ EXTRA/.test(renderVerify(rn, {}, builtWithExtra).markdown));
+  const builtClean = { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" }] } } } };
+  check("ENG-99192 verify: classic-layout with EXACTLY the plan's fields raises no EXTRA",
+    () => !/❌ EXTRA/.test(renderVerify(rn, { reconcileMode: "classic-layout" }, builtClean).markdown));
+}
+
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

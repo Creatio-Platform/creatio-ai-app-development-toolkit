@@ -127,7 +127,10 @@ Handlers, business rules, and auto-fills are ported **exactly as in a normal mig
     client-removed element is gone (or hidden); no base/standard element was removed without a matching
     Classic removal.
   - **Mode 2:** every plan field/detail is present at its `Position` with its status; every base layout
-    element NOT in the plan is gone; every kept Freedom-only value-add component is still present.
+    element NOT in the plan is gone; every kept Freedom-only value-add component is still present. This is
+    **machine-enforced**: `migrate.mjs --verify --built <file> --tasks <dir>` (the folder carries the frozen
+    `classic-layout` mode) flags any field control on the built page that is not in the plan as **❌ EXTRA** and
+    blocks completion — so removal has to actually happen, it cannot be merely asserted.
 - Record each removal with its evidence in `worklog.md`. List any ambiguous removal as a manual
   decision in `decisions.md` rather than acting on it silently.
 

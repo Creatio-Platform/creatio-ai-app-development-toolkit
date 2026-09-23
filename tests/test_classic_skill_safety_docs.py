@@ -510,6 +510,17 @@ class ReconcileModeDocTests(unittest.TestCase):
         # overlay must be explicitly exempted from the parity check.
         self.assertIn("In `overlay` mode this parity check does not apply", content)
 
+    def test_mode2_removal_is_machine_enforced_not_asserted(self):
+        # ENG-99192 Step 5 — the measured failure was sub-agents ASSERTING "base non-plan elements
+        # removed" while emitting no removes. Both docs must say removal is gated by --verify (❌ EXTRA),
+        # not a documentation-only claim, so the enforcement can't quietly regress to prose.
+        reconcile = flat(read_text(RECONCILE_DOC))
+        self.assertIn("machine-enforced", reconcile)
+        self.assertIn("EXTRA", reconcile)
+        build = flat(read_text(BUILD_EXEC_DOC))
+        self.assertIn("asserting it is not doing it", build)
+        self.assertIn("EXTRA", build)
+
 
 if __name__ == "__main__":
     unittest.main()
