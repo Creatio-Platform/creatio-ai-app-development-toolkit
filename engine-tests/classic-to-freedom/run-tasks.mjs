@@ -6863,11 +6863,17 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   const isReview = (g) => g.baseTitle === "Quality gates";
   const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g)).flatMap((g) => g.rows.map((r) => r.label));
   const childKey = groups.find((g) => g.rows.some((r) => r.label === waitLabel))?.pageKey;
-  const split = { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap((k) => (k === "main"
-    ? [splitItem("x-source", "main", "main", rowsOf("main", (g) => !isReview(g))), splitItem("x-review", "main", "main", rowsOf("main", isReview))]
-    : k === childKey
-      ? [splitItem("x-waiting", k, k, [waitLabel]), splitItem("x-child", k, k, rowsOf(k).filter((l) => l !== waitLabel))]
-      : [splitItem(`x-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  const itemsFor = (k) => {
+    if (k === "main") {
+      return [splitItem("x-source", "main", "main", rowsOf("main", (g) => !isReview(g))),
+        splitItem("x-review", "main", "main", rowsOf("main", isReview))];
+    }
+    if (k === childKey) {
+      return [splitItem("x-waiting", k, k, [waitLabel]), splitItem("x-child", k, k, rowsOf(k).filter((l) => l !== waitLabel))];
+    }
+    return [splitItem(`x-${slugKey(k)}`, k, k, rowsOf(k))];
+  };
+  const split = { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap(itemsFor) };
   const base = tmp("decision-hold-cross-page");
   const dir = path.join(base, "build-tasks");
   freezeSplit(dir, JSON.stringify(split));
@@ -6880,10 +6886,14 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   min += 1;
   const withheldAs = (set) => startableTasks(set, dir).withheld.find((w) => w.task.id === "x-waiting")?.cause ?? null;
   const heldBefore = withheldAs(syncTaskDir(dir, run, { ...opts, now: AT(min) }));
-  runTask(dir, "x-review", run, opts, (min += 2));
+  min += 2;
+  runTask(dir, "x-review", run, opts, min);
   const miss = { main: { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, decLabelOf("onBulk0"))] } };
   const round = syncRepairDir(dir, run, miss, opts);
-  for (const t of round.written) runTask(dir, t.id, run, opts, (min += 2));
+  for (const t of round.written) {
+    min += 2;
+    runTask(dir, t.id, run, opts, min);
+  }
   const after = syncTaskDir(dir, run, { ...opts, now: AT(min + 2) });
   const srcRow = after.tasks.find((t) => t.id === "x-source")?.rows[n - 1];
   const released = startableTasks(after, dir);
