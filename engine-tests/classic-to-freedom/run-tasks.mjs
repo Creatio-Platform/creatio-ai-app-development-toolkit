@@ -6679,17 +6679,17 @@ console.log("\n===== build order: virtual attributes are declared before the han
   // The page's rows in DISPATCH order: tasks by `order`, rows in the order the task file lists them.
   const rowsInOrder = (set, pageKey) => [...set.tasks].sort((a, b) => a.order - b.order)
     .flatMap((t) => t.rows.filter((r) => (r.pageKey || t.pageKey) === pageKey).map((r) => ({ ...r, order: t.order })));
-  const firstIndex = (rows, pred) => rows.findIndex(pred);
-  const lastIndex = (rows, pred) => rows.map(pred).lastIndexOf(true);
+  const firstIndex = (rows, pred) => rows.findIndex((r) => pred(r));
+  const lastIndex = (rows, pred) => rows.map((r) => pred(r)).lastIndexOf(true);
   const isVmattr = (r) => r.vk === "vmattr";
   const isHandler = (r) => r.vk === "handler";
-  const isDependency = (r) => /^\[attribute-dependency\]/.test(r.label);
+  const isDependency = (r) => r.label.startsWith("[attribute-dependency]");
   const summary = (set, pageKey) => rowsInOrder(set, pageKey).map((r) => `${r.order}:${r.vk || "-"}:${r.label.slice(0, 40)}`);
 
   check("build order fixture (anti-vacuity): the form page carries virtual-attribute rows AND handler rows, cut across MORE THAN ONE task — the order between tasks is what dispatch follows, and a fixture that folds everything into one task cannot show it",
     () => {
       const rows = rowsInOrder(attrSet, "main");
-      const tasksWith = (pred) => new Set(rows.filter(pred).map((r) => r.order));
+      const tasksWith = (pred) => new Set(rows.filter((r) => pred(r)).map((r) => r.order));
       const all = new Set([...tasksWith(isVmattr), ...tasksWith(isHandler)]);
       return rows.filter(isVmattr).length >= 2 && rows.filter(isHandler).length >= 2 && all.size >= 2;
     }, () => summary(attrSet, "main"));

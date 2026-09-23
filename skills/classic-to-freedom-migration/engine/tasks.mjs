@@ -114,7 +114,8 @@ const NOTES_HEADING = "## Notes";
 const ENGINE_BODY_HEADING = "## Deliverables";
 const NOTES_GUIDANCE = "<!-- YOURS. Never rewritten: what you built, the evidence you filed, what blocked you, what you propose. -->";
 
-// BUILD PHASE per group, and this is the whole build order within a page. The Confirm worklist runs FIRST because
+// BUILD PHASE per group: the order of a page's groups. The one per-row exception is the declared virtual attributes,
+// which VIRTUAL_ATTRIBUTE_PHASE moves ahead of the handlers. The Confirm worklist runs FIRST because
 // its rows are open questions answered by reading the stand — resolving them after the page is built is how a page
 // gets built against a guess. Quality gates runs LAST because the `creatio-ui-guidelines` pass needs a page to
 // look at. A group not named here lands between the two, in the order `checklistGroups` emitted it.
@@ -3097,9 +3098,17 @@ function persistTaskSet(dir, merged) {
 // which writes nothing, and an index left as the last `--tasks` run derived it would name a row NOT BUILT that a
 // later task has since recorded `built` — while the report reads it as built. Only the DERIVED file is written: no
 // task file is touched, so the refusal still schedules and records nothing. A refused set carries no tasks and
-// would render an empty index over a real one, so it is never written.
+// would render an empty index over a real one, so it is never written. Nor is a set that disagrees with the
+// folder: a plan changed since the last slice merges into tasks whose files were never written and turns the files
+// on disk `stale`, and an index derived from it would list the missing files as work and the real ones as dropped.
 export function refreshTaskIndex(dir, set) {
   if (!set || set.refused || !fs.existsSync(dir)) return false;
+  if ((set.stale || []).length) return false;
+  const untouchable = new Set((set.blocked || []).map((b) => b.file));
+  const missing = (set.tasks || []).some((t) => !t.unread && !untouchable.has(t.file)
+    && t.kind !== REPAIR_KIND && t.origin !== TASK_ORIGIN_ORCHESTRATOR
+    && !fs.existsSync(path.join(dir, t.file)));
+  if (missing) return false;
   return writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(set));
 }
 
