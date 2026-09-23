@@ -23,6 +23,9 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
   applyDecision, revokeDecision, decidedRowKeys, parseDecisionsMap, renderDecisionsMap } from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 import { parseSplit, resolveSplit, rowKey, splitProblems, SPLIT_FILE } from "../../skills/classic-to-freedom-migration/engine/split.mjs";
+// The build-phase tables, read as a namespace so the guard over them reports a missing export as a failed check
+// rather than a module that does not link.
+import * as TASKS_MODULE from "../../skills/classic-to-freedom-migration/engine/tasks.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
@@ -6906,8 +6909,172 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+/* ================================================================================================
+   A HANDLER IS NEVER DISPATCHED BEFORE THE ROW THAT DECLARES THE ATTRIBUTE IT WRITES.
+   A form page cut into several tasks must put its `[attribute-virtual]` declarations in a task at or before
+   every task holding a `Handler —` row: a handler that writes an undeclared attribute is inert, so a handler
+   task dispatched first can only record its rows blocked. The fixture goes through the real engine — two
+   handlers, the virtual attributes they set, an attribute dependency that triggers one of them — on the form
+   page AND on the list page, with a chunk budget small enough that those rows land in different tasks.
+   ================================================================================================ */
+console.log("\n===== build order: virtual attributes are declared before the handlers that write them =====");
+{
+  const attrBody = 'define("MPage",[],function(){return{entitySchemaName:"M",'
+    + 'attributes:{"LegalEntity":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN},'
+    + '"IsSignVisible":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false},'
+    + '"Amount":{dependencies:[{columns:["Price"],methodName:"setLegalEntity"}]}},'
+    + 'diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}],'
+    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},setSignAttrs:function(){this.set("IsSignVisible",true);}}};});';
+  const attrSection = 'define("MSection",[],function(){return{entitySchemaName:"M",'
+    + 'attributes:{"IsListFlag":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},'
+    + 'methods:{setListFlag:function(){this.set("IsListFlag",true);},refreshFlag:function(){this.set("IsListFlag",false);}}};});';
+  const attrManifest = {
+    entity: "M", seed: SEED, schemas: [{ pkg: "P", body: attrBody }], addRecordMiniPage: false,
+    section: { schemas: [{ pkg: "P", body: attrSection }],
+      listColumns: { success: true, sectionSchema: "MSection", entity: "M", source: "schema-default", columns: [{ name: "Name" }] } },
+    planMeta: PLAN_META,
+    signals: { dcm: RESOLVED, processes: RESOLVED, printables: RESOLVED, deduplication: RESOLVED },
+  };
+  const attrRun = runMigration(attrManifest);
+  // `chunk: 6` holds about one handler per task, so the page is cut between its handlers and its attributes.
+  // `run: 0` keeps the per-artifact cut, since a collapsed run has only one build task.
+  const attrOpts = { ...checklistOpts(attrManifest), taskBudget: { run: 0, chunk: 6 } };
+  const attrSet = buildTaskSet(attrRun, attrOpts);
+  // The page's rows in DISPATCH order: tasks by `order`, rows in the order the task file lists them.
+  const rowsInOrder = (set, pageKey) => [...set.tasks].sort((a, b) => a.order - b.order)
+    .flatMap((t) => t.rows.filter((r) => (r.pageKey || t.pageKey) === pageKey).map((r) => ({ ...r, order: t.order })));
+  const firstIndex = (rows, pred) => rows.findIndex((r) => pred(r));
+  const lastIndex = (rows, pred) => rows.map((r) => pred(r)).lastIndexOf(true);
+  const isVmattr = (r) => r.vk === "vmattr";
+  const isHandler = (r) => r.vk === "handler";
+  const isDependency = (r) => r.label.startsWith("[attribute-dependency]");
+  const summary = (set, pageKey) => rowsInOrder(set, pageKey).map((r) => `${r.order}:${r.vk || "-"}:${r.label.slice(0, 40)}`);
+
+  check("build order fixture (anti-vacuity): the form page carries virtual-attribute rows AND handler rows, cut across MORE THAN ONE task — the order between tasks is what dispatch follows, and a fixture that folds everything into one task cannot show it",
+    () => {
+      const rows = rowsInOrder(attrSet, "main");
+      const tasksWith = (pred) => new Set(rows.filter((r) => pred(r)).map((r) => r.order));
+      const all = new Set([...tasksWith(isVmattr), ...tasksWith(isHandler)]);
+      return rows.filter(isVmattr).length >= 2 && rows.filter(isHandler).length >= 2 && all.size >= 2;
+    }, () => summary(attrSet, "main"));
+  check("build order (form page): every `[attribute-virtual]` row is dispatched before every `Handler —` row — the declaring task is ordered at or before the handler's, so a handler agent never finds its target attribute missing",
+    () => {
+      const rows = rowsInOrder(attrSet, "main");
+      return lastIndex(rows, isVmattr) < firstIndex(rows, isHandler);
+    }, () => summary(attrSet, "main"));
+  check("build order (list page): the same holds for the list page's own logic — `List — Other declared logic worklist`'s virtual attributes precede `List — Custom methods`",
+    () => {
+      const rows = rowsInOrder(attrSet, LIST_PAGE_KEY);
+      return rows.some(isVmattr) && rows.some(isHandler) && lastIndex(rows, isVmattr) < firstIndex(rows, isHandler);
+    }, () => summary(attrSet, LIST_PAGE_KEY));
+  check("build order: an `[attribute-dependency]` row follows the handlers — it wires an attribute to the method it triggers, so it needs that method ported first, and only the virtual attributes move ahead of the handlers",
+    () => {
+      const rows = rowsInOrder(attrSet, "main");
+      return rows.some(isDependency) && firstIndex(rows, isDependency) > lastIndex(rows, isHandler);
+    }, () => summary(attrSet, "main"));
+  check("build order: every `dependsOn` id names a task EARLIER in the queue — ordering is enough to sequence one page's chunks, and a forward edge is a deadlock the orchestrator cannot walk out of",
+    () => {
+      const orderById = new Map(attrSet.tasks.map((t) => [t.id, t.order]));
+      return attrSet.tasks.every((t) => t.dependsOn.every((d) => orderById.get(d) < t.order));
+    }, () => attrSet.tasks.map((t) => `${t.order}<-${t.dependsOn.map((d) => attrSet.tasks.find((x) => x.id === d)?.order).join(",")}`));
+  check("build order: a collapsed run (default budget, one build task) lists the virtual attributes before the handlers too — its single task walks the same phase order, so a lone builder reading top-down reaches the declaration first",
+    () => {
+      const collapsed = buildTaskSet(attrRun, checklistOpts(attrManifest));
+      const whole = collapsed.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+      const rows = (whole?.rows || []).filter((r) => r.pageKey === "main");
+      return !!whole && rows.some(isVmattr) && lastIndex(rows, isVmattr) < firstIndex(rows, isHandler);
+    }, () => buildTaskSet(attrRun, checklistOpts(attrManifest)).tasks.map((t) => t.artifact));
+
+  // A phase keyed by a title designspec does not emit is a phase that silently does not apply. The emitted titles
+  // are read off designspec's SOURCE rather than off one fixture's output, because a group no fixture happens to
+  // produce would otherwise make a mismatched key look fine.
+  const designspecSrc = fs.readFileSync(path.join(ENGINE_DIR, "designspec.mjs"), "utf8");
+  const emittedTitles = new Set([...designspecSrc.matchAll(/(?:\bG\(|\bpageGroup\([A-Za-z_.]+,\s*)"([^"]+)"/g)].map((m) => m[1]));
+  const phaseKeys = [...(TASKS_MODULE.GROUP_PHASE?.keys() || []), ...(TASKS_MODULE.VIRTUAL_ATTRIBUTE_PHASE?.keys() || [])];
+  check("build phases (anti-vacuity): the source scan finds every group title the fixtures actually emit — so a title it misses cannot pass the guard below by omission",
+    () => {
+      const seen = [...GROUPS, ...checklistGroups(attrRun, attrOpts)].map((g) => g.baseTitle);
+      return seen.length > 0 && seen.every((t) => emittedTitles.has(t)) && emittedTitles.has("Form — Custom methods")
+        && emittedTitles.has("⚠ Other declared logic worklist");
+    }, () => ({ missing: [...GROUPS, ...checklistGroups(attrRun, attrOpts)].map((g) => g.baseTitle).filter((t) => !emittedTitles.has(t)) }));
+  check("build phases: every title the phase tables are keyed by is a group title designspec emits — a key nothing emits leaves its group in the default phase, ordered only by emission, without a word",
+    () => phaseKeys.length > 0 && phaseKeys.every((k) => emittedTitles.has(k)),
+    () => ({ exported: phaseKeys.length, unmatched: phaseKeys.filter((k) => !emittedTitles.has(k)) }));
+}
+
+/* ================================================================================================
+   THE INDEX AND THE MIGRATION RESULT REPORT READ ONE TASK SET.
+   A row one task recorded `not-built — blocked` can be recorded `built` later, on the same row, by the task
+   that built it. The final `--verify --tasks` renders the report from the folder as it stands; when its repair
+   round is refused that path writes no task file, and `build-tasks/index.md` must still describe the same set
+   the report does, or the index names NOT BUILT a deliverable the report calls built.
+   ================================================================================================ */
+console.log("\n===== --verify --tasks: the index and the migration result report read one task set =====");
+{
+  const base = tmp("index-report-agree");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const analysing = readTaskDir(dir).find((t) => t.writesTo && t.rows.length >= 2);
+  const analysingPath = path.join(dir, analysing.file);
+  // The analysing task: row 1 recorded blocked, the rest built — a `partial`, closed without a dispatch record,
+  // which is what sends the final verify down the read-only (dispatch-gate refusal) path.
+  const text = allBuilt(fs.readFileSync(analysingPath, "utf8"));
+  fs.writeFileSync(analysingPath, setOutcome(text, 1, NOT_BUILT_BLOCKED));
+  cliTasks(["--tasks", dir], MANIFEST);
+  const notBuiltLine = `\`${analysing.file}\` row 1 — **not built**`;
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const reportNamesRow = (md) => md.includes(`(${analysing.file}), row 1`);
+  const before = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST).stdout || "";
+  check("index vs report (anti-vacuity): while the row stands blocked, the index AND the report both name it not built — so the checks below can tell agreement from a surface that never mentions the row",
+    () => readIndex(dir).includes(notBuiltLine) && reportNamesRow(before),
+    () => ({ index: readIndex(dir).slice(-900), report: before.slice(0, 1200) }));
+  // A LATER task builds the deliverable and records it on the analysing task's row.
+  fs.writeFileSync(analysingPath, setOutcome(fs.readFileSync(analysingPath, "utf8"), 1, "built"));
+  const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST);
+  const report = run.stdout || "";
+  check("index vs report (anti-vacuity): the final verify took the read-only path — the dispatch gate refused the repair round — and the report reads the row as built",
+    () => /NO REPAIR TASKS WRITTEN/.test(report) && report.startsWith("# Migration result") && !reportNamesRow(report),
+    () => report.slice(0, 1200));
+  check("index vs report: the index agrees with the report on a refused round — the row the report reads as built is not listed NOT BUILT, and its task is not counted partial",
+    () => !readIndex(dir).includes(notBuiltLine) && !/\*\*⚠ Partial:\*\*/.test(readIndex(dir)),
+    () => readIndex(dir).slice(0, 1600));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+/* ================================================================================================
+   A REFUSED ROUND NEVER INDEXES FILES THE FOLDER DOES NOT HOLD.
+   The report-agreement refresh above re-derives the index from a FRESH slice merged with the folder. When the
+   plan has changed since the folder was written, that slice names task files nobody wrote, and a refused round
+   writes no task file to back them. The index must then stay exactly as the last full slice left it.
+   ================================================================================================ */
+console.log("\n===== --verify --tasks: a refused round under a changed plan leaves the index untouched =====");
+{
+  const base = tmp("index-drift");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const analysing = readTaskDir(dir).find((t) => t.writesTo && t.rows.length >= 2);
+  const analysingPath = path.join(dir, analysing.file);
+  fs.writeFileSync(analysingPath, setOutcome(allBuilt(fs.readFileSync(analysingPath, "utf8")), 1, NOT_BUILT_BLOCKED));
+  cliTasks(["--tasks", dir], MANIFEST);
+  const indexBefore = readIndex(dir);
+  const onDisk = new Set(fs.readdirSync(dir));
+  // What the CHANGED plan would slice to, cut into a folder of its own so the one under test is never touched.
+  const probe = path.join(base, "probe");
+  cliTasks(["--tasks", probe], MANIFEST5);
+  const unwritten = readTaskDir(probe).filter((t) => !onDisk.has(t.file)).map((t) => t.file);
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST5);
+  const report = run.stdout || "";
+  check("index drift (anti-vacuity): the changed plan slices to task files the folder does not hold, and the verify under it refused its repair round",
+    () => unwritten.length > 0 && /NO REPAIR TASKS WRITTEN/.test(report),
+    () => ({ unwritten, status: run.status, report: report.slice(0, 1200), stderr: (run.stderr || "").slice(0, 600) }));
+  check("index drift: the refused round leaves index.md byte-identical and names none of the unwritten task files",
+    () => readIndex(dir) === indexBefore && unwritten.every((f) => !readIndex(dir).includes(f)),
+    () => ({ unwritten, index: readIndex(dir).slice(0, 1600) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

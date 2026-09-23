@@ -121,8 +121,8 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
   still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
-  An item may claim a whole group (`@Form — Logic`) or the next N rows of one (`@Form — Logic[50]`), taken in plan
-  order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
+  An item may claim a whole group (`@Form — Custom methods`) or the next N rows of one
+  (`@Form — Custom methods[50]`), taken in plan order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
   hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
   matching masks COUNTS but not identifiers (a digit inside a code span is part of a name), so a plan that gains a
   field does not force a re-cut while `ASPPricing2Page` stays distinct from its sibling. With no split file the
@@ -245,7 +245,12 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   its parent, `list` follows `main`, a page's `⚠ Confirm` rows are the first rows of its own task and its
   `Quality gates` review is its last task. Base-field overrides sit between the layout that creates the fields and
   the coverage that counts them: they are changes APPLIED ONTO the template's existing fields, so the fields must
-  exist first and the counts must see the result. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
+  exist first and the counts must see the result. A page's `[attribute-virtual]` rows come before its business
+  rules and `Custom methods` handlers, because a handler that writes an undeclared attribute does nothing; the rest
+  of `Other declared logic worklist` stays after the handlers, since an `attribute-dependency` row wires an
+  attribute to the method it triggers. Every `GROUP_PHASE` key has to be a title `checklistGroups` emits, and the
+  goldens check that against designspec's source: a renamed group otherwise drops to the default phase without any
+  warning. The exceptions lead the run: the `Reference cache`, then `Scaffolding`
   (`main`'s `Pages` group) — not a layout but the app/section/package placement, the binding to the EXISTING entity
   and the page shells, the preconditions every other task needs.
 - **Nothing is ever deleted, and nothing unreadable is ever written to.** A task that leaves the plan is reported as
