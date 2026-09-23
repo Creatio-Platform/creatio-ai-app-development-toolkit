@@ -2972,7 +2972,9 @@ function startRefusalText(set, startId, dir) {
     dispatchGateFailure = { startRefusal: true, dir };
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on a decision another task raised:\n`
       + decisionSourceLines(set.blockedByDecision.rows).join("\n")
-      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, then start this task.\n";
+      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
+      + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"
+      + " this task.\n";
   }
   if (set.blockedByOverlap) {
     dispatchGateFailure = { startRefusal: true, dir };
@@ -3138,7 +3140,7 @@ const withheldLine = (w) => {
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
   if (w.cause === HOLD_DECISION) {
-    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row releases it:`,
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row, or re-opening it to build it, releases it:`,
       ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
   }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;

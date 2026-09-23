@@ -2559,7 +2559,7 @@ export function scopeGroups(groups, pageKey) {
 // ONE row per handler. A helper the plan folded under a caller says so, or the row reads as a demand for its own
 // Freedom artifact. Shared by every page kind: two renderings of one stub list would disagree about what is built.
 function handlerStubRows(cs) {
-  // Rows follow the fold order, so a folded helper sits directly after its caller.
+  // Rows follow the fold order: a folded helper comes after its caller, with only its own chain between them.
   const { ordered } = foldByCaller(cs.handlerStubs || []);
   // each handler row carries a `handler` vk resolved against `--built.pages[k].handlers` (the page's
   // handler source, verbatim from get-page). A Freedom port rarely keeps the Classic method NAME, so the vk also
