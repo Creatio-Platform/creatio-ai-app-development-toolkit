@@ -7784,6 +7784,58 @@ check("handoff BACK: a `<kind>:<name>` key describes its ⚠ Confirm member row"
   hoBack.changeSet.needsDecision.find(n => n.kind === "message" && n.item === "RefreshThing")?.describedIn.card === "C02");
 check("handoff BACK: a key matching no row anywhere is reported, never swallowed",
   hoBack.behaviourIndex.unmatched.includes("ghostMethod") && hoBack.behaviourIndex.unmatched.length === 1);
+// The card a row cites rides on its checklist row, so the task cut can keep rows citing one card together.
+{
+  const rows = checklistGroups(hoBack, {}).flatMap((g) => g.rows);
+  const handlerRow = (m) => rows.find((r) => r.vk?.type === "handler" && r.vk.method === m);
+  const memberRow = rows.find((r) => r.label === "[message] RefreshThing");
+  check("checklist rows: a handler row carries the card its describing entry cites",
+    () => handlerRow("onStageChanged")?.card === "C01" && handlerRow("privateHelper")?.card === "C01",
+    () => ({ onStageChanged: handlerRow("onStageChanged")?.card, privateHelper: handlerRow("privateHelper")?.card }));
+  check("checklist rows: a member worklist row carries the card its describing entry cites",
+    () => memberRow?.card === "C02", () => memberRow);
+  check("checklist rows: a row with no describing card carries no card field",
+    () => rows.filter((r) => r.vk?.type === "handler" && !["onStageChanged", "privateHelper"].includes(r.vk.method))
+      .every((r) => !("card" in r)),
+    () => rows.filter((r) => r.card).map((r) => r.label));
+}
+// Handler rows follow the fold order: a folded helper sits after its caller, with only its own chain between them.
+// The helper is declared BEFORE its caller, so declaration order and fold order differ.
+{
+  const body = 'define("DealPage",[],function(){return{entitySchemaName:"Deal",'
+    + 'attributes:{"Stage":{dependencies:[{columns:["Stage"],methodName:"onStageChanged"}]}},methods:{'
+    + 'recalcTotals:function(){return this.get("Amount");},onStageChanged:function(){this.recalcTotals();},'
+    + 'other:function(){return 1;}},diff:[{operation:"insert",name:"Amount",parentName:"ProfileContainer",'
+    + 'propertyName:"items",values:{bindTo:"Amount"}}]};});';
+  const run = runMigration({ entity: "Deal", schemas: [{ pkg: "P", body }] });
+  const handlers = checklistGroups(run, {}).filter((g) => g.baseTitle === "Form — Custom methods")
+    .flatMap((g) => g.rows).filter((r) => r.vk?.type === "handler");
+  const at = (m) => handlers.findIndex((r) => r.vk.method === m);
+  const folded = handlers.filter((r) => r.vk.parent);
+  check("checklist rows: a folded handler row comes after its caller's row, with only its own chain between them",
+    () => folded.length > 0 && folded.every((r) => {
+      const p = at(r.vk.parent), i = at(r.vk.method);
+      return p >= 0 && p < i && handlers.slice(p + 1, i).every((x) => x.vk.parent);
+    }),
+    () => handlers.map((r) => `${r.vk.method}<${r.vk.parent || ""}`));
+  check("checklist rows: fold order keeps one row per handler",
+    () => handlers.length === run.changeSet.handlerStubs.length, () => handlers.length);
+}
+// The checklist's ⚠ Confirm worklist drops the kinds a plan table already carries, as the plan's own list does.
+{
+  const cs = { ...efcs, needsDecision: [...efcs.needsDecision,
+    { kind: "rule-condition", item: "RuleX", reason: "condition unread" },
+    { kind: "parse-gap", item: "GapY", reason: "parse gap" }] };
+  const confirm = checklistGroups({ entity: "X", changeSet: cs }, {})
+    .filter((g) => g.baseTitle === "⚠ Confirm worklist").flatMap((g) => g.rows);
+  check("checklist confirm group: no `entity-filter` or `rule-condition` row",
+    () => efcs.needsDecision.some((n) => n.kind === "entity-filter")
+      && !confirm.some((r) => ["entity-filter", "rule-condition"].includes(r.confirm?.kind)),
+    () => confirm.map((r) => r.label));
+  check("checklist confirm group: a kind no table carries keeps its row",
+    () => confirm.some((r) => r.confirm?.kind === "parse-gap" && r.confirm.item === "GapY"),
+    () => confirm.map((r) => r.label));
+}
 
 // AN ENTRY WITH ACCEPTANCE CRITERIA AND NO CARD IS NOT DESCRIBED, ON EITHER LEG.
 // `INDEX_ENTRY` sets no `minLength`, so `{ card: "", ac: ["AC-1"] }` is schema-valid and is what a merge agent

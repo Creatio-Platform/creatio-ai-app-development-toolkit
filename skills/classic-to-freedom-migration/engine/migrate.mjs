@@ -58,7 +58,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
-  readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
+  readMergedTaskDir, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
@@ -2968,6 +2968,12 @@ function startRefusalText(set, startId, dir) {
       + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
       + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
   }
+  if (set.blockedByDecision) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on a decision another task raised:\n`
+      + decisionSourceLines(set.blockedByDecision.rows).join("\n")
+      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, then start this task.\n";
+  }
   if (set.blockedByOverlap) {
     dispatchGateFailure = { startRefusal: true, dir };
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
@@ -3131,6 +3137,10 @@ const withheldLine = (w) => {
   const on = (w.tasks || []).map((d) => `${d.id} (\`${d.status}\`)`).join(", ");
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
+  if (w.cause === HOLD_DECISION) {
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row releases it:`,
+      ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
+  }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
   // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
   // what will hold the task once the books are repaired — worth printing, but never in place of the real refusal.
@@ -3140,6 +3150,9 @@ const withheldLine = (w) => {
   }
   return `   · ${taskLine(w.task)} — its file could not be read (${w.file}); repair it by hand`;
 };
+// One line per source row of a decision hold: the task and row whose `needs-decision` mark the hold waits on.
+const decisionSourceLines = (rows) => (rows || [])
+  .map((r) => `   · ${r.task.id} row ${r.n}: ${r.label}  (\`${r.task.file}\`)`);
 const heldLine = (h) => `   · ${taskLine(h.task)} — status \`${h.task.status}\`: a decision, not a schedule. Read its \`## Notes\`, fix what they name, set it back to \`todo\`.`;
 
 // One block of stdout per verdict; the caller decides the exit code from the verdict itself. They are separate

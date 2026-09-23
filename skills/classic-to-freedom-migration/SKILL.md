@@ -470,6 +470,8 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    has settled; go to step 8. *Run halted* (exit **2**) → nothing is startable AND nothing is running: a task is
    `blocked` or carries a status nobody recognises, and no re-run changes that — read its `## Notes` and decide.
    *Dispatch ledger broken* (exit **2**) → repair the ledger first; `--start` refuses every id until you do.
+   A task withheld with **every open row waiting on a decision** names the source task and row that raised it:
+   answer that decision with `--decide D<N> --row <task>:<n>` and the task is released. Do not dispatch it first.
 
    **The queue order it answers in is leaf-first, and that is a build requirement, not a preference:** a related
    list's Add/Edit opens the child's own form, so the child page exists before the parent list that opens it, and
@@ -497,13 +499,17 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    scope decision ("we will not build this", "not this phase") is the developer's, and it reaches the folder only
    through `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed`, which refuses unless `D<N>` already
    resolves as a heading in `decisions.md`. Never hand-edit a task file to close it.
+   **A build-time adjustment is recorded through `--decide` BEFORE the task it settles is dispatched.** An
+   adjustment written only into `decisions.md` prose leaves its rows open, and the task goes to a sub-agent with
+   nothing to build. A task whose every row is decided settles on its own and `--next` never offers it.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an
    artifact a dispatched task is still writing, because two open tokens on one artifact is precisely what lets a
-   single sub-agent hold both and sign each correctly. **Every reason it refuses exits `2`** — a broken ledger, a
-   status that is a decision, an unclosed dependency, an artifact already being written, a file the engine cannot
-   parse, an id the folder does not hold. No clock was opened in any of them, so do not dispatch the task: the
+   single sub-agent hold both and sign each correctly. It also refuses a task every open row of which waits on a
+   decision another task raised. **Every reason it refuses exits `2`** — a broken ledger, a
+   status that is a decision, an unclosed dependency, an open decision, an artifact already being written, a file
+   the engine cannot parse, an id the folder does not hold. No clock was opened in any of them, so do not dispatch the task: the
    sub-agent would hold no token for it and its closure would fail the dispatch gate.
 
    **`--start` prints a DISPATCH TOKEN. Put it in the sub-agent's prompt.** It is issued to that one task, it is

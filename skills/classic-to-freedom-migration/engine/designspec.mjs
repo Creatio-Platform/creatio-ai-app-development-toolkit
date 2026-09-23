@@ -2559,24 +2559,29 @@ export function scopeGroups(groups, pageKey) {
 // ONE row per handler. A helper the plan folded under a caller says so, or the row reads as a demand for its own
 // Freedom artifact. Shared by every page kind: two renderings of one stub list would disagree about what is built.
 function handlerStubRows(cs) {
-  const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
-    .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
+  // Rows follow the fold order, so a folded helper sits directly after its caller.
+  const { ordered } = foldByCaller(cs.handlerStubs || []);
   // each handler row carries a `handler` vk resolved against `--built.pages[k].handlers` (the page's
   // handler source, verbatim from get-page). A Freedom port rarely keeps the Classic method NAME, so the vk also
   // publishes the method's TRIGGERS (the attribute whose change ran it, the control it was bound to) and, for a
   // helper folded under a caller, the caller's — a handler branching on that trigger is the port.
   const stubByName = new Map((cs.handlerStubs || []).map((h) => [h.sourceMethod, h]));
   const rootTrigger = (t) => (t?.kind === "internal" ? t.rootTrigger : t);
-  return (cs.handlerStubs || []).map((h) => {
-    const parent = foldedUnder.get(h.sourceMethod);
+  return ordered.map(({ stub: h, parent }) => {
     // Composed, not exclusive: a folded helper the list analyzer already read is still already read.
     const unfolded = h.listMapped ? ` (${LIST_MAPPED_TARGET})` : "";
     const note = (parent ? ` (ported with \`${esc(parent)}\`)` : "") + unfolded;
     const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
     const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
-    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note,
+    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note, ...cardField(h),
       vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
+}
+// The behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing one card
+// in one task. Absent when the row cites no card.
+function cardField(x) {
+  const card = x.describedIn?.card || x.describedIn?.bodyCard;
+  return card ? { card } : {};
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records
 // it and must NOT ask for a second build. Same shape as the folded-helper note beside it.
@@ -2589,9 +2594,9 @@ function memberWorklistRows(cs) {
     // use them — nothing on the stand answers to it on its own, so it is informational, never a row to confirm.
     .map((d) => {
       const label = `[${esc(d.kind)}] ${esc(d.item)}`;
-      if (d.kind === "attribute-virtual") return { label, vk: { type: "vmattr", name: d.item } };
-      if (d.kind === "module-dep") return { label, info: "Classic define() dependencies — their contribution is carried by the handlers and rules that used them; nothing on the stand answers to this row on its own" };
-      return { label };
+      if (d.kind === "attribute-virtual") return { label, ...cardField(d), vk: { type: "vmattr", name: d.item } };
+      if (d.kind === "module-dep") return { label, ...cardField(d), info: "Classic define() dependencies — their contribution is carried by the handlers and rules that used them; nothing on the stand answers to this row on its own" };
+      return { label, ...cardField(d) };
     });
 }
 // The section's imperative work, built by the SAME two row builders as the form page's. Both titles name the
@@ -2648,9 +2653,9 @@ function evidenceRow(id, label, extra = {}, vkExtra = {}) {
 // and without `esc`, which is a rendering transform and would not round-trip.
 function confirmWorklistRows(pageKey, cs) {
   return (cs.needsDecision || [])
-    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind))
+    .filter((nn) => !SHOWN_ELSEWHERE.has(nn.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(nn.kind))
     .map((d) => evidenceRow(`${pageKey}#confirm:${d.kind}:${d.item}`, `[${esc(d.kind)}] ${esc(d.item)}`,
-      { confirm: { kind: d.kind, item: d.item } }));
+      { confirm: { kind: d.kind, item: d.item }, ...cardField(d) }));
 }
 // Quality gates — ALWAYS present, one per page. See the label for what it demands. It is an evidence row, never a vk-less `skip`
 // row: visible, tallied in nothing, closable by asserting it in prose — which is exactly how "native components →

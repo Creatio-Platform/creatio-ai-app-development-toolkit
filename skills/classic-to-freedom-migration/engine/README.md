@@ -152,6 +152,15 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
   heavier than the whole budget gets a chunk to itself. Same-artifact chunks are chained through `dependsOn`.
   The weights and the chunk size are declared in `TASK_BUDGET` and overridable per run with `opts.taskBudget`.
+- **The cut packs units, not rows.** A unit is a fold chain (a handler and the helpers folded under it through
+  `vk.parent`) joined with every row of the bucket that cites the same card (`card`, the id `Described in` cites).
+  A unit sits at its first member's position and is never split; a unit heavier than the budget gets a chunk to
+  itself. A bucket that fits one chunk keeps the plan's row order.
+- **A task whose open rows all wait on an open decision is held (`HOLD_DECISION`).** Each row carries a decision
+  subject: its card, else its confirm evidence id, else its fold-chain root. A `not-built — needs-decision` row
+  with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject in
+  another task is withheld by `--next` and refused by `--start`, naming the source task and row. `--decide` on
+  the source row releases it. A row with no subject never waits.
 - **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
   exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
   rule protects nothing while every extra task pays a fresh context that re-reads what the last one read. Measured

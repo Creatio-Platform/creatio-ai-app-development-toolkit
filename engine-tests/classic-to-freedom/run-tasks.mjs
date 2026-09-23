@@ -17,7 +17,7 @@ import { buildTaskSet, mergeTaskSet, parseTaskFile, renderTaskFile, renderTaskIn
   ARTIFACT_SCAFFOLD, ARTIFACT_REFS, ARTIFACT_WHOLE, REFS_DIR, buildRepairTasks, syncRepairDir,
   startTask, readTimings, readTimingsFile, forecastMinutes, renderProgress, TIMINGS_FILE,
   dispatchAudit, readTaskDir,
-  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER,
+  startBlocker, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_UNREAD, HOLD_LEDGER, HOLD_DECISION,
   NEXT_STARTABLE, NEXT_WAITING, NEXT_FINISHED, NEXT_STUCK, NEXT_LEDGER, NEXT_VERDICTS, HOLD_CAUSES,
   REPAIR_ROUND_CAP, buildTaskSetFromSplit, taskSetFor, freezeSplit, readMergedTaskDir, unclaimedPlanRows,
   cutProblems, cutRefusal, REFUSED_COVERAGE, REFUSED_CUT,
@@ -5163,6 +5163,7 @@ console.log("\n===== the startable set — one predicate, two callers =====");
         if (res.started) return false;
         if (w.cause === HOLD_DEPS) return (res.blockedByDeps || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
         if (w.cause === HOLD_OVERLAP) return (res.blockedByOverlap || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
+        if (w.cause === HOLD_DECISION) return (res.blockedByDecision?.tasks || []).map((x) => x.id).sort().join(",") === idsOf(w.tasks).sort().join(",");
         return !!res.unread;
       }), () => a.withheld.map((w) => ({ id: w.task.id, cause: w.cause, on: idsOf(w.tasks || []) })));
     // HELD DIRECTION — the class an equivalence can skip. A task the query holds for its STATUS must be
@@ -6638,6 +6639,163 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
         cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
         repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
   }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// ============================================================================================================
+// ONE DELIVERABLE, ONE SUB-AGENT: the automatic cut keeps a fold chain and the rows citing one card in one task,
+// and dispatch skips a task with nothing left to build.
+// ============================================================================================================
+console.log("\n===== one deliverable, one sub-agent =====");
+const claimsAll = (tasks, groups) => {
+  const u = unclaimedPlanRows(tasks, groups);
+  return u.unplaced.length === 0 && u.surplus.length === 0;
+};
+{
+  const handler = (method, extra = {}) => ({ label: `Handler — \`${method}\``,
+    vk: { type: "handler", method, parent: extra.parent || null, triggers: [], category: null },
+    ...(extra.card ? { card: extra.card } : {}) });
+  const logicGroup = (rows) => [{ pageKey: "main", baseTitle: "Form — Custom methods", title: "Form — Custom methods", rows }];
+  const TIGHT = { ...OPTS, taskBudget: { run: 0, chunk: 8 } };
+  const cutOf = (groups, opts = TIGHT) => buildTaskSet(RUN, opts, groups).tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
+  const methodsOf = (t) => t.rows.map((r) => /`([^`]+)`/.exec(r.label)?.[1]);
+  const taskOfMethod = (tasks, m) => tasks.find((t) => methodsOf(t).includes(m))?.id;
+  const shape = (tasks) => tasks.map((t) => methodsOf(t).join(","));
+
+  const straddle = logicGroup([handler("h0"), handler("caller"), handler("helper", { parent: "caller" })]);
+  const straddleCut = cutOf(straddle);
+  check("cut: a fold chain that straddles the budget stays in one task",
+    () => taskOfMethod(straddleCut, "caller") === taskOfMethod(straddleCut, "helper"), () => shape(straddleCut));
+
+  const heavy = logicGroup([handler("h0"), handler("caller"), handler("helper", { parent: "caller" }),
+    handler("deeper", { parent: "helper" }), handler("h1")]);
+  const heavyCut = cutOf(heavy);
+  const chainTask = heavyCut.find((t) => methodsOf(t).includes("caller"));
+  check("cut: a fold chain heavier than the budget gets a task of its own, holding the whole chain and nothing else",
+    () => methodsOf(chainTask).join(",") === "caller,helper,deeper", () => shape(heavyCut));
+
+  const sameCard = logicGroup([handler("h0", { card: "C06" }), handler("h1"), handler("h2"), handler("h3", { card: "C06" })]);
+  const sameCardCut = cutOf(sameCard);
+  check("cut: rows citing one card land in one task",
+    () => taskOfMethod(sameCardCut, "h0") === taskOfMethod(sameCardCut, "h3"), () => shape(sameCardCut));
+  check("cut: a unit sits at the position of its first member",
+    () => shape(sameCardCut).join(" | ") === "h0,h3 | h1,h2", () => shape(sameCardCut));
+
+  const joined = logicGroup([handler("a", { card: "C1" }), handler("b"), handler("c", { parent: "a" }),
+    handler("d", { card: "C1" }), handler("e")]);
+  const joinedCut = cutOf(joined, { ...OPTS, taskBudget: { run: 0, chunk: 4 } });
+  check("cut: a fold chain and a card joined by one row form one unit",
+    () => new Set(["a", "c", "d"].map((m) => taskOfMethod(joinedCut, m))).size === 1, () => shape(joinedCut));
+
+  const roomy = cutOf(sameCard, { ...OPTS, taskBudget: { run: 0, chunk: 100 } });
+  check("cut: a bucket under the budget keeps the plan's row order",
+    () => roomy.length === 1 && methodsOf(roomy[0]).join(",") === "h0,h1,h2,h3", () => shape(roomy));
+
+  check("cut: every plan row is claimed by exactly one task after the unit cut",
+    () => [straddle, heavy, sameCard, joined].every((g) => claimsAll(buildTaskSet(RUN, TIGHT, g).tasks, g)),
+    () => [straddle, heavy, sameCard, joined].map((g) => unclaimedPlanRows(buildTaskSet(RUN, TIGHT, g).tasks, g)));
+  check("cut: every plan row of the fixture is claimed by exactly one task under a tight budget",
+    () => claimsAll(buildTaskSet(RUN, TIGHT, GROUPS).tasks, GROUPS),
+    () => unclaimedPlanRows(buildTaskSet(RUN, TIGHT, GROUPS).tasks, GROUPS));
+}
+
+// The real pipeline: two handlers described by one card, cut on a budget that would otherwise separate them.
+const CARD_MANIFEST = { ...manifestOf({ bulk: 2 }), behaviourIndex: {
+  onBulk0: { card: "C7", ac: ["AC-1"] }, onBulk5: { card: "C7", ac: ["AC-2"] } } };
+const CARD_OPTS = { ...optsOf(CARD_MANIFEST), taskBudget: { run: 0, chunk: 8 } };
+const CARD_RUN = runMigration(CARD_MANIFEST);
+const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
+{
+  const set = buildTaskSet(CARD_RUN, CARD_OPTS, CARD_GROUPS);
+  const owner = (m) => set.tasks.find((t) => t.rows.some((r) => r.label === `Handler — \`${m}\``))?.id;
+  check("cut (pipeline): the fixture carries the card on both described handler rows",
+    () => CARD_GROUPS.flatMap((g) => g.rows).filter((r) => r.card === "C7").length === 2);
+  check("cut (pipeline): two handlers described by one card land in one task",
+    () => owner("onBulk0") && owner("onBulk0") === owner("onBulk5"),
+    () => set.tasks.map((t) => `${t.id}: ${t.rows.map((r) => r.label).join(" · ")}`));
+  check("cut (pipeline): every plan row is claimed by exactly one task",
+    () => claimsAll(set.tasks, CARD_GROUPS), () => unclaimedPlanRows(set.tasks, CARD_GROUPS));
+}
+
+// A task every row of which was `--decide`d settles, so `--next` never offers it.
+{
+  const { base, dir, t } = decideFixtureA("decided-not-offered");
+  if (t) {
+    const before = startableTasks(syncTaskDir(dir, RUN, OPTS), dir);
+    const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do", taskId: t.id,
+      decisions: new Map([["D13", "descoped before dispatch"]]) });
+    const after = startableTasks(syncTaskDir(dir, RUN, OPTS), dir);
+    const named = (a) => [...a.startable, ...a.withheld.map((w) => w.task), ...a.held.map((h) => h.task)].map((x) => x.id);
+    check("--next: a task every row of which was decided before dispatch is not offered, and the ledger holds",
+      () => named(before).includes(t.id) && !res.refused && !named(after).includes(t.id) && after.verdict !== NEXT_LEDGER,
+      () => ({ before: named(before), after: named(after), verdict: after.verdict }));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
+// A task whose open rows all wait on a decision another task raised is held until that decision is recorded.
+{
+  const labelOf = (m) => `Handler — \`${m}\``;
+  const rowsOf = (k, keep = () => true) => CARD_GROUPS.filter((g) => g.pageKey === k && keep(g))
+    .flatMap((g) => g.rows.map((r) => r.label));
+  const isReview = (g) => g.baseTitle === "Quality gates";
+  const pages = [...new Set(CARD_GROUPS.map((g) => g.pageKey))];
+  const split = { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
+    ? [splitItem("dec-source", "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== labelOf("onBulk5"))),
+      splitItem("dec-waiting", "main", "main", [labelOf("onBulk5")]),
+      splitItem("dec-review", "main", "main", rowsOf("main", isReview))]
+    : [splitItem(`dec-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  const base = tmp("decision-hold");
+  const dir = path.join(base, "build-tasks");
+  freezeSplit(dir, JSON.stringify(split));
+  const opts = optsOf(CARD_MANIFEST);
+  const first = syncTaskDir(dir, CARD_RUN, opts);
+  const src = first.tasks.find((t) => t.id === "dec-source");
+  const n = src ? src.rows.findIndex((r) => r.label === labelOf("onBulk0")) + 1 : 0;
+  let min = clearDepsOf(dir, "dec-source", CARD_RUN, opts);
+  startTask(dir, "dec-source", CARD_RUN, { ...opts, dispatchToken: "tok-dec-source" }, null, AT(min));
+  closeCells(dir, "dec-source", (i) => (i === n ? "not-built — needs-decision" : "built"));
+  editFrontMatter(dir, "dec-source", "agentNonce", "tok-dec-source");
+  min += 1;
+  const heldSet = syncTaskDir(dir, CARD_RUN, { ...opts, now: AT(min) });
+  const held = startableTasks(heldSet, dir);
+  const hold = held.withheld.find((w) => w.task.id === "dec-waiting");
+  check("--next: a task whose open rows all wait on a decision another task raised is withheld as a decision hold",
+    () => first.tasks.length > 0 && n > 0 && hold?.cause === HOLD_DECISION && hold.tasks.some((x) => x.id === "dec-source"),
+    () => ({ tasks: first.tasks.map((t) => t.id), n, verdict: held.verdict,
+      withheld: held.withheld.map((w) => `${w.task.id}:${w.cause}`),
+      status: heldSet.tasks.find((t) => t.id === "dec-source")?.status }));
+  check("--next: the hold names the source row that raised the decision",
+    () => hold?.rows?.some((r) => r.task.id === "dec-source" && r.n === n), () => hold?.rows);
+  const copy = tmp("decision-hold-start");
+  fs.cpSync(dir, copy, { recursive: true });
+  const refused = startTask(copy, "dec-waiting", CARD_RUN, opts, null, AT(min + 1));
+  fs.rmSync(copy, { recursive: true, force: true });
+  check("--start: refuses the held task with the same cause `--next` gives",
+    () => !refused.started && refused.blockedByDecision?.cause === HOLD_DECISION,
+    () => ({ started: refused.started?.id, keys: Object.keys(refused).filter((k) => k.startsWith("blocked")) }));
+  const manifestPath = path.join(base, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
+  const cliCopy = tmp("decision-hold-cli");
+  fs.cpSync(dir, cliCopy, { recursive: true });
+  const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", cliCopy, ...args], { encoding: "utf8" });
+  const nextOut = cli("--next").stdout || "";
+  const startCli = cli("--start", "dec-waiting");
+  fs.rmSync(cliCopy, { recursive: true, force: true });
+  check("--next (CLI): the decision hold names the source task and row",
+    () => /\[dec-waiting\] — every open row waits on a decision/.test(nextOut) && new RegExp(`dec-source row ${n}:`).test(nextOut),
+    () => nextOut);
+  check("--start (CLI): the decision hold refuses with exit 2 and names the source row",
+    () => startCli.status === 2 && /waits on a decision another task raised/.test(startCli.stdout || "")
+      && new RegExp(`dec-source row ${n}:`).test(startCli.stdout || ""),
+    () => ({ status: startCli.status, stdout: startCli.stdout, stderr: startCli.stderr }));
+  const dec = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
+    rowRef: { taskId: "dec-source", n: String(n) }, decisions: new Map([["D4", "handled elsewhere"]]) });
+  const released = startableTasks(syncTaskDir(dir, CARD_RUN, { ...opts, now: AT(min + 2) }), dir);
+  check("--decide on the source row releases the held task",
+    () => !dec.refused && released.startable.some((t) => t.id === "dec-waiting"),
+    () => ({ refused: dec.problems, verdict: released.verdict, startable: released.startable.map((t) => t.id),
+      withheld: released.withheld.map((w) => `${w.task.id}:${w.cause}`) }));
   fs.rmSync(base, { recursive: true, force: true });
 }
 
