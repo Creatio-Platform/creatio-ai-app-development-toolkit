@@ -118,7 +118,10 @@ const NOTES_GUIDANCE = "<!-- YOURS. Never rewritten: what you built, the evidenc
 // its rows are open questions answered by reading the stand — resolving them after the page is built is how a page
 // gets built against a guess. Quality gates runs LAST because the `creatio-ui-guidelines` pass needs a page to
 // look at. A group not named here lands between the two, in the order `checklistGroups` emitted it.
-const GROUP_PHASE = new Map([
+// EVERY KEY MUST BE A TITLE `checklistGroups` EMITS. A key nothing emits matches nothing, and the group it was
+// meant for falls to DEFAULT_PHASE without a word — where it is ordered only by emission, which can put a page's
+// handlers ahead of the attributes they write. The goldens check every key against designspec's source.
+export const GROUP_PHASE = new Map([
   ["⚠ Confirm worklist", 10],
   ["Pages", 20],
   ["Form — Layout (by tab/region)", 30],
@@ -126,16 +129,30 @@ const GROUP_PHASE = new Map([
   ["Form — Base-field overrides", 35],
   ["Form — Coverage (verified)", 40],
   ["Card actions", 50],
-  ["Form — Logic", 60],
-  ["⚠ Imperative members worklist", 70],
+  ["Form — Business rules", 60],
+  ["Form — Custom methods", 65],
+  // After the handlers: an `attribute-dependency` row wires an attribute to the method it triggers, so it needs
+  // that method ported first. The worklist's virtual attributes do not wait here — see VIRTUAL_ATTRIBUTE_PHASE.
+  ["⚠ Other declared logic worklist", 70],
   // The list page's own imperative work: after the page it attaches to is built, before its review.
-  ["List — Custom methods", 86],
-  ["List — Other declared logic worklist", 87],
+  ["List — Custom methods", 87],
+  ["List — Other declared logic worklist", 88],
   ["Child pages", 80],
   ["Quality gates", 99],
 ]);
 const DEFAULT_PHASE = 85;
 const phaseOf = (baseTitle) => GROUP_PHASE.get(baseTitle) ?? DEFAULT_PHASE;
+// A VIRTUAL ATTRIBUTE IS DECLARED BEFORE THE LOGIC THAT WRITES TO IT. The member worklist carries its
+// `[attribute-virtual]` rows (the `vmattr` vk) together with kinds that must follow the handlers, so this is a
+// ROW phase keyed by the worklist's title rather than a group phase: those rows alone move ahead of their page's
+// business rules and handlers, and every other row of the group stays where GROUP_PHASE puts it. A handler that
+// writes an undeclared attribute is inert, so a handler task dispatched first can only record its rows blocked.
+export const VIRTUAL_ATTRIBUTE_PHASE = new Map([
+  ["⚠ Other declared logic worklist", 55],
+  ["List — Other declared logic worklist", 86],
+]);
+const rowPhaseOf = (row, baseTitle) =>
+  (row.vk?.type === "vmattr" ? VIRTUAL_ATTRIBUTE_PHASE.get(baseTitle) : undefined) ?? phaseOf(baseTitle);
 
 // LEAF-FIRST, which is a build requirement and not a preference: a related list's Add/Edit opens the child's own
 // form, so the child page must exist before the parent's list can be wired to it. `subPageNodes` walks the tree
@@ -411,13 +428,17 @@ function chunkLabel(artifact, rows, cut) {
 }
 
 // The rows of one artifact, in build order, each tagged with the group it came from and weighed. Ordering is the
-// group phase (Confirm first, review last) and then the plan's own emission order — the same sequence the
-// per-group slicing walked, so bucketing changes WHO builds a row, never WHEN it is built relative to the others.
+// row's phase (its group's, or VIRTUAL_ATTRIBUTE_PHASE for a declared attribute) and then the plan's own emission
+// order — the same sequence the per-group slicing walked, so bucketing changes WHO builds a row, never WHEN it is
+// built relative to the others. The sort is stable, so rows sharing a phase and a group keep the plan's order.
 function artifactRows(groups, B) {
   return groups
-    .map((g, i) => ({ g, i, base: baseTitleOf(g) }))
-    .sort((a, b) => (phaseOf(a.base) - phaseOf(b.base)) || (a.i - b.i))
-    .flatMap(({ g, base }) => g.rows.map((r) => ({ ...r, groupTitle: base, pageKey: g.pageKey, weight: rowWeight(r, base, B) })));
+    .flatMap((g, i) => {
+      const base = baseTitleOf(g);
+      return g.rows.map((r) => ({ ...r, groupTitle: base, pageKey: g.pageKey, weight: rowWeight(r, base, B),
+        phase: rowPhaseOf(r, base), groupIndex: i }));
+    })
+    .sort((a, b) => (a.phase - b.phase) || (a.groupIndex - b.groupIndex));
 }
 
 // THE TASK SET. `planVersion` is the engine's own plan version — the string a `decisions.md` approval names — so a
@@ -520,7 +541,7 @@ function chunksOf(bucket, B) {
       reviewsArtifacts: bucket.reviewsArtifacts,
       anchor: n > 1 ? `${key}#${n}` : key,
       label: chunkLabel(bucket.artifact, srcRows, cut),
-      phase: phaseOf(srcRows[0].groupTitle),
+      phase: srcRows[0].phase,
       srcRows,
     };
   });
@@ -3069,6 +3090,17 @@ function persistTaskSet(dir, merged) {
   }
   writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(merged));
   return { unplaced };
+}
+
+// THE INDEX FOLLOWS THE SET THE REPORT WAS RENDERED FROM. `--verify --tasks` renders the migration result report off
+// the folder as it stands; when its repair round is refused it reads that folder through `readMergedTaskDir`,
+// which writes nothing, and an index left as the last `--tasks` run derived it would name a row NOT BUILT that a
+// later task has since recorded `built` — while the report reads it as built. Only the DERIVED file is written: no
+// task file is touched, so the refusal still schedules and records nothing. A refused set carries no tasks and
+// would render an empty index over a real one, so it is never written.
+export function refreshTaskIndex(dir, set) {
+  if (!set || set.refused || !fs.existsSync(dir)) return false;
+  return writeIfChanged(path.join(dir, TASK_INDEX_FILE), renderTaskIndex(set));
 }
 
 // ---8<--- MINTED: the orchestrator declares deliverables, the engine writes the file ---8<---
