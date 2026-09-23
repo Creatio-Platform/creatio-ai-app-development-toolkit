@@ -6798,10 +6798,16 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   fs.writeFileSync(srcFile, setOutcome(fs.readFileSync(srcFile, "utf8"), n, ""));
   editFrontMatter(reopened, "dec-source", "status", "todo");
   const afterReopen = startableTasks(syncTaskDir(reopened, CARD_RUN, { ...opts, now: AT(min + 1) }), reopened);
+  const restarted = startTask(reopened, "dec-source", CARD_RUN, { ...opts, dispatchToken: "tok-dec-source-2" }, null, AT(min + 2));
   fs.rmSync(reopened, { recursive: true, force: true });
   check("re-opening the source row releases the decision hold; the task then waits on the source task as a dependency",
     () => afterReopen.withheld.find((w) => w.task.id === "dec-waiting")?.cause === HOLD_DEPS,
     () => afterReopen.withheld.map((w) => `${w.task.id}:${w.cause}`));
+  check("a re-opened source task is startable again",
+    () => afterReopen.startable.some((t) => t.id === "dec-source") && restarted.started
+      && !Object.keys(restarted).some((k) => k.startsWith("blockedBy") && restarted[k]),
+    () => ({ startable: afterReopen.startable.map((t) => t.id), started: restarted.started?.id ?? restarted.started,
+      blocked: Object.keys(restarted).filter((k) => k.startsWith("blockedBy") && restarted[k]) }));
   const dec = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
     rowRef: { taskId: "dec-source", n: String(n) }, decisions: new Map([["D4", "handled elsewhere"]]) });
   const released = startableTasks(syncTaskDir(dir, CARD_RUN, { ...opts, now: AT(min + 2) }), dir);
