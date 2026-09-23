@@ -6778,8 +6778,39 @@ console.log("\n===== --verify --tasks: the index and the migration result report
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+/* ================================================================================================
+   A REFUSED ROUND NEVER INDEXES FILES THE FOLDER DOES NOT HOLD.
+   The report-agreement refresh above re-derives the index from a FRESH slice merged with the folder. When the
+   plan has changed since the folder was written, that slice names task files nobody wrote, and a refused round
+   writes no task file to back them. The index must then stay exactly as the last full slice left it.
+   ================================================================================================ */
+console.log("\n===== --verify --tasks: a refused round under a changed plan leaves the index untouched =====");
+{
+  const base = tmp("index-drift");
+  const dir = path.join(base, "build-tasks");
+  cliTasks(["--tasks", dir], MANIFEST);
+  const analysing = readTaskDir(dir).find((t) => t.writesTo && t.rows.length >= 2);
+  const analysingPath = path.join(dir, analysing.file);
+  fs.writeFileSync(analysingPath, setOutcome(allBuilt(fs.readFileSync(analysingPath, "utf8")), 1, NOT_BUILT_BLOCKED));
+  cliTasks(["--tasks", dir], MANIFEST);
+  const indexBefore = readIndex(dir);
+  const onDisk = new Set(fs.readdirSync(dir));
+  // What the CHANGED plan would slice to, cut into a folder of its own so the one under test is never touched.
+  const probe = path.join(base, "probe");
+  cliTasks(["--tasks", probe], MANIFEST5);
+  const unwritten = readTaskDir(probe).filter((t) => !onDisk.has(t.file)).map((t) => t.file);
+  const builtFile = path.join(base, "built.json");
+  fs.writeFileSync(builtFile, JSON.stringify({ pages: { main: false } }));
+  const run = cliTasks(["--verify", "--built", builtFile, "--tasks", dir], MANIFEST5);
+  const report = run.stdout || "";
+  check("index drift (anti-vacuity): the changed plan slices to task files the folder does not hold, and the verify under it refused its repair round",
+    () => unwritten.length > 0 && /NO REPAIR TASKS WRITTEN/.test(report),
+    () => ({ unwritten, status: run.status, report: report.slice(0, 1200), stderr: (run.stderr || "").slice(0, 600) }));
+  check("index drift: the refused round leaves index.md byte-identical and names none of the unwritten task files",
+    () => readIndex(dir) === indexBefore && unwritten.every((f) => !readIndex(dir).includes(f)),
+    () => ({ unwritten, index: readIndex(dir).slice(0, 1600) }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
