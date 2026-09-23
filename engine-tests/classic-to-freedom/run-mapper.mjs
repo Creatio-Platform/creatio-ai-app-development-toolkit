@@ -2711,6 +2711,22 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
+  // A MIS-FILED evidence id reaches the CLI, not only the library: the OR-chain that carries it into `notReady`
+  // and the banner that names it are what an orchestrator actually meets, and a row-level check proves neither.
+  // This page is EMPTY, so the build leg speaks here too — that the two legs are independent is shown over a whole
+  // page, which only a library-level payload can supply.
+  fs.writeFileSync(builtPath, JSON.stringify({
+    pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } },
+    evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+    judge: { "main#quality-gates-de6871bb": { convincing: true, why: "diffed against AccountPage" } },
+  }));
+  const vOrphan = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", builtPath], { input: verifyManifest, encoding: "utf8" });
+  check("migrate.mjs --verify --built: an id this run does not publish exits 2 and says EVIDENCE MIS-FILED, naming the key",
+    vOrphan.status === 2 && /EVIDENCE MIS-FILED/.test(vOrphan.stderr || "") && /main#quality-gates-de6871bb/.test(vOrphan.stderr || ""),
+    () => ({ status: vOrphan.status, stderr: (vOrphan.stderr || "").slice(0, 200) }));
+  check("the mis-filed banner tells the reader the filing is wrong, so a builder sent to it does not go looking for a short page",
+    /Not a build gap/.test(vOrphan.stderr || ""),
+    () => ({ stderr: (vOrphan.stderr || "").slice(0, 200) }));
   // (c-D12) Contract v2 — exit 2 is TWO conditions with OPPOSITE responses. Exiting 2 in silence would leave
   // an executor unable to tell "my build is short" (repair on-stand and re-verify) from "the PLAN is short"
   // (stop, return to the caller — no amount of building clears it). This SU
@@ -8804,10 +8820,101 @@ const EV_JUNK = [
 const evJunkResults = EV_JUNK.map(([n, rec]) => [n, evShape(rec)]);
 const evGood = evShape({ referencePage: "an existing Freedom page", components: ["crt.Input"] });
 check("an evidence record is complete only when each required field has the RIGHT SHAPE — `components` a non-empty array of non-blank strings, `referencePage` a non-blank string. Junk is ⚠ unverified, never a close",
-  evJunkResults.every(([, v]) => v.complete === false && v.unverified === 1 && v.missing === 0)
+  // BOTH halves stay open on a junk record: the filed half has nothing complete to report, and a verdict over a
+  // record the engine itself calls incomplete has nothing to be about, so it does not close the judged half either.
+  evJunkResults.every(([, v]) => v.complete === false && v.unverified === 2 && v.missing === 0)
   && evJunkResults.every(([, v]) => /no complete evidence record under/.test(v.markdown))
   && evGood.complete === true,   // positive control: a well-shaped record still closes
   () => ({ junk: evJunkResults.map(([n, v]) => [n, v.complete]), good: evGood.complete }));
+
+/* ---- A verdict is about a record, so a row with no record behind it closes on nothing. ---- */
+const qgNoRecord = renderVerify(evShapeRes, {}, { ...evShapePage,
+  judge: { "main#quality-gates": { convincing: true, why: "Looks fine to me." } } });
+check("a verdict filed where no evidence record exists closes NOTHING — there is nothing for it to be about",
+  qgNoRecord.complete === false && /nothing for it to be about/.test(qgNoRecord.markdown),
+  () => ({ complete: qgNoRecord.complete, said: /nothing for it to be about/.test(qgNoRecord.markdown) }));
+
+/* ---- A record filed under an id the run does not publish is read by nothing. One page key is a single slot,
+   so a page split across many build tasks collides on it and agents suffix their own — which the engine never
+   derives, so the record it holds counts for nothing and no row says so. ---- */
+const orphanBuilt = (evidence, judge) => renderVerify(evShapeRes, {}, { ...evShapePage, evidence, judge });
+const orphanRun = orphanBuilt(
+  { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+  { "main#quality-gates-de6871bb": { convincing: true, why: "diffed against AccountPage" } });
+const cleanRun = orphanBuilt(
+  { "main#quality-gates": { referencePage: "AccountPage", components: ["crt.Input"] } },
+  { "main#quality-gates": { convincing: true, why: "diffed against AccountPage" } });
+check("a record filed under an id the run does not publish does NOT close anything and is NAMED — a suffix the engine cannot derive is not a place to file",
+  orphanRun.complete === false && /does not publish/.test(orphanRun.markdown) && /main#quality-gates-de6871bb/.test(orphanRun.markdown),
+  () => ({ complete: orphanRun.complete, named: /main#quality-gates-de6871bb/.test(orphanRun.markdown) }));
+// The row count must read the SAME as a payload that filed nothing at all: the two open rows are open because the
+// record is elsewhere, and the mis-filed key adds no row of its own. Its own field carries it instead.
+const nothingFiled = orphanBuilt({}, {});
+const wholePageOrphan = orphanBuilt(
+  { "main#quality-gates": { referencePage: "AccountPage", components: ["crt.Input"] },
+    "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+  { "main#quality-gates": { convincing: true, why: "diffed against AccountPage" },
+    "main#quality-gates-de6871bb": { convincing: true, why: "diffed against AccountPage" } });
+check("a WHOLE page with one mis-filed key leaves the build leg with nothing to say — no row is missing or unconfirmed, so only the filing blocks the run",
+  wholePageOrphan.missing === 0 && wholePageOrphan.unverified === 0
+  && wholePageOrphan.orphans.length === 1 && wholePageOrphan.complete === false,
+  () => ({ missing: wholePageOrphan.missing, u: wholePageOrphan.unverified, orphans: wholePageOrphan.orphans.length }));
+check("the sanctioned Verdict line names the mis-filing — it is read as the answer for the whole run, so it cannot read positive beside the banner that blocks it",
+  /EVIDENCE MIS-FILED/.test(wholePageOrphan.markdown) && !/All machine-checkable deliverables present/.test(wholePageOrphan.markdown),
+  () => ({ verdict: (wholePageOrphan.markdown.split(String.fromCharCode(10)).find((l) => /Verdict:/.test(l)) || "").slice(0, 120) }));
+check("a mis-filed id is a RUN-level fault, not rows: it adds nothing to a row count it was never in, and the per-page gaps still agree with that count",
+  orphanRun.unverified === nothingFiled.unverified && orphanRun.orphans.length === 1
+  && Object.values(orphanRun.pages).every((pg) => pg.unverified <= orphanRun.unverified),
+  () => ({ u: orphanRun.unverified, nothingFiledU: nothingFiled.unverified, orphans: orphanRun.orphans.length }));
+const scopedOrphan = renderVerify(evShapeRes, { scopePageKey: "main" }, { ...evShapePage,
+  evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
+  judge: { "main#quality-gates-de6871bb": { convincing: true, why: "diffed" } } });
+check("a SCOPED sweep raises no orphan — it renders one page's rows, so every other page's id would read as an orphan of the scope rather than of the run",
+  scopedOrphan.orphans.length === 0, () => ({ orphans: scopedOrphan.orphans.length }));
+const manyEv = {}, manyJu = {};
+for (let i = 0; i < 15; i++) {
+  const k = `main#quality-gates-orphan${String(i).padStart(2, "0")}`;
+  manyEv[k] = { referencePage: "P", components: ["crt.Input"] };
+  manyJu[k] = { convincing: true, why: "ok" };
+}
+const manyOrphans = orphanBuilt(manyEv, manyJu);
+const bannerLine = manyOrphans.markdown.split("\n").find((l) => /does not publish/.test(l)) || "";
+const namedCount = (bannerLine.match(/orphan\d\d/g) || []).length;
+check("the orphan banner names at most twelve ids and counts the rest — a list that grows without bound stops being readable, and a cut with no count hides how much it cut",
+  manyOrphans.orphans.length === 15 && namedCount === 12 && /\(\+3 more\)/.test(bannerLine),
+  () => ({ orphans: manyOrphans.orphans.length, named: namedCount, line: bannerLine.slice(-90) }));
+check("the SAME record filed under the published id raises no orphan — the check names mis-filed keys, not every key",
+  /does not publish/.test(cleanRun.markdown) === false,
+  () => ({ said: /does not publish/.test(cleanRun.markdown) }));
+
+/* ---- A raised finding is owned by a decision, not by the record that raised it. The row's label allows a
+   finding to be raised rather than fixed, so the question is who took it — answered by the decision log naming
+   the row's own published id, never by reading what a finding says. ---- */
+const ownRun = (extra) => renderVerify(evShapeRes, {}, { ...evShapePage,
+  evidence: { "main#quality-gates": { referencePage: "AccountPage", components: ["crt.Input"],
+    findingsRaised: ["Medium - left/right balance varies by tab. Raised, not built."] } },
+  judge: { "main#quality-gates": { convincing: true, why: "diffed against AccountPage" } }, ...extra });
+const ownUnclaimed = ownRun({ decisionClaims: ["list#quality-gates"] });
+const ownClaimed = ownRun({ decisionClaims: ["main#quality-gates"] });
+const ownNoList = ownRun({});
+const ownProse = renderVerify(evShapeRes, {}, { ...evShapePage,
+  evidence: { "main#quality-gates": { referencePage: "AccountPage", components: ["crt.Input"], findingsRaised: "None requiring a fix." } },
+  judge: { "main#quality-gates": { convincing: true, why: "diffed against AccountPage" } }, decisionClaims: [] });
+const ownFixed = renderVerify(evShapeRes, {}, { ...evShapePage,
+  evidence: { "main#quality-gates": { referencePage: "AccountPage", components: ["crt.Input"],
+    findings: ["Spacing on the tab — fixed in this pass."] } },
+  judge: { "main#quality-gates": { convincing: true, why: "diffed against AccountPage" } }, decisionClaims: [] });
+check("a finding the pass FIXED owes nobody a decision — `findings` records what was settled, and only `findingsRaised` asks who owns it",
+  ownFixed.complete === true, () => ({ complete: ownFixed.complete }));
+check("a record that raises findings under a row no decision names does NOT close — a finding raised rather than fixed is closed by a decision that takes it",
+  ownUnclaimed.complete === false && /no decision in/.test(ownUnclaimed.markdown),
+  () => ({ complete: ownUnclaimed.complete, said: /no decision in/.test(ownUnclaimed.markdown) }));
+check("the SAME record closes once a decision names this row — raising a finding stays allowed, leaving it with nobody does not",
+  ownClaimed.complete === true, () => ({ complete: ownClaimed.complete }));
+check("a payload composed before the claim list existed is not read as claiming none — the rule is silent, not hostile, on an offline replay",
+  ownNoList.complete === true, () => ({ complete: ownNoList.complete }));
+check("prose in the findings field raises nothing to own — only a list with entries states a finding",
+  ownProse.complete === true, () => ({ complete: ownProse.complete }));
 
 /* ---- F6: two label defects. (a) D2 suppresses a sub-page's `template` vk when the child rule derives no
    template choice — but the label still demanded `<FILL: form template>`, a decision the engine
@@ -12017,6 +12124,50 @@ const asFolder = (over = {}) => {
   if (over.reach !== null) asWrite(d, "reads/04-reachability-sectionRegistered.json", over.reach || { workplaces: 1, names: ["Applicants"] });
   return d;
 };
+// A row is owned by a DECISION naming it, so the claim list is composed from the decision log. Null and empty are
+// different answers: no log read says nothing about ownership, an empty list says the log names no row.
+const asClaimFolder = (decisionsText) => {
+  const d = asFolder();
+  asWrite(d, "reads/index.json", { version: 1, planVersion: "plan-aaaa1111", evidenceIds: ["main#quality-gates", "list#quality-gates"], reads: [
+    { kind: "pageMeta", file: "reads/01-meta-main.json", pageKey: "main", what: "m" },
+    { kind: "pageBundle", file: "reads/02-bundle-main.json", pageKey: "main", what: "b" },
+    { kind: "businessRules", file: "reads/03-rules-main.json", pageKey: "main", what: "r" },
+    { kind: "reachability", file: "reads/04-reachability-sectionRegistered.json", reachabilityKey: "sectionRegistered", what: "s" },
+  ] });
+  if (decisionsText !== null) fs.writeFileSync(path.join(d, "decisions.md"), decisionsText);
+  return d;
+};
+const asFindingsFolder = (findingsText) => {
+  const d = asClaimFolder(null);
+  fs.writeFileSync(path.join(d, "findings.md"), findingsText);
+  return d;
+};
+{
+  const noLog = assembleBuilt(asClaimFolder(null)).built;
+  const orphanOnly = assembleBuilt(asClaimFolder("| D1 | the 13 mis-filed records under `main#quality-gates-de6871bb` are re-filed |")).built;
+  const realClaim = assembleBuilt(asClaimFolder("| D12 | findings.md F11; repair round over `list#quality-gates` |")).built;
+  check("a run with NO decision log claims NOTHING and says so — it looked, and an empty list is that answer; only a payload composed before the field existed carries no list at all",
+    () => Array.isArray(noLog.decisionClaims) && noLog.decisionClaims.length === 0,
+    () => ({ claims: noLog.decisionClaims }));
+  check("a decision that names only a MIS-FILED id does not claim the published id it starts with — an id ends where one could still continue",
+    () => Array.isArray(orphanOnly.decisionClaims) && orphanOnly.decisionClaims.length === 0,
+    () => ({ claims: orphanOnly.decisionClaims }));
+  const leftPrefixed = assembleBuilt(asClaimFolder("| D1 | settled under `child:main#quality-gates` |")).built;
+  check("a decision naming a LONGER id that ends with a published one claims nothing — an id ends on both sides",
+    () => Array.isArray(leftPrefixed.decisionClaims) && leftPrefixed.decisionClaims.length === 0,
+    () => ({ claims: leftPrefixed.decisionClaims }));
+  const proseClaim = assembleBuilt(asClaimFolder("| D1 | settled under main#quality-gates: the panel title was widened |")).built;
+  check("an id named in plain prose claims its row — a decision is written for a reader, so an id it ends with a full stop or a colon is still named",
+    () => JSON.stringify(proseClaim.decisionClaims) === JSON.stringify(["main#quality-gates"]),
+    () => ({ claims: proseClaim.decisionClaims }));
+  const viaFindings = assembleBuilt(asFindingsFolder("F11 — accepted as a known gap, over `list#quality-gates`")).built;
+  check("a claim written only in `findings.md` counts — both files are the decision log, and a row owned in one is not unowned for being absent from the other",
+    () => JSON.stringify(viaFindings.decisionClaims) === JSON.stringify(["list#quality-gates"]),
+    () => ({ claims: viaFindings.decisionClaims }));
+  check("a decision that names the published id claims that row",
+    () => JSON.stringify(realClaim.decisionClaims) === JSON.stringify(["list#quality-gates"]),
+    () => ({ claims: realClaim.decisionClaims }));
+}
 {
   const d = asFolder();
   try {
@@ -12256,6 +12407,10 @@ check("`entitySchemaName` is derived from the PRIMARY data source, and is null w
       () => wrote.length === 2 && plan.evidenceIds.length > 0
         && plan.evidenceIds.every((id) => id in ev && id in ju),
       () => ({ wrote, ids: plan.evidenceIds.length, keys: Object.keys(ev).length }));
+    check("the skeleton scaffolds BOTH findings lists — a design pass fills the field it was handed, and the ownership rule reads the list it raised rather than a name an agent invented",
+      () => plan.evidenceIds.every((id) => Array.isArray(ev[id].findings) && ev[id].findings.length === 0
+        && Array.isArray(ev[id].findingsRaised) && ev[id].findingsRaised.length === 0),
+      () => ({ first: ev[plan.evidenceIds[0]] }));
     // The AC's own case: an id carrying a backtick and non-Latin text. Written by the engine, byte for byte, so
     // there is nothing to escape and nothing to get wrong.
     const gnarly = plan.evidenceIds.filter((id) => /[`·]|[^\x00-\x7f]/.test(id));

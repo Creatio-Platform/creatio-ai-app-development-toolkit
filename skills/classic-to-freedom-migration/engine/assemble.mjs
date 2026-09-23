@@ -354,6 +354,41 @@ function mergeSideFiles(dir, built, acc, problems) {
 // that quietly stands in for one: the caller decides what an unread file does to the run, and it cannot decide
 // that from a payload alone. `expect` is the read plan for the manifest being verified — pass it and a stale or
 // hand-edited index is named; omit it (an offline replay) and the index is taken at its word.
+// WHICH ROWS THE DECISION LOG CLAIMS. A design-pass record that raises findings is not owned by the record — the
+// owner is whoever decided, and that is written in `decisions.md`/`findings.md`. Matched by the row's OWN published
+// id appearing verbatim, so nothing has to read what a finding says: the decision either names the row or it does
+// not. Only ids the engine published are searched, so an unrelated string in the prose claims nothing.
+export const DECISION_FILES = ["decisions.md", "findings.md"];
+// An id CONTINUES where the neighbouring character could still be part of one, so a published id is not claimed by
+// a longer id that merely contains it. The two sides take different sets, because they guard different shapes: an id
+// is EXTENDED to its right only by more of its own name (`-<hash>` on a mis-filed key), while `:` and `.` there are
+// ordinary sentence punctuation and must not hide a claim written without backticks. To its left an id is PREFIXED
+// by another key, which ends in `:`, so that side keeps the wider set.
+const ID_EXTENDS_RIGHT = /[A-Za-z0-9_#-]/;
+const ID_EXTENDS_LEFT = /[A-Za-z0-9_:.#-]/;
+const freeLeft = (ch) => ch === undefined || !ID_EXTENDS_LEFT.test(ch);
+const freeRight = (ch) => ch === undefined || !ID_EXTENDS_RIGHT.test(ch);
+function namedIn(text, id) {
+  for (let i = text.indexOf(id); i !== -1; i = text.indexOf(id, i + 1)) {
+    if (freeLeft(text[i - 1]) && freeRight(text[i + id.length])) return true;
+  }
+  return false;
+}
+// COMPOSING THE LIST IS THE ANSWER, so a folder with no decision log claims NOTHING and says so with an empty
+// list. The absent field means something else entirely — a payload composed before this existed, which states
+// nothing about ownership — and only a replayed payload can carry that, never a run that looked. Null is for the
+// one case where the engine did not look: no published id to look for.
+function decisionClaims(dir, evidenceIds, problems) {
+  if (!Array.isArray(evidenceIds) || !evidenceIds.length) return null;
+  let text = "";
+  for (const f of DECISION_FILES) {
+    const full = path.join(dir, f);
+    if (!fs.existsSync(full)) continue;
+    try { text += fs.readFileSync(full, "utf8") + "\n"; }
+    catch (e) { problems.push({ file: f, what: "the decision log", why: `not readable (${e.message}) — no row can be shown as owned while it cannot be read` }); }
+  }
+  return evidenceIds.filter((id) => namedIn(text, id));
+}
 export function assembleBuilt(dir, expect = null) {
   const problems = [];
   const idxFile = path.posix.join(READS_DIR, READS_INDEX_FILE);
@@ -375,6 +410,8 @@ export function assembleBuilt(dir, expect = null) {
   // OPTIONAL, and absent is not a problem: a run with no evidence-gated row files neither. What a missing one
   // costs is already visible — every evidence row names the id nothing was filed under.
   mergeSideFiles(dir, built, acc, problems);
+  const claims = decisionClaims(dir, index.evidenceIds, problems);
+  if (claims) built.decisionClaims = claims;
   return { built, problems };
 }
 

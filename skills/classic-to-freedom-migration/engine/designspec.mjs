@@ -3676,10 +3676,34 @@ function resolveEvidenceJudgedPart(vk, ctx) {
     return ["❌ MISSING", `evidence record ${need} was FILED AS \`false\` — there is nothing for a judge to confirm${contradiction}`, "missing"];
   }
   if (judged === false) return ["❌ MISSING", `the judge REJECTED the evidence for ${need}${why ? " — " + esc(String(why)) : ""}`, "missing"];
+  // A VERDICT IS ABOUT A RECORD, so there must be one. Checked BEFORE the verdict closes the row, the way the
+  // filed half and the combined row already check it: a `convincing: true` filed under an id carrying no complete
+  // record closes a row over nothing.
+  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) {
+    return ["⚠ verify", judged === true
+      ? `a verdict was filed under ${need} but no complete evidence record was — there is nothing for it to be about`
+      : `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`,
+    "unverified", "verifier"];
+  }
+  // A RAISED FINDING IS OWNED BY A DECISION, NOT BY THE RECORD THAT RAISED IT. The row's label allows a finding to
+  // be raised rather than fixed, so the question is not whether findings exist but whether anyone took them: the
+  // decision log claims a row by naming its published id, and a record that raises findings under a row no
+  // decision names leaves the work with nobody. Read only when the engine composed the claim list — a payload
+  // assembled before it existed says nothing about ownership and must not be read as saying "none".
+  if (judged === true && Array.isArray(ctx.root?.decisionClaims)
+      && declaresFindings(rec) && !ctx.root.decisionClaims.includes(vk.id)) {
+    return ["⚠ verify", `the record under ${need} raises findings and no decision in \`decisions.md\` /`
+      + " `findings.md` names this row — a finding raised rather than fixed is closed by a decision that takes it,"
+      + " not by a verdict", "unverified", "verifier"];
+  }
   if (judged === true) return ["✅ Done", `judged convincing for ${need}`, "ok"];
-  if (!evidenceComplete(rec, vk.requires, vk.allowNoDiff)) return ["⚠ verify", `not judged yet — no complete evidence record has been filed under ${need} for a judge to review`, "unverified", "verifier"];
   return ["⚠ verify", `evidence filed under ${need} but NOT judged — a record nobody reviewed is not a closed row`, "unverified", "verifier"];
 }
+// Does the record RAISE a finding — one it did not fix, which someone therefore has to own? Only `findingsRaised`
+// answers that: `findings` is the pass's own record of what it looked at and settled, and a pass that fixed what it
+// found owes nobody a decision. A LIST with entries is the only form that raises anything; the same field is also
+// written as prose ("None requiring a fix."), which states no finding to own.
+const declaresFindings = (rec) => Array.isArray(rec?.findingsRaised) && rec.findingsRaised.length > 0;
 // Is an evidence record complete? Every required field must carry a value of the RIGHT SHAPE, not merely a value.
 // The earlier predicate ended in `v != null`, so `components: false`, `components: {}` and `referencePage: 0` all
 // counted as a complete record and closed the row — a record that names no page and lists no component proves
@@ -4196,9 +4220,13 @@ export function planGaps(result) {
   if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   return g;
 }
-function verifyVerdict(missing, unverified) {
+// THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.
+// A mis-filed record blocks the run without touching a row, so a verdict computed from rows alone would read
+// positive beside the banner that blocks it.
+function verifyVerdict(missing, unverified, orphans = 0) {
   if (missing > 0) return `⛔ **INCOMPLETE — ${missing} machine-checked deliverable(s) MISSING from YOUR BUILD** (build them / file the evidence, then re-verify)`;
   if (unverified > 0) return `⚠ **${unverified} machine row(s) not confirmed** — resolve before calling it done`;
+  if (orphans > 0) return `⛔ **EVIDENCE MIS-FILED — ${orphans} record(s) filed under id(s) this run does not publish** (re-file them under the id each row names, or drop a key the plan no longer has)`;
   return `✅ **All machine-checkable deliverables present on the built page** (still confirm the ☐ agent rows)`;
 }
 // The PLAN-gap banner (D12), stated separately from the build verdict so the two are never read as one condition.
@@ -4233,6 +4261,26 @@ function buildVerifyRow(r, g, ctxFor, tally, rowNo) {
     kind: rowKindOf(r, outcome), vkType: r.vk?.type || null, owner: verifyRowOwner(owner), ...idPart };
   return { row, tableLine: `| ${rowNo} | ${r.label} | ${mark} | ${esc(ev)} |` };
 }
+// The evidence/judge keys a payload carries that the engine does not publish. Sorted so two runs over the same
+// folder name them in the same order, and deduped across the two maps — one mis-named id is one fault, not two.
+function orphanEvidenceKeys(root, derived) {
+  const seen = new Set();
+  for (const map of [root?.evidence, root?.judge]) {
+    if (!map || typeof map !== "object") continue;
+    for (const k of Object.keys(map)) if (!derived.has(k)) seen.add(k);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+function orphanBanner(orphans) {
+  if (!orphans.length) return [];
+  const named = orphans.slice(0, 12).map((k) => "`" + esc(k) + "`").join(", ");
+  const rest = orphans.length > 12 ? ` (+${orphans.length - 12} more)` : "";
+  return ["", `> ⛔ **${orphans.length} evidence/judge record(s) filed under id(s) this run does not publish**`
+    + ` — nothing reads them and the design pass they record counts for nothing: ${named}${rest}.`
+    + " Either the id was invented — re-file under the id the row names, and where several tasks share one page key"
+    + " take the collision to the user rather than appending a suffix — or the plan moved and the key belongs to a row"
+    + " this run no longer publishes, which is settled by dropping it, not by building anything."];
+}
 export function renderVerify(result, opts = {}, built = {}) {
   const root = entryObject(built) || {};
   const ctxFor = verifyCtxFactory(root);
@@ -4247,19 +4295,29 @@ export function renderVerify(result, opts = {}, built = {}) {
   // ☐ confirm-on-stand rows (they are the manual follow-up list) and the ✅ count (what was confirmed), which the
   // per-page open-row tally by design does not keep. Same cells the table shows, same row numbers.
   const rows = [];
+  const derivedEvidenceIds = new Set();
   for (const g of groups) {
     L.push("", `**${g.title}**`, "", "| # | Deliverable | Status | Evidence (built page) |", "| --- | --- | --- | --- |");
     for (const r of g.rows) {
+      if (r.vk?.type === "evidence" && r.vk.id) derivedEvidenceIds.add(r.vk.id);
       const { row, tableLine } = buildVerifyRow(r, g, ctxFor, tally, ++n);
       rows.push(row);
       L.push(tableLine);
     }
   }
+  // A RECORD FILED WHERE THE ENGINE NEVER LOOKS IS NOT A RECORD. The ids are engine-derived and written into the
+  // skeletons, so a key matching none of them resolves to nothing and the design pass it records counts for
+  // nothing. A RUN-level fault, never rows: it is the FILING that is wrong, not the build, and a row count these
+  // keys never entered must not carry them. Only on an UNSCOPED sweep — a scoped view renders one page's rows, so
+  // every other page's id would read as an orphan of the scope rather than of the run.
+  const orphans = opts.scopePageKey ? [] : orphanEvidenceKeys(root, derivedEvidenceIds);
   const { missing, unverified, builderOpen, pages } = tally;
-  const verdict = verifyVerdict(missing, unverified);
+  const verdict = verifyVerdict(missing, unverified, orphans.length);
   const md = ["### ✅ Plan-vs-Done — VERIFIED against the built page", "",
     `> SAME grouped control table as \`--checklist\`, Status AUTO-FILLED from the built page(s) (\`get-page\` → \`bundle.viewConfig\`, keyed per page in \`--built.pages\`). Structural rows are machine-checked and drive the verdict; \`☐ confirm on-stand\` rows are surfaced for the agent — not machine-gated. ${verdict}`,
     ...planGapBanner(result),
-    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result)].join("\n");
-  return { markdown: md, missing, unverified, builderOpen, complete: missing === 0 && unverified === 0, pages, rows };
+    ...orphanBanner(orphans),
+    ...L, "", `**Verdict:** ${verdict}`, ...planGapBanner(result), ...orphanBanner(orphans)].join("\n");
+  return { markdown: md, missing, unverified, builderOpen,
+    complete: missing === 0 && unverified === 0 && orphans.length === 0, orphans, pages, rows };
 }
