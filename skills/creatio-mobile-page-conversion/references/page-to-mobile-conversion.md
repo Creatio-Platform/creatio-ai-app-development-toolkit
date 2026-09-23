@@ -45,7 +45,8 @@ The tools used in this flow:
   `guide.existingMobilePages` (any mobile page(s) already covering the entity/page being converted), the
   data behind the reuse-vs-convert check in step 2a. A `web-page` target verified `missing` KEEPS its
   binding on the element (`bindingRemoved: true` here means only "the target param was blanked", never
-  "the binding is gone") — the request still converts, only `params.schemaName` is cleared to `""`. There
+  "the binding is gone") — the request still converts, only its target param (`params.schemaName` for
+  `crt.OpenPageRequest`, the only `web-page`-kind request today) is cleared to `""`. There
   is no `originalBinding` field: the repoint sub-step in 8a patches the target param on the existing
   binding in place — see the "Requests (actions)" report bullet.
 - `list-page-templates` (schema-type `mobile`), `create-page`, `update-page`, `validate-page` — persistence.
@@ -276,9 +277,12 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
      several reference the same target): `get-page` the page that carries `elementName` (with its
      `target-schema-uid` for `update-page`, same rule as step 7), locate that element's existing `binding`
      property (its `request` and every other `params` entry are already correct — the conversion never
-     touched them), and set ONLY its target param (`params.schemaName` for `crt.OpenPageRequest`) to the
-     RESOLVED mobile schema name (from `create-page`'s result for a fresh conversion, or from the reused
-     page confirmed at step 2a — never a guessed naming pattern). This is a point patch of one param on the
+     touched them), and set ONLY its target param to the RESOLVED mobile schema name (from `create-page`'s
+     result for a fresh conversion, or from the reused page confirmed at step 2a — never a guessed naming
+     pattern). That param is `params.schemaName` today, since `crt.OpenPageRequest` is the only
+     `web-page`-kind request and declares no `paramMap` rename for it; if a future conversion rule adds
+     another `web-page`-kind request, or a `paramMap` entry for `schemaName`, resolve the actual target
+     param from that rule instead of assuming `schemaName`. This is a point patch of one param on the
      binding already sitting there, not a clone-and-swap of a saved snapshot — there is no `originalBinding`
      field to clone. Then `update-page` and `validate-page`.
      This is itself a write to an ALREADY-converted page and needs no separate Gate M — the developer already
@@ -419,18 +423,21 @@ one followed by a later summary):
   that registration was skipped/declined.
 - **Page-level business rules:** which `convertedRules` were recreated on the mobile page
   (`create-page-business-rule`) and which `droppedRules` did not convert.
-- **Requests (actions):** from `guide.requestConversions`, which has FOUR collections and you need all of
+- **Requests (actions):** from `guide.requestConversions`, which has FIVE collections and you need all of
   them — `convertedRequests` (carried, remapped where the mobile name differs), `droppedRequests` (a binding
   lost — an unsupported request type — OR a `web-page` target's param blanked while the binding itself
   stays; read `unresolvedTargetRequests` to tell which), `flaggedRequests` (an unknown request kept for
-  you to verify) and `unresolvedTargetRequests` (the action's navigation target could not be confirmed —
-  read `state` AND `bindingRemoved` together, they answer different questions). `bindingRemoved: true`
+  you to verify), `unresolvedTargetRequests` (the action's navigation target could not be confirmed —
+  read `state` AND `bindingRemoved` together, they answer different questions) and `missingTargetPages`
+  (the fifth — see the "Missing pages" bullet below). `bindingRemoved: true`
   happens ONLY for a `web-page` target (`crt.OpenPageRequest`) verified `missing`: the request still
-  converts and the binding stays in `viewConfigDiff[].values` — only `params.schemaName` is cleared to
+  converts and the binding stays in `viewConfigDiff[].values` — only its target param (`schemaName` for
+  `crt.OpenPageRequest` today; derived from the conversion rule's `targetParam`/`paramMap`, never assumed
+  to stay `schemaName` if another `web-page`-kind request is added later) is cleared to
   `""` — and the finding is ALSO duplicated in `droppedRequests` under `drop-request-target-missing`. Do
-  NOT treat the blanked binding as usable as-is, it fails every time (an empty `schemaName` still shows a
+  NOT treat the blanked binding as usable as-is, it fails every time (an empty target param still shows a
   settings-error dialog); there is no `originalBinding` snapshot to restore from — the repoint step below
-  patches `params.schemaName` on the SAME binding once the target resolves. Every other combination
+  patches that same target param on the SAME binding once the target resolves. Every other combination
   (`entity-default-mobile-page` of any state, or `unknown`) keeps `bindingRemoved: false` and the binding
   untouched — an add-on read or an unreachable environment is never proof enough to touch a working
   action. A `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements`
