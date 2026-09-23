@@ -108,10 +108,9 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     const iB = M6i(details), iA = M6i(basic);
     check("layout (guard): a tab also holding another plan tab's fields matches neither row by field identity, and a grid inside a tab is never a tab candidate — whichever row resolves first",
       () => [hA, hB, iB, iA].every((r) => r[2] === "skip" && !/Done/.test(r[0])), () => [hA, hB, iB, iA]);
-    // A tab panel's direct child that is not a `crt.TabContainer` (named as a tab, the candidate filter), and the same
-    // content one level deeper.
+    // A tab panel's direct child named as a tab but not a `crt.TabContainer`, and the same content one level deeper.
     const panelChild = T(tabsPage([{ type: "crt.GridContainer", name: "DetailsTab", items: fieldsOf(SEVEN) }]))(basic);
-    check("layout: a direct child of a `crt.TabPanel` that is not a `crt.TabContainer` and holds exactly the row's fields matches by field identity",
+    check("layout: a container named as a tab, a direct child of a `crt.TabPanel` but not a `crt.TabContainer`, holding exactly the row's fields matches by field identity",
       () => panelChild[0] === "✅ Done" && /in tab `DetailsTab`/.test(panelChild[1]) && /matched by the 7 plan field/.test(panelChild[1]),
       () => panelChild);
     const nested = T(tabsPage([{ ...other, items: [...fieldsOf(["Notes"]),

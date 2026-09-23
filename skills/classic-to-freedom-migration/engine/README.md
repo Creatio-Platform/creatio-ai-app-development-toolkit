@@ -411,7 +411,8 @@ whose `condition`/`actions` carry it as a whole token in any of those forms — 
 Classic trigger attribute/control — else ⚠, never ❌), `vmattr` rows (virtual attribute present), `layout` rows
 (side profile / tab found by caption words — a `#ResourceString(K)#` caption resolved through `.resources` when
 the entry carries them — or, failing any caption match, by holding exactly the fields the row names and no other
-field, or for a row with no field names by the one tab whose content matches it exactly, else ☐ confirm on-stand /
+field, among containers whose type or name contains `Tab` that are a `crt.TabContainer` or a direct child of a
+`crt.TabPanel`, or for a row with no field names by the one tab whose content matches it exactly, else ☐ confirm on-stand /
 header, measured
 inside the container; a container-less payload is judged page-wide and says so) and the `cardnative` row (template button element names). A `[module-dep]` row is
 informational (`info`, ℹ noted). The ungated `List page →` identity row is dropped when the gated `List template →`

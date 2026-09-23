@@ -3886,9 +3886,9 @@ function tabMatch(container, caption) {
   const toks = new Set([...tokensOf(container.caption), ...tokensOf(container.name)]);
   return words.every((w) => toks.has(w)) ? 2 : 0;
 }
-// Truthy when a TAB (a `crt.TabContainer`, or a direct child of a `crt.TabPanel`) holds exactly the fields the plan
-// puts on it, by the Fields row's identity rule (`maxFieldMatch`): every plan field and no other field. Related
-// lists and widgets do not count. A tab also holding another tab's fields is no match, whichever row resolves first.
+// Truthy when a TAB holds exactly the fields the plan puts on it, by the Fields row's identity rule (`maxFieldMatch`):
+// every plan field and no other field. A tab is a candidate whose type or name contains `Tab` (resolveLayoutTab)
+// that is a `crt.TabContainer` or a direct child of a `crt.TabPanel`. Related lists and widgets do not count. A tab also holding another tab's fields is no match, whichever row resolves first.
 const TAB_BY_FIELDS = 1;
 function holdsAllFields(container, names) {
   const want = [...new Set(names || [])];
