@@ -1598,8 +1598,8 @@ function sansRecordedPointer(evidence, files) {
 // The row to compare is the VERIFIER'S when it reported one. A residual row (no verifier row) names the newest
 // file that recorded it, so on that path the pointer is removed from both sides and only the rest is compared;
 // such a match is STALLED, since only a round that closed the row `not-built` leaves it residual.
-// A residual row also counts as changed once another task on its page (not a repair task of the same round) was
-// dispatched and closed after that round: the work it was blocked on may exist now.
+// A residual row also counts as changed once another task on its page was dispatched and closed after that round:
+// the work it was blocked on may exist now.
 function unchangedSinceLastRound(last, key, row, verifiedRow, files, pageMovedSince) {
   const prev = last.get(key);
   if (!prev?.hold) return null;
@@ -2405,15 +2405,14 @@ function readExisting(dir) {
 
 // The open rows of each page with the decision-settled rows (`boundaries`) and the rows unchanged since the round
 // that closed them (`disputed` / `stalled`) taken out; what is left is `gated`, the rows a round may be opened for.
-// Whether a task on the round's page, other than a repair task of the same round, closed after it, by the order of
-// the timings ledger's close samples. A round with no sample has no close to compare against.
+// Whether another task on the round's page closed after it, by the order of the timings ledger's close samples.
+// A round with no sample has no close to compare against.
 function pageMovedSinceFor(tasks, samples) {
   const closedAt = new Map(samples.map((x, i) => [x.id, i]));
   return (round) => {
     const since = closedAt.get(round.id);
     if (since === undefined) return false;
-    const sibling = (t) => t.kind === REPAIR_KIND && (t.repairRound || 1) === (round.repairRound || 1);
-    return tasks.some((t) => t.id !== round.id && t.pageKey === round.pageKey && !sibling(t)
+    return tasks.some((t) => t.id !== round.id && t.pageKey === round.pageKey
       && ROUND_ATTEMPTED.has(t.status) && (closedAt.get(t.id) ?? -1) > since);
   };
 }

@@ -40,8 +40,7 @@ and the rows came back. A row whose recorded and evidence cells are identical to
 opens no round at all: closed `built` it is reported DISPUTED (the check is in question), closed `not-built`
 STALLED; neither is verified, and a changed row opens a new round. A row routed from a build agent's `not-built`
 record (every `--route` round) is compared without the engine's `recorded on <file>, row <n>` pointer; a match is
-STALLED, until another task on its page (not a repair task of the same round) is dispatched and closed after that
-round. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
+STALLED, until another task on its page, a repair task included, is dispatched and closed after that round. After `REPAIR_ROUND_CAP` (3) rounds a cause is PARKED and no further task is written —
 three sub-agents have failed at it, so the plan, the stand or the expectation is wrong, not the build. A repair file
 is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
 never reported stale.

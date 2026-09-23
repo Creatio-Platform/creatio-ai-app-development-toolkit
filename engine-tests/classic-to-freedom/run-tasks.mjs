@@ -6779,6 +6779,27 @@ console.log("\n===== an UNCHANGED row opens no new round: disputed when it close
         && again.written.length === 1 && again.written[0].repairRound === 2,
       () => ({ other: other?.id, held: held.stalled.length, written: again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: (again.stalled || []).length }));
     fs.rmSync(d, { recursive: true, force: true });
+    // Round 1 splits the page's rows by cause; the round for one cause closes `not-built`, another closes after it.
+    const siblings = (name, laterCause) => {
+      const f = partialFolder(name, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], ["main", "Page build"]).d;
+      const round1 = syncRepairDir(f, RUN, {}, OPTS).written;
+      const first = round1.find((t) => t.cause === "not-built:other");
+      const rest = round1.filter((t) => t !== first);
+      const later = rest.filter((t) => t.cause === laterCause);
+      for (const t of round1) clearDepsOf(f, t.id, RUN, OPTS, nextMin());
+      for (const t of rest.filter((x) => !later.includes(x))) runRepair(f, t.id, "built");
+      runRepair(f, first.id, NOT_BUILT_BLOCKED);
+      for (const t of later) runRepair(f, t.id, "built");
+      return { f, again: syncRepairDir(f, RUN, {}, OPTS) };
+    };
+    const sib = siblings("residual-sibling-later", "not-built:fields");
+    const sibNone = siblings("residual-sibling-none", null);
+    check("repair: a repair task of the SAME round closing after the one that left a row not-built also reopens that row; with nothing closed after it the row stays STALLED",
+      () => sib.again.stalled.length === 0 && sib.again.written.some((t) => t.cause === "not-built:other" && t.repairRound === 2)
+        && sibNone.again.stalled.length > 0 && !sibNone.again.written.some((t) => t.cause === "not-built:other"),
+      () => ({ later: sib.again.written.map((t) => `${t.cause} r${t.repairRound}`), none: sibNone.again.written.map((t) => `${t.cause} r${t.repairRound}`), stalled: [sib.again.stalled.length, sibNone.again.stalled.length] }));
+    fs.rmSync(sib.f, { recursive: true, force: true });
+    fs.rmSync(sibNone.f, { recursive: true, force: true });
     const elsewhere = pageMoved("residual-page-elsewhere", ["list", "Page build"]);
     check("repair (guard): a task closed on ANOTHER page after the round does not reopen a STALLED row",
       () => elsewhere.held.stalled.length === 1 && elsewhere.again.stalled.length === 1 && elsewhere.again.written.length === 0,
