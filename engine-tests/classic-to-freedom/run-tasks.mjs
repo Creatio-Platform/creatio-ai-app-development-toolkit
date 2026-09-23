@@ -5558,6 +5558,20 @@ const planTaskOf = (tasks, { allowRun = false } = {}) =>
 const mainPlanTaskOf = (tasks, minRows = 1) =>
   (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
     && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= minRows && !(x.rows || []).some((r) => r.na));
+// A folder with a plan task on `main` and a repair task mirroring that task's first row on the same page —
+// the two-task join the cascade acts on, plus a `decisions.md` the decide can resolve. `minRows` forces a
+// task with a second row where the fixture needs to prove that row stays untouched.
+const repairMirrorFixture = (label, decision, title, minRows = 1) => {
+  const base = tmp(label);
+  const dir = path.join(base, "build-tasks");
+  fs.writeFileSync(path.join(base, "decisions.md"), `## ${decision} — ${title}\n`);
+  const set = syncTaskDir(dir, RUN, OPTS);
+  const src = mainPlanTaskOf(set.tasks, minRows);
+  const shared = src?.rows?.[0]?.label;
+  const rep = src ? syncRepairDir(dir, RUN, { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } }, OPTS)
+    .written.find((t) => t.cause) : null;
+  return { base, dir, set, decisions: new Map([[decision, title]]), src, shared, rep };
+};
 const decideFixtureB = (label, md = null) => {
   const base = tmp(label);
   const dir = path.join(base, "build-tasks");
@@ -6510,18 +6524,10 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
   // The cascade is what AC 9 is about, and it only shows on a deliverable TWO tasks carry: a plan task owns the
   // row, a repair task covers the same label on the same page. The verify fixture is built from a real plan row
   // so the two sides share a label, which is the join the cascade makes.
-  const base = tmp("cascade-cross-task");
-  const dir = path.join(base, "build-tasks");
-  fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope\n");
-  const decisions = new Map([["D13", "descope"]]);
-  const set = syncTaskDir(dir, RUN, OPTS);
-  const src = mainPlanTaskOf(set.tasks, 2);
+  const { base, dir, set, decisions, src, shared, rep } = repairMirrorFixture("cascade-cross-task", "D13", "descope", 2);
   check("AC 9 fixture: a plan task on `main` was found whose first row can be mirrored into a repair task",
     () => !!src, () => ({ tasks: set.tasks.map((x) => `${x.id}:${x.pageKey}:${(x.rows || []).length}`).slice(0, 6) }));
   if (src) {
-    const shared = src.rows[0].label;
-    const mirrored = { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } };
-    const rep = syncRepairDir(dir, RUN, mirrored, OPTS).written.find((t) => t.cause);
     check("AC 9 fixture: the repair task really carries the SAME deliverable as the plan row, so the cascade has something to join on",
       () => !!rep && (rep.rows || []).some((r) => r.label === shared),
       () => ({ repair: rep?.id, rows: (rep?.rows || []).map((r) => r.label) }));
@@ -6565,30 +6571,20 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
   // A repair task decided `postponed` on its OWN (a direct `--decide --task <repair-id>`), not by cascade,
   // must stay revokable — its map entry carries no cascade marker. This is the case the plain skip-repair-
   // tasks approach would have broken.
-  const base = tmp("revoke-standalone-repair");
-  const dir = path.join(base, "build-tasks");
-  fs.writeFileSync(path.join(base, "decisions.md"), "## D19 — defer\n");
-  const decisions = new Map([["D19", "defer"]]);
-  const set = syncTaskDir(dir, RUN, OPTS);
-  const src = mainPlanTaskOf(set.tasks);
-  if (src) {
-    const shared = src.rows[0].label;
-    const rep = syncRepairDir(dir, RUN, { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } }, OPTS)
-      .written.find((t) => t.cause);
-    if (rep) {
-      // Decide the repair task DIRECTLY (not via a plan-row cascade): its entry has no `+` marker.
-      const dec = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
-        destination: "ENG-42", taskId: rep.id, decisions });
-      const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D19" });
-      const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
-      check("§3: a repair task decided `postponed` DIRECTLY (not by cascade) stays revokable — --revoke clears it, because only cascade-written cells carry the marker",
-        () => !dec.refused
-          && rev.cleared?.some((c) => c.task.id === rep.id)
-          && (repRevoked?.rows || []).every((r) => !r.outcomeKind),
-        () => ({ decided: dec.touched?.map((t) => `${t.task.id}:${t.n}`),
-          cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
-          repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
-    }
+  const { base, dir, decisions, rep } = repairMirrorFixture("revoke-standalone-repair", "D19", "defer");
+  if (rep) {
+    // Decide the repair task DIRECTLY (not via a plan-row cascade): its entry has no `+` marker.
+    const dec = applyDecision(dir, RUN, { ...OPTS, decision: "D19", mode: "postponed",
+      destination: "ENG-42", taskId: rep.id, decisions });
+    const rev = revokeDecision(dir, RUN, { ...OPTS, decision: "D19" });
+    const repRevoked = readTaskDir(dir).find((x) => x.id === rep.id);
+    check("§3: a repair task decided `postponed` DIRECTLY (not by cascade) stays revokable — --revoke clears it, because only cascade-written cells carry the marker",
+      () => !dec.refused
+        && rev.cleared?.some((c) => c.task.id === rep.id)
+        && (repRevoked?.rows || []).every((r) => !r.outcomeKind),
+      () => ({ decided: dec.touched?.map((t) => `${t.task.id}:${t.n}`),
+        cleared: (rev.cleared || []).map((c) => `${c.task.id}:${c.n}`),
+        repairKinds: (repRevoked?.rows || []).map((r) => r.outcomeKind) }));
   }
   fs.rmSync(base, { recursive: true, force: true });
 }
