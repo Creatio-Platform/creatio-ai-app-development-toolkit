@@ -5547,15 +5547,23 @@ const decideFixtureA = (label, minRows = 1) => {
     && x.origin === "engine" && x.kind !== "repair" && !x.rows.some((r) => r.na));
   return { base, dir, set, t };
 };
+// The first engine-authored plan task with real, non-boundary rows — the target every decide/revoke
+// fixture needs. `allowRun` keeps a collapsed whole-run task (pageKey "run") in scope, which the CLI's
+// default budget produces and a `--task` addressing accepts.
+const planTaskOf = (tasks, { allowRun = false } = {}) =>
+  (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.artifact !== ARTIFACT_REFS
+    && (allowRun || x.pageKey !== "run") && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+// The cascade fixtures need a task on `main` specifically (a repair task mirrors one of its rows on the
+// same page), and one with two rows to prove the OTHER row stays untouched.
+const mainPlanTaskOf = (tasks, minRows = 1) =>
+  (tasks || []).find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
+    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= minRows && !(x.rows || []).some((r) => r.na));
 const decideFixtureB = (label, md = null) => {
   const base = tmp(label);
   const dir = path.join(base, "build-tasks");
   if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
   const set = syncTaskDir(dir, RUN, OPTS);
-  const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-    && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-    && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
-  return { base, dir, set, t };
+  return { base, dir, set, t: planTaskOf(set.tasks) };
 };
 
 {
@@ -6310,13 +6318,10 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     // checklistOpts(MANIFEST) so slicing matches what the CLI wrote (task ids are content-derived, and
     // the two callers must agree on the opts or the ids diverge).
     const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
-    // No `pageKey !== "run"` filter here, unlike the blocks that slice with `OPTS`: the CLI slices with the
-    // DEFAULT budget, which collapses this fixture into whole-run tasks whose pageKey IS "run". Excluding them
-    // left `t` undefined on every run, so the two checks below never executed and the suite stayed green while
-    // the only CLI coverage of the happy path was dead. A collapsed run task is a valid `--task` target.
-    const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    // `allowRun`, unlike the blocks that slice with `OPTS`: the CLI slices with the DEFAULT budget, which
+    // collapses this fixture into whole-run tasks whose pageKey IS "run". A collapsed run task is a valid
+    // `--task` target, so keeping it in scope is what makes this CLI coverage run at all.
+    const t = planTaskOf(merged.tasks, { allowRun: true });
     check("M2: fixture: the CLI happy-path target task was found — without this the two checks below are a silent skip",
       () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
     if (t) {
@@ -6339,9 +6344,7 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     const { base, dir } = setup("cli-descope-exit0");
     cliTasks(["--tasks", dir], MANIFEST);
     const merged = readMergedTaskDir(dir, RUN, checklistOpts(MANIFEST));
-    const t = merged.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    const t = planTaskOf(merged.tasks, { allowRun: true });
     check("descope: fixture: the descope target task was found — without it the check below is a silent skip",
       () => !!t, () => ({ ids: merged.tasks.map((x) => `${x.id}:${x.pageKey}`).slice(0, 8) }));
     if (t) {
@@ -6365,9 +6368,7 @@ console.log("\n===== --decide / --revoke CLI parser (spawnSync) =====");
     const base = tmp("descope-fake-marker");
     const dir = path.join(base, "build-tasks");
     const set = syncTaskDir(dir, RUN, OPTS);
-    const t = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair"
-      && x.artifact !== ARTIFACT_REFS && x.pageKey !== "run"
-      && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+    const t = planTaskOf(set.tasks);
     if (t) {
       // Hand-type a fake closure into EVERY row: no --decide ran, so `decisions:` stays empty.
       let fp = path.join(dir, t.file);
@@ -6514,8 +6515,7 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
   fs.writeFileSync(path.join(base, "decisions.md"), "## D13 — descope\n");
   const decisions = new Map([["D13", "descope"]]);
   const set = syncTaskDir(dir, RUN, OPTS);
-  const src = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
-    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= 2 && !(x.rows || []).some((r) => r.na));
+  const src = mainPlanTaskOf(set.tasks, 2);
   check("AC 9 fixture: a plan task on `main` was found whose first row can be mirrored into a repair task",
     () => !!src, () => ({ tasks: set.tasks.map((x) => `${x.id}:${x.pageKey}:${(x.rows || []).length}`).slice(0, 6) }));
   if (src) {
@@ -6570,8 +6570,7 @@ console.log("\n===== the cascade and the adopted-body writer (repair tasks) ====
   fs.writeFileSync(path.join(base, "decisions.md"), "## D19 — defer\n");
   const decisions = new Map([["D19", "defer"]]);
   const set = syncTaskDir(dir, RUN, OPTS);
-  const src = set.tasks.find((x) => x.origin === "engine" && x.kind !== "repair" && x.pageKey === "main"
-    && x.artifact !== ARTIFACT_REFS && (x.rows || []).length >= 1 && !(x.rows || []).some((r) => r.na));
+  const src = mainPlanTaskOf(set.tasks);
   if (src) {
     const shared = src.rows[0].label;
     const rep = syncRepairDir(dir, RUN, { main: { missing: 1, complete: false, openRows: [openRow(1, shared)] } }, OPTS)
