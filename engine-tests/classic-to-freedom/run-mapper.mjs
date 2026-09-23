@@ -2711,9 +2711,10 @@ try {
   check("migrate.mjs --verify --built: empty built page (deliverables MISSING) → HARD exit 2 (done-gate) + a ❌ MISSING in the report",
     vIncomplete.status === 2 && /MISSING/.test(vIncomplete.stdout || ""),
     () => ({ status: vIncomplete.status, stdoutHead: (vIncomplete.stdout || "").slice(0, 160) }));
-  // A MIS-FILED evidence id blocks the run through the CLI, not only through the library: the OR-chain that
-  // carries it into `notReady` and the banner that names it are the part an orchestrator actually meets, and a
-  // row-level check proves neither. Its verdict is its own — the page is whole, so the BUILD leg must stay quiet.
+  // A MIS-FILED evidence id reaches the CLI, not only the library: the OR-chain that carries it into `notReady`
+  // and the banner that names it are what an orchestrator actually meets, and a row-level check proves neither.
+  // This page is EMPTY, so the build leg speaks here too — that the two legs are independent is shown over a whole
+  // page, which only a library-level payload can supply.
   fs.writeFileSync(builtPath, JSON.stringify({
     pages: { main: { viewConfig: { items: [] }, parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111" } },
     evidence: { "main#quality-gates-de6871bb": { referencePage: "AccountPage", components: ["crt.Input"] } },
