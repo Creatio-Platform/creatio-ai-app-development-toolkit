@@ -7491,5 +7491,107 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
     () => shape(mixedCut));
 }
 
+// `--decide` names the open rows on other tasks that share a subject with a row it decided, and closes none of them.
+{
+  const labelOf = (m) => `Handler — \`${m}\``;
+  const rowsOf = (k, keep = () => true) => CARD_GROUPS.filter((g) => g.pageKey === k && keep(g))
+    .flatMap((g) => g.rows.map((r) => r.label));
+  const isReview = (g) => g.baseTitle === "Quality gates";
+  const pages = [...new Set(CARD_GROUPS.map((g) => g.pageKey))];
+  const split = { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
+    ? [splitItem("sib-source", "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== labelOf("onBulk5"))),
+      splitItem("sib-other", "main", "main", [labelOf("onBulk5")]),
+      splitItem("sib-review", "main", "main", rowsOf("main", isReview))]
+    : [splitItem(`sib-${slugKey(k)}`, k, k, rowsOf(k))])) };
+  const opts = optsOf(CARD_MANIFEST);
+  const D4 = new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]]);
+  const fixture = (label) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    freezeSplit(dir, JSON.stringify(split));
+    const set = syncTaskDir(dir, CARD_RUN, opts);
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
+    return { base, dir, set };
+  };
+  const rowOf = (set, id, label) => (set.tasks.find((t) => t.id === id)?.rows || []).findIndex((r) => r.label === label) + 1;
+  const decide = (dir, id, n, decision = "D4") => applyDecision(dir, CARD_RUN, { ...opts, decision, mode: "wont-do",
+    rowRef: { taskId: id, n: String(n) }, decisions: D4 });
+  const cellOf = (dir, id, n) => readTaskDir(dir).find((t) => t.id === id)?.rows?.[n - 1];
+  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
+
+  {
+    const { base, dir, set } = fixture("siblings-listed");
+    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const res = decide(dir, "sib-source", n);
+    check("--decide: an open row on another task sharing the decided row's subject is listed",
+      () => !res.refused && named(res).join(",") === "sib-other:1", () => ({ refused: res.problems, named: named(res) }));
+    check("--decide: a listed sibling row is not written",
+      () => !cellOf(dir, "sib-other", 1)?.outcomeKind && !/^decisions: \S/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
+      () => cellOf(dir, "sib-other", 1));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  // The printed command, run as printed, closes exactly the listed rows.
+  {
+    const { base, dir, set } = fixture("siblings-cli");
+    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const manifestPath = path.join(base, "manifest.json");
+    const out = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--decide", "D4", "--wont-do",
+      "--row", `sib-source:${n}`], { encoding: "utf8" });
+    const cmds = (out.stdout || "").split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
+    const decidedRows = () => readTaskDir(dir).flatMap((t) => (t.rows || [])
+      .map((r, i) => (r.outcomeKind === "wont-do" ? `${t.id}:${i + 1}` : null)).filter(Boolean)).sort();
+    const before = decidedRows();
+    const runs = cmds.map((c) => spawnSync(c, { encoding: "utf8", shell: true }));
+    const after = decidedRows();
+    check("--decide (CLI): prints one ready-to-run command per open sibling row",
+      () => out.status === 0 && cmds.length === 1 && cmds[0].includes("sib-other:1") && /--wont-do/.test(cmds[0]),
+      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
+    check("--decide (CLI): the printed command closes exactly the listed rows",
+      () => runs.every((r) => r.status === 0) && after.join(",") === [...before, "sib-other:1"].sort().join(",")
+        && /^decisions: 1:D4$/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
+      () => ({ before, after, runs: runs.map((r) => `${r.status} ${r.stderr}`) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, set } = fixture("siblings-no-subject");
+    const src = set.tasks.find((t) => t.id === "sib-source");
+    const n = src.rows.findIndex((r) => !r.subject && !r.na) + 1;
+    const res = decide(dir, "sib-source", n);
+    check("--decide: a decided row with no subject lists no siblings",
+      () => n > 0 && !res.refused && named(res).length === 0, () => ({ n, named: named(res) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, set } = fixture("siblings-closed");
+    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    decide(dir, "sib-other", 1, "D5");
+    const decided = decide(dir, "sib-source", n);
+    const f = taskFilePath(dir, "sib-other");
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, "built").replace(/^decisions:.*$/m, "decisions: "));
+    const built = decide(dir, "sib-source", n, "D5");
+    check("--decide: a sibling row already decided is not listed",
+      () => !decided.refused && named(decided).length === 0, () => named(decided));
+    check("--decide: a sibling row already built is not listed",
+      () => !built.refused && named(built).length === 0, () => named(built));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, set } = fixture("siblings-postponed");
+    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
+      "--postponed", "--to", "ENG-12345", "--row", `sib-source:${n}`], { encoding: "utf8" });
+    const cmd = (out.stdout || "").split("\n").find((l) => l.includes("--row") && l.includes("sib-other:1")) || "";
+    check("--decide --postponed (CLI): the sibling command carries the same mode and destination",
+      () => out.status === 0 && /--postponed --to "?'?ENG-12345/.test(cmd) && !/--wont-do/.test(cmd),
+      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

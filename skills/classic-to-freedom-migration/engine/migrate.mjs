@@ -3435,7 +3435,15 @@ function decideTouchedLines(res, opts) {
   lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
   return lines;
 }
-function runDecideMode(result, dir, opts) {
+// The open rows on another task that share a subject with a decided row, each with the command that applies the
+// same answer to it. Listed only: each row is closed by the person running its command.
+function decideSiblingLines(res, cmdFor) {
+  if (!res.siblings?.length) return [];
+  return ["", `${res.siblings.length} open row(s) on other tasks share a subject with the decided row(s) and were NOT`
+    + " touched. To apply the same answer to them, run:",
+    ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
+}
+function runDecideMode(result, dir, opts, cmdFor = () => "") {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
   // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
   // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
@@ -3456,6 +3464,7 @@ function runDecideMode(result, dir, opts) {
       ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
+  lines.push(...decideSiblingLines(res, cmdFor));
   lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }
@@ -3761,8 +3770,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
       rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
+    // The same answer, addressed to one row, with every element encoded for the shell.
+    const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
+      TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
+      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
+      ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
     let res;
-    try { res = runDecideMode(result, tasksDir, opts); }
+    try { res = runDecideMode(result, tasksDir, opts, cmdFor); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
     if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
     output = res.note;

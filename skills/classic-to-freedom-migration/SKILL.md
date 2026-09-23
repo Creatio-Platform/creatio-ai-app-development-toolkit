@@ -504,6 +504,9 @@ section came out as six tasks and five sub-agents before this, one of them cachi
    **A build-time adjustment is recorded through `--decide` BEFORE the task it settles is dispatched.** An
    adjustment written only into `decisions.md` prose leaves its rows open, and the task goes to a sub-agent with
    nothing to build. A task whose every row is decided settles on its own and `--next` never offers it.
+   `--decide` writes only the rows it is given. It then lists the open rows on other tasks that share a subject
+   with a decided row, each with the `--decide … --row <task>:<n>` command that applies the same answer. Run a
+   command only when the person's answer covers that row.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses a task whose
    `dependsOn` has not closed, naming each one and its status. And it refuses to issue a second token for an

@@ -3747,6 +3747,23 @@ function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, 
     t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, carriedOf(t), editedOf(t));
   }
 }
+// The OPEN rows of other tasks that share a decision subject with a row this decision addressed: not built, not
+// decided, not a plan boundary. Listed for the person, never written.
+function openSubjectSiblings(tasks, touched) {
+  const subjects = new Set(touched.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
+  const addressed = new Set(touched.map((x) => x.task));
+  const out = [];
+  if (!subjects.size) return out;
+  for (const t of tasks) {
+    if (t.unread || addressed.has(t)) continue;
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    (t.rows || []).forEach((r, i) => {
+      if (!subjects.has(r.subject) || r.na || map?.has(i + 1)) return;
+      if (!r.outcomeKind || r.outcomeKind === O_NOT_BUILT) out.push({ task: t, n: i + 1, subject: r.subject });
+    });
+  }
+  return out;
+}
 export function applyDecision(dir, result, opts = {}) {
   const { decision, mode, destination, decisions } = opts;
   const guard = decideGuardProblems(opts);
@@ -3814,7 +3831,8 @@ export function applyDecision(dir, result, opts = {}) {
   const unplaced = persisted?.unplaced || [];
   const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode, destination: destination || null,
-    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
+    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged,
+    siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
