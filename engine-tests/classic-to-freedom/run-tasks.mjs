@@ -4825,6 +4825,42 @@ console.log("\n===== the migration result report — one artifact, computed from
         && /\*\*D9\*\* — space title/.test(repG.markdown) && /\*\*D10\*\* — dot title/.test(repG.markdown),
       () => ({ unbacked: repG.counts.unbackedBoundaries, s2: repG.markdown.slice(repG.markdown.indexOf("## 2."), repG.markdown.indexOf("## 3.")) }));
   }
+  // decisions.md written as a TABLE (`| D1 | **title** | … |`), per references/migration-documentation.md — the
+  // second cell is the title (bold lead lifted). Structured shapes (heading / table) take precedence, so a plain
+  // `D<n> —` PROSE line in the same file does NOT register a decision.
+  {
+    const baseT = tmp("result-report-grammar-table"); fs.mkdirSync(baseT, { recursive: true });
+    fs.writeFileSync(path.join(baseT, "decisions.md"),
+      "# decisions.md\n\n| # | Decision | Answered by |\n|---|---|---|\n| D1 | **Section boundary — Requests stay Classic.** keeps opening the Classic page | User |\n| D2 | **Section host — new app.** primary package UsrX | User |\n\nD9 — still waiting on the user, not decided yet\n");
+    const dT = path.join(baseT, "build-tasks");
+    const bndT = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
+      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+    const repT = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndT("t1", "D1"), bndT("t2", "D2")] }, dir: dT });
+    check("readDecisions table rows: `| D1 | **title** | … |` parses (bold lead as the title), so boundaries citing D1/D2 are backed (0 unbacked) and each renders with its title",
+      () => repT.counts.unbackedBoundaries === 0
+        && /\*\*D1\*\* — Section boundary — Requests stay Classic/.test(repT.markdown)
+        && /\*\*D2\*\* — Section host — new app/.test(repT.markdown),
+      () => ({ unbacked: repT.counts.unbackedBoundaries, s2: repT.markdown.slice(repT.markdown.indexOf("## 2."), repT.markdown.indexOf("## 3.")) }));
+    const repProse = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndT("t9", "D9")] }, dir: dT });
+    check("readDecisions precedence: a plain `D9 — …` PROSE line in a table/heading file does NOT back a boundary — structured shapes win, so a citation of that id stays a question (1 unbacked)",
+      () => repProse.counts.unbackedBoundaries === 1 && repProse.reasons.some((r) => /boundary closed by the agent with NO recorded decision/.test(r)),
+      () => ({ unbacked: repProse.counts.unbackedBoundaries, reasons: repProse.reasons }));
+  }
+  // A plain-line-only decisions.md (no heading / table): the dated line IS the sanctioned shape, so a boundary
+  // citing it is backed.
+  {
+    const baseP = tmp("result-report-grammar-plain"); fs.mkdirSync(baseP, { recursive: true });
+    fs.writeFileSync(path.join(baseP, "decisions.md"), "# decisions.md\n\nD3 — plain dated line boundary decision\nD4: another decision\n");
+    const dP = path.join(baseP, "build-tasks");
+    const bndP = (id, ref) => ({ id, file: `${id}.md`, group: "Repair", pageKey: "main", status: "partial", kind: "repair", repairRound: 1, notes: "",
+      rows: [{ label: `Card action ${id}`, outcomeKind: "n-a", outcome: `n-a — closed per ${ref}`, outcomeReason: `closed per ${ref}`, na: null }] });
+    const repP = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: { planVersion: RUN.planVersion, tasks: [bndP("p3", "D3"), bndP("p4", "D4")] }, dir: dP });
+    check("readDecisions plain lines: in a file with no heading/table, `D3 — …` and `D4: …` parse, so boundaries citing them are backed (0 unbacked)",
+      () => repP.counts.unbackedBoundaries === 0
+        && /\*\*D3\*\* — plain dated line boundary decision/.test(repP.markdown)
+        && /\*\*D4\*\* — another decision/.test(repP.markdown),
+      () => ({ unbacked: repP.counts.unbackedBoundaries, s2: repP.markdown.slice(repP.markdown.indexOf("## 2."), repP.markdown.indexOf("## 3.")) }));
+  }
 
   // renderFinalReport unit — the refused-ledger path at the source. `readMergedTaskDir` over a
   // folder whose frozen split is corrupt returns `refused` with `tasks: []`; renderFinalReport must NOT read that

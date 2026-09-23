@@ -3859,7 +3859,10 @@ export function resolveVmAttrVk(vk, ctx) {
   // with a virtual attribute whose payload predates the reads contract — a false hard block, not a false green.
   if (!ctx.vmAttrs) return ["☐ confirm on-stand", "view-model attributes not provided — pass get-page's `bundle.viewModelConfig` to auto-check this, or confirm the attribute on the stand", "skip"];
   if (ctx.vmAttrs.has(vk.name)) return ["✅ Done", `\`${esc(vk.name)}\` is a view-model attribute of the built page`, "ok"];
-  if (ctx.ops.some((o) => o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
+  // The bare-name leg requires a FIELD type: a `crt.Button` / container / menu item that merely shares the
+  // attribute's name is not a binding, and must not close the row (the `bound` and `<Name>Field` legs already
+  // target field bindings). `crt.ComboBox` and the other real field types still pass.
+  if (ctx.ops.some((o) => (o.name === vk.name && VERIFY_FIELD_RE.test(o.type || "")) || o.bound === vk.name || o.name === `${vk.name}Field`)) return ["✅ Done", `\`${esc(vk.name)}\` is bound by a field on the built page`, "ok"];
   return ["⚠ verify", `\`${esc(vk.name)}\` is not among the built page's view-model attributes — if it was ported another way (a bound column, a converter), record it`, "unverified"];
 }
 // The words of a plan caption that identify a tab, matched against the built tab's caption binding or name:
@@ -3939,10 +3942,25 @@ function resolveLayoutTab(vk, ctx, judge) {
     .filter((x) => x.score > 0 && !ctx.claimedContainers.has(x.c.name))
     .sort((a, b) => (b.score - a.score) || (Math.abs(size(a.c) - wantCount) - Math.abs(size(b.c) - wantCount)));
   const tab = cand[0]?.c;
+  if (tab) { ctx.claimedContainers.add(tab.name); return judge(tab, `in tab \`${esc(tab.name)}\``); }
+  // The caption did not word-match — a built tab's caption is usually an unresolved `#ResourceString(<key>)#` macro
+  // (its text lives in schema resources, not in the bundle the gate reads), and a Classic→Freedom template renames
+  // tabs ("Basic information" → `GeneralInfoTab`). Fall back to a CONTENT FIT, but accept it only when it is
+  // UNAMBIGUOUS: exactly one unclaimed non-`crt.TabPanel` tab whose content count is EXACTLY the want and whose
+  // region satisfies the want (judge ok). Exact count is the guard — a tab that merely CONTAINS the want among more
+  // fields (a misplaced tab whose fields landed in a bigger sibling) has size > want and does not qualify, and two
+  // tabs that both fit exactly are ambiguous. Either way the row falls to confirm-on-stand, so a missing or
+  // misplaced tab never reads green; only the correctly-built renamed tab that holds exactly this content closes ✅.
+  // (Exact-size fits are order-independent; matching all captions first and content-fitting only leftovers, ideally
+  // on published field identities rather than counts, is the follow-up.)
+  const fits = tabs.filter((c) => c.type !== "crt.TabPanel" && !ctx.claimedContainers.has(c.name) && size(c) === wantCount && judge(c, "")[2] === "ok");
+  if (fits.length === 1) { const fit = fits[0]; ctx.claimedContainers.add(fit.name); return judge(fit, `in tab \`${esc(fit.name)}\` (matched by content — its caption did not word-match)`); }
+  // No word match and no unambiguous content fit: which tab holds these is a placement fact to confirm on the stand,
+  // not a machine failure that spawns a repair against a correctly built page. The page-wide Fields / Related-lists
+  // rows still gate whether the CONTENT exists at all.
   const tabList = tabs.length ? `: ${tabs.map((t) => esc(t.name)).join(", ")}` : "";
-  if (!tab) return ["⚠ verify", `no unclaimed tab whose caption or name matches "${esc(vk.caption)}" among ${tabs.length} tab container(s)${tabList}`, "unverified"];
-  ctx.claimedContainers.add(tab.name);
-  return judge(tab, `in tab \`${esc(tab.name)}\``);
+  const why = fits.length > 1 ? "and more than one tab could hold it by content" : "and no single tab fits its content exactly";
+  return ["☐ confirm on-stand", `no built tab matched the plan caption "${esc(vk.caption)}" by words, ${why} — confirm on the stand which tab holds these among ${tabs.length} tab container(s)${tabList}`, "skip"];
 }
 // The template's native card controls, by the element names it ships them under.
 // Native control aliases as camelCase TOKEN sequences, never raw substrings: `Tag` matches `TagSelect`
@@ -4013,20 +4031,32 @@ export function boundAttributeOf(node) {
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
   return m ? m[1] : attr;
 }
+// One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
+// component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
+// never the children array); a FIELD keeps `bound` (the column identity the fields row reads). Extracted so
+// walkViewConfig stays under Sonar's cognitive-complexity ceiling.
+function pushWalkNode(node, out) {
+  const cols = columnsOf(node);
+  const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
+  const attr = boundAttributeOf(node);
+  out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
+}
 function walkViewConfig(node, out = []) {
   if (Array.isArray(node)) { for (const n of node) { walkViewConfig(n, out); } return out; }
   if (!node || typeof node !== "object") return out;
-  if (node.name != null || node.type != null) {
-    // `{name, type}` is the whole flattening for every other check. A COLLECTION component needs two more, and
-    // only these two: `columns` (data inside the node, which a name/type walk goes straight past) and the `items`
-    // BINDING — a string like `"$Items"`, never the children array that shares the property name on a container.
-    // A FIELD component keeps a third: the attribute it binds (`bound`), the column identity the fields row reads.
-    const cols = columnsOf(node);
-    const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
-    const attr = boundAttributeOf(node);
-    out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}) });
+  // A node carrying a `name` OR a `type` is a component (the childpage structural row treats any returned node as
+  // proof the page was built).
+  if (node.name != null || node.type != null) pushWalkNode(node, out);
+  // Recurse into ARRAY children only — component lists (`items`, `menuItems`, `menu`, `actions`, toolbar rows, …);
+  // walking `items` alone left native controls under other arrays invisible (a built `ReloadDataMenuItem` read as
+  // missing). Object-valued keys hold CONFIG (`clicked`, `params`, `layoutConfig`, `_filterOptions`, series specs),
+  // not components, so a `name` buried in config never enters the op list and cannot widen a name-based check.
+  // `columns` is grid DATA, read separately (columnsOf / findGridNodes).
+  for (const k of Object.keys(node)) {
+    if (k === "columns") continue;
+    if (Array.isArray(node[k])) walkViewConfig(node[k], out);
   }
-  return walkViewConfig(node.items, out);
+  return out;
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
 // DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
@@ -4105,7 +4135,7 @@ function reachabilityValue(root, key) {
   const v = root?.reachability?.[key];
   return v === undefined ? root?.[key] : v;
 }
-const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput)$/;
+const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|PhoneInput|EmailInput)$/;
 // ONE ctx per page (D8). It carries BOTH this page's record and the payload ROOT: `placement` and every
 // count/structural check read the PAGE (so a child's field count can never be closed by the parent's
 // components), while `onstand` / `evidence` / `childpage` read the ROOT (reachability, evidence and judge
@@ -4114,7 +4144,7 @@ const VERIFY_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInp
 // the built page's CONTAINERS, each with the fields / related lists / widgets it holds (all descendants):
 // what the `layout` vk measures a region against. `caption` is the raw binding (`#ResourceString(…TabCaption)#`),
 // matched loosely by the caption words the plan published.
-const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput)$/;
+const LAYOUT_FIELD_RE = /^crt\.(Input|ComboBox|DateTimePicker|Checkbox|NumberInput|MoneyInput|ColorEdit|TextArea|MultilineInput|RichTextEdit|ImageInput|PhoneInput|EmailInput)$/;
 const LAYOUT_WIDGETS = new Set(["crt.Feed", "crt.EntityStageProgressBar", "crt.NextSteps", "crt.FileList", "crt.CommunicationOptions", "crt.ApprovalList", "crt.Approval"]);
 function collectLayout(node, acc) {
   if (Array.isArray(node)) { for (const n of node) { collectLayout(n, acc); } return acc; }
