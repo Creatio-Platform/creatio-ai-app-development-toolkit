@@ -2759,8 +2759,8 @@ const ROUTE_FLAG = "--route";
 // folder refresh a plain `--tasks` run already performs.
 const NEXT_FLAG = "--next";
 // `--decide D<N>` / `--revoke D<N>`: the ONE path a PERSON's scope decision reaches the ledger.
-// See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` from
-// `<migration-folder>/decisions.md` and the plan's `### Adjustments`, and refuse when it does not.
+// See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` to a heading in
+// `<migration-folder>/decisions.md`, and refuse when it does not.
 const DECIDE_FLAG = "--decide";
 const REVOKE_FLAG = "--revoke";
 const WONT_DO_FLAG = "--wont-do";
@@ -3367,9 +3367,9 @@ function runRepairMode(result, dir, verifyRes, opts) {
 }
 
 // `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`
-// — the one path a person's scope decision reaches the ledger. It refuses unless `D<N>` already resolves in
-// `<migration-folder>/decisions.md` or under the plan's `### Adjustments`; that refusal IS the safeguard
-// (an agent cannot mint the ground it stands on), and the message prints exactly what to add.
+// — the one path a person's scope decision reaches the ledger. It refuses unless `D<N>` already resolves to
+// a heading in `<migration-folder>/decisions.md`; that refusal IS the safeguard (an agent cannot mint the
+// ground it stands on), and the message prints exactly what to add.
 function decidePrintProblems(prefix, problems, addHelp) {
   const lines = [`migrate.mjs: ⛔ ${prefix}:`];
   for (const p of problems) lines.push(`  — ${p}`);
@@ -3377,11 +3377,11 @@ function decidePrintProblems(prefix, problems, addHelp) {
   return lines.join("\n") + "\n";
 }
 // The one refusal that can be acted on without reading the code: the decision does not resolve yet, so the
-// message has to name the file to add it to and the two shapes that count as a heading there.
+// message has to name the file to add it to and the heading shape that counts there.
 function decideRefusalHelp(res, opts, migrationDir) {
-  if (!res.problems.some((p) => /does not resolve in decisions\.md/.test(p))) return [];
+  if (!res.problems.some((p) => /does not resolve to a heading in decisions\.md/.test(p))) return [];
   return ["", "  add it to `" + path.join(migrationDir, "decisions.md") + "` as a heading (`## " + opts.decision
-    + " — <title>`), or under the plan's `### Adjustments` as `N. **<title>**`, then re-run."];
+    + " — <title>`), then re-run."];
 }
 // Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
 // addressed by task or by row, so reading its length up front throws on the two commonest forms.

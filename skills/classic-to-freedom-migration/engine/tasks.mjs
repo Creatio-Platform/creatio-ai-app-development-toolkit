@@ -3286,8 +3286,8 @@ export function decidedRowKeys(set) {
 // A whole-task scope decision — `wont-do` or `postponed` — is a PERSON's answer, and it reaches the ledger
 // through this ONE mode: `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`.
 // The subject is the decision, because that is the thing the refusal turns on: `--decide` refuses unless
-// `D<N>` already resolves in `decisions.md` or under the plan's `### Adjustments`, and it NEVER creates one.
-// That refusal IS the safeguard — an agent cannot mint the ground it stands on.
+// `D<N>` already resolves to a heading in `decisions.md`, and it NEVER creates one. That refusal IS the
+// safeguard — an agent cannot mint the ground it stands on.
 //
 // A cell `--decide` fills carries its provenance in the task's `decisions:` front-matter (`<n>:D<N>` pairs),
 // so `--revoke D<N>` finds exactly what it wrote and removes only that. `postponed` additionally requires a
@@ -3364,7 +3364,7 @@ function decideGuardProblems({ decision, mode, destination, decisions }) {
     return ["--postponed needs --to <destination> (an issue key or free text; a key renders as a link)"];
   }
   if (!decisions?.has?.(decision)) {
-    return [`decision '${decision}' does not resolve in decisions.md or the plan's ### Adjustments — nothing was written. Add it there first (a heading '## ${decision} — <title>' in decisions.md, or a numbered item under Adjustments), then re-run.`];
+    return [`decision '${decision}' does not resolve to a heading in decisions.md — nothing was written. Add it there first (a heading '## ${decision} — <title>'), then re-run.`];
   }
   return null;
 }
