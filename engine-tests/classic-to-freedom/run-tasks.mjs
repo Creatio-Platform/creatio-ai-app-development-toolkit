@@ -7076,5 +7076,62 @@ console.log("\n===== --verify --tasks: a refused round under a changed plan leav
   fs.rmSync(base, { recursive: true, force: true });
 }
 
+// A packing unit holding a handler is placed after the bucket's standalone virtual attributes: those of units with
+// no handler. The unit stays whole and its own attributes precede its handlers.
+console.log("\n===== build order: a unit holding a handler follows the standalone virtual attributes =====");
+{
+  const handler = (method, card) => ({ label: `Handler — \`${method}\``,
+    vk: { type: "handler", method, parent: null, triggers: [], category: null }, ...(card ? { card } : {}) });
+  const attr = (name, card) => ({ label: `[attribute-virtual] ${name}`, vk: { type: "vmattr", name }, ...(card ? { card } : {}) });
+  const confirm = (item, card) => ({ label: `[x] ${item}`, id: `main#confirm:x:${item}`, confirm: { kind: "x", item },
+    ...(card ? { card } : {}) });
+  const group = (title, rows) => ({ pageKey: "main", baseTitle: title, title, rows });
+  const TIGHT = { ...OPTS, taskBudget: { run: 0, chunk: 4 } };
+  const cutOf = (groups) => buildTaskSet(RUN, TIGHT, groups).tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
+  const names = (t) => t.rows.map((r) => /`([^`]+)`/.exec(r.label)?.[1] || r.label.split(" ").pop());
+  const at = (tasks, n) => tasks.findIndex((t) => names(t).includes(n));
+  const shape = (tasks) => tasks.map((t) => names(t).join(",")).join(" | ");
+  const inOrder = (tasks, a, b) => {
+    const ta = at(tasks, a), tb = at(tasks, b);
+    return ta >= 0 && (ta < tb || (ta === tb && names(tasks[ta]).indexOf(a) < names(tasks[ta]).indexOf(b)));
+  };
+
+  const one = [group("⚠ Confirm worklist", [confirm("q", "C")]),
+    group("⚠ Other declared logic worklist", [attr("V1"), attr("V2"), attr("V3")]),
+    group("Form — Custom methods", [handler("H", "C"), handler("H2"), handler("H3")])];
+  const oneCut = cutOf(one);
+  check("cut: a Confirm row sharing a card with a handler rides with it, after every standalone virtual attribute",
+    () => oneCut.length > 1 && at(oneCut, "q") === at(oneCut, "H")
+      && ["V1", "V2", "V3"].every((v) => at(oneCut, v) <= at(oneCut, "H")),
+    () => shape(oneCut));
+  check("cut: every plan row is claimed once when a handler unit moves after the standalone attributes",
+    () => claimsAll(buildTaskSet(RUN, TIGHT, one).tasks, one), () => unclaimedPlanRows(buildTaskSet(RUN, TIGHT, one).tasks, one));
+
+  const two = [group("⚠ Other declared logic worklist", [attr("V1", "C"), attr("V2"), attr("V3"), attr("V4")]),
+    group("Form — Custom methods", [handler("H1", "C"), handler("H2"), handler("H3")])];
+  const twoCut = cutOf(two);
+  check("cut: a unit of an attribute and its handler stays whole, after the other standalone attributes, attribute first",
+    () => twoCut.length > 1 && at(twoCut, "V1") === at(twoCut, "H1") && inOrder(twoCut, "V1", "H1")
+      && ["V2", "V3", "V4"].every((v) => at(twoCut, v) <= at(twoCut, "V1")),
+    () => shape(twoCut));
+
+  const noHandler = [group("⚠ Confirm worklist", [confirm("q", "C")]),
+    group("⚠ Other declared logic worklist", [attr("V1"), attr("V2"), attr("V3", "C")]),
+    group("Form — Custom methods", [handler("H1"), handler("H2")])];
+  const noHandlerCut = cutOf(noHandler);
+  check("cut: a unit holding no handler sits at its first member's position",
+    () => noHandlerCut.length > 1 && at(noHandlerCut, "q") === 0 && at(noHandlerCut, "V3") === 0
+      && at(noHandlerCut, "V1") > 0,
+    () => shape(noHandlerCut));
+
+  const mixed = [group("⚠ Other declared logic worklist", [attr("A1", "CA"), attr("B1", "CB"), attr("S1")]),
+    group("Form — Custom methods", [handler("HA", "CA"), handler("HB", "CB"), handler("H9")])];
+  const mixedCut = cutOf(mixed);
+  check("cut: two units each holding an attribute and a handler stay whole, each attribute before its own handler",
+    () => mixedCut.length > 1 && at(mixedCut, "A1") === at(mixedCut, "HA") && inOrder(mixedCut, "A1", "HA")
+      && at(mixedCut, "B1") === at(mixedCut, "HB") && inOrder(mixedCut, "B1", "HB"),
+    () => shape(mixedCut));
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -411,10 +411,26 @@ function packingUnits(rows) {
   return [...units.values()];
 }
 
+// A UNIT HOLDING A HANDLER FOLLOWS THE BUCKET'S STANDALONE VIRTUAL ATTRIBUTES: the `vmattr` rows of units with no
+// handler. Such a unit sits at the later of its first member's position and just after the last standalone
+// attribute, so a handler is never dispatched before an attribute outside its unit. Moved units keep their
+// relative order; the rest keep theirs; members keep the phase order they arrived in.
+function afterStandaloneAttributes(units) {
+  const has = (u, type) => u.some((r) => r.vk?.type === type);
+  let last = -1;
+  units.forEach((u, i) => { if (has(u, "vmattr") && !has(u, "handler")) last = i; });
+  const early = (u, i) => i < last && has(u, "handler");
+  const moved = units.filter(early);
+  const kept = units.filter((u, i) => !early(u, i));
+  const at = kept.indexOf(units[last]) + 1;
+  return [...kept.slice(0, at), ...moved, ...kept.slice(at)];
+}
+
 // The bucket's rows cut into chunks along unit boundaries. `chunkRows` packs the units as it packs rows; a single
 // chunk keeps the plan's row order, so a bucket under the budget is not reordered.
 function packRows(rows, B) {
-  const units = packingUnits(rows).map((members) => ({ members, weight: members.reduce((a, r) => a + r.weight, 0) }));
+  const units = afterStandaloneAttributes(packingUnits(rows))
+    .map((members) => ({ members, weight: members.reduce((a, r) => a + r.weight, 0) }));
   const packed = chunkRows(units, B).map((c) => c.flatMap((u) => u.members));
   return packed.length > 1 ? packed : [rows];
 }

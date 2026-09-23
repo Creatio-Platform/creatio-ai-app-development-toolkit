@@ -155,7 +155,9 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
 - **The cut packs units, not rows.** A unit is a fold chain (a handler and the helpers folded under it through
   `vk.parent`) joined with every row of the bucket that cites the same card (`card`, the id `Described in` cites).
   A unit sits at its first member's position and is never split; a unit heavier than the budget gets a chunk to
-  itself. A bucket that fits one chunk keeps the plan's row order.
+  itself. A unit holding a handler sits no earlier than just after the bucket's last standalone virtual attribute
+  (an `[attribute-virtual]` row of a unit with no handler), and its own members keep the phase order, attributes
+  before handlers. A bucket that fits one chunk keeps the plan's row order.
 - **A task whose open rows all wait on an open decision is held (`HOLD_DECISION`).** Each row carries a decision
   subject: its card, else its confirm evidence id, else its fold-chain root. A `not-built — needs-decision` row
   with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject in
