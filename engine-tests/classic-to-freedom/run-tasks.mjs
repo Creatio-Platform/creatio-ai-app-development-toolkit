@@ -6712,16 +6712,35 @@ const claimsAll = (tasks, groups) => {
   const u = unclaimedPlanRows(tasks, groups);
   return u.unplaced.length === 0 && u.surplus.length === 0;
 };
+// Hand-built cut fixtures: a handler row, a cut under a `chunk` budget, and each task's row names.
+const cardLabel = (m) => `Handler — \`${m}\``;
+const handler = (method, extra = {}) => ({ label: cardLabel(method),
+  vk: { type: "handler", method, parent: extra.parent || null, triggers: [], category: null },
+  ...(extra.card ? { card: extra.card } : {}) });
+const budgetOf = (chunk) => ({ ...OPTS, taskBudget: { run: 0, chunk } });
+const TIGHT = budgetOf(8);
+const cutOf = (groups, chunk = 8) => buildTaskSet(RUN, budgetOf(chunk), groups).tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
+const names = (t) => t.rows.map((r) => /`([^`]+)`/.exec(r.label)?.[1] || r.label.split(" ").pop());
+const shape = (tasks) => tasks.map((t) => names(t).join(",")).join(" | ");
+// A split of a card fixture: the `waiting` row alone in `other`, the rest of `main` in `<prefix>-source`, the review
+// rows in `<prefix>-review`, and one item per other page, which on the waiting row's page follows `other`. The
+// default fixture is the card fixture, where `onBulk0` and `onBulk5` share card C7.
+function cardSplit(prefix, other, { run = CARD_RUN, groups = CARD_GROUPS, waiting = cardLabel("onBulk5") } = {}) {
+  const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g))
+    .flatMap((g) => g.rows.map((r) => r.label)).filter((l) => l !== waiting);
+  const isReview = (g) => g.baseTitle === "Quality gates";
+  const waitPage = groups.find((g) => g.rows.some((r) => r.label === waiting))?.pageKey;
+  const waitItem = (k) => (k === waitPage ? [splitItem(other, k, k, [waiting])] : []);
+  const itemsOf = (k) => (k === "main"
+    ? [splitItem(`${prefix}-source`, k, k, rowsOf(k, (g) => !isReview(g))), ...waitItem(k),
+      splitItem(`${prefix}-review`, k, k, rowsOf(k, isReview))]
+    : [...waitItem(k), splitItem(`${prefix}-${slugKey(k)}`, k, k, rowsOf(k))]);
+  return { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap(itemsOf) };
+}
+
 {
-  const handler = (method, extra = {}) => ({ label: `Handler — \`${method}\``,
-    vk: { type: "handler", method, parent: extra.parent || null, triggers: [], category: null },
-    ...(extra.card ? { card: extra.card } : {}) });
   const logicGroup = (rows) => [{ pageKey: "main", baseTitle: "Form — Custom methods", title: "Form — Custom methods", rows }];
-  const TIGHT = { ...OPTS, taskBudget: { run: 0, chunk: 8 } };
-  const cutOf = (groups, opts = TIGHT) => buildTaskSet(RUN, opts, groups).tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
-  const methodsOf = (t) => t.rows.map((r) => /`([^`]+)`/.exec(r.label)?.[1]);
-  const taskOfMethod = (tasks, m) => tasks.find((t) => methodsOf(t).includes(m))?.id;
-  const shape = (tasks) => tasks.map((t) => methodsOf(t).join(","));
+  const taskOfMethod = (tasks, m) => tasks.find((t) => names(t).includes(m))?.id;
 
   const straddle = logicGroup([handler("h0"), handler("caller"), handler("helper", { parent: "caller" })]);
   const straddleCut = cutOf(straddle);
@@ -6731,26 +6750,26 @@ const claimsAll = (tasks, groups) => {
   const heavy = logicGroup([handler("h0"), handler("caller"), handler("helper", { parent: "caller" }),
     handler("deeper", { parent: "helper" }), handler("h1")]);
   const heavyCut = cutOf(heavy);
-  const chainTask = heavyCut.find((t) => methodsOf(t).includes("caller"));
+  const chainTask = heavyCut.find((t) => names(t).includes("caller"));
   check("cut: a fold chain heavier than the budget gets a task of its own, holding the whole chain and nothing else",
-    () => methodsOf(chainTask).join(",") === "caller,helper,deeper", () => shape(heavyCut));
+    () => names(chainTask).join(",") === "caller,helper,deeper", () => shape(heavyCut));
 
   const sameCard = logicGroup([handler("h0", { card: "C06" }), handler("h1"), handler("h2"), handler("h3", { card: "C06" })]);
   const sameCardCut = cutOf(sameCard);
   check("cut: rows citing one card land in one task",
     () => taskOfMethod(sameCardCut, "h0") === taskOfMethod(sameCardCut, "h3"), () => shape(sameCardCut));
   check("cut: a unit sits at the position of its first member",
-    () => shape(sameCardCut).join(" | ") === "h0,h3 | h1,h2", () => shape(sameCardCut));
+    () => shape(sameCardCut) === "h0,h3 | h1,h2", () => shape(sameCardCut));
 
   const joined = logicGroup([handler("a", { card: "C1" }), handler("b"), handler("c", { parent: "a" }),
     handler("d", { card: "C1" }), handler("e")]);
-  const joinedCut = cutOf(joined, { ...OPTS, taskBudget: { run: 0, chunk: 4 } });
+  const joinedCut = cutOf(joined, 4);
   check("cut: a fold chain and a card joined by one row form one unit",
     () => new Set(["a", "c", "d"].map((m) => taskOfMethod(joinedCut, m))).size === 1, () => shape(joinedCut));
 
-  const roomy = cutOf(sameCard, { ...OPTS, taskBudget: { run: 0, chunk: 100 } });
+  const roomy = cutOf(sameCard, 100);
   check("cut: a bucket under the budget keeps the plan's row order",
-    () => roomy.length === 1 && methodsOf(roomy[0]).join(",") === "h0,h1,h2,h3", () => shape(roomy));
+    () => roomy.length === 1 && names(roomy[0]).join(",") === "h0,h1,h2,h3", () => shape(roomy));
 
   check("cut: every plan row is claimed by exactly one task after the unit cut",
     () => [straddle, heavy, sameCard, joined].every((g) => claimsAll(buildTaskSet(RUN, TIGHT, g).tasks, g)),
@@ -6788,7 +6807,7 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   const groups = checklistGroups(run, opts);
   const set = buildTaskSet(run, opts, groups);
   const placed = (m) => set.tasks.flatMap((t) => t.rows.map((r) => ({ id: t.id, label: r.label, subject: r.subject })))
-    .find((x) => x.label === `Handler — \`${m}\``);
+    .find((x) => x.label === cardLabel(m));
   const a = placed("onBulk0");
   const b = placed("onBulk5");
   check("cut (pipeline): two handlers citing only one body card are not joined into one task",
@@ -6816,24 +6835,8 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
   fs.rmSync(base, { recursive: true, force: true });
 }
 
-// A split of the card fixture: `onBulk5` alone in `other`, the rest of `main` in `<prefix>-source`, the review rows
-// in `<prefix>-review`, and one item per other page. `onBulk0` and `onBulk5` share card C7.
-const cardLabel = (m) => `Handler — \`${m}\``;
-function cardSplit(prefix, other) {
-  const rowsOf = (k, keep = () => true) => CARD_GROUPS.filter((g) => g.pageKey === k && keep(g))
-    .flatMap((g) => g.rows.map((r) => r.label));
-  const isReview = (g) => g.baseTitle === "Quality gates";
-  const pages = [...new Set(CARD_GROUPS.map((g) => g.pageKey))];
-  return { planVersion: CARD_RUN.planVersion, items: pages.flatMap((k) => (k === "main"
-    ? [splitItem(`${prefix}-source`, "main", "main", rowsOf("main", (g) => !isReview(g)).filter((l) => l !== cardLabel("onBulk5"))),
-      splitItem(other, "main", "main", [cardLabel("onBulk5")]),
-      splitItem(`${prefix}-review`, "main", "main", rowsOf("main", isReview))]
-    : [splitItem(`${prefix}-${slugKey(k)}`, k, k, rowsOf(k))])) };
-}
-
 // A task whose open rows all wait on a decision another task raised is held until that decision is recorded.
 {
-  const labelOf = cardLabel;
   const split = cardSplit("dec", "dec-waiting");
   const base = tmp("decision-hold");
   const dir = path.join(base, "build-tasks");
@@ -6841,7 +6844,7 @@ function cardSplit(prefix, other) {
   const opts = optsOf(CARD_MANIFEST);
   const first = syncTaskDir(dir, CARD_RUN, opts);
   const src = first.tasks.find((t) => t.id === "dec-source");
-  const n = src ? src.rows.findIndex((r) => r.label === labelOf("onBulk0")) + 1 : 0;
+  const n = src ? src.rows.findIndex((r) => r.label === cardLabel("onBulk0")) + 1 : 0;
   let min = clearDepsOf(dir, "dec-source", CARD_RUN, opts);
   startTask(dir, "dec-source", CARD_RUN, { ...opts, dispatchToken: "tok-dec-source" }, null, AT(min));
   closeCells(dir, "dec-source", (i) => (i === n ? "not-built — needs-decision" : "built"));
@@ -6994,29 +6997,16 @@ function cardSplit(prefix, other) {
   const manifest = { ...manifestOf({ bulk: 2 }), childPageSchemas: { C1Page: childWithHandler },
     behaviourIndex: { onBulk0: { card: "C7", ac: ["AC-1"] }, "C1Page::onChildC7": { card: "C7", ac: ["AC-2"] } } };
   const opts = { ...optsOf(manifest), taskBudget: { run: 0, chunk: 8 } };
-  const decLabelOf = (m) => `Handler — \`${m}\``;
   const run = runMigration(manifest);
   const groups = checklistGroups(run, opts);
   const waitLabel = groups.flatMap((g) => g.rows).find((r) => r.card === "C7" && /onChildC7/.test(r.label))?.label;
-  const isReview = (g) => g.baseTitle === "Quality gates";
-  const rowsOf = (k, keep = () => true) => groups.filter((g) => g.pageKey === k && keep(g)).flatMap((g) => g.rows.map((r) => r.label));
   const childKey = groups.find((g) => g.rows.some((r) => r.label === waitLabel))?.pageKey;
-  const itemsFor = (k) => {
-    if (k === "main") {
-      return [splitItem("x-source", "main", "main", rowsOf("main", (g) => !isReview(g))),
-        splitItem("x-review", "main", "main", rowsOf("main", isReview))];
-    }
-    if (k === childKey) {
-      return [splitItem("x-waiting", k, k, [waitLabel]), splitItem("x-child", k, k, rowsOf(k).filter((l) => l !== waitLabel))];
-    }
-    return [splitItem(`x-${slugKey(k)}`, k, k, rowsOf(k))];
-  };
-  const split = { planVersion: run.planVersion, items: [...new Set(groups.map((g) => g.pageKey))].flatMap(itemsFor) };
+  const split = cardSplit("x", "x-waiting", { run, groups, waiting: waitLabel });
   const base = tmp("decision-hold-cross-page");
   const dir = path.join(base, "build-tasks");
   freezeSplit(dir, JSON.stringify(split));
   const first = syncTaskDir(dir, run, opts);
-  const n = (first.tasks.find((t) => t.id === "x-source")?.rows || []).findIndex((r) => r.label === decLabelOf("onBulk0")) + 1;
+  const n = (first.tasks.find((t) => t.id === "x-source")?.rows || []).findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
   let min = clearDepsOf(dir, "x-source", run, opts);
   startTask(dir, "x-source", run, { ...opts, dispatchToken: "tok-x-source" }, null, AT(min));
   closeCells(dir, "x-source", (i) => (i === n ? "not-built — needs-decision" : "built"));
@@ -7026,7 +7016,7 @@ function cardSplit(prefix, other) {
   const heldBefore = withheldAs(syncTaskDir(dir, run, { ...opts, now: AT(min) }));
   min += 2;
   runTask(dir, "x-review", run, opts, min);
-  const miss = { main: { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, decLabelOf("onBulk0"))] } };
+  const miss = { main: { missing: 1, unverified: 0, complete: false, openRows: [openRow(1, cardLabel("onBulk0"))] } };
   const round = syncRepairDir(dir, run, miss, opts);
   for (const t of round.written) {
     min += 2;
@@ -7472,17 +7462,11 @@ console.log("\n===== --verify --tasks: a refused round under a changed plan leav
 // no handler. The unit stays whole and its own attributes precede its handlers.
 console.log("\n===== build order: a unit holding a handler follows the standalone virtual attributes =====");
 {
-  const handler = (method, card) => ({ label: `Handler — \`${method}\``,
-    vk: { type: "handler", method, parent: null, triggers: [], category: null }, ...(card ? { card } : {}) });
   const attr = (name, card) => ({ label: `[attribute-virtual] ${name}`, vk: { type: "vmattr", name }, ...(card ? { card } : {}) });
   const confirm = (item, card) => ({ label: `[x] ${item}`, id: `main#confirm:x:${item}`, confirm: { kind: "x", item },
     ...(card ? { card } : {}) });
   const group = (title, rows) => ({ pageKey: "main", baseTitle: title, title, rows });
-  const TIGHT = { ...OPTS, taskBudget: { run: 0, chunk: 4 } };
-  const cutOf = (groups) => buildTaskSet(RUN, TIGHT, groups).tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
-  const names = (t) => t.rows.map((r) => /`([^`]+)`/.exec(r.label)?.[1] || r.label.split(" ").pop());
   const at = (tasks, n) => tasks.findIndex((t) => names(t).includes(n));
-  const shape = (tasks) => tasks.map((t) => names(t).join(",")).join(" | ");
   const inOrder = (tasks, a, b) => {
     const ta = at(tasks, a), tb = at(tasks, b);
     return ta >= 0 && (ta < tb || (ta === tb && names(tasks[ta]).indexOf(a) < names(tasks[ta]).indexOf(b)));
@@ -7490,18 +7474,19 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
   const one = [group("⚠ Confirm worklist", [confirm("q", "C")]),
     group("⚠ Other declared logic worklist", [attr("V1"), attr("V2"), attr("V3")]),
-    group("Form — Custom methods", [handler("H", "C"), handler("H2"), handler("H3")])];
-  const oneCut = cutOf(one);
+    group("Form — Custom methods", [handler("H", { card: "C" }), handler("H2"), handler("H3")])];
+  const oneCut = cutOf(one, 4);
   check("cut: a Confirm row sharing a card with a handler rides with it, after every standalone virtual attribute",
     () => oneCut.length > 1 && at(oneCut, "q") === at(oneCut, "H")
       && ["V1", "V2", "V3"].every((v) => at(oneCut, v) <= at(oneCut, "H")),
     () => shape(oneCut));
   check("cut: every plan row is claimed once when a handler unit moves after the standalone attributes",
-    () => claimsAll(buildTaskSet(RUN, TIGHT, one).tasks, one), () => unclaimedPlanRows(buildTaskSet(RUN, TIGHT, one).tasks, one));
+    () => claimsAll(buildTaskSet(RUN, budgetOf(4), one).tasks, one),
+    () => unclaimedPlanRows(buildTaskSet(RUN, budgetOf(4), one).tasks, one));
 
   const two = [group("⚠ Other declared logic worklist", [attr("V1", "C"), attr("V2"), attr("V3"), attr("V4")]),
-    group("Form — Custom methods", [handler("H1", "C"), handler("H2"), handler("H3")])];
-  const twoCut = cutOf(two);
+    group("Form — Custom methods", [handler("H1", { card: "C" }), handler("H2"), handler("H3")])];
+  const twoCut = cutOf(two, 4);
   check("cut: a unit of an attribute and its handler stays whole, after the other standalone attributes, attribute first",
     () => twoCut.length > 1 && at(twoCut, "V1") === at(twoCut, "H1") && inOrder(twoCut, "V1", "H1")
       && ["V2", "V3", "V4"].every((v) => at(twoCut, v) <= at(twoCut, "V1")),
@@ -7510,15 +7495,15 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
   const noHandler = [group("⚠ Confirm worklist", [confirm("q", "C")]),
     group("⚠ Other declared logic worklist", [attr("V1"), attr("V2"), attr("V3", "C")]),
     group("Form — Custom methods", [handler("H1"), handler("H2")])];
-  const noHandlerCut = cutOf(noHandler);
+  const noHandlerCut = cutOf(noHandler, 4);
   check("cut: a unit holding no handler sits at its first member's position",
     () => noHandlerCut.length > 1 && at(noHandlerCut, "q") === 0 && at(noHandlerCut, "V3") === 0
       && at(noHandlerCut, "V1") > 0,
     () => shape(noHandlerCut));
 
   const mixed = [group("⚠ Other declared logic worklist", [attr("A1", "CA"), attr("B1", "CB"), attr("S1")]),
-    group("Form — Custom methods", [handler("HA", "CA"), handler("HB", "CB"), handler("H9")])];
-  const mixedCut = cutOf(mixed);
+    group("Form — Custom methods", [handler("HA", { card: "CA" }), handler("HB", { card: "CB" }), handler("H9")])];
+  const mixedCut = cutOf(mixed, 4);
   check("cut: two units each holding an attribute and a handler stay whole, each attribute before its own handler",
     () => mixedCut.length > 1 && at(mixedCut, "A1") === at(mixedCut, "HA") && inOrder(mixedCut, "A1", "HA")
       && at(mixedCut, "B1") === at(mixedCut, "HB") && inOrder(mixedCut, "B1", "HB"),
@@ -7527,7 +7512,6 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
 // `--decide` names the open rows on other tasks that share a subject with a row it decided, and closes none of them.
 {
-  const labelOf = cardLabel;
   const split = cardSplit("sib", "sib-other");
   const opts = optsOf(CARD_MANIFEST);
   const D4 = new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]]);
@@ -7548,7 +7532,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
   {
     const { base, dir, set } = fixture("siblings-listed");
-    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
     const res = decide(dir, "sib-source", n);
     check("--decide: an open row on another task sharing the decided row's subject is listed",
       () => !res.refused && named(res).join(",") === "sib-other:1", () => ({ refused: res.problems, named: named(res) }));
@@ -7561,7 +7545,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
   // The printed command, run as printed, closes exactly the listed rows.
   {
     const { base, dir, set } = fixture("siblings-cli");
-    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
     const manifestPath = path.join(base, "manifest.json");
     const out = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--decide", "D4", "--wont-do",
       "--row", `sib-source:${n}`], { encoding: "utf8" });
@@ -7593,7 +7577,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
   {
     const { base, dir, set } = fixture("siblings-closed");
-    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
     decide(dir, "sib-other", 1, "D5");
     const decided = decide(dir, "sib-source", n);
     const f = taskFilePath(dir, "sib-other");
@@ -7608,7 +7592,7 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
 
   {
     const { base, dir, set } = fixture("siblings-postponed");
-    const n = rowOf(set, "sib-source", labelOf("onBulk0"));
+    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
     const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
       "--postponed", "--to", "ENG-12345", "--row", `sib-source:${n}`], { encoding: "utf8" });
     const cmd = (out.stdout || "").split("\n").find((l) => l.includes("--row") && l.includes("sib-other:1")) || "";
