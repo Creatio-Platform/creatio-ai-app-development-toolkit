@@ -58,7 +58,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
-  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER,
+  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
@@ -2968,6 +2968,14 @@ function startRefusalText(set, startId, dir) {
       + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
       + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
   }
+  if (set.blockedByDecision) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on an open decision on a subject another task shares:\n`
+      + decisionSourceLines(set.blockedByDecision.rows).join("\n")
+      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
+      + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"
+      + " this task.\n";
+  }
   if (set.blockedByOverlap) {
     dispatchGateFailure = { startRefusal: true, dir };
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
@@ -3131,6 +3139,10 @@ const withheldLine = (w) => {
   const on = (w.tasks || []).map((d) => `${d.id} (\`${d.status}\`)`).join(", ");
   if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
   if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
+  if (w.cause === HOLD_DECISION) {
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row, or re-opening it to build it, releases it:`,
+      ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
+  }
   if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
   // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
   // what will hold the task once the books are repaired — worth printing, but never in place of the real refusal.
@@ -3140,6 +3152,9 @@ const withheldLine = (w) => {
   }
   return `   · ${taskLine(w.task)} — its file could not be read (${w.file}); repair it by hand`;
 };
+// One line per source row of a decision hold: the task and row whose `needs-decision` mark the hold waits on.
+const decisionSourceLines = (rows) => (rows || [])
+  .map((r) => `   · ${r.task.id} row ${r.n}: ${r.label}  (\`${r.task.file}\`)`);
 const heldLine = (h) => `   · ${taskLine(h.task)} — status \`${h.task.status}\`: a decision, not a schedule. Read its \`## Notes\`, fix what they name, set it back to \`todo\`.`;
 
 // One block of stdout per verdict; the caller decides the exit code from the verdict itself. They are separate
@@ -3420,7 +3435,15 @@ function decideTouchedLines(res, opts) {
   lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
   return lines;
 }
-function runDecideMode(result, dir, opts) {
+// The open rows on another task that share a subject with a decided row, each with the command that applies the
+// same answer to it. Listed only: each row is closed by the person running its command.
+function decideSiblingLines(res, cmdFor) {
+  if (!res.siblings?.length) return [];
+  return ["", `${res.siblings.length} open row(s) on other tasks share a subject with the decided row(s) and were NOT`
+    + " touched. To apply the same answer to them, run:",
+    ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
+}
+function runDecideMode(result, dir, opts, cmdFor = () => "") {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
   // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
   // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
@@ -3441,6 +3464,7 @@ function runDecideMode(result, dir, opts) {
       ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
+  lines.push(...decideSiblingLines(res, cmdFor));
   lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }
@@ -3746,8 +3770,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
       rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
+    // The same answer, addressed to one row, with every element encoded for the shell.
+    const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
+      TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
+      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
+      ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
     let res;
-    try { res = runDecideMode(result, tasksDir, opts); }
+    try { res = runDecideMode(result, tasksDir, opts, cmdFor); }
     catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
     if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
     output = res.note;

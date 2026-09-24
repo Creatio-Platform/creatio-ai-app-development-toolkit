@@ -329,9 +329,9 @@ function refsRows(result) {
   ];
 }
 
-// GREEDY PACKING ALONG THE SEAMS. Rows arrive in build order and are taken in that order, so a chunk is always a
-// contiguous run and never a re-ordering of the plan. A row heavier than the whole budget gets a chunk to itself
-// rather than being split: a structural unit — one tab, one region — is the smallest thing a task may be.
+// GREEDY PACKING ALONG THE SEAMS. Items arrive in build order and are taken in that order, so a chunk is always a
+// contiguous run of them. An item heavier than the whole budget gets a chunk to itself rather than being split:
+// a structural unit — one tab, one region, one fold chain — is the smallest thing a task may be.
 function chunkRows(rows, B) {
   const out = [];
   let cur = [];
@@ -343,6 +343,96 @@ function chunkRows(rows, B) {
   }
   if (cur.length) out.push(cur);
   return out;
+}
+
+// ---8<--- UNITS: rows that one sub-agent must build together ---8<---
+
+// A handler row's fold key: page, group and method, so two groups defining one method name stay apart.
+const foldKey = (r, method) => `fold:${r.pageKey}:${r.groupTitle}:${method}`;
+
+// The root of a handler row's fold chain: the caller reached by walking `vk.parent` through the given rows.
+// `null` for a row that is not a handler. A cycle or a parent missing from the rows stops the walk.
+function foldRoots(rows) {
+  const parentOf = new Map();
+  for (const r of rows) {
+    if (r.vk?.type === "handler") parentOf.set(foldKey(r, r.vk.method), r.vk.parent ? foldKey(r, r.vk.parent) : null);
+  }
+  const rootOf = (key) => {
+    const seen = new Set([key]);
+    let at = key;
+    for (let p = parentOf.get(at); p && parentOf.has(p) && !seen.has(p); p = parentOf.get(p)) { seen.add(p); at = p; }
+    return at;
+  };
+  return rows.map((r) => (r.vk?.type === "handler" ? rootOf(foldKey(r, r.vk.method)) : null));
+}
+
+// THE DECISION SUBJECT of each row: its card, else its confirm evidence id, else its fold-chain root. A row with
+// none never waits on a decision.
+function rowSubjects(rows) {
+  const roots = foldRoots(rows);
+  return rows.map((r, i) => {
+    if (r.card) return `card:${r.card}`;
+    if (r.confirm && r.id) return `confirm:${r.id}`;
+    return roots[i];
+  });
+}
+
+// The rows with their decision subject attached; a row with no subject is returned unchanged.
+const withSubjects = (rows) => {
+  const subjects = rowSubjects(rows);
+  return rows.map((r, i) => (subjects[i] ? { ...r, subject: subjects[i] } : r));
+};
+
+// Rows that must reach one task: a fold chain, and every row citing one card, joined transitively. Each unit sits
+// at the position of its first member; a row in no chain and citing no card is a unit of its own.
+function packingUnits(rows) {
+  const roots = foldRoots(rows);
+  const keysOf = (r, i) => [roots[i], r.card ? `card:${r.card}` : null].filter(Boolean);
+  const unitOfKey = new Map();
+  const unitOfRow = rows.map((_, i) => i);
+  const find = (i) => {
+    let x = i;
+    while (unitOfRow[x] !== x) x = unitOfRow[x];
+    return x;
+  };
+  rows.forEach((r, i) => {
+    for (const k of keysOf(r, i)) {
+      if (!unitOfKey.has(k)) { unitOfKey.set(k, i); continue; }
+      const a = find(unitOfKey.get(k)), b = find(i);
+      if (a !== b) unitOfRow[Math.max(a, b)] = Math.min(a, b);
+    }
+  });
+  const units = new Map();
+  rows.forEach((r, i) => {
+    const u = find(i);
+    if (!units.has(u)) units.set(u, []);
+    units.get(u).push(r);
+  });
+  return [...units.values()];
+}
+
+// A UNIT HOLDING A HANDLER FOLLOWS THE BUCKET'S STANDALONE VIRTUAL ATTRIBUTES: the `vmattr` rows of units with no
+// handler. Such a unit sits at the later of its first member's position and just after the last standalone
+// attribute, so a handler is never dispatched before an attribute outside its unit. Moved units keep their
+// relative order; the rest keep theirs; members keep the phase order they arrived in.
+function afterStandaloneAttributes(units) {
+  const has = (u, type) => u.some((r) => r.vk?.type === type);
+  let last = -1;
+  units.forEach((u, i) => { if (has(u, "vmattr") && !has(u, "handler")) last = i; });
+  const early = (u, i) => i < last && has(u, "handler");
+  const moved = units.filter(early);
+  const kept = units.filter((u, i) => !early(u, i));
+  const at = kept.indexOf(units[last]) + 1;
+  return [...kept.slice(0, at), ...moved, ...kept.slice(at)];
+}
+
+// The bucket's rows cut into chunks along unit boundaries. `chunkRows` packs the units as it packs rows; a single
+// chunk keeps the plan's row order, so a bucket under the budget is not reordered.
+function packRows(rows, B) {
+  const units = afterStandaloneAttributes(packingUnits(rows))
+    .map((members) => ({ members, weight: members.reduce((a, r) => a + r.weight, 0) }));
+  const packed = chunkRows(units, B).map((c) => c.flatMap((u) => u.members));
+  return packed.length > 1 ? packed : [rows];
 }
 
 
@@ -387,6 +477,7 @@ function taskOf(chunk, order) {
     group: r.groupTitle,                   // the plan group this deliverable was read from
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
+    ...(r.subject ? { subject: r.subject } : {}),
   }));
   const task = {
     id: taskId(identityKey, artifact, anchor),
@@ -527,9 +618,9 @@ function collapseSmallRun(ordered, B) {
 // Cut one bucket into the tasks it needs. Under the budget that is exactly ONE task — the monolithic case is this
 // function returning a single chunk, not a separate path with its own contract.
 function chunksOf(bucket, B) {
-  const rows = artifactRows(bucket.groups, B);
+  const rows = withSubjects(artifactRows(bucket.groups, B));
   if (!rows.length) return [];
-  const packed = chunkRows(rows, B);
+  const packed = packRows(rows, B);
   const cut = packed.length > 1;
   const used = new Map();
   return packed.map((srcRows) => {
@@ -1522,7 +1613,11 @@ function latestPerDeliverable(items) {
 // `not-built` by design, so a surface reading `notBuiltRows` raw prints a deliverable that is finished, and a
 // list a reader learns to distrust is worse than no list.
 export const notBuiltOpenItems = (tasks) =>
-  latestPerDeliverable(notBuiltRows(tasks).filter((it) => it.residual !== "closed"));
+  latestPerDeliverable(notBuiltRows(tasks).filter((it) => !settledByRound(it)));
+
+// A row whose repair round has built it. Its Outcome cell keeps its `not-built` word, so every reader of open
+// rows filters on this.
+const settledByRound = (row) => row.residual === "closed";
 
 // point 3 / AC 8: a `needs-decision` row is NOT open work for the router — it is the build agent
 // raising a question, and only a person's `--decide` can settle it. Feeding it to the repair rounds today
@@ -2142,6 +2237,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     return { refused: true, refusal, problems, tasks: [], planVersion: result.planVersion || null };
   }
 
+  const subjectOf = splitSubjects(resolved.items);
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
       label: r.label, groupTitle: r.group, vk: r.vk, na: r.na,
@@ -2149,6 +2245,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       // that page the review then has to wait for.
       rowPageKey: r.pageKey,
       weight: rowWeight(r, r.group, B),
+      subject: subjectOf.get(r) || null,
     }));
     const task = {
       id: it.id,
@@ -2169,7 +2266,8 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       phase: DEFAULT_PHASE,
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
-      rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null })),
+      rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
+        ...(r.subject ? { subject: r.subject } : {}) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2195,6 +2293,14 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
     emptied,
     tasks: withDependencies([...refsChunk, ...tasks]),
   };
+}
+
+// The decision subject of every row a split claims, resolved over the whole plan so a fold chain split across
+// items still shares one root. Keyed by the resolved row object.
+function splitSubjects(items) {
+  const rows = items.flatMap((it) => it.rows);
+  const subjects = rowSubjects(rows.map((r) => ({ ...r, groupTitle: r.group })));
+  return new Map(rows.map((r, i) => [r, subjects[i]]));
 }
 
 // ---8<--- REPAIR: the rows `--verify` found open, cut into tasks the same way ---8<---
@@ -2789,11 +2895,12 @@ export const HOLD_OVERLAP = "overlap";      // another DISPATCHED task is still 
 export const HOLD_SEQUENCED = "sequenced";  // set-level only: an earlier member of THIS answer writes it first
 export const HOLD_STATUS = "status";        // open, but neither `todo` nor in flight — a decision, not a schedule
 export const HOLD_LEDGER = "ledger";        // the dispatch books are broken, so the gate refuses THIS id too
-export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER];
+export const HOLD_DECISION = "decision";    // every open row waits on an open decision on a subject another task shares
+export const HOLD_CAUSES = [HOLD_UNREAD, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_STATUS, HOLD_LEDGER, HOLD_DECISION];
 
 // `null` means startable. Otherwise `{ cause, tasks[], file }` — `tasks` names what to wait for, so the caller
 // never has to re-derive who is holding it in order to say so.
-export function startBlocker(task, tasks, running = {}) {
+export function startBlocker(task, tasks, running = {}, decisions = decisionIndex(tasks)) {
   // A file the engine REFUSED to read is not started and is not advertised: its `## Notes` are the only record of
   // work already done on the stand, and the front matter is a human's to repair.
   if (task.unread) return { cause: HOLD_UNREAD, file: task.file, tasks: [] };
@@ -2811,6 +2918,8 @@ export function startBlocker(task, tasks, running = {}) {
   // its page reads instead of redoing the work.
   const openDeps = (task.dependsOn || []).map((d) => byId.get(d)).filter((d) => d && !SETTLED.has(d.status));
   if (openDeps.length) return { cause: HOLD_DEPS, tasks: openDeps };
+  const decision = decisionHold(task, decisions);
+  if (decision) return decision;
   // ONE WRITER PER ARTIFACT. The comparison is on `writesTo` and on an OPEN CLOCK, not on the number of open
   // tasks: tasks on different artifacts may legitimately run at once, and a read-only task claims nothing.
   const conflicts = task.writesTo
@@ -2818,6 +2927,67 @@ export function startBlocker(task, tasks, running = {}) {
     : [];
   if (conflicts.length) return { cause: HOLD_OVERLAP, tasks: conflicts };
   return null;
+}
+
+// A row still to build: not a plan boundary, and its outcome blank or `not-built`.
+const isOpenRow = (r) => !r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_BUILT);
+
+// Whether row `n` (1-based) of a task has a `--decide` entry.
+function hasDecision(task, n) {
+  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
+  return !!map?.has(n);
+}
+
+// The rows marked `not-built — needs-decision` with no `--decide` entry and not built by a repair round, by the
+// subject each one opens.
+function openDecisionSources(tasks) {
+  const open = new Map();
+  for (const t of tasks) {
+    (t.rows || []).forEach((r, i) => {
+      if (!r.subject || r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
+      if (settledByRound(r) || hasDecision(t, i + 1)) return;
+      if (!open.has(r.subject)) open.set(r.subject, []);
+      open.get(r.subject).push({ task: t, n: i + 1, label: r.label });
+    });
+  }
+  return open;
+}
+
+// The ids of the tasks whose rows cite each subject, whatever those rows' outcomes.
+function subjectCiters(tasks) {
+  const citers = new Map();
+  for (const t of tasks) {
+    for (const r of t.rows || []) {
+      if (!r.subject) continue;
+      if (!citers.has(r.subject)) citers.set(r.subject, new Set());
+      citers.get(r.subject).add(t.id);
+    }
+  }
+  return citers;
+}
+
+// One read of the open decision subjects for a whole folder, shared by every task one pass evaluates.
+function decisionIndex(tasks) {
+  return { sources: openDecisionSources(tasks), citers: subjectCiters(tasks) };
+}
+
+// The open source rows a task's row on `subject` waits on. A subject no other task cites holds nothing, so a
+// task's own needs-decision row holds it only while another task shares that subject.
+function waitedSources(task, subject, index) {
+  const shared = [...(index.citers.get(subject) || [])].some((id) => id !== task.id);
+  return shared ? index.sources.get(subject) || [] : [];
+}
+
+// A task every open row of which waits on an open decision on a subject another task shares:
+// `{ cause, tasks, rows }` naming the source tasks and rows, else `null`. A row with no subject never waits, so one
+// such open row keeps the task startable.
+function decisionHold(task, index) {
+  const open = (task.rows || []).filter(isOpenRow);
+  if (!open.length || open.some((r) => !r.subject)) return null;
+  const waits = open.map((r) => waitedSources(task, r.subject, index));
+  if (waits.some((w) => !w.length)) return null;
+  const rows = [...new Set(waits.flat())];
+  return { cause: HOLD_DECISION, tasks: [...new Set(rows.map((x) => x.task))], rows };
 }
 
 // MARK A TASK STARTED, then regenerate. The orchestrator calls this immediately BEFORE it dispatches the
@@ -2854,6 +3024,7 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
     return { ...merged, started: null, blockedByDispatch: merged.dispatch };
   }
   if (blocker?.cause === HOLD_DEPS) return { ...merged, started: null, blockedByDeps: blocker.tasks };
+  if (blocker?.cause === HOLD_DECISION) return { ...merged, started: null, blockedByDecision: blocker };
   if (blocker?.cause === HOLD_OVERLAP) return { ...merged, started: null, blockedByOverlap: blocker.tasks };
   t.status = S_IN_PROGRESS;
   // THE SIGNATURE THE AGENT CANNOT MINT. The orchestrator hands this token to the sub-agent it dispatches and the
@@ -3366,9 +3537,10 @@ export function startableTasks(set, dir) {
 
   const startable = [], withheld = [];
   const claimed = new Map();   // artifact → the member of THIS answer that already writes it
+  const decisions = decisionIndex(tasks);
   for (const t of candidates) {
-    const blocker = startBlocker(t, tasks, running);
-    if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file }); continue; }
+    const blocker = startBlocker(t, tasks, running, decisions);
+    if (blocker) { withheld.push({ task: t, cause: blocker.cause, tasks: blocker.tasks || [], file: blocker.file, rows: blocker.rows }); continue; }
     const owner = t.writesTo ? claimed.get(t.writesTo) : null;
     if (owner) { withheld.push({ task: t, cause: HOLD_SEQUENCED, tasks: [owner] }); continue; }
     if (t.writesTo) claimed.set(t.writesTo, t);
@@ -3583,6 +3755,22 @@ function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, 
     t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, carriedOf(t), editedOf(t));
   }
 }
+// The OPEN rows of other tasks that share a decision subject with a row this decision addressed: not built, not
+// decided, not a plan boundary. Listed for the person, never written.
+function openSubjectSiblings(tasks, touched) {
+  const subjects = new Set(touched.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
+  const addressed = new Set(touched.map((x) => x.task));
+  const out = [];
+  if (!subjects.size) return out;
+  for (const t of tasks) {
+    if (t.unread || addressed.has(t)) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1)) return;
+      out.push({ task: t, n: i + 1, subject: r.subject });
+    });
+  }
+  return out;
+}
 export function applyDecision(dir, result, opts = {}) {
   const { decision, mode, destination, decisions } = opts;
   const guard = decideGuardProblems(opts);
@@ -3650,7 +3838,8 @@ export function applyDecision(dir, result, opts = {}) {
   const unplaced = persisted?.unplaced || [];
   const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode, destination: destination || null,
-    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
+    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged,
+    siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are

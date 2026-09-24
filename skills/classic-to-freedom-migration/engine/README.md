@@ -18,7 +18,7 @@ node migrate.mjs <manifest.json> --tasks <dir> --split s.json  # …cutting it w
 node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) are startable right now, each with the exact --start command — ask this instead of picking off index.md
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
-node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves as a heading in decisions.md — it never creates a decision, and that refusal IS the safeguard
+node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves as a heading in decisions.md — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows, then lists the open rows on other tasks that share a subject with a decided row, each with the `--decide … --row <task>:<n>` command that applies the same answer
 node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
@@ -157,6 +157,20 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   publishes (a tab, a region, a related list, a named handler) and a structural unit is never split, so a row
   heavier than the whole budget gets a chunk to itself. Same-artifact chunks are chained through `dependsOn`.
   The weights and the chunk size are declared in `TASK_BUDGET` and overridable per run with `opts.taskBudget`.
+- **The cut packs units, not rows.** A unit is a fold chain (a handler and the helpers folded under it through
+  `vk.parent`) joined with every row of the bucket that cites the same primary card (`card`, the id `Described in`
+  cites; a body card joins no rows). A unit sits at its first member's position and is never split; a unit heavier
+  than the budget gets a chunk to itself. A unit holding a handler sits no earlier than just after the bucket's last
+  standalone virtual attribute (an `[attribute-virtual]` row of a unit with no handler), and its own members keep
+  the phase order, attributes before handlers. A bucket that fits one chunk keeps the plan's row order.
+- **A task whose open rows all wait on an open decision is held (`HOLD_DECISION`).** Each row carries a decision
+  subject: its primary card, else its confirm evidence id, else its fold-chain root. A `not-built — needs-decision`
+  row with no `decisions:` entry opens its subject; a `todo` task every open row of which has an opened subject that
+  another task also cites is withheld by `--next` and refused by `--start`, naming the source task and row. The
+  task's own undecided rows count as sources, so deciding one task's row on a shared subject does not release
+  another task whose row on it is still undecided. `--decide` on the source row releases it, and so does re-opening
+  that row (its `Outcome` cell cleared, its task back to `todo`) or a repair round that builds it. A row with no
+  subject never waits, a plan-boundary row is never open, and a subject no other task cites holds nothing.
 - **A run under `TASK_BUDGET.run` is ONE build task plus ONE review, not one task per artifact.** The artifact rule
   exists so two sub-agents never write one page body; on a run this small there is only ever one builder, so the
   rule protects nothing while every extra task pays a fresh context that re-reads what the last one read. Measured
