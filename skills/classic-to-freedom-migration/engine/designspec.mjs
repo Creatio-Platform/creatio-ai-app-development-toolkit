@@ -2581,10 +2581,10 @@ function handlerStubRows(cs) {
       vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
 }
-// The behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing one card
-// in one task. Absent when the row cites no card.
+// The primary behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing
+// one card in one task. Absent when the row cites no primary card; a body card alone joins no rows.
 function cardField(x) {
-  const card = x.describedIn?.card || x.describedIn?.bodyCard;
+  const card = x.describedIn?.card;
   return card ? { card } : {};
 }
 // A section method the list analyzer already read: its effect is in the positioned list ops, so the row records

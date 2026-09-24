@@ -6778,6 +6778,28 @@ const CARD_GROUPS = checklistGroups(CARD_RUN, CARD_OPTS);
     () => claimsAll(set.tasks, CARD_GROUPS), () => unclaimedPlanRows(set.tasks, CARD_GROUPS));
 }
 
+// Two handlers citing one body card and no primary card, cut on the same budget: they form no unit and share no
+// decision subject.
+{
+  const manifest = { ...manifestOf({ bulk: 2 }), behaviourIndex: {
+    onBulk0: { bodyCard: "shared/C9", ac: ["AC-1"] }, onBulk5: { bodyCard: "shared/C9", ac: ["AC-2"] } } };
+  const opts = { ...optsOf(manifest), taskBudget: { run: 0, chunk: 8 } };
+  const run = runMigration(manifest);
+  const groups = checklistGroups(run, opts);
+  const set = buildTaskSet(run, opts, groups);
+  const placed = (m) => set.tasks.flatMap((t) => t.rows.map((r) => ({ id: t.id, label: r.label, subject: r.subject })))
+    .find((x) => x.label === `Handler — \`${m}\``);
+  const a = placed("onBulk0");
+  const b = placed("onBulk5");
+  check("cut (pipeline): two handlers citing only one body card are not joined into one task",
+    () => a && b && a.id !== b.id, () => ({ a, b }));
+  check("cut (pipeline): two handlers citing only one body card share no decision subject",
+    () => a && b && a.subject !== b.subject && ![a.subject, b.subject].some((x) => String(x).startsWith("card:")),
+    () => ({ a, b }));
+  check("cut (pipeline): every plan row is claimed by exactly one task when rows cite only a body card",
+    () => claimsAll(set.tasks, groups), () => unclaimedPlanRows(set.tasks, groups));
+}
+
 // A task every row of which was `--decide`d settles, so `--next` never offers it.
 {
   const { base, dir, t } = decideFixtureA("decided-not-offered");

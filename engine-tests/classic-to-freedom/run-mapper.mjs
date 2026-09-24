@@ -8171,6 +8171,16 @@ check("handoff BACK: the plan prints BOTH cards, so the guards in the body card 
 check("handoff BACK: an ⚠ Other declared logic row described ONLY by a body card cites it instead of reading ⚠ not described",
   () => /^\| RefreshThing \| message \|.*\| body shared\/C09 AC-56 \|$/m.test(hoBodyPlan),
   () => hoBodyPlan.split("\n").filter((l) => /RefreshThing/.test(l)));
+// The task cut keys on the primary card only: a body card, usually a shared-core card, joins no rows.
+{
+  const rows = checklistGroups(hoBody, {}).flatMap((g) => g.rows);
+  const bodyOnly = rows.find((r) => r.label === "[message] RefreshThing");
+  const both = rows.find((r) => r.vk?.type === "handler" && r.vk.method === "privateHelper");
+  check("checklist rows: a row citing only a body card carries no card field",
+    () => bodyOnly && !("card" in bodyOnly), () => bodyOnly);
+  check("checklist rows: a row citing a primary card and a body card carries the primary card",
+    () => both?.card === "C01", () => both);
+}
 
 // The COMPUTED floor under the two-card rule: a row whose body is PROVABLY in another schema — a `mixin:` member,
 // an `externalRef` method — described by a wiring card alone is flagged (`behaviourIndex.wiringOnly` + ⚠ plan
