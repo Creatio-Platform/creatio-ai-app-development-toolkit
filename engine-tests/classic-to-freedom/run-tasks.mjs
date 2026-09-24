@@ -6927,6 +6927,11 @@ function cardSplit(prefix, other) {
       const mixed = task("wait", [{ label: "B", subject: "card:C1" }, { label: "C" }]);
       return cause(mixed, [source(), mixed]) === null;
     });
+  check("decision hold: a plan-boundary row with no subject leaves a task whose other open rows all wait held",
+    () => {
+      const bounded = task("wait", [{ label: "B", subject: "card:C1" }, { label: "N", na: "outside this plan" }]);
+      return cause(bounded, [source(), bounded]) === HOLD_DECISION;
+    });
   check("decision hold: a task's own needs-decision row on a subject no other task cites never holds that task",
     () => {
       const own = task("own", [{ label: "A", subject: "card:C1", ...NEEDS }, { label: "B", subject: "card:C1" }]);

@@ -2929,15 +2929,23 @@ export function startBlocker(task, tasks, running = {}, decisions = decisionInde
   return null;
 }
 
+// A row still to build: not a plan boundary, and its outcome blank or `not-built`.
+const isOpenRow = (r) => !r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_BUILT);
+
+// Whether row `n` (1-based) of a task has a `--decide` entry.
+function hasDecision(task, n) {
+  const map = task.decisions instanceof Map ? task.decisions : parseDecisionsMap(task.decisions);
+  return !!map?.has(n);
+}
+
 // The rows marked `not-built — needs-decision` with no `--decide` entry and not built by a repair round, by the
 // subject each one opens.
 function openDecisionSources(tasks) {
   const open = new Map();
   for (const t of tasks) {
-    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
       if (!r.subject || r.outcomeKind !== O_NOT_BUILT || r.outcomeCause !== CAUSE_NEEDS_DECISION) return;
-      if (map?.has(i + 1) || settledByRound(r)) return;
+      if (settledByRound(r) || hasDecision(t, i + 1)) return;
       if (!open.has(r.subject)) open.set(r.subject, []);
       open.get(r.subject).push({ task: t, n: i + 1, label: r.label });
     });
@@ -2974,7 +2982,7 @@ function waitedSources(task, subject, index) {
 // `{ cause, tasks, rows }` naming the source tasks and rows, else `null`. A row with no subject never waits, so one
 // such open row keeps the task startable.
 function decisionHold(task, index) {
-  const open = (task.rows || []).filter((r) => !r.outcomeKind || r.outcomeKind === O_NOT_BUILT);
+  const open = (task.rows || []).filter(isOpenRow);
   if (!open.length || open.some((r) => !r.subject)) return null;
   const waits = open.map((r) => waitedSources(task, r.subject, index));
   if (waits.some((w) => !w.length)) return null;
@@ -3756,10 +3764,9 @@ function openSubjectSiblings(tasks, touched) {
   if (!subjects.size) return out;
   for (const t of tasks) {
     if (t.unread || addressed.has(t)) continue;
-    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     (t.rows || []).forEach((r, i) => {
-      if (!subjects.has(r.subject) || r.na || map?.has(i + 1)) return;
-      if (!r.outcomeKind || r.outcomeKind === O_NOT_BUILT) out.push({ task: t, n: i + 1, subject: r.subject });
+      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1)) return;
+      out.push({ task: t, n: i + 1, subject: r.subject });
     });
   }
   return out;
