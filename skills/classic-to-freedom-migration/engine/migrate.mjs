@@ -3464,8 +3464,8 @@ function runDecideMode(result, dir, opts, cmdFor = () => "") {
       ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
     return { note: lines.join("\n") + "\n", ok: false };
   }
-  lines.push(...decideSiblingLines(res, cmdFor));
-  lines.push("", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+  lines.push(...decideSiblingLines(res, cmdFor),
+    "", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
   return { note: lines.join("\n") + "\n", ok: true };
 }
 function runRevokeMode(result, dir, opts) {
