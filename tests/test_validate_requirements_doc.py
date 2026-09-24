@@ -718,6 +718,30 @@ class TestValidateRequirementsDocPortalSection(unittest.TestCase):
             validate_requirements_doc(doc)
         self.assertIn("external access:", str(ctx.exception))
 
+    def test_external_access_marker_only_in_prose_is_rejected(self):
+        # The markers are line-anchored labels, NOT bare substrings: a prose line that
+        # merely CONTAINS "external access:" (e.g. a "no external access:" narrative) must
+        # NOT satisfy the gate. Guards against the retired-`default list columns:`-style
+        # substring anti-pattern for the portal markers.
+        doc = PORTAL_DOC.replace(
+            "  - external access: read, create\n",
+            "  - customers have no external access: internal fields stay hidden\n",
+        )
+        with self.assertRaises(WorkflowError) as ctx:
+            validate_requirements_doc(doc)
+        self.assertIn("external access:", str(ctx.exception))
+
+    def test_portal_block_terminates_analytics_slice(self):
+        # The §7 Analytics slice must END at `## 8. Portal section`, never fold §8 into the
+        # §7.2 home-page check. Put an `- access rights:` line INSIDE the Portal block: a
+        # home page must have NO access rights, so if the slice wrongly included §8 this
+        # would fail. It must still PASS, proving the boundary terminates at the heading.
+        doc = PORTAL_DOC.replace(
+            "- portal sections: 1 (Tasks)\n",
+            "- portal sections: 1 (Tasks)\n- access rights: All Employees\n",
+        )
+        validate_requirements_doc(doc)  # must not raise (analytics slice stops at ## 8. Portal section)
+
     def test_internal_only_doc_keeps_edge_cases_at_8(self):
         # No portal section → Edge Cases stays `## 8` and the doc is valid (regression
         # that the number-agnostic Edge Cases handling did not break internal-only plans).

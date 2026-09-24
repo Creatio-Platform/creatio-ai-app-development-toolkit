@@ -105,7 +105,7 @@ The Business Plan is the business-facing requirements document.
 
 The Business Plan is presented inline in the visible conversation body. The deliverable for this stage is the plan visible in the conversation plus the developer's natural-language approval — not a file. Saving a copy to disk is neither required nor a substitute for the inline presentation.
 
-Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 8-section body must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
+Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not substitute for presenting the Business Plan inline. The full 8-section body (plus the conditional `## 8. Portal section` — which renumbers Edge Cases to `## 9` — when external access is in scope) must appear in the visible conversation before the developer approves; a summary block inside a host approval dialog is not the Business Plan and clicking "approve" on it does not satisfy Gate R.
 
 Required sections:
 
@@ -117,7 +117,8 @@ Required sections:
 - `## 5. Business Logic`
 - `## 6. UX Expectations`
 - `## 7. Analytics`
-- `## 8. Edge Cases and Exceptions`
+- `## 8. Portal section` — CONDITIONAL: include ONLY when the app exposes sections to external / portal users (see the external-user rule); when present it renumbers Edge Cases to `## 9`
+- `## 8. Edge Cases and Exceptions` (or `## 9. Edge Cases and Exceptions` when `## 8. Portal section` is present)
 
 ## Document Rendering Contract
 
@@ -138,7 +139,7 @@ Sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` must use short paragraphs and bul
 
 ## Pre-Write Self-Check
 
-Before presenting the Business Plan to the developer, verify the assembled draft contains all eight sections in the exact order:
+Before presenting the Business Plan to the developer, verify the assembled draft contains all eight required sections in the exact order, plus the conditional Portal section when external access is in scope:
 
 1. `## 1. Business Outcome`
 2. `## 2. Roles and Permissions`
@@ -147,10 +148,11 @@ Before presenting the Business Plan to the developer, verify the assembled draft
 5. `## 5. Business Logic`
 6. `## 6. UX Expectations`
 7. `## 7. Analytics`
-8. `## 8. Edge Cases and Exceptions`
+8. `## 8. Portal section` — ONLY when the app exposes sections to external / portal users; OMIT otherwise. When present, Edge Cases becomes `## 9`.
+9. `Edge Cases and Exceptions` — the LAST section, numbered `## 8` when there is no Portal section, `## 9` when there is. Check it by name, number-agnostically.
 
-If any required section is absent, renamed, or out of order, do not present the draft.
-Regenerate the missing section from conversation context or business discovery before presenting.
+If any REQUIRED section (1–7 and Edge Cases) is absent, renamed, or out of order, do not present the draft.
+Regenerate the missing section from conversation context or business discovery before presenting. A plan with a `## 8. Portal section` and Edge Cases at `## 9` is CORRECT, not a violation — do not reject it for the shifted Edge Cases number.
 
 ## Hard Fail Conditions
 

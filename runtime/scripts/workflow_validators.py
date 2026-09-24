@@ -12,6 +12,12 @@ ANALYTICS_HEADING = "## 7. Analytics"
 # stays § 8. So Edge Cases is matched by whichever number the portal decision implies, not a fixed one.
 PORTAL_HEADING = "## 8. Portal section"
 PORTAL_HEADING_RE = re.compile(r"(?m)^## 8\. Portal section\s*$")
+# Portal section (§8) markers are line-anchored labels, NOT bare substrings — same discipline as
+# LIST_COLUMNS_LABEL_RE. A plain `"external access:" in text` would also match a prose mention
+# (e.g. "no external access:" in a narrative line), letting a non-conforming portal block pass the
+# only machine gate. The `[\s\-*>#\`]*` prefix allows the bullet/quote lead-ins §8 actually uses.
+PORTAL_SECTIONS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*portal sections:")
+EXTERNAL_ACCESS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*external access:")
 EDGE_CASES_HEADING = "## 8. Edge Cases and Exceptions"
 EDGE_CASES_HEADING_WITH_PORTAL = "## 9. Edge Cases and Exceptions"
 
@@ -186,11 +192,11 @@ def validate_requirements_doc(content: str) -> None:
         raise WorkflowError(f"Requirements doc failed: missing required section: {edge_cases_heading}")
     if portal_present:
         portal_text = extract_section(text, PORTAL_HEADING, edge_cases_heading)
-        if "portal sections:" not in portal_text.lower():
+        if not PORTAL_SECTIONS_LABEL_RE.search(portal_text):
             raise WorkflowError(
                 "Requirements doc failed: section 8 Portal section must state a 'portal sections:' line (how many sections are exposed to external users, named)"
             )
-        if "external access:" not in portal_text.lower():
+        if not EXTERNAL_ACCESS_LABEL_RE.search(portal_text):
             raise WorkflowError(
                 "Requirements doc failed: section 8 Portal section must state an 'external access:' level for each exposed section (default read — do not surface internal fields to external users)"
             )
