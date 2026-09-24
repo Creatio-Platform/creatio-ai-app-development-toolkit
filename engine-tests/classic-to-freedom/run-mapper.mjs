@@ -2942,11 +2942,11 @@ check("#verify field-path image: WITH crt.ImageInput built → image row ✅ Don
 const fmtCs = runMigration({ entity: "X", entityColumns: { Phone: { type: "42" }, Web: { type: "44" }, Email: { type: "Email" } },
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"Phone",parentName:"Header",propertyName:"items",values:{bindTo:"Phone"}},{operation:"insert",name:"Web",parentName:"Header",propertyName:"items",values:{bindTo:"Web"}},{operation:"insert",name:"Email",parentName:"Header",propertyName:"items",values:{bindTo:"Email"}}]};});` }] }, { baseDir: FIX });
 const fmtVal = (n) => (fmtCs.changeSet.viewConfigDiff || []).find((o) => o.name === n)?.values;
-check("#format R-m3: phone(42) / weblink(44) / email columns → crt.Input, RECOGNIZED (no 'type not recognized' field-control ⚠) — formats live on the column",
+check("#format: phone(42) / weblink(44) / email columns → crt.Input, RECOGNIZED (no 'type not recognized' field-control ⚠) — formats live on the column",
   fmtVal("Phone")?.type === "crt.Input" && fmtVal("Web")?.type === "crt.Input" && fmtVal("Email")?.type === "crt.Input"
   && !(fmtCs.changeSet.needsDecision || []).some((d) => d.kind === "field-control"),
   () => ({ phone: fmtVal("Phone")?.type, web: fmtVal("Web")?.type, email: fmtVal("Email")?.type, fc: (fmtCs.changeSet.needsDecision || []).filter((d) => d.kind === "field-control") }));
-check("#format R-m3: the type LABELS read Phone / Web link / Email (driven by the column format, not just the name)",
+check("#format: the type LABELS read Phone / Web link / Email (driven by the column format, not just the name)",
   fmtVal("Phone")?.typeLabel === "Phone" && fmtVal("Web")?.typeLabel === "Web link" && fmtVal("Email")?.typeLabel === "Email",
   () => ({ phone: fmtVal("Phone")?.typeLabel, web: fmtVal("Web")?.typeLabel, email: fmtVal("Email")?.typeLabel }));
 // an image-only top-level form (its only field is a crt.ImageInput) is NOT a hollow
@@ -9280,12 +9280,12 @@ check("b (no contradiction): the tabbed child's own design-spec recommendation a
     spec: String(tabChild?.spec || "").split("\n").filter((l) => /Template/.test(l)).slice(0, 4) }));
 
 /* ================================================================================================================
-   M1 + M2 — the two defects a checker can drive through the real CLI to exit 0 / to a false ❌.
+   Two defects a checker can drive through the real CLI to exit 0 / to a false ❌.
 
    ONE fixture serves both: a `main` page that emits a `fields` vk WITH expected names, a `feature` vk
    (`crt.ApprovalList`, from a VisaDetailV2 detail — `uiShape: "component"`, so it is not folded into
    "Related lists"), and the two DCM vks (`dcm-bar` + `dcm-next`, from `signals.dcm.present`). Those are exactly
-   the three COMPONENT vks M2 is about, plus the fields row M1 is about, all on one key.
+   the three COMPONENT vks the tri-state needs, plus the fields row identity needs, all on one key.
    ============================================================================================================== */
 const M12_SEED = [{ pkg: "BaseModulePageV2", body: 'define("BaseModulePageV2",[],function(){return{diff:[{operation:"insert",name:"ProfileContainer",values:{itemType:15}},{operation:"insert",name:"Tabs",values:{itemType:15}}],methods:{init:function(){return;}}};});' }];
 const M12_MANIFEST = {
@@ -9316,7 +9316,7 @@ const M12_NAMELESS = [{ type: "crt.Input" }, { type: "crt.Tab" }, { type: "crt.A
 const M12_NAMED = M12_NAMELESS.map((o, i) => ({ name: `E${i}`, ...o }));
 M12_NAMED[0].name = "MainF";   // the one element whose NAME the plan actually expects
 
-check("preconditions: `main` really emits a `fields` vk WITH expected names AND the three COMPONENT vks (feature + dcm-bar + dcm-next) — else M1/M2 below are vacuous",
+check("preconditions: `main` really emits a `fields` vk WITH expected names AND the three COMPONENT vks (feature + dcm-bar + dcm-next) — else both cases below are vacuous",
   () => {
     const f = checklistGroups(m12Run, m12Opts).flatMap((g) => g.rows).find((r) => r.pageKey === "main" && r.vk?.type === "fields")?.vk;
     const md = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))).markdown;
@@ -9325,7 +9325,7 @@ check("preconditions: `main` really emits a `fields` vk WITH expected names AND 
   },
   () => ({ fieldsVk: checklistGroups(m12Run, m12Opts).flatMap((g) => g.rows).find((r) => r.pageKey === "main" && r.vk?.type === "fields")?.vk }));
 
-/* ---- M1: when the plan published expected field NAMES, identity is the ONLY acceptable evidence ----
+/* ---- expected field NAMES: identity is the ONLY acceptable evidence when the plan published them ----
    Pre-fix `resolveFieldsVk` matched by name only `if (named.length)` — at least one BUILT op carrying a name.
    A built set with NO names at all fell through to counting ops whose `type` matches FIELD_RE, so the payload
    below (1 crt.Input, the right count of the right type, not one expected name) printed
@@ -9394,7 +9394,7 @@ check("entity: an entry that reports NO entity is ⚠ unverified, never ❌ MISS
       && v.pages.main.unverified >= 1 && v.complete === false; },
   () => m12Row(renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } })), "Bound to the EXISTING object"));
 
-check("M1 (complement): the identity path still CLOSES — the same build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
+check("fields: the identity path still CLOSES — a build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
   () => /Fields — 1 expected \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Fields — 1 expected"))
   && m1Named.pages.main.missing === 0 && m1Named.pages.main.unverified === 0 && m1Named.complete === true,
   () => ({ row: m12Row(m1Named, "Fields — 1 expected").slice(0, 200), pages: m1Named.pages }));
@@ -9477,7 +9477,7 @@ check("renderVerify: `rows` carries every table row with its page, kind (machine
   }, () => { const v = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMED))); return { rows: v.rows?.length, kinds: [...new Set((v.rows || []).map((r) => r.kind))] }; });
 runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify, checklistGroups, m12Run, m12Opts, m12Built, m12Page, M12_NAMED, lpRun, lpOpts });
 
-/* ---- M2: D6's tri-state for the COMPONENT rows (`feature` / `dcm-bar` / `dcm-next`) ----
+/* ---- COMPONENT rows: D6's tri-state (`feature` / `dcm-bar` / `dcm-next`) ----
    `resolveComponentVk` had no `ctx.entryAbsent` branch, unlike `resolveFormPageVk` / `resolveImageVk` /
    `resolveCountVk`. So a page whose `--built.pages` key was never supplied reported hard ❌ MISSING on all three —
    "you built it wrong" about a page the verifier never fetched, sending the executor to rebuild instead of to

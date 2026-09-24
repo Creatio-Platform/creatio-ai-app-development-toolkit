@@ -90,7 +90,7 @@ const OPEN_LIFECYCLE = new Set([S_TODO, S_IN_PROGRESS]);
 // enough: those two are the answers `--decide` writes under a recorded `D<N>`. A cause is required on
 // `not-built` and is a fixed token — prose goes under `## Notes`, which a table cell cannot hold without
 // breaking.
-// Exported (review m4) so callers that already branch on the row-outcome vocabulary
+// Exported so callers that already branch on the row-outcome vocabulary
 // (report.mjs' isPostponedDerivedPartial / collectPostponedRows / taskRows) share the SAME literals as
 // the module that defines them — a future rename lands loudly across every reader instead of leaving
 // stale bare-string comparisons behind.
@@ -792,7 +792,7 @@ export const parseDecisionsMap = (s) => {
   for (const tok of String(s || "").trim().split(/\s+/).filter(Boolean)) {
     const [n, d] = tok.split(":");
     const num = Number(n);
-    // review m10: `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
+    // `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
     // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
     // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
     // decision entry the engine cannot reach. The value keeps its cascade `+` marker verbatim.
@@ -1424,7 +1424,7 @@ function dispatchAttention(dispatch) {
   return out;
 }
 
-// review M1: a `wont-do` / `postponed` cell the ENGINE wrote is recorded in the task's
+// A `wont-do` / `postponed` cell the ENGINE wrote is recorded in the task's
 // `decisions:` front-matter map — `--decide` writes both together (the cell text + the D<N> pairing) and
 // `persistTaskSet` lands them in one write. A cell whose row index is NOT in that map is therefore a
 // hand-typed closure, the exact bypass the ticket exists to close (Direction §1). parseOutcome already

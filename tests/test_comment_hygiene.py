@@ -54,6 +54,38 @@ MARKERS = (
     # ``Major3(seed)`` - so the digits are part of the label: a ``\b`` placed
     # straight after the word never fires there, since a letter followed by a
     # digit is no boundary at all.
+    # The same label abbreviated to its initial and the finding's number —
+    # ``M2`` for the second Major, ``m7`` for the seventh minor. A bare
+    # ``[Mm]<digits>`` is far too common to match on its own (``m71``, ``m4b``
+    # and ``M1`` are all ordinary identifiers in this tree), so only the
+    # ATTRIBUTION positions count: the id opening a check title, the id after
+    # the word ``review``, and the id alone in a section banner's parentheses.
+    #
+    # "Opening" means opening the TEXT, which reaches this marker in two shapes.
+    # A check title arrives already stripped of its ``check("`` by the title
+    # reader, so it starts at the id itself; a comment keeps its token, so the
+    # id opens the line only after ``//`` or ``#``. Matching the line start
+    # alone covers the first and silently misses the second — a banner reading
+    # ``// m9: ...`` one line above a title that WAS renamed.
+    # A banner may open with `/*` and a run of filler (`---`, `===`), and the
+    # id may carry one word before its colon (`M2 companion:`) or a prefix
+    # (`R-m3:`). An id opening a parenthesis heads a LIST of them, as in
+    # `(m6 verdict branches, m7 --pages)`.
+    #
+    # What this deliberately does NOT read: an id used as a bare noun in
+    # prose — `M1 + M2 are the two defects`, `the same shape M1 closed`. There
+    # is no shape separating those from a milestone or a matrix, so matching
+    # them would cost more in false positives than it buys. They are cleaned by
+    # hand; the gate is not a substitute for reading the comment.
+    (
+        "finding_id",
+        re.compile(
+            r"(?:^|(?://|/\*|\#)[\s\-=*]*)[Mm]\d+[ab]?(?:\s+\w+)?\s*[:(]"
+            r"|\bR-[Mm]\d+[ab]?\s*[:(]"
+            r"|\breview\s+[Mm]\d+[ab]?\b"
+            r"|(?:^|\s)\(\s*[Mm]\d+[ab]?\s*[)\s]"
+        ),
+    ),
     (
         "severity_label",
         re.compile(
@@ -418,6 +450,26 @@ class CommentHygieneTests(unittest.TestCase):
                 "// follow-up review - the read-path guard.",
                 "// implementation review - the two payload halves.",
             ],
+            "finding_id": [
+                # A title, as the title reader hands it over: already stripped
+                # of its ``check("``, so the id opens the text itself.
+                "M1a: a hand-typed cell without a marker is refused.",
+                "m7: a revoked decision clears the cell.",
+                # A comment keeps its token, so the id opens the line only
+                # after it. A banner in this shape sat one line above a title
+                # that WAS renamed, and read clean.
+                "  // m9: renderDecisionsMap emits pairs sorted by numeric key.",
+                "        # M2: the production defaults reach the real symbols.",
+                "// review M2: spawnSync coverage for the CLI parser.",
+                "// ---- (M1) hand-typed cells bypass the gate ----",
+                # A banner opened by ``/*`` and a run of filler, an id carrying
+                # one word before its colon, a prefixed id, and an id heading a
+                # LIST of them — each read clean until it was pinned here.
+                "/* ---- M1: identity is the only acceptable evidence ----",
+                "# M2 companion: a RuntimeError maps to State C.",
+                "check(\"#format R-m3: phone columns render as crt.Input\",",
+                "// Coverage the review named (m6 verdict branches, m7 --pages).",
+            ],
             "severity_label": [
                 "// Blocker: the handler drops its page key.",
                 "// Guard for the BLOCKER raised against the handler.",
@@ -491,6 +543,9 @@ class CommentHygieneTests(unittest.TestCase):
             "// An item with no quality-gate row is never treated as a review.",
             "// The gate names every row it cannot close (the review step runs last).",
             "// Rows of a collapsed run carry their own page key.",
+            "// M2 is the second matrix in the pair, not a finding.",
+            "// The m71 fixture carries three rows.",
+            "// review (anti-vacuity): the fixture pairs a reader with a writer.",
             "# The installer writes the state file before it reports success.",
             "// Identically labeled rows on different pages do not share state.",
             "# clio MCP being unavailable is a prerequisites blocker, not a warning.",

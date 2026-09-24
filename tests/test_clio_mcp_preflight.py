@@ -143,7 +143,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertTrue(killed["called"], "watchdog must force-kill the hung clio child")
 
     def test_default_seam_wires_to_mcp_client_and_forwards_timeout(self):
-        # M2: the production defaults (_default_resolver/_default_prober) actually reach
+        # The production defaults (_default_resolver/_default_prober) actually reach
         # mcp_client's real (private) symbols and forward the timeout — the one path the
         # injected-seam tests never exercise, and the one a mcp_client rename would break.
         seen = {}
@@ -170,7 +170,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertEqual(seen.get("timeout"), 7)
 
     def test_default_resolver_runtime_error_maps_to_blocked(self):
-        # M2 companion: a resolver RuntimeError through the real default maps to State C
+        # Production defaults, error path: a resolver RuntimeError through the real default maps to State C
         # and never reaches the prober.
         orig_resolve, orig_get = mcp_client._resolve_clio_cmd, mcp_client._get_shared_client
         removed_env = os.environ.pop("CLIO_CMD", None)
