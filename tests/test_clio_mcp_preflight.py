@@ -170,7 +170,7 @@ class ClioMcpPreflightBehaviorTests(unittest.TestCase):
         self.assertEqual(seen.get("timeout"), 7)
 
     def test_default_resolver_runtime_error_maps_to_blocked(self):
-        # M2 companion: a resolver RuntimeError through the real default maps to State C
+        # Production defaults, error path: a resolver RuntimeError through the real default maps to State C
         # and never reaches the prober.
         orig_resolve, orig_get = mcp_client._resolve_clio_cmd, mcp_client._get_shared_client
         removed_env = os.environ.pop("CLIO_CMD", None)

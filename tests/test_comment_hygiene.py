@@ -67,12 +67,23 @@ MARKERS = (
     # id opens the line only after ``//`` or ``#``. Matching the line start
     # alone covers the first and silently misses the second — a banner reading
     # ``// m9: ...`` one line above a title that WAS renamed.
+    # A banner may open with `/*` and a run of filler (`---`, `===`), and the
+    # id may carry one word before its colon (`M2 companion:`) or a prefix
+    # (`R-m3:`). An id opening a parenthesis heads a LIST of them, as in
+    # `(m6 verdict branches, m7 --pages)`.
+    #
+    # What this deliberately does NOT read: an id used as a bare noun in
+    # prose — `M1 + M2 are the two defects`, `the same shape M1 closed`. There
+    # is no shape separating those from a milestone or a matrix, so matching
+    # them would cost more in false positives than it buys. They are cleaned by
+    # hand; the gate is not a substitute for reading the comment.
     (
         "finding_id",
         re.compile(
-            r"(?:^|(?://|\#)\s*)\s*[Mm]\d+[ab]?\s*[:(]"
+            r"(?:^|(?://|/\*|\#)[\s\-=*]*)[Mm]\d+[ab]?(?:\s+\w+)?\s*[:(]"
+            r"|\bR-[Mm]\d+[ab]?\s*[:(]"
             r"|\breview\s+[Mm]\d+[ab]?\b"
-            r"|(?:^|\s)\(\s*[Mm]\d+[ab]?\s*\)"
+            r"|(?:^|\s)\(\s*[Mm]\d+[ab]?\s*[)\s]"
         ),
     ),
     (
@@ -451,6 +462,13 @@ class CommentHygieneTests(unittest.TestCase):
                 "        # M2: the production defaults reach the real symbols.",
                 "// review M2: spawnSync coverage for the CLI parser.",
                 "// ---- (M1) hand-typed cells bypass the gate ----",
+                # A banner opened by ``/*`` and a run of filler, an id carrying
+                # one word before its colon, a prefixed id, and an id heading a
+                # LIST of them — each read clean until it was pinned here.
+                "/* ---- M1: identity is the only acceptable evidence ----",
+                "# M2 companion: a RuntimeError maps to State C.",
+                "check(\"#format R-m3: phone columns render as crt.Input\",",
+                "// Coverage the review named (m6 verdict branches, m7 --pages).",
             ],
             "severity_label": [
                 "// Blocker: the handler drops its page key.",

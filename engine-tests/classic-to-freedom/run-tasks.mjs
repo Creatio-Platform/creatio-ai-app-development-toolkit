@@ -5957,7 +5957,7 @@ const decideFixtureB = (label, md = null) => {
   {
     // Guard C: `not-applicable` is the PLAN's word. An agent typing `not-applicable — <reason>` onto a
     // row the plan did NOT mark as a boundary (`!r.na`) must NOT hide the row from `--verify` — otherwise a
-    // MISSING row drops out of the gate with no builder and no plan authority, the same shape M1 closed for
+    // MISSING row drops out of the gate with no builder and no plan authority, the same shape already guarded for
     // `wont-do` / `postponed`. A resolvable citation makes the leak worse: the report would file the row
     // under boundaries-with-a-decision. `decidedRowKeys` keys the not-applicable exemption on `r.na`, so an
     // agent-asserted one stays measured (and is named on Attention by assertedBoundaryRows).
@@ -6017,11 +6017,11 @@ const decideFixtureB = (label, md = null) => {
 }
 
 // ============================================================================================================
-// review Group D: test coverage the review named (m6 red/green verdict branches, m7 --pages
-// addressing + refusal, m8 free-text destination + escaped pipe, m9 parseDecisionsMap/renderDecisionsMap
-// direct invariants). Each closes a coverage gap where a one-character change would slip through unnoticed.
+// Coverage gaps: the red/green verdict branches, `--pages` addressing and its refusal, the free-text
+// destination with an escaped pipe, and the parseDecisionsMap / renderDecisionsMap direct invariants.
+// Each closes a gap where a one-character change would slip through unnoticed.
 // ============================================================================================================
-console.log("\n===== review coverage gaps (Group D) =====");
+console.log("\n===== coverage gaps =====");
 {
   // Three-colour verdict, GREEN branch. A synthetic set with nothing open and nothing postponed must
   // render 🟢 (not 🟡 or 🔴) and NOT emit a Carry-over section.
@@ -6154,10 +6154,9 @@ console.log("\n===== review coverage gaps (Group D) =====");
 }
 
 // ============================================================================================================
-// review Group B: correctness fixes for round-trip edge cases (m3 title-less parens, m10
-// non-integer row keys, m11 last-arrow anchoring).
+// Round-trip edge cases: title-less parens, non-integer row keys, and last-arrow anchoring.
 // ============================================================================================================
-console.log("\n===== cell round-trip edge cases (Group B) =====");
+console.log("\n===== cell round-trip edge cases =====");
 {
   // A title-less D<N> (a heading like `## D13` with no title) must round-trip through parsePostponedCell.
   const { base, dir, t } = decideFixtureB("m3-titleless-dn", "## D13\n");
