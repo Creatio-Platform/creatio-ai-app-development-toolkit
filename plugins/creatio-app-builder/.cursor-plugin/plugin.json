@@ -1,7 +1,7 @@
 {
   "name": "creatio-app-builder",
   "displayName": "creatio-app-builder",
-  "version": "1.10.0",
+  "version": "1.12.0",
   "description": "Creatio app builder: business-plan driven Creatio app creation through clio MCP (orchestrator, runbooks, business checklist, runtime helpers).",
   "author": {
     "name": "Creatio"

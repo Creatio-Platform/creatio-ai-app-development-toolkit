@@ -1,6 +1,6 @@
 {
   "name": "creatio-core",
-  "version": "1.10.0",
+  "version": "1.12.0",
   "description": "Creatio core knowledge for Creatio app development: schema naming, Freedom UI guidelines, shared context, clio MCP and the product telemetry hook.",
   "author": {
     "name": "Creatio"

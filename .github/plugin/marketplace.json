@@ -11,28 +11,28 @@
       "description": "Creatio core knowledge for Creatio app development: schema naming, Freedom UI guidelines, shared context, clio MCP and the product telemetry hook.",
       "source": "./plugins/creatio-core",
       "category": "development",
-      "version": "1.10.0"
+      "version": "1.12.0"
     },
     {
       "name": "creatio-app-builder",
       "description": "Creatio app builder: business-plan driven Creatio app creation through clio MCP (orchestrator, runbooks, business checklist, runtime helpers).",
       "source": "./plugins/creatio-app-builder",
       "category": "development",
-      "version": "1.10.0"
+      "version": "1.12.0"
     },
     {
       "name": "creatio-ui",
       "description": "Creatio UI jobs for Creatio app development: branding orchestrator and web-to-mobile page conversion.",
       "source": "./plugins/creatio-ui",
       "category": "development",
-      "version": "1.10.0"
+      "version": "1.12.0"
     },
     {
       "name": "creatio-migration",
       "description": "Creatio Classic UI to Freedom UI migration engine and the Classic UI expert for Creatio app modernization.",
       "source": "./plugins/creatio-migration",
       "category": "development",
-      "version": "1.10.0"
+      "version": "1.12.0"
     }
   ]
 }

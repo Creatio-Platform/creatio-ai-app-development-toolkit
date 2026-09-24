@@ -1,9 +1,10 @@
 // Mapper. Pure Node module: EffectiveClassicPage (from engine.mjs)
 // -> Freedom ChangeSet (viewConfigDiff / viewModelConfigDiff / modelConfigDiff + rule specs)
 // + needsDecision[] for the judgment 20%.
-import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey } from "./engine.mjs";
+import { VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, resourceKey, HEADER_TOP_REGION } from "./engine.mjs";
 import { ROLE as ITEM_ROLE_VALUES, MATCH, OWNER, SOURCE, MAPPING_ROWS, rowForItem, rowForItemType, resolveFeatureRow,
-  widgetsByMatch, profileCardsByEntity, knownCardActions } from "./mapping-table.mjs";
+  widgetsByMatch, profileCardsByEntity, knownCardActions,
+  LIST_REGION, LIST_ROW_ACTIONS_PROPERTY, listRegionForContainer, listRowForItemType } from "./mapping-table.mjs";
 
 // ---- ITEM-KIND DISPATCH (generator-mirrored) ---------------------------------------------------------------
 // Classic identifies every element with ONE switch over `itemType` and treats "no itemType" as the field path
@@ -374,6 +375,26 @@ function isProfileCardModule(c) {
   if (!c.masterColumnName || c.hasDashboardConfig) return false;
   return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
 }
+// ENG-95806 — a record-scoped CARD WIDGET (a small indicator/chart from SysWidgetDashboard) is recognised
+// STRUCTURALLY by the two coordinates the migrator needs to convert it: BOTH `recordId` (the SysWidgetDashboard
+// record) and `widgetKey` (which widget in it) must be present. A module missing EITHER cannot be converted, so
+// it is deliberately NOT a card widget and keeps the old generic `component` decision (no silent drop). A module
+// the widget catalog already owns is excluded so a known base-chrome widget is never mistaken for a card widget.
+// Recognition is by the two COORDINATES, not by `moduleName`: in a classic body only a CardWidgetModule carries
+// both `recordId` and `widgetKey` on `viewModelConfig`, so the name is intentionally not re-checked here — a
+// differently-named module carrying both coordinates is a card widget by construction. This name-independence is
+// documented in `references/classic-to-freedom-mapping.md` ("Recognise it") and pinned by a golden test.
+function isCardWidgetModule(c) {
+  if (!c?.recordId || !c?.widgetKey) return false;
+  // Mutually exclusive with isProfileCardModule (ENG-95806 review F3): a module that ALSO carries
+  // `masterColumnName` is a linked-record PROFILE CARD, handled by mapProfileCards — which runs BEFORE mapWidgets
+  // and accounts for the key. Without this guard such a module would satisfy BOTH predicates and get a profile-card
+  // decision AND a card-widget decision (a double decision R1 forbids), because mapWidgets never sees
+  // mapProfileCards' accountedFor. Genuine card widgets carry no `masterColumnName`, so this excludes ONLY the
+  // ambiguous overlap and lets the profile-card phase win — never a real card widget.
+  if (isProfileCardModule(c)) return false;
+  return !(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName] || WIDGET_BY_MODULE[c.schemaName]);
+}
 
 // A base (template-owned) field a CLIENT schema RECONFIGURED (hid / moved / re-laid-out) is excluded from the payload
 // as template context — but the delta is KNOWN, so emit it as a CONCRETE applied override (what to change on the base
@@ -514,8 +535,8 @@ export function mapToFreedom(eff, opts = {}) {
   _pc.accountedFor.forEach(a => accountedFor.add(a));
 
   // ---- Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped) ----
-  const _w = mapWidgets(eff, { signals: opts.signals });
-  const { widgets, chromeWidgets } = _w;
+  const _w = mapWidgets(eff, { signals: opts.signals, ownSignals: opts.ownSignals, isChildPage, index, profileAnchors });
+  const { widgets, chromeWidgets, dcmActive, cardWidgets } = _w;
   _w.needsDecision.forEach(d => needsDecision.push(d));
   _w.accountedFor.forEach(a => accountedFor.add(a));
 
@@ -573,6 +594,13 @@ export function mapToFreedom(eff, opts = {}) {
     profileCards,
     // header/analytical widgets recognised → Freedom analogs (base-provided flagged).
     widgets,
+    // DCM present for THIS page's entity (scoped: a child edit page does not inherit the parent's case) — the
+    // coverage builder gates the case-bar / Next-steps deliverable rows on this, not on the raw inherited signal.
+    dcmActive,
+    // ENG-95806 — record-scoped CARD WIDGETS (SysWidgetDashboard indicators) with their coordinates (widgetKey +
+    // recordId) and resolved region: the agent groups them by recordId and converts each group via the migrator's
+    // ConvertCardWidgetsProcess, placing the returned Freedom element — never hand-building a chart.
+    cardWidgets,
     // inherited base-template chrome (e.g. empty Recommendations container) — hidden from the plan, kept for inspection.
     chromeWidgets,
     // image/photo components (generator-based) → Freedom image component.
@@ -738,6 +766,10 @@ function fieldVisibility(f, own, col, { isMiniPage, needsDecision }) {
   if (f.visible === "dynamic" && !isMiniPage) needsDecision.push({ kind: "visibility-rule", item: col,
     reason: `field '${col}' visibility is dynamic (bound/rule/feature) in classic — confirm the Freedom visibility rule; static mapping shows it` });
   if (hiddenAncestor) needsDecision.push({ kind: "ancestor-visibility", item: col,
+    // `container` + `ancestorState` are structured so the renderer can FOLD one row per (container, state) instead of
+    // repeating the same container fact once per contained field. The `reason` stays self-contained for any reader
+    // that shows rows unfolded (checklist / raw needsDecision).
+    container: hiddenAncestor.name, ancestorState: hiddenAncestor.visible === false ? "hidden" : "dynamic",
     reason: `field '${col}' sits inside container '${hiddenAncestor.name}' which is ${hiddenAncestor.visible === false ? "hidden (static) — the field is mapped hidden too" : "conditionally shown (dynamic/rule) in classic"}; wire the container's visibility condition onto the Freedom field/group instead of leaving it unconditionally visible` });
   return vis;
 }
@@ -1222,9 +1254,11 @@ function mapFields(ctx, containers) {
 function detectDetailAddMechanism(dinfo) {
   const am = dinfo?.addMode;
   if (!am?.editableGrid) return null;
+  // ENG-96327 (81305bd) — no `enableVia` build recipe: HOW to make a Freedom grid inline-editable (`crt.DataGrid`
+  // editable/itemsCreation properties, resolved via get-component-info) is builder mechanics the build step owns —
+  // the plan states the human fact (this detail is inline-editable, and WHICH columns), not the component wiring.
   return {
     columns: am.editableColumns?.length ? am.editableColumns : null,
-    enableVia: "crt.DataGrid features.editable.enable (+ itemsCreation to add rows inline) — resolve the exact property via get-component-info on the target version",
     addVia: am.lookup ? "add existing via lookup" : null,
   };
 }
@@ -1646,9 +1680,11 @@ function mapRemainingLogic(eff, payloadMethods, payloadComponents) {
 
   // charts/widgets not in the catalog -> B9/B10 (generic). An embedded PROFILE CARD is excluded: mapProfileCards
   // already mapped it to a concrete component, so repeating it here as "propose the closest component" would both
-  // duplicate the worklist and read as if the target were still unknown.
+  // duplicate the worklist and read as if the target were still unknown. A CARD WIDGET (ENG-95806) is likewise
+  // excluded: mapWidgets emitted a concrete card-widget decision for it, so a generic component entry here would
+  // duplicate the worklist and re-vague a target that is now actionable.
   for (const c of payloadComponents)
-    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName]) && !isProfileCardModule(c)) needsDecision.push({ kind: "component", item: c.key,
+    if (!(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName]) && !isProfileCardModule(c) && !isCardWidgetModule(c)) needsDecision.push({ kind: "component", item: c.key,
       // name the embedded schema when the config carries one (`config.schemaName`) — a real classic body rarely
       // sets `moduleName`, so the old text degraded to a useless "module '?'".
       reason: `module '${c.moduleName || c.schemaName || "?"}' (chart/widget) — propose closest standard Freedom component, confirm with user` });
@@ -2129,10 +2165,16 @@ function mapProfileCards(ctx) {
 }
 
 // Moment 4: header/analytical widgets → Freedom analogs (base-provided are NOTED, not dropped).
-// Returns its own needsDecision[] / accountedFor[]; the orchestrator merges them.
+// ENG-95806 — ALSO recognises record-scoped CARD WIDGETS (SysWidgetDashboard indicators): a card-widget branch
+// runs BEFORE the base-chrome catalog and bypasses its `seenWidget` dedup / evidence gating entirely (a card
+// widget is genuine page content keyed by coordinates, not inherited chrome). `opts.index` (the layout tree) +
+// `opts.profileAnchors` let it resolve each widget's region the same way mapProfileCards does.
+// Returns its own needsDecision[] / accountedFor[] / cardWidgets[]; the orchestrator merges them.
 function mapWidgets(eff, opts = {}) {
-  const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [];
+  const widgets = [], chromeWidgets = [], needsDecision = [], accountedFor = [], cardWidgets = [];
   const seenWidget = new Set();
+  const index = opts.index instanceof Map ? opts.index : new Map();
+  const profileAnchors = opts.profileAnchors;
   // A widget catalog entry maps a base-template CONTAINER/MODULE (e.g. ESNFeedContainer, DcmActionsDashboard…)
   // to a Freedom analog. But the base Freedom template DEFINES all of these universally, so their mere presence
   // in the merged page is NOT evidence the classic page actually had the widget — emitting on presence leaked
@@ -2145,7 +2187,14 @@ function mapWidgets(eff, opts = {}) {
   //       tab would carry a schemaTouched TimelineTab and emit it — the rule generalises, no per-widget hardcode.
   //   (2) ON-STAND SIGNAL — DCM (`signal:"dcm"`) is never in the page body (it comes from the DCM case schema),
   //       so it emits only when `manifest.signals.dcm` is resolved+present, regardless of container presence.
-  const dcmPresent = opts.signals?.dcm?.resolved === true && !!opts.signals.dcm.present;
+  // DCM is an ENTITY-level fact (a case schema belongs to ONE entity). A CHILD edit page migrates a DIFFERENT entity,
+  // so the PARENT's inherited `dcm` describes the wrong entity — inheriting it placed the parent's case progress bar
+  // + Next steps onto a plain detail page (e.g. Contract's case leaking onto the SpecInContract detail). Scope it to
+  // the child's OWN bundle: only the child's own recorded `signals.dcm` (or classic evidence in the child body via
+  // `classicEvident` below) may place these on a child page. Same reasoning as `mapDedupOnSave`'s `ownSignals` gate.
+  // Typed / mini folds are the SAME entity as the root, so they keep inheriting (isChildPage is false for them).
+  const dcmSig = opts.isChildPage ? opts.ownSignals?.dcm : opts.signals?.dcm;
+  const dcmPresent = dcmSig?.resolved === true && !!dcmSig.present;
   const byName = new Map((eff.items || []).map((i) => [i.name, i]));
   // "a classic (non-seed) page layer contributed this element" — either it INSERTED it fresh (`!templateOwned`,
   // the defining insert was a client layer) or it MERGED/MOVED onto a base-seed element (`schemaTouched`). The
@@ -2172,7 +2221,7 @@ function mapWidgets(eff, opts = {}) {
     seenWidget.add(w.widget);
     // `chrome` widgets (e.g. the always-present-but-empty Recommendations container) are inherited scaffolding — hide.
     if (w.chrome) { chromeWidgets.push({ widget: w.widget, classic, note: w.note || null }); return; }
-    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null });
+    widgets.push({ widget: w.widget, freedom: w.freedom, classic, base: !!base, note: w.note || null, placement: w.placement || null, signal: w.signal || null });
     let tail;
     if (w.note) tail = ` — ${w.note}`;
     else if (base) tail = " — usually provided by the Freedom template; confirm or re-apply any customization";
@@ -2185,9 +2234,47 @@ function mapWidgets(eff, opts = {}) {
     const classicEvident = !base || evident; // a non-seed page layer contributed this container (self/ancestor)
     for (const w of (Array.isArray(defs) ? defs : [defs])) emitOneWidget(w, classic, base, classicEvident);
   };
-  for (const c of (eff.components || [])) addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
+  // ENG-95806 — a card widget is CONTENT keyed by coordinates, so it skips the widget catalog, the seenWidget dedup
+  // and the base-chrome evidence gate. It must NOT leak an inherited one, though: a module carried in from a base /
+  // seed layer (`fromTemplate`) is base-template chrome, and the dispatch loop below gates on `!c.fromTemplate` so
+  // it never emits a per-page card-widget decision — that gate replaces the base-chrome evidence gate this branch
+  // otherwise bypasses, which is why the payload records no template origin. Resolve its region by climbing the host
+  // diff item's parent chain (mirrors mapProfileCards); an unresolved chain (or no host diff item, e.g. a module-only
+  // declaration) falls back to the top area, where analytical indicators sit. Account for BOTH the module key AND the
+  // host diff-item name so mapUnmappedDrop does not later re-report the widget as an unknown dropped component.
+  const emitCardWidget = (c) => {
+    const host = index.get(c.key);
+    const own = host?.parent ? resolveOwner(host.parent, index, profileAnchors) : null;
+    let region;
+    if (own?.kind === "tab") region = own.tab;
+    else if (own?.kind === "profile") region = "SideAreaProfileContainer";
+    else region = HEADER_TOP_REGION;
+    accountedFor.push(c.key);
+    if (host?.name) accountedFor.push(host.name);
+    cardWidgets.push({ key: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region });
+    // The decision names the CONCRETE conversion action (convert via ConvertCardWidgetsProcess and place the
+    // returned Freedom element) — NOT the old "propose the closest component". The migrator's result-envelope
+    // contract has ONE canonical home (the "Card widgets" recipe in references/classic-to-freedom-mapping.md);
+    // this reason points there instead of restating it.
+    needsDecision.push({
+      kind: "card-widget", item: c.key, widgetKey: c.widgetKey, recordId: c.recordId, region,
+      reason: `card widget '${c.widgetKey}' (record-scoped SysWidgetDashboard indicator, record '${c.recordId}') → convert via ConvertCardWidgetsProcess (group by recordId, one call per record) and place the returned Freedom element in ${region}; do NOT hand-build — a Failed/Skipped conversion stays TODO/BLOCKED. Full recipe: references/classic-to-freedom-mapping.md → "Card widgets".`,
+    });
+  };
+  for (const c of (eff.components || [])) {
+    // A card-widget-shaped module is handled here and NEVER falls to the generic widget path; an inherited
+    // (`fromTemplate`) one is base-template chrome and is recognised but not emitted (no per-page leak).
+    if (isCardWidgetModule(c)) {
+      if (!c.fromTemplate) emitCardWidget(c);
+      continue;
+    }
+    addWidget(WIDGET_BY_MODULE[c.key] || WIDGET_BY_MODULE[c.moduleName], c.key, c.fromTemplate, !c.fromTemplate);
+  }
   for (const i of (eff.items || [])) addWidget(WIDGET_BY_CONTAINER[i.name], i.name, i.templateOwned, !i.templateOwned || classicEvidence(i.name));
-  return { widgets, chromeWidgets, needsDecision, accountedFor };
+  // `dcmActive` = DCM is present FOR THIS PAGE'S entity (scoped above). Published so the coverage builder demands the
+  // case progress bar / Next steps on the same scoped basis the widgets emit on — never on the parent's inherited
+  // signal (which would ask a plain child detail to grow a case bar it has no case for).
+  return { widgets, chromeWidgets, needsDecision, accountedFor, dcmActive: dcmPresent, cardWidgets };
 }
 
 // Moment 4b: the ON-SAVE DUPLICATE CHECK (ENG-94274) — a second on-stand signal, for the same reason `dcm` is one.
@@ -2402,8 +2489,9 @@ function listViewModelOps(columns, filters) {
 //
 // INPUT CONTRACT — `section.rowActions`, one entry per `DataGridActiveRow…` item the section declares:
 //   { name, caption?, condition?, package? }
-// Empty until the section view `diff` is folded, so this surface is inert rather than absent: the moment entries
-// arrive they are positioned, rendered and gated with no further change here.
+// FED BY THE FOLD since ENG-94714: `mapSectionView` reads the `activeRowActions` items off the folded section view
+// and `mergeRowActions` unions them with anything the manifest supplied, the fold winning. The manifest arm is kept
+// — it is how a row action read by hand off a stand still reaches the plan when no section bundle was collected.
 //
 // NO OP IS EMITTED. Every other op in this ChangeSet reproduces a shape measured on a built Freedom page; no such
 // measurement exists for a row action, and a guessed `values`/`propertyName` would be indistinguishable from a
@@ -2415,6 +2503,13 @@ function listRowActionSpec(ra) {
     name: ra?.name || null,
     caption: ra?.caption || null,
     condition: ra?.condition || null,
+    // THE PROPERTY TRAVELS WITH THE METHOD. `sectionDiffRowAction` reads both off the folded item, and this
+    // projection is the only thing between it and the design-spec table — dropping them here made every row
+    // action render "on `visible`", so an `enabled`-bound action ported as a visibility rule and hid the control
+    // instead of greying it. `conditions` rides alongside for the same reason the command bar carries it: the
+    // singular pair is the first condition, not the only one.
+    conditionProperty: ra?.conditionProperty || null,
+    conditions: ra?.conditions || [],
     sourcePackage: ra?.package || null,
     grid: LIST_GRID,
     freedomControl: null,     // unresolved by design — see above
@@ -2435,6 +2530,14 @@ export const LIST_DECISION_KIND = {
   commandBar: "list-command-bar",
   rowAction: "list-row-action",
   process: "list-process",
+  // ENG-94714 — the two questions a folded section `diff` raises that no other surface absorbs.
+  // `gridConfig`: the element declares configuration keys this engine models on no field. The founding case is the
+  // section's `merge DataGrid` carrying `controlColumnName` / `applyControlConfig` / `controlCellClass`, which has
+  // no obvious Freedom analog — so it is ASKED, never guessed at and never dropped.
+  // `sectionElement`: the section declares an element the list vocabulary has no reading for, or one that resolved
+  // to no list region. This is the arm that makes "nothing is silently dropped" true rather than aspirational.
+  gridConfig: "list-grid-config",
+  sectionElement: "list-section-element",
 };
 export const LIST_DECISION_KINDS = Object.values(LIST_DECISION_KIND);
 // THE COLUMN-SET question, own fn so `listNeedsDecision` stays under Sonar CC 15. `null` when the set needs no
@@ -2472,63 +2575,395 @@ function listColumnsDecision(section, columns) {
   }
   return null;
 }
+function listColumnTypeDecisions(columns) {
+  return columns.filter((x) => x.dataValueType == null).map((c) => ({ kind: LIST_DECISION_KIND.columnType, item: c.name,
+    reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` }));
+}
+function listColumnPathDecisions(columns) {
+  return columns.filter((x) => x.isPath).map((c) => ({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
+    reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` }));
+}
+function listFilterTypeDecisions(filters) {
+  return filters.filter((x) => x.quickFilterType == null).map((f) => ({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
+    reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` }));
+}
+// The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
+// to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
+// the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
+// omitted here disables search, the folder tree or the filter builder with no error anywhere.
+function listFilterAttributesDecision(filters) {
+  if (!filters.length) return null;
+  // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
+  // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
+  return { kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
+    reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` };
+}
+// Two further ways the command bar can be short, each stated as what it is. `unresolved` = the method is defined
+// nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
+// claiming nobody defines it would be false.
+const tickName = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
+function commandBarGapClause(names, why) {
+  if (!names.length) return "";
+  const behind = names.length > 1 ? "them" : "it";
+  return `; and ${names.map(tickName).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
+}
+// ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
+// are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
+// The folded MENU ITEMS that carry a condition of their OWN, named with the button they hang under. A menu item's
+// `visible`/`enabled` binding is a behaviour rule exactly like a button's, and the worklist listed only the
+// buttons — so an item Classic enables on a selection reached the operator as an unconditional entry.
+function menuItemConditionClause(actions) {
+  const named = [];
+  for (const a of actions) {
+    for (const m of a.menuItems || []) {
+      if (!(m.conditions || []).length) continue;
+      named.push(`\`${m.caption || m.name}\` (under \`${a.name}\`): `
+        + m.conditions.map((c) => `\`${c.method}\` on \`${c.property}\``).join(" · "));
+    }
+  }
+  if (!named.length) return "";
+  return `; menu item(s) carrying their own condition — ${named.join(" ; ")} — must become Freedom state too, not an always-enabled entry`;
+}
+function listCommandBarDecision(section, actions) {
+  if (!section) return null;
+  const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
+  const helperGap = commandBarGapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
+    + commandBarGapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
+  return { kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
+    reason: `read from BOTH classic surfaces — the \`getSectionActions()\` menu and the buttons the section inserts through its own view \`diff\` (each row's Source cell says which)${helperGap}${menuItemConditionClause(actions)} — confirm the set against the Classic section on-stand, and where each button belongs on the Freedom command bar` };
+}
+function listRowActionDecisions(rowActions) {
+  return rowActions.map((ra) => {
+    // Every resolved condition is named, not only the first: an item binding one method to `visible` and another
+    // to `enabled` would otherwise reach the worklist as a visibility question alone, and the dropped `enabled`
+    // rule is exactly the behaviour change this reason exists to prevent. The singular pair is the fallback.
+    let pairs = null;
+    if (ra.conditions?.length) {
+      pairs = ra.conditions.map((c) => `\`${c.method}\` on \`${c.property || "visible"}\``).join(" · ");
+    } else if (ra.condition) {
+      pairs = `\`${ra.condition}\` on \`${ra.conditionProperty || "visible"}\``;
+    }
+    const cond = pairs ? `its condition(s) (${pairs}) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
+    return { kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
+      reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` };
+  });
+}
+// ENG-94714 — one row per ELEMENT, listing its keys, not one row per key. Measured reason: the real
+// `OpportunitySectionV2` grid declares twenty such keys, and twenty rows would bury the two that carry a real
+// question (`controlColumnName`, `applyControlConfig`) under eighteen restatements of base grid wiring. The
+// element name is the stable half of the evidence id, so it is the `item`; the keys live in the reason.
+function listGridConfigDecisions(section) {
+  return (section?.sectionView?.gridConfig || []).map((g) => ({ kind: LIST_DECISION_KIND.gridConfig, item: `element config: ${g.name}`,
+    // The grid clause is appended only for the GRID, because it is about the grid: appending it to a button's
+    // `menu` key produced a reason that explained cell rendering to a reader looking at a dropdown.
+    reason: `\`${g.name}\`${g.package ? " (from `" + g.package + "`)" : ""} declares ${g.props.length} configuration key(s) this engine models on no field: ${g.props.map((k) => "`" + k + "`").join(" · ")}. They were read off the section's own \`diff\` and are carried here rather than dropped — decide per key whether the Freedom list page already provides the behaviour itself, or whether it needs an explicit equivalent.${g.region === LIST_REGION.GRID ? " On the grid, `controlColumnName` and its `applyControlConfig`/`controlCellClass` companions render a control INSIDE a cell, which has no obvious Freedom analog — resolve that one on-stand." : ""}` }));
+}
+// A section-declared element the list vocabulary cannot read. Named with its KIND, because the remedy differs:
+// an unmapped kind is a gap in this engine's table, an unresolved region usually means the section seed is
+// missing so the element's ancestry runs off the folded tree.
+function listSectionElementDecisions(section) {
+  return (section?.sectionView?.openItems || []).map((e) => {
+    const where = e.region === LIST_REGION.UNRESOLVED
+      ? "its ancestry reaches no recognised list container, which usually means the section's own template seed (`section.seed`) was not supplied"
+      : `it sits on the ${e.region} surface`;
+    const captioned = e.caption ? ` Its caption is \`${e.caption}\`, which has to reach the Freedom list surface somehow — carry it, or record that it is dropped on purpose.` : "";
+    const cond = e.conditions?.length
+      ? ` It carries ${e.conditions.map((c) => "`" + c.method + "` on `" + c.property + "`").join(" and ")} — that condition must survive the port.`
+      : "";
+    return { kind: LIST_DECISION_KIND.sectionElement, item: `section element: ${e.name}`,
+      reason: `the section declares this element in its own \`diff\` (kind: ${e.kind}${e.package ? ", from `" + e.package + "`" : ""}) and the list vocabulary has no reading for it — ${where}. Decide its Freedom equivalent on-stand; it is published here so it is not silently dropped, which is what happened to every section-declared element before ENG-94714.${captioned}${cond}` };
+  });
+}
+function listProcessDecision(section) {
+  if (!section?.processLaunch) return null;
+  return { kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
+    reason: "the Classic section launches it — wire it as a list-page run-process action" };
+}
 // The ⚠ items a list page raises on its own — each one a question the operator answers, not a gap to paper over.
 // Each entry is `{ kind, item, reason }` — the shape the shared ⚠ Confirm renderer takes, so a list-page decision is
 // presented and gated exactly like a form-page one. `item` names the thing; `reason` says what to resolve and why.
 function listNeedsDecision(section, columns, filters, actions, rowActions = []) {
-  const out = [];
   const columnSet = listColumnsDecision(section, columns);
-  if (columnSet) out.push(columnSet);
-  for (const c of columns.filter((x) => x.dataValueType == null)) {
-    out.push({ kind: LIST_DECISION_KIND.columnType, item: c.name,
-      reason: `classic type ${c.classicType || "UNKNOWN"} has no confirmed Freedom \`dataValueType\` — resolve it on-stand, because a guessed enum renders the column with the wrong editor` });
-  }
-  for (const c of columns.filter((x) => x.isPath)) {
-    out.push({ kind: LIST_DECISION_KIND.columnPath, item: c.name,
-      reason: `a display path, bound as the lookup column \`${c.root}\` — confirm the list should show that lookup's display value` });
-  }
-  for (const f of filters.filter((x) => x.quickFilterType == null)) {
-    out.push({ kind: LIST_DECISION_KIND.filterType, item: f.classicName || f.name,
-      reason: `classic filter type ${f.classicType || "UNKNOWN"} maps to no known \`quickFilterType\` — resolve which Freedom control renders it` });
-  }
-  // The `filterAttributes` merge REPLACES the whole array, so every entry the starter list page already registers has
-  // to be re-listed alongside this ChangeSet's contribution. That is an on-stand query with a recordable answer (read
-  // the starter page's `Items` model config), which is what makes it a ⚠ Confirm item rather than a note: an entry
-  // omitted here disables search, the folder tree or the filter builder with no error anywhere.
-  if (filters.length) {
-    // The ITEM is the thing, kept SHORT and stable: it is half the evidence id an executor must reproduce
-    // verbatim to file its answer, so a sentence full of backticks and separators there is a hostile key.
-    out.push({ kind: LIST_DECISION_KIND.filterAttributes, item: `${LIST_ITEMS_ATTR}.filterAttributes`,
-      reason: `re-list every entry the starter list page already registers alongside this ChangeSet's contribution (${filters.map((f) => "`" + f.name + "_" + LIST_ITEMS_ATTR + "`").join(" · ")}) — a \`merge\` REPLACES the array, so read the starter page's \`${LIST_ITEMS_ATTR}\` model config and record every entry it already registers (a stock page carries the folder-tree, predefined-filter, tag-lookup, search and filter-builder attributes); any entry missing from the merged array is silently disabled on the built page` });
-  }
-  // ONE item, whatever the action count: the gap is in the SOURCE, not in any single action. A section whose buttons
-  // are declared only in its view `diff` yields no actions at all, and that is the case that must not pass silently.
-  if (section) {
-    const found = actions.length ? actions.map((a) => a.name).join(", ") : "none declared through `getSectionActions()`";
-    // Two further ways the list can be short, each stated as what it is. `unresolved` = the method is defined
-    // nowhere in the chain. `notFollowed` = it was seen and deliberately not read (one hop, depth cap), so
-    // claiming nobody defines it would be false.
-    const tick = (n) => (/^\w+$/.test(n) ? "`" + n + "`" : n);
-    const gapClause = (names, why) => {
-      if (!names.length) return "";
-      const behind = names.length > 1 ? "them" : "it";
-      return `; and ${names.map(tick).join(" · ")} ${why}, so the items behind ${behind} are NOT in the list above`;
-    };
-    const helperGap = gapClause(section.sectionActionUnresolved || [], "which no layer in this chain defines")
-      + gapClause(section.sectionActionNotFollowed || [], "which this parse saw but did not read");
-    out.push({ kind: LIST_DECISION_KIND.commandBar, item: `command-bar buttons: ${found}`,
-      reason: `only \`getSectionActions()\` items are read; a button the section adds through its view \`diff\` (and a \`DataGridActiveRow…\` row action) is not folded at all, so neither reaches this ChangeSet${helperGap} — confirm the full button set against the Classic section on-stand, and where each one belongs on the Freedom command bar` });
-  }
-  for (const ra of rowActions) {
-    const cond = ra.condition ? `its enablement condition (\`${ra.condition}\`) must become Freedom state, not an always-enabled action` : "confirm whether it is conditionally enabled in Classic — an always-enabled port is a behaviour change";
-    out.push({ kind: LIST_DECISION_KIND.rowAction, item: `row action: ${ra.name || "unnamed"}`,
-      reason: `${cond}; the Freedom row-action control and its placement on \`${ra.grid}\` are NOT resolved here — read them off a built page before building` });
-  }
-  if (section?.processLaunch) {
-    out.push({ kind: LIST_DECISION_KIND.process, item: `section process: ${(section.processNames || []).join(", ") || "unnamed"}`,
-      reason: "the Classic section launches it — wire it as a list-page run-process action" });
+  const filterAttrs = listFilterAttributesDecision(filters);
+  const commandBar = listCommandBarDecision(section, actions);
+  const process = listProcessDecision(section);
+  return [
+    ...(columnSet ? [columnSet] : []),
+    ...listColumnTypeDecisions(columns),
+    ...listColumnPathDecisions(columns),
+    ...listFilterTypeDecisions(filters),
+    ...(filterAttrs ? [filterAttrs] : []),
+    ...(commandBar ? [commandBar] : []),
+    ...listRowActionDecisions(rowActions),
+    ...listGridConfigDecisions(section),
+    ...listSectionElementDecisions(section),
+    ...(process ? [process] : []),
+  ];
+}
+// ---- THE SECTION VIEW (ENG-94714) -------------------------------------------------------------------------
+//
+// Everything a section declares in its OWN `diff`, read off the folded section view and handed to
+// `buildListChangeSet`. Before this, the section `diff` was an unread field: every fact the plan carried about a
+// Classic list came from method bodies (`getGridDataColumns`, `initFixedFiltersConfig`, `getSectionActions`,
+// `getAddRecordMiniPage`), so an element the section INSERTED — a command-bar button, a `DataGridActiveRow…` row
+// action — reached nothing at all. Measured on two real bundles read from a stand: `OpportunitySectionV2` alone
+// declares eight such elements, all of them previously dropped without a trace.
+//
+// NOT `mapToFreedom`. That function maps a RECORD page, and the difference is not cosmetic: fed this same bundle
+// it emits one op and puts it in `SideAreaProfileContainer`, a record-page region. `buildListChangeSet` stays the
+// single producer of the list deliverable and this function feeds it facts — the isolation the list path has
+// always had (a section body that will not parse must never block the form-page plan) is preserved because
+// nothing here can throw into the form path.
+
+// Presentation-only `values` keys. They reach `unmodelledProps` like any other unmodelled key, and they are the
+// one family deliberately NOT raised as a question: they are CSS hooks with no behaviour and no Freedom analog,
+// and a Freedom page styles itself. Measured need — on the real Opportunity bundle these four accounted for most
+// of the unmodelled keys on the command-bar buttons, and a worklist that asks about `style` next to
+// `controlColumnName` teaches the reader to skim past both.
+const LIST_PRESENTATION_PROPS = new Set(["className", "classes", "style", "tag"]);
+
+// The condition a classic element carries, WITH the property it binds. AC: an `enabled` condition ported as a
+// visibility rule (or dropped) is a behaviour change, so the property travels with the method name and is never
+// flattened into one "condition" field. Both may be present — `SagRequestCombinedSectionButton` on the real
+// Opportunity section binds `getSARequestButtonVisible` to `visible` AND `IsSARequestButtonEnabled` to `enabled`.
+// `visible` is listed first so a single-condition reader sees the more common one; both are always published.
+function listConditionsOf(item) {
+  const out = [];
+  for (const property of ["visible", "enabled"]) {
+    const method = item?.handlers?.[property];
+    if (typeof method === "string" && method.trim()) out.push({ property, method: method.trim() });
   }
   return out;
+}
+
+// The keys this element declares that the engine models nowhere and that are worth a question — see
+// `LIST_PRESENTATION_PROPS` for the family that is not. Sorted by the projection already, so the order is stable.
+const listOpenProps = (item) => (item.unmodelledProps || []).filter((k) => !LIST_PRESENTATION_PROPS.has(k));
+
+// Which list surface an element sits on. The item's OWN identity is checked BEFORE its ancestry, because the two
+// elements that matter most answer for themselves: the grid IS an anchor (climbing from it would reach
+// `DataGridContainer` and resolve nothing), and a row action is identified by the `propertyName` it was inserted
+// under (`activeRowActions`), not by where its parent lives. Only then does the walk climb, and it stops at the
+// first recognised container — the same shape `resolveOwner` uses for a form page, with list anchors instead of
+// profile ones. `hops` is bounded exactly as `resolveOwner` bounds it: a malformed chain must not spin.
+function listRegionOf(item, index) {
+  if (item.propertyName === LIST_ROW_ACTIONS_PROPERTY) return LIST_REGION.ROW_ACTIONS;
+  // The own-name heuristic matches on `includes("Filter")` / `includes("ActionButtons")`, which is a CONTAINER
+  // naming convention — applying it to a leaf made `ApplyFilterButton`, a plain button under a command-bar
+  // container, resolve its own region to `filter-bar`, miss the command-bar arm and land in `openItems`. A leaf
+  // answers for itself only when its ancestry cannot: nothing to climb.
+  const answersForItself = item.itemType === VIEW_ITEM_TYPE.CONTAINER
+    || item.itemType === VIEW_ITEM_TYPE.GRID
+    || !item.parent;
+  const own = answersForItself ? listRegionForContainer(item.name) : null;
+  if (own) return own;
+  let parentName = item.parent, hops = 0;
+  while (parentName && hops++ < 32) {
+    const region = listRegionForContainer(parentName);
+    if (region) return region;
+    const parent = index.get(parentName);
+    if (!parent) return LIST_REGION.UNRESOLVED;   // ancestry runs off the tree — a missing section seed
+    if (parent.propertyName === LIST_ROW_ACTIONS_PROPERTY) return LIST_REGION.ROW_ACTIONS;
+    parentName = parent.parent;
+  }
+  return LIST_REGION.UNRESOLVED;
+}
+
+// SECTION-DECLARED, or inherited chrome? The evidence rule `mapWidgets` already applies on the form page:
+// `templateOwned` says the DEFINING insert came from the seed, `schemaTouched` says a client layer reconfigured
+// it. An element is this section's business when it defined it OR changed it; an untouched base element is the
+// list chrome every Classic section has, which the Freedom list page provides itself.
+const isSectionDeclared = (i) => !i.templateOwned || i.schemaTouched;
+
+// One command-bar button, as the facts a builder needs and nothing it does not. No `crt.*` type: where a
+// list-page button belongs on the Freedom command bar has not been measured, and the command-bar table says so
+// per row. `source` names the classic surface it came from, so a diff-declared button and a `getSectionActions`
+// item stay tellable apart in the plan.
+function sectionDiffAction(item, menuItems = []) {
+  return {
+    name: item.name,
+    // `resourceKey` for the same reason the `getSectionActions` surface applies it: it strips the
+    // `Resources.Strings.` prefix a classic binding carries. Without it the plan showed `NewOrderCaption` for a
+    // menu-derived action and `Resources.Strings.NewOrderCaption` for a diff-derived one — two spellings of the
+    // same fact in one table, and two different strings for a reader (or a gate) to match on. A caption bound to a
+    // METHOD rather than a resource (`getButtonCaption`, which the real Opportunity buttons use) passes through
+    // unchanged, which is correct: it is a dynamic caption, and naming the method is the honest answer.
+    caption: item.caption ? resourceKey(item.caption) : null,
+    conditions: listConditionsOf(item),
+    parent: item.parent || null,
+    order: item.order ?? null,
+    package: item.provenance?.[item.provenance.length - 1] || null,
+    openProps: listOpenProps(item),
+    // A STATIC literal, not a bound condition. `handlerBindings` only sees methods and `unmodelledValueKeys`
+    // excludes these two, so a `visible: false` button reached the ChangeSet indistinguishable from an
+    // always-visible one — and the built Freedom list then showed a control Classic hides by default.
+    staticVisible: item.visible === false ? false : null,
+    staticEnabled: item.enabled === false ? false : null,
+    // The button's own MENU / MENU_ITEM descendants, folded exactly as the form path folds them. Empty for a
+    // button with no menu; the LIST_ROWS notes promise this fold, so it has to exist on this path too.
+    menuItems,
+    source: "sectionDiff",
+  };
+}
+
+// MENU / MENU_ITEM descendants of one command-bar button, folded into a single array. Recursive, because classic
+// nests the items under an intermediate MENU as often as directly under the button. Every name it walks is
+// recorded in `claimed`, so the caller can tell a folded menu from one that belongs to no button — the latter is
+// still a named open item rather than a silent drop.
+function listMenuEntriesOf(owner, childrenByParent, claimed) {
+  const out = [];
+  for (const child of (childrenByParent.get(owner.name) || [])) {
+    if (child.itemType === VIEW_ITEM_TYPE.MENU) {
+      claimed.add(child.name);
+      out.push(...listMenuEntriesOf(child, childrenByParent, claimed));
+      continue;
+    }
+    if (child.itemType === VIEW_ITEM_TYPE.MENU_SEPARATOR) { claimed.add(child.name); continue; }
+    if (child.itemType !== VIEW_ITEM_TYPE.MENU_ITEM) continue;
+    claimed.add(child.name);
+    out.push({
+      name: child.name,
+      caption: child.caption ? resourceKey(child.caption) : null,
+      // The classic click stays IMPERATIVE and is named, not ported: dropping it was how `onBulkAssign` and
+      // `onBulkExport` vanished with the menu that carried them.
+      classicHandler: child.handlers?.click || null,
+      conditions: listConditionsOf(child),
+      order: child.order ?? null,
+      package: child.provenance?.[child.provenance.length - 1] || null,
+    });
+  }
+  return out;
+}
+
+// One row action. Same shape the manifest-supplied `section.rowActions` entries carry (`mergeRowActions` unions
+// the two), plus the condition PROPERTY and the package. `itemType` is deliberately not consulted: a real
+// `DataGridActiveRow…` op carries no `itemType` at all — all four on the real Opportunity section do not — so
+// keying this surface on the kind would find none of them. The `propertyName` is what identifies it.
+function sectionDiffRowAction(item) {
+  const conditions = listConditionsOf(item);
+  return {
+    name: item.name,
+    caption: item.caption ? resourceKey(item.caption) : null, // same normalization as the command bar above
+    // `condition` (singular) is the field `listRowActionSpec` and the design-spec table already render; the full
+    // set rides alongside it so the property a condition binds is never lost on the way through.
+    condition: conditions[0]?.method || null,
+    conditionProperty: conditions[0]?.property || null,
+    conditions,
+    package: item.provenance?.[item.provenance.length - 1] || null,
+    source: "sectionDiff",
+  };
+}
+
+// THE SECTION VIEW MAP. Returns `null` when there is no folded section, so every consumer has ONE thing to test.
+//   commandBarActions — buttons the section declares above the list
+//   rowActions        — `activeRowActions` items on the grid
+//   gridConfig        — per element, the declared keys the engine models nowhere (the `controlColumnName` family)
+//   openItems         — section-declared elements the list vocabulary has no reading for, named rather than dropped
+//   counts            — how much of the folded tree was section-declared vs inherited chrome
+// Groups the folded items under their declaring parent, in declared order. Own fn so `mapSectionView` stays under
+// Sonar CC 15; the ordering matters because a menu's items must reach its button in the order Classic declared them.
+function indexChildrenByParent(items) {
+  const childrenByParent = new Map();
+  for (const i of [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+    if (!i.parent) continue;
+    if (!childrenByParent.has(i.parent)) childrenByParent.set(i.parent, []);
+    childrenByParent.get(i.parent).push(i);
+  }
+  return childrenByParent;
+}
+// The package that last touched an element — the tail of its provenance chain, or null when it carries none.
+function lastProvenancePackage(item) {
+  return item.provenance?.[item.provenance.length - 1] || null;
+}
+// A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
+// carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
+function sectionViewLabel(item, region) {
+  return { name: item.name, region,
+    caption: item.caption ? resourceKey(item.caption) : null,
+    conditions: listConditionsOf(item),
+    package: lastProvenancePackage(item) };
+}
+// The grid itself and the containers are already owned by the list surface or are layout, so they are accounted for
+// and silent. `OWNER.FOLDED` is deliberately NOT in this list. It used to be, and it is what dropped a
+// section-declared MENU / MENU_ITEM to no surface at all: the fold it named did not exist on the list path. The fold
+// exists now, and what it claimed is skipped by the caller — so reaching here means nothing folded this element.
+function isAccountedForOnListSurface(region, row) {
+  return region === LIST_REGION.GRID || row?.ownedBy === OWNER.CONTAINER || row?.ownedBy === OWNER.CHROME;
+}
+// An element the list vocabulary has NO row for, named rather than dropped — the arm that makes "nothing is
+// silently dropped" true.
+function sectionViewOpenItem(item, region, caption = null) {
+  return { name: item.name, region,
+    kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
+    caption,
+    conditions: listConditionsOf(item),
+    package: lastProvenancePackage(item) };
+}
+export function mapSectionView(sectionEff) {
+  if (!sectionEff) return null;
+  const items = sectionEff.items || [];
+  const index = new Map(items.map((i) => [i.name, i]));
+  const childrenByParent = indexChildrenByParent(items);
+  // Names a command-bar button folded into its own `menuItems`. Anything MENU-shaped that is NOT in here belongs
+  // to no button on this surface and becomes a named open item — that is what makes "nothing is silently dropped"
+  // true for the menu family, which the blanket `OWNER.FOLDED` skip used to swallow.
+  const foldedIntoMenus = new Set();
+  const out = { commandBarActions: [], rowActions: [], gridConfig: [], openItems: [],
+    counts: { items: items.length, sectionDeclared: 0, chrome: 0 } };
+  for (const item of items) {
+    if (!isSectionDeclared(item)) { out.counts.chrome++; continue; }
+    out.counts.sectionDeclared++;
+    foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus });
+  }
+  // The fold is claimed in a pass of its OWN, after the loop, not by a `continue` inside it (PR #176 review).
+  // `foldedIntoMenus` is filled as the loop runs, so a MENU / MENU_ITEM declared BEFORE its owning button reached
+  // the in-loop guard with the set still empty: it landed in `openItems` and was folded into the button's
+  // `menuItems` a few iterations later, so the same section body produced two different worklists depending on the
+  // order its `diff` array happens to be written in — and `items` order is replay order, not `index` order.
+  // Filtering afterwards is order-independent by construction.
+  out.openItems = out.openItems.filter((e) => !foldedIntoMenus.has(e.name));
+  return out;
+}
+// Unmodelled configuration is reported per ELEMENT, not per key: the real Opportunity grid declares eighteen such
+// keys and one row naming all of them is answerable, while eighteen rows are a wall. It is reported for any list
+// element that carries some, not only the grid — `controlColumnName` is the case the ticket names, not the only
+// case there is. Called from each routing arm rather than before them, so an arm can drop a key it just MODELLED.
+function pushGridConfig(out, item, region, props) {
+  if (!props.length) return;
+  out.gridConfig.push({ name: item.name, region, props, package: lastProvenancePackage(item) });
+}
+// One section-declared element, routed to the surface that can read it. Extracted from `mapSectionView`'s loop so
+// each arm stands on its own: the loop was over the cognitive-complexity bound with the label arm added, and the
+// routing rules are the part a reader actually needs to follow.
+function foldSectionItem(item, { out, index, childrenByParent, foldedIntoMenus }) {
+  const region = listRegionOf(item, index);
+  const openProps = listOpenProps(item);
+  if (region === LIST_REGION.ROW_ACTIONS) { pushGridConfig(out, item, region, openProps); out.rowActions.push(sectionDiffRowAction(item)); return; }
+  if (region === LIST_REGION.COMMAND_BAR && item.itemType === VIEW_ITEM_TYPE.BUTTON) {
+    const menuItems = listMenuEntriesOf(item, childrenByParent, foldedIntoMenus);
+    // `menu` is raised as an open item only when the fold read NOTHING out of it. A classic command-bar button
+    // declares its dropdown as `"menu":{"items":[…]}`, and `menu` is in none of the REMOVABLE_ITEM_PROPS families,
+    // so every menu-bearing button was reported as declaring a configuration key "this engine models on no field"
+    // — while the very same run folded that menu into `menuItems` and printed it in the Menu position cell. One
+    // element both mapped and re-disclosed as an unmapped-config question about the same key is the ⚠ noise the
+    // per-element grouping exists to avoid.
+    pushGridConfig(out, item, region, menuItems.length ? openProps.filter((k) => k !== "menu") : openProps);
+    out.commandBarActions.push(sectionDiffAction(item, menuItems));
+    return;
+  }
+  pushGridConfig(out, item, region, openProps);
+  if (item.itemType === VIEW_ITEM_TYPE.LABEL) {
+    out.labels ??= [];
+    out.labels.push(sectionViewLabel(item, region));
+    // AND an open item, with its caption (PR #176 review). `labels` is a structured field with no reader in
+    // `designspec.mjs`, `migrate.mjs` or any decision list, so a section-declared LABEL was computed and then
+    // discarded — the same "silently dropped" failure the MENU fold was raised for, arriving on another element
+    // kind. The field stays for a structured consumer; the open item is what puts the label on the ⚠ worklist.
+    out.openItems.push(sectionViewOpenItem(item, region, item.caption ? resourceKey(item.caption) : null));
+    return;
+  }
+  if (isAccountedForOnListSurface(region, listRowForItemType(item.itemType))) return;
+  out.openItems.push(sectionViewOpenItem(item, region));
 }
 // THE LIST-PAGE CHANGESET. `null` when the run has no section at all (a mini/child page migration): a list page
 // that does not exist must not appear as a build deliverable.
@@ -2545,7 +2980,11 @@ export function buildListChangeSet({ entity, section, entityColumns } = {}) {
   // No string tolerance here on purpose: `mergeSectionActions` drops a nameless entry, so a bare string cannot
   // reach this function through the only caller that builds `section` — a fallback for it would be unreachable
   // code that no test could exercise through the pipeline.
-  const actions = (section.sectionActions || []).map((a) => ({ ...a, source: "getSectionActions" }));
+  // `source` names the classic surface each action came from. It is READ off the entry when it carries one — a
+  // diff-declared button arrives tagged `sectionDiff` — and defaults to `getSectionActions` for the method-body
+  // surface, which is the only source that existed when this line was written. Overwriting it unconditionally
+  // would have relabelled every folded button as an imperative menu item in the plan.
+  const actions = (section.sectionActions || []).map((a) => ({ ...a, source: a.source || "getSectionActions" }));
   const rowActions = (section.rowActions || []).map(listRowActionSpec);
   return {
     entity: boundEntity,

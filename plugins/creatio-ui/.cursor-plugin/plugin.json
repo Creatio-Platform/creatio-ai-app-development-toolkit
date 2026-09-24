@@ -1,7 +1,7 @@
 {
   "name": "creatio-ui",
   "displayName": "creatio-ui",
-  "version": "1.10.0",
+  "version": "1.12.0",
   "description": "Creatio UI jobs for Creatio app development: branding orchestrator and web-to-mobile page conversion.",
   "author": {
     "name": "Creatio"

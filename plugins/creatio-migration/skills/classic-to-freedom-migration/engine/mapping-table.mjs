@@ -271,15 +271,18 @@ const feature = (suffix, { feature: name, freedom, componentType = null, uiShape
 // the structured form the registry gate can branch on: absent on the stand ⇒ install `CrtCustomer360App` / enable
 // `CommonCommunicationsBehavior` and re-run the BUILD (the plan is correct), NOT a re-plan.
 const COMMS_GATE = { kind: GATE_KIND.COMPOSITE, id: "CrtCustomer360App", feature: "CommonCommunicationsBehavior" };
-const COMMS_NOTE = "means of communication = the NATIVE Communication-options component (crt.CommunicationOptions, the compositeOnly widget the \"Communication options\" composite assembles — NOT `crt.ContactCommunication`, which is not a real component type; `ContactCommunication` is the ENTITY the data lives in) — read get-component-info for its contract/wiring; it requires the CrtCustomer360App package AND the CommonCommunicationsBehavior feature. Do NOT downgrade it to a plain Expanded-list/DataGrid over ContactCommunication (that loses the typed add-communication UI). If the component/package/feature is unavailable on the stand, that is a decision to RAISE (add the dependency, or confirm the fallback) — not a silent grid.";
+// ENG-96327 — the human plan carries the SHORT note; the full build recipe (crt.CommunicationOptions is compositeOnly,
+// read get-component-info, do NOT downgrade to a plain grid over ContactCommunication, etc.) lives once in
+// `references/classic-to-freedom-mapping.md`, which the build agent is handed. The human-relevant part is the on-stand
+// PREREQUISITE / decision, which the short note keeps.
+const COMMS_NOTE = "Native Communication-options component — requires the CrtCustomer360App package + CommonCommunicationsBehavior feature on-stand; confirm, or raise adding it.";
 const FEATURE_ROWS = [
   // A Creatio "Visa" IS an approval/sign-off. Its records live in a `*Visa` entity (e.g. ApplicantVisa,
   // inheriting BaseVisa) with an FK to the master record — that data shape IS how Approvals is stored, so
   // "it's just a related list over ApplicantVisa filtered by the master" is NOT evidence against Approvals.
   // Do not downgrade VisaDetailV2 to a generic Expanded-list on that reasoning (a real agent did, wrongly).
   feature("VisaDetailV2", { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)",
-    componentType: "crt.ApprovalList", uiShape: "component",
-    notes: "Creatio Visa = an approval/sign-off; its records living in a `*Visa` entity (ApplicantVisa) with an FK to the master is exactly how Approvals is stored — that structure is NOT a reason to reclassify it as a plain related list. Approvals renders as TWO components — read get-component-info for the approval set and add BOTH: (1) the approval MODULE/widget as a SEPARATE container placed ABOVE the profile island, and (2) the approval LIST. Adding only the list is INCOMPLETE. Keep it as the Approvals feature unless you confirm on-stand it does not use the visa/approval infrastructure." }),
+    componentType: "crt.ApprovalList", uiShape: "component" }),
   feature("FileDetailV2", { feature: "Attachments", freedom: "Freedom Attachments & notes", componentType: "crt.FileList",
     uiShape: "component", templateProvided: true }),
   // Activities and Emails are FILTERED RELATED LISTS (uiShape "list") — a DataGrid of the child records
@@ -288,10 +291,8 @@ const FEATURE_ROWS = [
   // Emails is NOT the email-client component. A real agent rebuilt these as a Timeline — do not conflate the
   // list feature with the Timeline widget (#6). A list-shaped feature is gated as a related list, so it carries
   // NO `verify.componentType` of its own.
-  feature("ActivityDetailV2", { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list",
-    notes: "Activities = a plain FILTERED RELATED LIST of Activity/Task records (a DataGrid filtered by the master FK) — NOT a Timeline and NOT an aggregate activity feed. Build it as a related list, exactly like any other child list." }),
-  feature("EmailDetailV2", { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list",
-    notes: "Emails = a plain FILTERED RELATED LIST of Email records (a DataGrid filtered by the master) — NOT a Timeline and NOT the email-client component. Build it as a related list." }),
+  feature("ActivityDetailV2", { feature: "Activities", freedom: "Freedom related list of Activity (Task) records, filtered to the master", uiShape: "list" }),
+  feature("EmailDetailV2", { feature: "Emails", freedom: "Freedom related list of Email activities, filtered to the master", uiShape: "list" }),
   // Means-of-communication ("Средства связи контакта" / ContactCommunication) is the NATIVE Communication-options
   // component, NOT a generic list. A real agent downgraded it to a plain Expanded-list because the composite
   // needed the CrtCustomer360App package — that fallback is wrong (loses the add-by-type UI, type icons, dedup).
@@ -302,7 +303,9 @@ const FEATURE_ROWS = [
     // produced by an older engine EXPECTED `crt.ContactCommunication` (the entity name with a `crt.` prefix, which
     // resolves to nothing on a stand), and a correctly built page carrying `crt.CommunicationOptions` must read ✅
     // rather than ❌ MISSING. A `satisfies` entry is therefore a name the registry must NOT carry — if it does, it
-    // is a real component being aliased away, and the registry check says so.
+    // is a real component being aliased away, and the registry check says so. The real component is
+    // `crt.CommunicationOptions`, NOT `crt.ContactCommunication` (the ENTITY name with a `crt.` prefix — it resolves
+    // to nothing on a stand; this counter-example is what the code lint exempts the `satisfies` alias by).
     satisfies: ["crt.ContactCommunication"],
     gate: COMMS_GATE,
     notes: COMMS_NOTE }),
@@ -342,9 +345,11 @@ const FEATURE_ENTITY_ROWS = [
 // default form template ships NEITHER: both must be ADDED when the object has a configured DCM case. The
 // progress bar goes on the page top; Next steps goes in a NEW tab in the tab container, next to Feed. Both
 // auto-populate from the object's case (do not hand-author stages/steps). No case on the object ⇒ nothing to add.
-const DCM_CHECK = "Check the object's case on-stand: SysSchema WHERE ManagerName='DcmSchemaManager' (NOT 'CaseSchemaManager' — wrong name, returns 0 = false 'no case'); a hit for this entity ⇒ add it, no hit ⇒ nothing to add. A case can exist even if the classic page tracked stage only via a Stage lookup + history detail.";
-const DCM_PROGRESS_NOTE = "Case-stage progress bar (crt.EntityStageProgressBar) — NOT in the default Freedom form template. When the object has a DCM case, PREFER building the form page from `PageWithTabsAndProgressBarTemplate` (it ships the bar placed) and RE-BIND the new page to your entity, rather than hand-adding the widget. FALLBACK (already on a no-bar template / page exists): PLACE IT in `MainContainer` (the content container below the header), at the TOP of the content — NOT in `MainHeader`, and not as a bare child of `Main`. It auto-populates from the object's case (do not hand-author stages). " + DCM_CHECK;
-const DCM_NEXTSTEPS_NOTE = "Next steps (crt.NextSteps) — NOT in the default Freedom form template; ADD it as a TAB in the card toggle panel BESIDE the Feed and Attachments tabs when the object has a configured DCM case. Build the tab like Feed/Attachments: caption via `#ResourceString(Key)#` (NOT $Resources.Strings.*), set the tab icon to `flag-icon` (do not guess — an invented name renders empty), put the header (Label + '+' menu button) in the tab's `tools` slot and the widget in `items`. It auto-populates from the object's case (do not hand-author steps). " + DCM_CHECK;
+// ENG-96327 — SHORT human notes; the full build recipe (template choice / MainContainer fallback / #ResourceString /
+// flag-icon / tools slot, and the SysSchema `DcmSchemaManager` on-stand check) lives once in
+// `references/classic-to-freedom-mapping.md`, which the build agent is handed.
+const DCM_PROGRESS_NOTE = "Case-stage progress bar — auto-populates from the object's DCM case (nothing to hand-author).";
+const DCM_NEXTSTEPS_NOTE = "Next steps — a new tab beside Feed/Attachments; auto-populates from the object's DCM case.";
 // `signal: "dcm"` — DCM is NOT evidenced by the classic page BODY (the DcmActionsDashboard containers are
 // Freedom base-template chrome, never touched by the page's own layers); its presence is an ON-STAND fact
 // (a configured DCM case, `manifest.signals.dcm`). So these two widgets emit ONLY when the resolved dcm
@@ -610,4 +615,99 @@ export function gateShapeIssues(rows = MAPPING_ROWS) {
     if ("feature" in g && !nonEmptyString(g.feature)) bad("a gate's `feature`, when present, must be a non-empty string");
   }
   return out;
+}
+
+
+// ---- LIST-PAGE VOCABULARY (ENG-94714) ---------------------------------------------------------------------
+//
+// A SECOND, SMALLER TABLE, read ONLY by the section-view mapper. The rows above answer "what does this classic
+// element become on a Freedom FORM page"; these answer the same question for a LIST page, and for the same
+// `itemType` the two answers genuinely differ. A GRID on a record page is an editable-grid detail with no
+// confirmed Freedom target (`TIER.DECISION` above, deliberately); a GRID on a section IS the list, and
+// `buildListChangeSet` already builds it as `DataTable`. One row cannot hold both readings.
+//
+// WHY NOT MUTATE THE SHARED ROWS: flipping `byItemType(VIEW_ITEM_TYPE.GRID)` to `ROLE.MAPPED` would change
+// `mapUnmappedDrop` and the member ledger for record-page grids too — a behaviour change nobody asked for, on a
+// surface this ticket does not touch. Keeping the list reading in its own table is what lets the section gain a
+// mapping without the form losing one.
+//
+// NO FABRICATED COMPONENT TYPES. Not one row here names a `crt.*`. The list surfaces already have their builder
+// (`buildListChangeSet` owns the grid, its columns and the quick filters), and for a command-bar button or a row
+// action no built Freedom page has been measured — so the element's FACTS are published and the control is
+// resolved on-stand. A type picked out of the component registry because it happens to exist there would read
+// exactly like a measured one; the registry gate validates the types we DO name, it cannot catch an invented one.
+
+// Which list surface an element belongs to. `UNRESOLVED` is a real answer, not a failure: it means the element is
+// section-declared but sits under no recognised list anchor, and the mapper raises it as a named open item
+// instead of guessing a home for it.
+export const LIST_REGION = {
+  GRID: "grid",                 // the list itself — `buildListChangeSet` builds it as `DataTable`
+  ROW_ACTIONS: "row-actions",   // per-row commands (`activeRowActions` on the grid)
+  COMMAND_BAR: "command-bar",   // the button strip above the list
+  FILTER_BAR: "filter-bar",     // the quick-filter area
+  UNRESOLVED: "unresolved",
+};
+
+// The grid's own element name in every classic section body measured so far, and the `propertyName` its per-row
+// commands are inserted under. Named here rather than inline in the mapper so the section mapper and every later
+// reader agree on one spelling.
+export const LIST_GRID_ELEMENT = "DataGrid";
+export const LIST_ROW_ACTIONS_PROPERTY = "activeRowActions";
+
+// A container's list region, from its NAME. This is a SHAPE rule, and it is stated as one because there is no
+// enumerable list of classic container names to match exactly: `BaseDataView` [`CrtUIPlatform7x`] defines the
+// base set, a product package may add its own, and the engine has to classify a name it has never seen.
+//   * `...ActionButtons...` — measured: `CombinedModeActionButtonsCardLeftContainer` (both the Leads and the
+//     Opportunities command-bar button land there) and the `SeparateModeActionButtons*` family beside it.
+//   * `...Filter...` — the quick-filter area.
+// A name matching NEITHER returns null, which the caller turns into a named open item. The asymmetry is
+// deliberate: a wrong region silently rebuilds the element in the wrong place, an unresolved one asks.
+export function listRegionForContainer(name) {
+  const n = String(name || "");
+  if (!n) return null;
+  if (n === LIST_GRID_ELEMENT) return LIST_REGION.GRID;
+  if (n.includes("ActionButtons")) return LIST_REGION.COMMAND_BAR;
+  if (n.includes("Filter")) return LIST_REGION.FILTER_BAR;
+  return null;
+}
+
+// What the list mapper does with an element OF THIS KIND once its region is known. `ownedBy` names the producer,
+// exactly as it does above; `LIST_OWNER` is the new one — "`buildListChangeSet` emits it, from the facts this row
+// hands over". `target` is null on every row, for the reason stated at the top of this block.
+export const LIST_OWNER = "list-changeset";
+const listRow = (itemType, rest) => row({ match: { by: MATCH.ITEM_TYPE, itemType }, target: null, ...rest });
+const LIST_ROWS = [
+  // The grid IS the list page. Absorbed by the surface `buildListChangeSet` already owns (`LIST_GRID` =
+  // `DataTable`, its `values.columns[]` merge and the `PDS_*` view-model attributes), so the element emits nothing
+  // of its own and needs no component type — but it is no longer UNMAPPED, because the engine really does build a
+  // Freedom equivalent for it.
+  listRow(VIEW_ITEM_TYPE.GRID, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "list",
+    notes: "On a SECTION this is the list itself, not an editable-grid detail: `buildListChangeSet` already emits it as `DataTable` with the section's columns and quick filters. Configuration it carries that the engine models on no field (`controlColumnName`, `applyControlConfig`, `controlCellClass`) is raised as a `list-grid-config` open item rather than folded into that merge." }),
+  // A command-bar button. Tier B for the same reason the form-page BUTTON row is: the view is derivable, the click
+  // handler is imperative and becomes a stub. No `crt.Button` here though — WHERE a list-page button goes on the
+  // Freedom command bar has not been measured, and the command-bar table already says so on every row.
+  listRow(VIEW_ITEM_TYPE.BUTTON, { role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: LIST_OWNER, uiShape: "component",
+    notes: "Reaches `listChangeSet.commandBarActions` carrying its caption, its source package and its condition WITH the property that condition binds (`visible` vs `enabled`) — porting an `enabled` condition as a visibility rule, or dropping it, is a behaviour change. The Freedom control and its place on the command bar are resolved on-stand." }),
+  // Menus fold into the owning button, exactly as on the form page — one reading of the classic menu idiom, not two.
+  listRow(VIEW_ITEM_TYPE.MENU, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: OWNER.FOLDED,
+    notes: "A wrapper: it contributes its items to the owning command-bar button and emits nothing of its own." }),
+  listRow(VIEW_ITEM_TYPE.MENU_ITEM, { role: ROLE.MAPPED, tier: TIER.VIEW_ONLY, ownedBy: OWNER.FOLDED,
+    notes: "Folds into the owning button's menu; its click stays imperative, like every other classic handler." }),
+  listRow(VIEW_ITEM_TYPE.MENU_SEPARATOR, { role: ROLE.DECOR, tier: TIER.AUTO, ownedBy: OWNER.CHROME,
+    notes: "A group boundary inside a menu — it carries no migration answer of its own." }),
+  // A container is layout. Structural only when its subtree produced something; an empty one still surfaces, which
+  // is the same rule the form path applies (`ROLE.CONTAINER`).
+  listRow(VIEW_ITEM_TYPE.CONTAINER, { role: ROLE.CONTAINER, tier: TIER.AUTO, ownedBy: OWNER.CONTAINER,
+    notes: "The classic list containers (command bar, filter area) have fixed Freedom counterparts the list page already provides — the container is not rebuilt, its CHILDREN are placed." }),
+  listRow(VIEW_ITEM_TYPE.LABEL, { role: ROLE.MAPPED, tier: TIER.AUTO, ownedBy: LIST_OWNER, uiShape: "component",
+    notes: "Author-written copy on the list chrome; carried with its caption so it is not lost, its placement resolved on-stand like the buttons beside it." }),
+];
+const LIST_ROW_BY_ITEM_TYPE = new Map(LIST_ROWS.map((r) => [r.match.itemType, r]));
+
+// The list reading of `itemType`, or `null` when this table has none — which is NOT the same as the `TIER.DECISION`
+// rows above. Null means "this element kind has no list reading at all", and the caller raises it as a named open
+// item naming the kind; a silent fallback to the FORM row would place a record-page element on a list.
+export function listRowForItemType(itemType) {
+  if (itemType == null) return null;
+  return LIST_ROW_BY_ITEM_TYPE.get(itemType) || null;
 }

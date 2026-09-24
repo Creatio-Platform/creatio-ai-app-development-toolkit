@@ -16,7 +16,7 @@
 // `strip` normalizes EVERY value to a single inert line (control chars / CR / LF / tabs -> space) before it
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char can no longer start a new line. Safe for engine-authored text too (single-line).
-import { resourceKey } from "./engine.mjs"; // ONE canonical resource-key normalization, shared with the mapper (strips $/prefix/#anchor)
+import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
 import { featureVerifyType, featureVerifyExtraTypes, analogsOf } from "./mapping-table.mjs"; // ENG-95543: the feature -> crt.* gate types, from the ONE shared table; ENG-95859: a feature's OTHER required halves
 import { LIST_GRID, LIST_FILTER_TYPE } from "./mapper.mjs"; // the grid + filter control the ChangeSet targets — the gate must require the same
 const strip = (s) => (s == null ? "" : String(s)
@@ -172,7 +172,10 @@ function rowsForDetails(details, tabRegion) {
     let editNote = "";
     if (d.editable) {
       const editCols = (d.editable.columns || []).length ? ` — editable: ${d.editable.columns.map(esc).join(" · ")}` : "";
-      editNote = `⚠ INLINE-EDITABLE (${esc(d.editable.enableVia)})${editCols}`;
+      // ENG-96327 (81305bd) — the human fact only: inline-editable + which columns. HOW to enable it on a
+      // crt.DataGrid (`features.editable.enable` / `itemsCreation`, resolved via get-component-info) is builder
+      // mechanics, not plan content.
+      editNote = `⚠ INLINE-EDITABLE${editCols}`;
     }
     const add = [cols, editNote].filter(Boolean).join(" · ") || DASH;
     return { region: d.tab ? tabRegion(d.tab) : "⚠ unplaced", sort: 1, cells: [esc(d.caption || d.detailSchema || d.entity), d.editable ? "Editable list" : "Related list", src, DASH, add] };
@@ -192,17 +195,43 @@ function rowsForFeatures(standardFeatures, tabRegion) {
 function widgetSource(w) {
   // The DCM progress bar is SHIPPED by PageWithTabsAndProgressBarTemplate (template-PROVIDED + re-bound); Next
   // steps is genuinely ADDED as a new tab; other placed widgets keep the generic ADD wording.
-  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed) — build the form on that template + RE-BIND to the case; hand-adding to `MainContainer` is the fallback";
+  if (w.placement === "page-top") return "provided by `PageWithTabsAndProgressBarTemplate` (ships the bar placed)"; // ENG-96327 — the re-bind / MainContainer-fallback recipe lives in the mapping doc, not this cell
   if (w.placement === "tab-next-to-feed") return "⚠ ADD — a new tab (Next steps) beside Feed/Attachments (not template-provided)";
   if (w.placement) return "⚠ ADD — not in the default Freedom template";
   if (w.note) return "⚠ confirm on-stand — see note"; // specific guidance (e.g. NBO) — do NOT assert template-provided
   if (w.base) return "template context — provided by the Freedom template";
   return "native — confirm on-stand";
 }
-function rowsForWidgets(widgets) {
-  return (widgets || []).map((w) => {
-    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top";
+function rowsForWidgets(widgets, dcmActive) {
+  // When the DCM case is resolved present on-stand (`dcmActive`), the DCM widgets (case progress bar + Next steps)
+  // are template/on-stand chrome, NOT page-body layout, and are already covered where it matters: the `### On-stand
+  // signals` DCM line ("present → build it"), the DCM template banner (use the progress-bar template that SHIPS
+  // them), the skill's mapping reference, and the GATED `DCM case progress bar` / `DCM Next steps` checklist rows.
+  // Re-listing them here — esp. "⚠ ADD — not template-provided", which is wrong once the DCM template is used — is
+  // redundant noise, so they are dropped from the Layout table. Gate on `dcmActive`: when a DCM widget instead comes
+  // from CLASSIC EVIDENCE in the page body with no resolved case (dcmActive false), the checklist does NOT cover it,
+  // so this row is its only mention and MUST stay. Non-DCM widgets (Timeline, Recommendations, Duplicates) always stay.
+  return (widgets || []).filter((w) => !(dcmActive && w.signal === "dcm")).map((w) => {
+    const region = w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION;
     return { region, sort: 2, cells: [esc(w.widget), "Component", widgetSource(w), DASH, w.note ? esc(w.note) : DASH] };
+  });
+}
+// ENG-95806 — the friendly Region label for a card widget is `regionOf(region)`, the SAME resolver every other
+// printer sink uses: `regionOf` already maps `SideAreaProfileContainer` → "Side profile" and returns the
+// `Header / top` sentinel unchanged, so a dedicated helper only duplicated it (review d-baranovskyi). Call
+// `regionOf(w.region)` directly at the Layout row, the checklist Layout-by-region group and the Coverage/--verify
+// row so the three can never drift and the raw container name never leaks to one of them.
+// ENG-95806 — a record-scoped CARD WIDGET (SysWidgetDashboard indicator) is real page CONTENT, so it gets its own
+// Layout row in the region it resolved to, naming the widgetKey and the migrator-driven conversion (Source =
+// SysWidgetDashboard + the record). The full grouping + process-call + Failed-means-blocked instructions stay in
+// the ⚠ Confirm item (the card-widget needsDecision reason). `region`/`recordId`/`widgetKey` are stand-derived, so
+// `esc` neutralizes hostile tokens at this sink (same convention as every other row builder).
+function rowsForCardWidgets(cardWidgets, regionOf) {
+  return (cardWidgets || []).map((w) => {
+    const region = regionOf(w.region);
+    const src = `from SysWidgetDashboard (record \`${esc(w.recordId)}\`)`;
+    const note = "→ convert via `ConvertCardWidgetsProcess` (group by recordId, batch widgetKeys); place the returned Freedom element — do NOT hand-build a chart (a Failed conversion stays TODO/BLOCKED)";
+    return { region, sort: 2, cells: [esc(w.widgetKey), "Card widget", src, DASH, note] };
   });
 }
 const PROCESS_HOWTO = "⚠ Migrate ONLY if a process is connected to this section. Check on-stand with `odata-read` (the param is `filters`, NOT `filter`): `ProcessInModules` `filters {all:[{field:\"SysModule/Id\",op:\"eq\",value:<sysModuleId>}]}` (a lookup → filter via the `SysModule/Id` nav, never a `SysModuleId` field), select `[\"SysSchemaUId\",\"Position\"]` — that is the section's \"Run process\" menu (Section Wizard → Business Processes). ProcessInModules has NO name column: resolve each `SysSchemaUId` to the process name via `odata-read VwSysProcess` `filters {all:[{field:\"Id\",op:\"eq\",value:<SysSchemaUId>}]}`, select `[\"Caption\",\"Name\"]` (Caption = the human menu label; a process's `Id` == its `UId`, so filter by `Id` — `UId eq <guid>` FAILS with an Edm.Guid-vs-String error; no `IsMaxVersion` filter needed, `Id` is unique). None connected ⇒ the button is NOT migrated; if some are, name each in the plan. (No `SysProcessId`/`Caption` exists on ProcessInModules; `SysProcessEntity`/`VwSysProcessEntity` = runtime process-instance↔record links, NOT this.)";
@@ -237,12 +266,19 @@ function cardActionNote(name, result, opts) {
   if (name === "Tag") return { type: "—", note: "Provided by the default Freedom template (tags) — nothing to migrate." };
   return { type: "Action", note: DASH };
 }
+// The base-page standard action-menu buttons — inherited chrome on EVERY page, not a page's own customization.
+// On a CHILD edit page they carry no section context (their disposition is "no section-level menu / native /
+// not applicable"), so listing all four on every child page is pure boilerplate. Dropped from a child's Layout;
+// a child's OWN custom action (any name not in this set) still renders.
+const STANDARD_CARD_ACTIONS = new Set(["Print", "ViewOptions", "Process", "RunProcess", "ReloadData", "Tag"]);
 function rowsForCardActions(cardActions, result, opts) {
-  return (cardActions || []).map((a) => {
-    const name = a.replace(/Button$/, "");
-    const { type, note } = cardActionNote(name, result, opts);
-    return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
-  });
+  return (cardActions || [])
+    .filter((a) => !(opts.isChildPage && STANDARD_CARD_ACTIONS.has(a.replace(/Button$/, ""))))
+    .map((a) => {
+      const name = a.replace(/Button$/, "");
+      const { type, note } = cardActionNote(name, result, opts);
+      return { region: "Card actions", sort: 3, cells: [esc(name), type, DASH, DASH, note] };
+    });
 }
 // ENG-95543 — one Layout row per element the shared mapping table emitted (`crt.Label` / `crt.Button` /
 // `crt.Link`). These carry no `values.control`, so `isField` cannot see them and without this builder they would be
@@ -307,7 +343,7 @@ function pageRuleRows(cs) {
     const condTrigger = (r.conditions || []).length ? "conditional" : "always";
     const trigger = attrs.length ? `when ${attrs.map(esc).join(" / ")}` : condTrigger;
     const effect = humanizeAction(r.action) + (r.inverseAction ? ` (else ${humanizeAction(r.inverseAction)})` : "");
-    return [esc(r.element), trigger, effect, "page business rule"];
+    return [trigger, esc(r.element), effect, "page business rule"];
   });
 }
 // entity/lookup filters — DEDUP by target attribute (a column can carry >1 FILTRATION rule); one row per attr.
@@ -319,18 +355,18 @@ function entityFilterRows(cs) {
     const singleEffc = rs[0].complete ? "static filter" : "⚠ dynamic — resolve value";
     const unresolvedNote = unresolved ? ` (${unresolved} ⚠ dynamic — resolve value)` : "";
     const effc = rs.length === 1 ? singleEffc : `${rs.length} filters${unresolvedNote}`;
-    return [`Filter · ${esc(attr)}`, `${esc(attr)} lookup`, effc, "entity business rule / lookup filter"];
+    return [`${esc(attr)} lookup`, `Filter · ${esc(attr)}`, effc, "entity business rule / lookup filter"];
   });
 }
 // Build the Logic-table rows (declarative page rules → entity/lookup filters → process launch).
-// Logic carries what the engine MAPPED. Methods belong to `⚠ Imperative logic` only — one method, one row, in the
+// Business rules carry what the engine MAPPED. Methods belong to `⚠ Custom methods` only — one method, one row, in the
 // table that carries the port obligation and traces the trigger from the data.
-// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [behaviour, trigger, effect, target].
+// Own fn so renderDesignSpec stays under Sonar CC 15. Returns an array of [trigger, behaviour, effect, target].
 function buildLogicRows(cs) {
   const logic = [...pageRuleRows(cs), ...entityFilterRows(cs)];
   if ((cs.needsDecision || []).some((n) => n.kind === "process-launch")) {
     const pn = cs.needsDecision.find((n) => n.kind === "process-launch")?.item;
-    logic.push(["Run process", "Run process action", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
+    logic.push(["Run process action", "Run process", `launch ${esc(pn || "process")}`, pn ? "⚠ verify process name/binding" : "⚠ which process — resolve on-stand via `ProcessInModules` (section SysModule) → `VwSysProcess` by Id"]);
   }
   return logic;
 }
@@ -343,11 +379,11 @@ function renderLogicSection(cs) {
   const stubCount = (cs.handlerStubs || []).length;
   if (!logic.length && !stubCount) return [];
   const table = logic.length
-    ? ["| Behaviour | Trigger | Effect | Freedom target |", "| --- | --- | --- | --- |",
+    ? ["| Trigger | Behaviour | Effect | Freedom target |", "| --- | --- | --- | --- |",
       ...logic.map((row) => `| ${row.join(" | ")} |`)]
     : ["> No declarative business rules or lookup filters on this page."];
-  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Imperative logic** below.`] : [];
-  return ["#### Logic", ...table, ...pointer, ""];
+  const pointer = stubCount ? ["", `> ${stubCount} custom method(s) — see **⚠ Custom methods** below.`] : [];
+  return ["#### Business rules", ...table, ...pointer, ""];
 }
 
 // The "Add record" line: which mini page (folded / cyclic / not-folded), a verified full edit page, or unverified.
@@ -402,11 +438,13 @@ function listColumnLine(section) {
   if (section.listColumnSource === "entity-default") {
     return `- **List columns:** ⚠ ${rendered} — the Classic section declares NO list columns, so this is a single fallback column${why}, NOT the column set the Classic list was configured with — confirm which columns the Freedom list should show`;
   }
-  // ENG-95850 (D) — say WHERE a profile-sourced set came from. It is the set the list actually renders (which is why
-  // the engine takes it over the static declaration), and it is also profile data that can be scoped — the reader
-  // has to know which of the two they are confirming.
+  // ENG-95850 (D) — a profile-sourced set is the one the list actually renders (which is why the engine takes it
+  // over the static declaration). The bullet's job is just to SHOW that set: the columns are visible and editable,
+  // so a wrong one is something the user changes. The "a profile can be scoped — confirm this is the set every
+  // user should get" caveat (and clio's own profile note) is noise here; the actionable question survives as the
+  // `profile-sourced list column set` ⚠ Confirm decision. So render the columns plainly, without the note tail.
   if (section.listColumnSource === "profile") {
-    return `- **List columns:** ${rendered}${why} — read from the saved grid PROFILE the Classic list actually renders (Classic keeps each user's visible set as per-user list/profile data), NOT from the section's static declaration, which usually names fewer columns; a profile can be scoped, so confirm this is the set every user should get in Freedom`;
+    return `- **List columns:** ${rendered} — the Classic list shows these columns; confirm this set is kept in Freedom`;
   }
   return `- **List columns:** ${rendered}${why} — the Classic list shows these columns; confirm this set is kept in Freedom`;
 }
@@ -416,19 +454,6 @@ function listColumnLine(section) {
 // `Region | Element | Type | Source | Rule | Additional` table.
 // ONE table per function: each surface reads as its own shape, and no single function carries every branch.
 // The TYPE cell states the resolved `dataValueType` or says it is unresolved — never a guessed enum.
-function listColumnsTable(columns) {
-  if (!columns.length) return [];
-  const L = ["", "#### List columns (in order)", "| # | Column | Grid column | Source | Type |", "| --- | --- | --- | --- | --- |"];
-  columns.forEach((c, i) => {
-    const ref = c.ref ? ` → ${esc(c.ref)}` : "";
-    const type = c.dataValueType == null
-      ? `⚠ ${esc(c.classicType || "UNKNOWN")} — \`dataValueType\` unresolved`
-      : `${esc(c.classicType || "?")} (\`dataValueType\` ${c.dataValueType})${ref}`;
-    const src = c.isPath ? `PDS.${esc(c.root)} (from \`${esc(c.name)}\`)` : `PDS.${esc(c.root)}`;
-    L.push(`| ${i + 1} | ${esc(c.name)} | \`${esc(c.code)}\` | ${src} | ${type} |`);
-  });
-  return L;
-}
 // A filter's row is its PLACEMENT: which element, which container, at which index, on which column, as which control.
 function listFiltersTable(filters) {
   if (!filters.length) return [];
@@ -447,7 +472,19 @@ function listRowActionsTable(rowActions) {
   if (!rowActions?.length) return [];
   const L = ["", "#### Row actions", "| Action | Condition | Source package | Freedom target |", "| --- | --- | --- | --- |"];
   for (const ra of rowActions) {
-    const cond = ra.condition ? `\`${esc(ra.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
+    // The PROPERTY the condition binds travels with the method name (ENG-94714). `visible` and `enabled` are not
+    // interchangeable: porting an enablement condition as a visibility rule hides the control instead of greying
+    // it, and porting either as nothing ships an always-available action. The cell says which one it is.
+    // An item may bind BOTH properties (one method to `visible`, another to `enabled`), so every condition this
+    // run resolved is rendered rather than only the first — the same rule the command-bar table applies. The
+    // singular pair is the fallback for a row action resolved before `conditions` was plumbed through.
+    let cond = "⚠ none declared — confirm on-stand";
+    if (ra.conditions?.length) {
+      cond = ra.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property || "visible")}\``).join(" · ")
+        + " — carry as Freedom state";
+    } else if (ra.condition) {
+      cond = `\`${esc(ra.condition)}\` on \`${esc(ra.conditionProperty || "visible")}\` — carry as Freedom state`;
+    }
     const pkg = ra.sourcePackage ? esc(ra.sourcePackage) : "—";
     L.push(`| \`${esc(ra.name || "—")}\` | ${cond} | ${pkg} | ⚠ row action on \`${esc(ra.grid)}\` — control and placement NOT resolved here |`);
   }
@@ -456,6 +493,45 @@ function listRowActionsTable(rowActions) {
 }
 // The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
 // folded — the ⚠ Confirm item carries the question.
+// The condition cell of the command-bar table. Own fn so `listCommandBarTable` stays under Sonar CC 15: a bound
+// condition, several bound conditions, and a STATIC `visible: false` / `enabled: false` are three separate readings
+// of the same cell, and a button may carry both kinds at once.
+function commandBarConditionCell(a) {
+  let cond = "⚠ none declared — confirm on-stand";
+  if (a.conditions?.length) {
+    cond = a.conditions.map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ") + " — carry as Freedom state";
+  } else if (a.condition) {
+    cond = `\`${esc(a.condition)}\` — carry as Freedom state`;
+  }
+  // A STATIC `visible: false` / `enabled: false` is not a bound condition and never reached the cell above, so a
+  // button Classic hides by default read here as always-visible — and the built Freedom list showed it.
+  const statics = [
+    a.staticVisible === false ? "`visible: false` (static)" : null,
+    a.staticEnabled === false ? "`enabled: false` (static)" : null,
+  ].filter(Boolean);
+  if (!statics.length) return cond;
+  return (a.conditions?.length || a.condition ? cond + " · " : "") + statics.join(" · ") + " — Classic hides/disables it by default";
+}
+
+// The `Menu position` cell: the separator-delimited group, the submenu container, and the folded menu. Naming the
+// items (and the classic handler behind each) is the whole difference between a menu that reaches the plan and one
+// that vanishes with its handlers.
+function menuItemCell(m) {
+  // The item's OWN conditions, not only its caption and handler. `listMenuEntriesOf` records them on every folded
+  // MENU_ITEM, and until this line nothing rendered them: a section-declared item with `enabled:{bindTo}` reached
+  // the plan looking unconditional, which is the same always-enabled port the button-level cell exists to prevent.
+  const conds = (m.conditions || []).map((c) => `\`${esc(c.method)}\` on \`${esc(c.property)}\``).join(" · ");
+  return `\`${esc(m.caption || m.name)}\``
+    + (m.classicHandler ? ` → \`${esc(m.classicHandler)}\`` : "")
+    + (conds ? ` (${conds})` : "");
+}
+function commandBarPlacementCell(a) {
+  const menu = (a.menuItems || []).length
+    ? " · menu: " + a.menuItems.map(menuItemCell).join(", ")
+    : "";
+  return [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ") + menu;
+}
+
 function listCommandBarTable(actions) {
   if (!actions.length) return [];
   const L = ["", "#### Command-bar actions",
@@ -463,19 +539,18 @@ function listCommandBarTable(actions) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const a of actions) {
     // Same columns the Row actions table publishes: a name alone cannot build a button, and an action ported
-    // without its `Enabled` condition ships always-enabled. `Menu position` carries the separator-delimited
-    // group and the submenu container, which are the only record of the classic menu's shape.
+    // without its `Enabled` condition ships always-enabled.
     const cap = a.caption ? `\`${esc(a.caption)}\`` : "⚠ none read — confirm on-stand";
-    const cond = a.condition ? `\`${esc(a.condition)}\` — carry as Freedom state` : "⚠ none declared — confirm on-stand";
-    const place = [`group ${a.group ?? 0}`, a.parent ? `under \`${esc(a.parent)}\`` : null].filter(Boolean).join(" · ");
-    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${cond} | ${place}`
+    L.push(`| \`${esc(a.name)}\` | ${cap} | ${a.icon ? "`" + esc(a.icon) + "`" : "—"} | ${commandBarConditionCell(a)} | ${commandBarPlacementCell(a)}`
       + ` | ${a.package ? esc(a.package) : "—"} | \`${esc(a.source)}\` | list-page command bar — ⚠ container NOT resolved here |`);
   }
   return L;
 }
 function renderListLayoutTables(lcs) {
+  // ENG-96327 (134fe62) — the detailed "List columns (in order)" table is dropped from the human plan: the plain
+  // `- **List columns:**` line + the form Layout already carry it for the approver, and the columns still travel on
+  // `result.listChangeSet` for the builder. Quick filters / row actions / command bar still render as tables.
   return [
-    ...listColumnsTable(lcs.columns),
     ...listFiltersTable(lcs.quickFilters),
     ...listRowActionsTable(lcs.rowActions),
     ...listCommandBarTable(lcs.commandBarActions),
@@ -488,9 +563,8 @@ function renderListLayoutTables(lcs) {
 // `list-filter-attributes` ⚠ Confirm item, where it is gated rather than merely printed.)
 function renderListBuildNotes(lcs) {
   const L = [];
-  if (lcs.columnIdsAssignedByBuilder) {
-    L.push("", "> **Build note — column ids:** each grid column also needs a GUID `id`. The engine does not mint one (it has no stable source), so the builder assigns it per column.");
-  }
+  // ENG-96327 (134fe62) — the "column ids" build note is dropped from the human plan (builder detail; the fact
+  // stays on the ChangeSet as `columnIdsAssignedByBuilder`).
   if (lcs.quickFilterConfigCompletedByBuilder) {
     L.push("", "> **Build note — a quick-filter op is placement, not a finished component:** it carries the element name, its container and index, the filtered column and the control — the engine's resolvable facts. `crt.QuickFilter` also needs its own nested filter config and value binding, and it is `compositeOnly` with no published composite recipe, so complete it from that component's documentation (`get-component-info crt.QuickFilter`) rather than treating these `values` as the whole body.");
   }
@@ -498,8 +572,28 @@ function renderListBuildNotes(lcs) {
 }
 // The `### List page` block (section concerns: add-record, columns, quick filters, section actions, process).
 // Own fn so renderDesignSpec stays under Sonar CC 15. Returns the lines to push.
+// The ordering constraint belongs to the LIST page because that is what the migrator writes into: it cannot
+// run before the page exists. Own fn to keep renderListPageBlock under Sonar CC 15.
+// One accessor, so a malformed `items` reads as "none recorded" everywhere instead of throwing in one path
+// and counting a string's characters in another.
+const dashboardItems = (s) => (Array.isArray(s?.items) ? s.items : []);
+function dashboardsListNote(sd) {
+  if (sd?.resolved !== true || !sd.present) return [];
+  const d = dashboardDecisions(dashboardItems(sd));
+  const moving = d.packaged.length + d.standOnly.length;
+  return [`- **Dashboards:** ${moving} classic dashboard(s) \u2192 hand off to \`MigrateDashboardsProcess\` targeting THIS page's \`crt.Dashboards\` element. **LAST build step** \u2014 run it only after the list page exists and is confirmed. Do NOT rebuild the widgets by hand. Captions + the per-dashboard decisions: see **On-stand signals**.`];
+}
 function renderListPageBlock(result, section, opts = {}) {
   const L = ["### List page"];
+  // The LIST page's own verdict, first thing in the block (ENG-94714). It is stated HERE rather than in the plan's
+  // top banners because it is scoped: the record page above it may be perfectly approvable on the same run, and a
+  // banner at the top would read as a verdict on the whole plan. Everything below it still renders — a partial
+  // reading is evidence, and hiding it would leave the operator with a blocked page and no idea what was found.
+  if (result.listGate?.blocked) {
+    L.push("", "> ⛔ **The list page is NOT approvable from this run.** The section's own evidence is incomplete, so what follows is a PARTIAL reading of the Classic list — an element it shows may be missing below with nothing naming it. The record page above is unaffected and is judged on its own gate.");
+    for (const r of result.listGate.reasons) L.push(`> - ${esc(r)}`);
+    L.push("");
+  }
   // The plan is the document an operator APPROVES, so it must not present a full build spec for a page the run
   // deliberately does not build. Same treatment as the `Navigable section registered` row: state the decision, then
   // keep the contents as a record of what a later run — the one that adds the menu entry — would build.
@@ -511,12 +605,21 @@ function renderListPageBlock(result, section, opts = {}) {
   if (section) {
     L.push(listColumnLine(section));
     if (section.processLaunch) L.push(`- **Section process:** ⚠ launches ${(section.processNames || []).map(esc).join(", ") || "a process"} — wire as a list-page run-process action`);
+    // ENG-96327 — an EXPLICIT found/not signal for the section's command-bar actions. The `#### Command-bar actions`
+    // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
+    // only place the "none found" fact is stated (the `list-command-bar` ⚠ Confirm that used to carry it is now
+    // dropped from the human plan as noise). Always shown, so the approver sees found-or-not at a glance.
+    const cbaCount = (result.listChangeSet?.commandBarActions || []).length;
+    L.push(cbaCount
+      ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
+      : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
   // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
   const lcs = result.listChangeSet;
   // …and its own ⚠ Confirm section, from the SAME `needsDecision` mechanism the form page uses: a list-page decision
   // is an open question with an owner, not a note in prose.
+  L.push(...dashboardsListNote(result.signals?.dashboards));
   if (lcs) L.push(...renderListLayoutTables(lcs), ...renderListBuildNotes(lcs), ...renderConfirmWorklist(lcs));
   L.push("");
   return L;
@@ -568,7 +671,7 @@ function orderRegions(rows) {
   const regionRank = (r) => {
     if (r.startsWith("Side profile") || r === "Header") return 0;
     if (r.startsWith("Tab ")) return 1;
-    if (r === "Header / top") return 2;
+    if (r === HEADER_TOP_REGION) return 2;
     if (r === "Card actions") return 3;
     return 4;
   };
@@ -617,17 +720,21 @@ function childFormRecommendation(cs, fields, opts) {
 // field-count rule (childFormRecommendation → Mini vs Grid), and a top-area-template steer there both conflicts
 // with that (a mini page has no header area) and mis-fires on a flat child whose fields merely sit in a Header
 // container. This is the engine surfacing the header→template rule the same way `signals.dcm` surfaces the bar.
-function headerTemplateRecommendation(cs, opts) {
+function headerTemplateRecommendation(cs, opts, result) {
   if (opts.isMiniPage || opts.isChildPage || cs.headerLayout !== "wide") return [];
+  // ENG-96327 (134fe62) — when the object HAS a DCM case, the DCM progress-bar template banner is the SINGLE
+  // template steer; a second top-area recommendation here only competes with it. Defer to the DCM banner.
+  const dcmPresent = result?.signals?.dcm?.resolved === true && !!result.signals.dcm.present;
+  if (dcmPresent) return [];
   return [`> **Template recommendation — header elements present:** the Classic page has a populated Header block, so build this form on the **top-area template \`PageWithTopAreaAndTabsFreedomTemplate\`** ("Tabbed page with area on top") and place the header elements in **\`TopAreaProfileContainer\`** — not the narrow left profile. If the object ALSO has a DCM case, prefer the progress-bar template and place the header elements per \`creatio-ui-guidelines\`.`, ""];
 }
 
 // Decision kinds that ALREADY have a section of their own — Layout, Child pages, or, for `method`, the
-// ⚠ Imperative logic worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
+// ⚠ Custom methods worklist — so re-listing them in the "⚠ Confirm" worklist (spec) or the "⚠ Confirm worklist"
 // checklist group (below) would double-report them. `method` belongs here for the WORKLIST, not because a method
 // appears in the Logic table: it does not. Removing it from this Set puts every method in two worklists at once.
 // ONE const for both readers: they were two identical literals that had to be edited in lockstep to stay honest.
-// The ⚠ Imperative members worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
+// The ⚠ Other declared logic worklist — declared on this page, behaviour living OUTSIDE the page body. Same standing as
 // methods: each is a port unit that must end up ported / dropped / blocked, not a question with an on-stand answer.
 // `attribute-dependency` is deliberately absent — it is the trigger of a method that already has its own row.
 // What each kind IS, stated ONCE above the table instead of repeated verbatim on every row of that kind.
@@ -649,15 +756,110 @@ const ATTRIBUTE_DEPENDENCY_NOTE = "**attribute-dependency** — column-change tr
 // attribute is its own member — dropping its row would report the method while the attribute went untracked.
 const MEMBER_WORKLIST_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency"]);
 const SHOWN_ELSEWHERE = new Set(["process-launch", "standard-feature", "widget", "card-action", "method", "detail-editpage",
-  // Imperative MEMBERS have their own worklist (⚠ Imperative members), for the same reason methods do: they are work
+  // Imperative MEMBERS have their own worklist (⚠ Other declared logic), for the same reason methods do: they are work
   // to port, not questions to answer, and a flat bullet list cannot grade an aspect the way a table cell can.
   ...IMPERATIVE_MEMBER_KINDS,
   // `attribute-dependency` is normally the trigger of a handler method, and that method already has an ⚠ Imperative
-  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Imperative members
+  // logic row carrying it. Orphan dependencies whose handler row is missing are injected into ⚠ Other declared logic
   // by renderImperativeMembers(), so they stay visible without double-listing normal method triggers.
   "attribute-dependency"]);
+// ENG-96327 — WHO the ⚠ Confirm block is for. It is read by the HUMAN approver, but a caption/label/hint to fetch
+// on-stand, a control type to look up, a field's density/truncation, an image's placement are pure AGENT work — the
+// agent resolves them on-stand and nothing about the answer is the approver's call. Keep them OUT of the human list,
+// which is left to the decisions that genuinely need a person (map-or-drop, layout shape, a Classic side effect, an
+// add mechanism, …). A DENYLIST, not an allowlist: a new decision kind stays VISIBLE by default (the safe direction)
+// and is hidden only when it is added here as demonstrably cosmetic.
+const COSMETIC_CONFIRM_KINDS = new Set([
+  "element-caption", "group-caption", "detail-caption", "field-labels", "field-hint", "field-control",
+  "layout-density", "layout-truncated", "image-column", "image-placement",
+]);
+// ENG-96327 — kinds whose decision is ALREADY printed in a TABLE the plan renders, so repeating them in the ⚠ Confirm
+// list makes the approver read the same question twice: `rule-condition` / `entity-filter` are each a row in the
+// **Business rules** table (`⚠ condition unread — parse gap` / `⚠ dynamic — resolve value`).
+// NB `detail-add-mechanism` is dropped ONLY when its sole mode is an inline-editable grid (`editableGridOnly`, set in
+// migrate.mjs) — that row just restates the Layout table's `⚠ INLINE-EDITABLE` note (columns included). A detail with
+// a REAL add mechanism (add-disabled / custom grid action / lookup / service verify — guidance the Layout note does
+// not carry) keeps its ⚠ Confirm row. Filtered per-decision in `kept` below, not by a whole-kind denylist.
+const SHOWN_IN_TABLE_CONFIRM_KINDS = new Set(["rule-condition", "entity-filter"]);
+// Decisions ALREADY stated by a BANNER above the ⚠ Confirm list, so a confirm row only re-asks "sure?" of a choice
+// the plan just made. Both fire off a signal the banner also reads, so they are strict duplicates:
+//   `layout-type` — a WIDE Classic Header fires the header **Template recommendation** banner (headerLayout === "wide"),
+//     which names the exact top-area template + `TopAreaProfileContainer` ("not the narrow left profile"); the column
+//     grid is also in the Layout table (HeaderContainer). The confirm added nothing but "confirm you use a header region".
+//   `typed-page` — restated verbatim by the ⚠ Typed entity banner AND separately gated by the "Per-type page routing"
+//     Plan-vs-Done checklist row (with an on-stand verify), so the routing is both visible and enforced without it.
+const SHOWN_IN_BANNER_CONFIRM_KINDS = new Set(["layout-type", "typed-page"]);
+// NB there is deliberately NO BUILDER_ONLY denylist on this engine: builder/analyst decisions (visibility-rule,
+// rule-target-missing, unmapped-component, parse-gap, registry-composite-only, base-tab-placement, lookup-value)
+// are KEPT visible in ⚠ Confirm. Without a `--units` machine channel, `plan.md`'s ⚠ Confirm IS the build agent's
+// worklist (SKILL step 7), so hiding a real decision here would lose it — the only kinds dropped are genuine noise
+// whose information the plan already carries elsewhere (COSMETIC / SHOWN_IN_TABLE / SHOWN_IN_BANNER / LIST_PAGE_NOISE).
+// ENG-96327 — LIST-PAGE decisions the approver does not act on, each already covered elsewhere in the List-page
+// block: `list-columns` (profile caveat on the `- **List columns:**` line), `list-column-path` (a builder detail),
+// `list-command-bar` / `list-add-routing` (stated in the List-page bullets), and `list-row-action` / `list-process`
+// (BINARY — the Row-actions table / `- **Section process:**` bullet state found-or-not).
+const LIST_PAGE_NOISE_CONFIRM_KINDS = new Set(["list-columns", "list-column-path", "list-command-bar", "list-add-routing",
+  "list-row-action", "list-process"]);
+
+// The two per-field VISIBILITY confirms (`visibility-rule` = a field's own bound `visible`; `ancestor-visibility` =
+// the field's container has a bound/hidden `visible`) each state a bound-visibility fact that lives NOWHERE else in
+// the plan (not in Business rules — those are declarative `BusinessRule_*`; not in Custom methods / Other declared
+// logic — those carry body members). So they must not be dropped — but repeating one container's fact once per
+// contained field is pure noise. These fold each kind into ONE summary row listing the fields. Module scope: Sonar
+// counts a nested function's branching against its encloser, and these close over none of renderConfirmWorklist's locals.
+function visibilityRuleRow(fields) {
+  const n = fields.length, list = fields.join(", ");
+  return `- **[visibility-rule]** ${list} — ${n === 1 ? "this field's" : "these fields'"} visibility is dynamic (bound/rule/feature) in classic — confirm ${n === 1 ? "the" : "each"} Freedom visibility rule (static mapping shows ${n === 1 ? "it" : "them"})`;
+}
+function ancestorVisibilityRow(g) {
+  const n = g.fields.length, list = g.fields.join(", "), c = g.container, sit = n === 1 ? "sits" : "sit";
+  const mapped = n === 1 ? "the field is" : "the fields are";
+  return g.state === "hidden"
+    ? `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is hidden (static) — ${mapped} mapped hidden too`
+    : `- **[ancestor-visibility]** ${c} — ${list} ${sit} inside container '${c}' which is conditionally shown (dynamic/rule) in classic — wire the container's visibility condition onto the Freedom group instead of leaving it unconditionally visible`;
+}
+// `rule-target-missing` = a business rule names a target with no element on the page. Each row states the same fact
+// and the same verify-or-drop action, differing only in the attribute name — repeating the paragraph per target is
+// noise. Fold into ONE summary row listing the targets (the fact lives nowhere else, so it is folded, not dropped).
+function ruleTargetMissingRow(items) {
+  const n = items.length, list = items.join(", ");
+  return n === 1
+    ? `- **[rule-target-missing]** ${list} — a business rule targets it but the page has no element for it — neither a mapped field nor a tab/group/container. It is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`
+    : `- **[rule-target-missing]** ${list} — business rules target these but the page has no element for them — neither a mapped field nor a tab/group/container. Each is likely an entity-only column or a stale binding; verify the Freedom target provides the element (or the rule is obsolete).`;
+}
+// The ancestor-visibility group key — one folded row per (container, state).
+const ancKey = (d) => `anc|${d.container || ""}|${d.ancestorState || "dynamic"}`;
+// Fold the summary kinds (one row each: visibility-rule, rule-target-missing folded across all items; ancestor-visibility
+// grouped per container+state), and map every other kept decision 1:1 — order preserved, a folded row landing at its
+// first member's position. Table-driven so a new folded kind is one SUMMARY_ROW entry, not another branch (Sonar S3776).
+function foldedConfirmRows(kept) {
+  const itemsOf = (kind) => kept.filter((d) => d.kind === kind).map((d) => esc(d.item));
+  // kind -> { key, build } : a folded row built once from ALL its items (key dedupes so it emits at first occurrence).
+  const SUMMARY_ROW = {
+    "visibility-rule": { key: () => "vis", build: () => visibilityRuleRow(itemsOf("visibility-rule")) },
+    "rule-target-missing": { key: () => "rtm", build: () => ruleTargetMissingRow(itemsOf("rule-target-missing")) },
+    "ancestor-visibility": { key: ancKey, build: (d) => ancestorVisibilityRow(ancGroupOf(kept, d)) },
+  };
+  const emitted = new Set();
+  const plainRow = (d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` + (d.describedIn ? ` · **described in** ${describedInText(d)}` : "");
+  const rows = [];
+  for (const d of kept) {
+    const fold = SUMMARY_ROW[d.kind];
+    if (!fold) { rows.push(plainRow(d)); continue; }
+    const key = fold.key(d);
+    if (!emitted.has(key)) { emitted.add(key); rows.push(fold.build(d)); }
+  }
+  return rows;
+}
+// The (container, state) group a given ancestor-visibility decision folds into, with all sibling fields collected.
+function ancGroupOf(kept, d) {
+  const fields = kept.filter((x) => x.kind === "ancestor-visibility" && ancKey(x) === ancKey(d)).map((x) => esc(x.item));
+  return { container: esc(d.container || ""), state: d.ancestorState || "dynamic", fields };
+}
+
 // The "⚠ Confirm before I build" worklist — the GENUINE open decisions only (kinds carried by Layout, Child-pages
-// or the ⚠ Imperative logic worklist are not re-listed), plus the C2 lookup-GUID prompt. Returns the lines.
+// or the ⚠ Custom methods worklist are not re-listed; cosmetic / shown-in-a-table / builder-only / list-noise kinds
+// are dropped by the denylists above), plus the C2 lookup-GUID prompt. Returns the lines.
 function renderConfirmWorklist(cs) {
   // `reason` is escaped with `esc` (not `strip`): the mapper interpolates raw stand-derived tokens into it
   // (container/field names, captions, bound hints), all attacker-chosen on a hostile stand. `strip` alone leaves
@@ -665,17 +867,49 @@ function renderConfirmWorklist(cs) {
   // engine-authored parts of every reason are plain prose (audited). Keep new reasons that way (put any code
   // identifier or angle-bracketed token in `item`, which is likewise `esc`d). Removals are NOT a worklist item.
   // Every card-carrying kind is in SHOWN_ELSEWHERE, so what reaches here needs an ON-STAND answer, not a 5.1 card:
-  // no `described in` and no card tally — those belong to the ⚠ Imperative members / ⚠ Imperative logic worklists.
+  // no `described in` and no card tally — those belong to the ⚠ Other declared logic / ⚠ Custom methods worklists.
   const nd = (cs.needsDecision || []).filter((n) => !SHOWN_ELSEWHERE.has(n.kind));
-  const confirm = nd.map((d) => `- **[${esc(d.kind)}]** ${esc(d.item)} — ${esc(d.reason)}` +
-    (d.describedIn ? ` · **described in** ${describedInText(d)}` : ""));
-  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec
-  // shows "required (conditional)" but the raw GUID is unreadable. Prompt resolving them to names on-stand.
+  // ENG-96327 — the RENDERED list is the shrink, but ONLY of what is genuinely NOISE for THIS engine: cosmetic kinds
+  // the agent resolves on-stand (COSMETIC), decisions already printed in a table (SHOWN_IN_TABLE), decisions already
+  // stated by a banner above the list (SHOWN_IN_BANNER), and list-page decisions already stated by a bullet/table
+  // (LIST_PAGE_NOISE). Builder/analyst decisions are NOT dropped: this
+  // engine has no `--units` machine channel, so `plan.md`'s ⚠ Confirm IS the build agent's worklist (SKILL step 7) —
+  // hiding a real decision here would lose it. A DENYLIST: a new kind stays visible by default.
+  const kept = nd.filter((d) => !COSMETIC_CONFIRM_KINDS.has(d.kind) && !SHOWN_IN_TABLE_CONFIRM_KINDS.has(d.kind)
+    && !SHOWN_IN_BANNER_CONFIRM_KINDS.has(d.kind) && !LIST_PAGE_NOISE_CONFIRM_KINDS.has(d.kind)
+    // A detail whose ONLY add-mode is an inline-editable grid just restates the Layout table's `⚠ INLINE-EDITABLE`
+    // note (columns included) — drop it; a detail with a real add mechanism keeps its row (guidance has no other home).
+    && !(d.kind === "detail-add-mechanism" && d.editableGridOnly));
+  const confirm = foldedConfirmRows(kept);
+  // C2 — business-rule conditions often compare against lookup-record GUIDs (Stage/Source values); the spec shows
+  // "required (conditional)" but the raw GUID is unreadable. The build agent resolves it on-stand, and with no
+  // `--units` channel this prompt is how it reaches the agent — so it stays in the worklist.
   const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   if (GUID.test(JSON.stringify(cs.pageBusinessRules || [])) || GUID.test(JSON.stringify(cs.entityBusinessRules || [])))
     confirm.push("- **[lookup-value]** business-rule conditions compare against lookup-record **GUIDs** (e.g. Stage/Source values) — resolve each GUID to its display name on-stand before building, so the rule reads correctly.");
   if (!confirm.length) return [];
   return [`#### ⚠ Confirm before I build (${confirm.length})`, ...confirm, ""];
+}
+
+// The form-page Layout block — heading + the one Layout table (rows grouped by region, reading order) + the
+// cross-datasource `↳ linked` recipe printed once. Extracted from renderDesignSpec so its region loops don't
+// count against that function's cognitive complexity (Sonar S3776); skipped entirely in `logicOnly` mode.
+function renderFormLayoutBlock(entity, opts, order, byRegion, cs) {
+  const out = [
+    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
+    "#### Layout",
+    "| Region | Element | Type | Source | Rule | Additional |",
+    "| --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const region of order) {
+    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
+    for (const it of items) out.push(`| ${region} | ${it.cells.join(" | ")} |`);
+  }
+  out.push("");
+  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
+    out.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
+  }
+  return out;
 }
 
 export function renderDesignSpec(result, opts = {}) {
@@ -709,7 +943,8 @@ export function renderDesignSpec(result, opts = {}) {
     ...rowsForFields(fields, regionOf),
     ...rowsForDetails(cs.details, tabRegion),
     ...rowsForFeatures(cs.standardFeatures, tabRegion),
-    ...rowsForWidgets(cs.widgets),
+    ...rowsForWidgets(cs.widgets, cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present)),
+    ...rowsForCardWidgets(cs.cardWidgets, regionOf),
     ...rowsForCardActions(cs.cardActions, result, opts),
     ...rowsForImages([...(cs.images || []), ...fieldImages], regionOf),
     ...rowsForTableElements(cs.tableElements, regionOf),
@@ -745,22 +980,10 @@ export function renderDesignSpec(result, opts = {}) {
   // A mini page's form section is titled "Mini page (quick-add)" — NOT "<entity> form page" — so it can't be
   // mistaken for the record page's form section (the two rendered under the SAME "<entity> form page" heading,
   // which read as a duplicated block for the same page).
-  L.push(
-    opts.isMiniPage ? `### Mini page (quick-add) — \`${entity}\`` : `### ${entity} form page`,
-    "#### Layout",
-    "| Region | Element | Type | Source | Rule | Additional |",
-    "| --- | --- | --- | --- | --- | --- |",
-  );
-  for (const region of order) {
-    const items = byRegion.get(region).sort((a, b) => a.sort - b.sort || a.i - b.i);
-    for (const it of items) L.push(`| ${region} | ${it.cells.join(" | ")} |`);
-  }
-  L.push("");
-  // Cross-datasource recipe — printed ONCE for all fields marked `↳ linked` above, instead of repeating the same
-  // paragraph in every linked field's Additional cell.
-  if ((cs.viewConfigDiff || []).some((o) => isField(o) && o.values?.linkedValue)) {
-    L.push("> **`↳ linked` fields (read-only, cross-datasource):** the bound column is on a RELATED object, not this entity. In Freedom show each natively — add the related object's column through the lookup on this page and bind the input to `<Lookup>.<column>` READ-ONLY. Do NOT rebuild it as a plain entity field; wire a manual on-change handler ONLY if the value must be STORED; do NOT drop it (dropping collapses an island to a lone field).", "");
-  }
+  // `logicOnly` (ENG-96327) — render JUST the behaviour (Business rules / ⚠ Custom methods / ⚠ Other declared logic
+  // / ⚠ Confirm), NOT the form-page Layout. Used for a formless INLINE-GRID child: it has no form page, so a Layout
+  // table (empty, or listing grid-only bits) would misdescribe it — its logic IS the deliverable to port.
+  if (!opts.logicOnly) L.push(...renderFormLayoutBlock(entity, opts, order, byRegion, cs));
 
   L.push(...renderLogicSection(cs));
 
@@ -768,7 +991,7 @@ export function renderDesignSpec(result, opts = {}) {
   // reconfigured (hid / moved). The parallel-analog build does NOT re-create base fields, so these are CONCRETE
   // changes to APPLY onto the template's existing field — a build instruction, not a ⚠ decision to confirm.
   const bfo = cs.baseFieldOverrides || [];
-  if (bfo.length) {
+  if (bfo.length && !opts.logicOnly) {
     L.push(
       "#### Base-field overrides (apply onto the template's fields)",
       `> These base fields ship with the Freedom template; the client schema reconfigured them. APPLY each change onto the existing base field — do NOT re-create the field, and do NOT ship the bare template default.`,
@@ -780,11 +1003,11 @@ export function renderDesignSpec(result, opts = {}) {
   }
 
   // ---- The rest of the page, in render order, in ONE push (S7778) ----
-  //  • ⚠ Imperative logic — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
+  //  • ⚠ Custom methods — the METHOD worklist, and a BINDING one. Directly under Logic: the two are one subject
   //    split in two, what the engine mapped and then what it could not. Methods stay out of the ⚠ Confirm list
   //    (that one holds open questions needing an on-stand answer); this is where each method gets its ported /
   //    dropped / blocked mark, with the evidence the engine read from the body.
-  //  • ⚠ Imperative members — the same worklist contract for the NON-method imperative members. Beside the method
+  //  • ⚠ Other declared logic — the same worklist contract for the NON-method imperative members. Beside the method
   //    worklist because they are the same kind of thing: declared here, defined elsewhere, each a port unit.
   //    These three worklists together are "the ⚠ worklist" the SKILL's rules refer to.
   //  • child-page lighter-shell recommendation (child pages only), then the ⚠ Confirm worklist — GENUINE open
@@ -793,8 +1016,13 @@ export function renderDesignSpec(result, opts = {}) {
   L.push(
     ...renderImperativeLogic(cs),
     ...renderImperativeMembers(cs),
-    ...headerTemplateRecommendation(cs, opts), ...childFormRecommendation(cs, fields, opts), ...renderConfirmWorklist(cs),
-    ...renderMemberLedger(result.coverage),
+    // Template recommendations are FORM-PAGE framing (which template to build the form on) — dropped in `logicOnly`,
+    // where there is no form. The ⚠ Confirm worklist stays: an inline grid still has decisions to port.
+    ...(opts.logicOnly ? [] : [...headerTemplateRecommendation(cs, opts, result), ...childFormRecommendation(cs, fields, opts)]), ...renderConfirmWorklist(cs),
+    // ENG-96327 (e00abfa) — the Member ledger is dense per-kind coverage accounting, kept on the standalone `--spec`
+    // surface (QA / the build agent) but OUT of the embedded plan (`embedded`) a human approves. The coverage GATE is
+    // unaffected (computed in migrate.mjs) and any `unaccounted` gap still fires the ⛔ COVERAGE INCOMPLETE banner.
+    ...(opts.embedded ? [] : renderMemberLedger(result.coverage)),
   );
 
 
@@ -844,7 +1072,7 @@ function triggerText(t) {
 // type from prose instead of from the engine's own output. `attribute-*` joins them for the same reason: the
 // declaration is here, the behaviour it drives is not. Lives here (not in migrate.mjs) because both the renderer and
 // the handoff digest key off it, and migrate.mjs already imports this module.
-// DERIVED, not re-spelled: every kind the ⚠ Imperative members worklist renders must also be requested in the
+// DERIVED, not re-spelled: every kind the ⚠ Other declared logic worklist renders must also be requested in the
 // step-5.1 handoff digest. Hand-keeping a second identical list means a kind added to `MEMBER_KIND_NOTE` reaches the
 // table and prints a `⚠ not described` cell that no run can ever fill, because the digest never asked for it.
 export const HANDOFF_MEMBER_KINDS = MEMBER_WORKLIST_KINDS;
@@ -861,7 +1089,11 @@ function describedInText(h) {
   // ac)` and render `? AC-1`, a citation naming no card the operator can open, while the ⚠ that exists for that
   // row went quiet. `describedInOf` (migrate.mjs) no longer produces one; this leg refuses it too, so a plan
   // rendered from an older `behaviour-index.json` reads honestly rather than citing a question mark.
-  if (!d || (!d.card && !d.bodyCard)) return "⚠ not described";
+  // No card to cite. A row is "described in plain language" iff BOTH prose cells are filled — the SAME `&&` rule
+  // `hasPlainLanguage` uses for the "could not describe N of M" banner, so the Described-in column, the banner count
+  // and the per-cell `⚠ not described` all agree on one row (review — Rita/m-dymytrova). Both filled → say so instead
+  // of the self-contradicting `⚠ not described` beside two filled cells (review — kbondarenko); one or none → ⚠.
+  if (!d || (!d.card && !d.bodyCard)) return (d?.whatItDoes && d?.useCase) ? "plain-language only" : "⚠ not described";
   const cite = (card, ac) => {
     const acText = (ac || []).length ? ` ${ac.map(esc).join(", ")}` : "";
     return esc(card || "?") + acText;
@@ -1063,7 +1295,34 @@ function foldByCaller(stubs) {
   return { ordered, folded: parentOf.size };
 }
 
-// The ⚠ Imperative members worklist. Mirrors ⚠ Imperative logic: a table of port units, with each row's unresolved
+// ENG-96534 — the two plain-language columns the human plan shows for a logic row, in place of the mechanical
+// Trigger / Body does / Reads → writes: WHAT the item does and a step-by-step USE CASE. Both are authored on the
+// behaviour card by the step-5.1 analysis and carried per row in the behaviour index (`whatItDoes` from the card's
+// "What it is"; `useCase` a non-technical walkthrough the analyst writes). No card yet → the same `⚠ not described`
+// marker the `Described in` column uses, so a blank can never read as "nothing to do". `esc` (via `strip`) folds any
+// newline the walkthrough contains into a space, so a multi-step narrative stays in one cell.
+const describedField = (x, key) => {
+  const t = x.describedIn?.[key];
+  return typeof t === "string" && t.trim() ? esc(t) : "⚠ not described";
+};
+const whatItDoesText = (x) => describedField(x, "whatItDoes");
+const useCaseText = (x) => describedField(x, "useCase");
+// ENG-96534 (Rita + Kravchuk review) — a row is "described" for the warning banner iff BOTH plain-language cells
+// carry prose, because both render `⚠ not described` INDEPENDENTLY: a row with one filled and one empty still shows a
+// `⚠ not described` cell, so it must count as undescribed or the banner and the cells disagree. `&&`, not `||`.
+const hasPlainLanguage = (x) => {
+  const t = (v) => typeof v === "string" && v.trim();
+  return !!(t(x.describedIn?.whatItDoes) && t(x.describedIn?.useCase));
+};
+
+// ENG-96534 — the columns are plain-language for the human approver: What the item does + Use case (from the
+// behaviour card) replace the mechanical Trigger / Body does / Reads → writes.
+const IMPERATIVE_LOGIC_TABLE_HEADER = [
+  "| Method | Source | What the item does | Use case | Freedom target | Described in |",
+  "| --- | --- | --- | --- | --- | --- |",
+];
+
+// The ⚠ Other declared logic worklist. Mirrors ⚠ Custom methods: a table of port units, with each row's unresolved
 // aspect stated IN ITS OWN CELL rather than escalated to ⚠ Confirm — a bullet list can only say "this row is open",
 // it cannot say "we know what it is, we do not know whether the template already provides it".
 function renderImperativeMembers(cs) {
@@ -1071,19 +1330,21 @@ function renderImperativeMembers(cs) {
   const rows = rawRows
     .sort((a, b) => order.get(a.kind) - order.get(b.kind) || String(a.item).localeCompare(String(b.item)));
   if (!rows.length) return [];
-  const described = rows.filter((d) => d.describedIn).length;
-  const L = [`#### ⚠ Imperative members — account for EVERY row (${rows.length})`, "",
-    `> ${described} of ${rows.length} carry a behaviour card` +
-    (described < rows.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), "",
-    "> Each row is declared on this page, but its behaviour lives OUTSIDE the page body. Mark each **ported** (naming",
-    "> the Freedom artifact you built), **dropped** (with the reason) or **blocked** — the same standard as a method row.",
-    "> **Described in** names the behaviour card and acceptance criteria a step-5.1 run established: port against those,",
-    "> not against the member's name. `⚠ not described` means no run has covered it yet.", ""];
+  const described = rows.filter(hasPlainLanguage).length;
+  const undescribed = rows.length - described;
+  // ENG-96327 — warn ONLY when the analysis could not explain some members (non-blocking, parallel follow-up; each
+  // marked `⚠ not described` below), and drop the worklist-mechanics preamble. The per-kind note below stays — it
+  // says what each member KIND is, which is not worklist mechanics.
+  const L = [`#### ⚠ Other declared logic — account for EVERY row (${rows.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${rows.length} member(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
   // One explanation per kind PRESENT, above the table — a per-row reason repeats the same paragraph on every row.
   for (const k of order.keys()) if (rows.some((r) => r.kind === k)) L.push("> " + (MEMBER_KIND_NOTE[k] || ATTRIBUTE_DEPENDENCY_NOTE));
-  L.push("", "| Member | Kind | Detail | Described in |", "| --- | --- | --- | --- |");
+  // ENG-96534 — same plain-language columns as ⚠ Custom methods (What the item does + Use case, from the behaviour
+  // card). The mechanical `Detail` column is dropped: the human columns + the per-kind note carry the meaning.
+  L.push("", "| Member | Kind | What the item does | Use case | Described in |", "| --- | --- | --- | --- | --- |");
   for (const d of rows)
-    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${d.detail ? esc(d.detail) : "—"} | ${describedInText(d)} |`);
+    L.push(`| ${esc(d.item)} | ${esc(d.kind)} | ${whatItDoesText(d)} | ${useCaseText(d)} | ${describedInText(d)} |`);
   L.push("");
   return L;
 }
@@ -1091,40 +1352,24 @@ function renderImperativeMembers(cs) {
 function renderImperativeLogic(cs) {
   const stubs = cs.handlerStubs || [];
   if (!stubs.length) return [];
-  // Counted, not just listed: how many rows still have no trigger, and how many carry a behaviour card. The
-  // pair is the honest state of the worklist — "51 unresolved, 0 described" and "51 unresolved, 51 described" are
-  // very different plans, and the row-by-row table alone made them look identical.
-  // The count is of EMPTY cells, so it must not claim "no TRACED trigger": a row the behaviour run answered leaves
-  // this count while nothing was traced for it. Those are counted on their own, next to it.
-  const unresolved = stubs.filter((h) => !(h.triggers || []).length).length;
-  const reported = stubs.filter((h) => (h.triggers || []).some((t) => t.kind === "reported")).length;
-  // A row whose only trigger came from the inverse call graph is NOT the same as one bound to a declaration: we know
-  // what calls it, not what starts it. Counted apart so the inversion cannot read as work that no longer needs doing.
-  const internalOnly = stubs.filter((h) => (h.triggers || []).length && h.triggers.every((t) => t.kind === "internal" && !t.rootTrigger && !t.lifecycle)).length;
-  const described = stubs.filter((h) => h.describedIn && (h.describedIn.card || h.describedIn.bodyCard || (h.describedIn.ac || []).length)).length;
-  const { ordered, folded } = foldByCaller(stubs);
-  // Rows and PORT UNITS are different numbers once helpers are folded, and the difference is the useful one: 63 rows
-  // that are really 39 things to build reads very differently from 63 independent handlers.
-  const units = stubs.length - folded;
-  const L = [`#### ⚠ Imperative logic — account for EVERY row (${stubs.length})`, "",
-    `> ${unresolved} row(s) have no trigger yet` +
-    (reported ? ` · ${reported} answered by the behaviour run` : "") +
-    (internalOnly ? ` · ${internalOnly} know only their calling method (what starts the chain is still open)` : "") +
-    (folded ? ` · ${folded} are helpers folded under their caller (\`↳\`) → **${units} port unit(s)**` : "") +
-    ` · ${described} of ${stubs.length} carry a behaviour card` +
-    (described < stubs.length ? " — run step 5.1 for the rest before this plan is approvable." : "."), ""];
-  L.push(...IMPERATIVE_LOGIC_PREAMBLE);
-  // A call to another row of this table is an INTERNAL call — the fold column already carries it, so it must not
-  // also print as an unclassified framework call.
-  const siblings = new Set(stubs.map((h) => h.sourceMethod));
+  // ENG-96534 — a row is "described" iff BOTH plain-language cells carry prose (see hasPlainLanguage). The
+  // agent-facing worklist statistics (unresolved / traced-only / helpers folded → port units) are dropped from the
+  // human plan; the `↳` fold still shows per-row in the table, and the trigger DATA the mapper traced still rides
+  // `--units` for the builder.
+  const described = stubs.filter(hasPlainLanguage).length;
+  const undescribed = stubs.length - described;
+  const { ordered } = foldByCaller(stubs);
+  // ENG-96327 — the plan opens with a WARNING only when the analysis could not explain some rows (separate, parallel
+  // follow-up — NOT a blocker); each such row is marked `⚠ not described` in the table.
+  const L = [`#### ⚠ Custom methods — account for EVERY row (${stubs.length})`, ""];
+  if (undescribed > 0)
+    L.push(`> ⚠ The behaviour analysis could not identify and describe the logic of ${undescribed} of ${stubs.length} method(s) — not a blocker for approval; hand them to separate, parallel follow-up (each is marked \`⚠ not described\` below).`, "");
+  L.push(...IMPERATIVE_LOGIC_TABLE_HEADER);
   for (const { stub: h, depth, parent } of ordered) {
-    const triggers = h.triggers || [];
-    const trigger = triggers.length ? triggers.map(triggerText).join(" / ") : "⚠ unresolved";
     // The marker carries the nesting; the name stays intact so a search for the method still finds its row.
     const name = parent ? `${"↳".repeat(Math.min(depth, 3))} ${esc(h.sourceMethod)}` : esc(h.sourceMethod);
     const target = parent ? `port with \`${esc(parent)}\`` : targetText(h);
-    const cells = [name, sourceText(h), trigger, bodyDoesText(h, siblings), readsWritesText(h.evidence),
-      target, describedInText(h)];
+    const cells = [name, sourceText(h), whatItDoesText(h), useCaseText(h), target, describedInText(h)];
     L.push(`| ${cells.join(" | ")} |`);
   }
   L.push("");
@@ -1313,7 +1558,7 @@ function renderPlanBanners(result, opts) {
   const placementBlockers = opts.placementBlockers || [];
   if (placementBlockers.length) P.push(`> ⛔ **PLAN INCOMPLETE — placement not settled:** the target app cannot be shown to host this section yet. ${placementBlockers.map((b) => "\n> - " + b).join("")}\n>\n> Record the answers in \`manifest.placement\` (\`targetPackageEditable\` · \`application\` · \`primaryPackage\` · \`targetPackageInApplication\` · \`sectionHost\`), then re-run \`migrate.mjs --plan\`. Collect them read-only: package editability from \`list-packages\` + \`SysPackage.InstallType\` + per-layer \`isClientEditable\`; the app from \`get-app-info\` / \`find-app\`; the primary package from \`get-app-info\` (an app that errors with *"Primary package not found in response."* HAS none — that is a resolved \`null\`, not a failed check); composition from \`odata-read SysPackageInInstalledApp\` filtered by \`SysPackage/Id\`. **\`create-app-section\` takes no package parameter** — it writes to the app's primary package, so \`existing-app\` is legal only when that primary IS the target package and is editable.`, "");
   const signalsMissing = opts.signalsMissing || [];
-  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
+  if (signalsMissing.length) P.push(`> ⛔ **PLAN INCOMPLETE — on-stand signals not resolved:** ${signalsMissing.map((k) => "`" + k + "`").join(", ")}. Run the checks and add answers to \`manifest.signals\` (each \`{ "resolved": true, "present": <bool>, … }\`), then re-run \`migrate.mjs --plan\`. **FIRST resolve the section's \`SysModule.Id\`** (the prerequisite for processes+printables — without it those checks CANNOT run, and a failed check is NOT a "none" answer): \`odata-read SysModule\` \`filters {any:[{field:"Code",op:"contains",value:"<Name>"},{field:"Caption",op:"contains",value:"<Name>"}]}\`, select \`["Id","Caption","Code"]\` — match your section (do NOT filter \`SectionSchemaUId eq <guid>\`: a UId column, it FAILS with Edm.Guid-vs-String; the module \`Code\` is usually the base entity name, e.g. section \`Applicant1Section\` → module Code \`Applicant\`). Then: **dcm** = \`SysSchema ManagerName='DcmSchemaManager'\` for the entity/family; **processes** = \`odata-read ProcessInModules\` with **\`filters\`** (NOT \`filter\`) \`{all:[{field:"SysModule/Id",op:"eq",value:<sysModuleId>}]}\` (a lookup → filter via the \`SysModule/Id\` nav, never a \`SysModuleId\` field), select \`["SysSchemaUId","Position"]\` — then resolve each \`SysSchemaUId\` to the process name via \`odata-read VwSysProcess\` \`filters {all:[{field:"Id",op:"eq",value:<SysSchemaUId>}]}\`, select \`["Caption","Name"]\` (a process's \`Id\` == its \`UId\`, so filter by **\`Id\`** — \`UId eq <guid>\` FAILS with an Edm.Guid-vs-String error, and \`Id\` is the field the helper auto-unquotes; NO \`IsMaxVersion\` filter — \`Id\` is unique and returns the one row; ProcessInModules itself has NO name/Caption column); **printables** = \`SysModuleReport\` by \`SysModule\` (\`ShowInSection\`/\`ShowInCard\`); **dashboards** = \`execute-esq\` (NOT \`odata-read\` — it drops the plain-Guid \`SysModule.SectionSchemaUId\`) on \`SysDashboard\` filtered \`Section\` = the section's \`SysModule.Id\`, select \`["Id","Caption"]\`, then read which package SHIPS each dashboard from the \`SysDashboard\` data bindings and record it as \`items:[{ id, caption, sourcePackage? }]\` (omitted = stand data only). That is the read; \`saveInPackage\` (defaulting from it) and \`skip\` (absent unless recorded) are the user's decisions — the full two-step chain is in the skill's \`signals\` step. **deduplication** = the on-save duplicate check, which needs TWO answers because they fail differently. (a) \`present\` — does THIS entity have an active use-on-save rule: \`odata-read DuplicatesRule\` (a \`BaseLookup\` in \`CrtDeduplication\`), select \`["Name","IsActive","UseAtSave","ProcedureName"]\`, keep the rows whose \`Object\` is this entity with \`IsActive\` AND \`UseAtSave\` both true, and list their names in \`names\`. (b) \`serviceConfigured\` — can the TARGET stand actually run the Freedom flow: \`get-sys-setting DeduplicationWebApiUrl\` must be non-empty AND features \`ESDeduplication\` + \`BulkESDeduplication\` must be on (read \`AdminUnitFeatureState\` with \`execute-esq\`, columns \`Feature.Code\` / \`FeatureState\` — **no state row means OFF**). Why both are required: no rule ⇒ nothing to lose; a rule with NO service ⇒ the check silently stops at migration. Measured on a stand newer than 8.3.4 — Classic posted \`DeduplicationService/FindDuplicatesOnSave\` and showed its duplicates screen, while the Freedom form page issued only \`InsertQuery\` and saved the duplicate without a word. "Checked, none found" is \`present:false\` — a valid resolved answer, NOT a skip.`, "");
   // ADVISORY (not a hard block, review #5): a seed with 5..149 methods is likely a TRUNCATED base-template fetch (a
   // real chain has 150+). Surface it so a partial fetch isn't silently folded onto — the agent confirms the full chain.
   P.push(...renderFidelityWarnings(result));
@@ -1400,50 +1645,56 @@ function reuseClassicChildSentence(c) {
   return "The Classic child page is NOT migrated — it is superseded, not skipped. Its schema name was not recorded in the manifest, so this plan does not name it.";
 }
 
-// ENG-95861 — the boundary child's own block in `### Child page mappings`. Own fn for Sonar CC 15: `renderChild`
-// already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than a mapping.
-// It says three things, because a reader who takes any one of them wrong re-opens a settled decision: what stays
-// Classic, that nothing here is a deliverable (so nothing about it can ever read MISSING), and how to reverse it.
+// ENG-95861 / ENG-96327 — the boundary child's own line in `### Child page mappings`. Own fn for Sonar CC 15:
+// `renderChild` already carries a seven-arm chain, and this arm is the only one that is a SCOPE statement rather than
+// a mapping. The human fact only: which Classic page this related list keeps opening, whose section owns it, and that
+// migrating it is out of this plan's scope. The gate mechanics it used to spell out (no `--units`/`--verify`, never
+// reads MISSING) are AGENT reassurance, and the reversal recipe (drop `opensClassicPage`, add `childPageSchemas`,
+// re-run) is agent scope-change how-to — neither is something the approver acts on, so both are dropped; the Main-
+// scope row states the same boundary in the table, and `decisions.md` records the scope call.
 function boundaryChildLines(c) {
   const pg = boundaryClassicPage(c);
   const opens = pg ? "`" + esc(pg) + "`" : "the Classic page the detail already opens";
   return [
-    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. **Nothing here is folded, rebuilt or built** — the platform opens a Classic page from a Freedom related list, and that is the intended end state, not a gap. This resolution publishes NO deliverable: no \`--checklist\`/\`--verify\` row, so nothing about ${esc(c.entity)} can be reported MISSING.`,
-    ">",
-    `> **Migrating ${esc(c.entity)} is that section's own job.** If the user later widens the scope, drop \`opensClassicPage\` from this detail's manifest entry, supply the child page's schema in \`childPageSchemas\`, and re-run — the boundary is a scope decision recorded in \`decisions.md\`, reversible by re-planning, never a defect of this plan.`,
+    `> **Reuse (Classic) — cross-section boundary (approved).** \`${esc(c.entity)}\` belongs to ${boundarySectionPhrase(c)}, so its Classic card stays Classic and this related list keeps opening it: ${opens}. Migrating it is that section's own job — not part of this plan.`,
   ];
+}
+
+// The lines for ONE child mapping (the arm-specific body under the child heading) plus whether this arm EMBEDS the
+// child's own spec and so must recurse into grandchildren. Module-level so its arm chain doesn't count against
+// renderChildMappings' cognitive complexity (Sonar S3776); the recursion + blank-line spacing stay in renderChild.
+function childBodyLines(c, lvl) {
+  const h = "#".repeat(Math.min(6, lvl));
+  const head = `${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`;
+  const arm = (body, recurse = false) => ({ lines: [head, ...body], recurse });
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return arm([
+    `> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
+    ">",
+    `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`]);
+  if (boundaryChild(c)) return arm(boundaryChildLines(c));
+  if (c.cyclic) return arm([`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`]);
+  // ENG-96327 — inline-grid: show ONLY the logic (`logicSpec`, rendered `logicOnly`), NOT a form-page mapping; the
+  // intro just said there is no form page. Fall back to the full spec if `logicSpec` is (defensively) absent. Recurses.
+  if (c.formless === "inline-grid") return arm([
+    `> ⚠ **No separate form page — inline-editable grid (confirm on-stand).** \`${esc(c.resolvedFrom || c.editPage)}\` folded to **0 form fields** while carrying behaviour (an attribute lookup-filter + column-render methods), which reads as a ConfigurationGrid detail edited INLINE in the related-list rows. This rests on the fold seeing no fields — if the fields layer was simply not captured (a bad/partial child bundle) the reading is wrong, so CONFIRM the Classic detail really is inline-editable (no separate edit page) before skipping the form. If it is: do NOT build a Freedom form page — build the related list as an editable **crt.DataGrid** with its columns, and port the page's logic below (the lookup-filter attribute → a Freedom lookup-filter handler; the link-column methods → a column formatter).`,
+    "", "", demoteHeadings(c.logicSpec || c.spec, lvl - 2)], true);
+  if (c.formless === "empty") return arm([`> ⚠ **Folded to an EMPTY page (0 form fields, no behaviour).** \`${esc(c.resolvedFrom || c.editPage)}\` produced no fields, tabs, details or logic — likely a bad bundle/seed. Verify the child schema before building; do NOT ship a Freedom form for it.`, ""]);
+  if (c.spec) return arm(["", demoteHeadings(c.spec, lvl - 2)], true); // nest the child's own headings; EMBED grandchildren
+  if (c.specError) return arm([`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`]);
+  if (typeof c.editPage === "string" && c.editPage) return arm([`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`]);
+  if (c.editPage === false) return arm([`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`]);
+  // Read-only is a fact about add-record, not page existence, so this row stays OPEN (the gate blocks on it).
+  if (c.editable === false) return arm([`> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`]);
+  return arm([`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`]);
 }
 
 function renderChildMappings(childs) {
   if (!childs.length) return [];
   const P = ["### Child page mappings", ""];
   const renderChild = (c, lvl) => {
-    const h = "#".repeat(Math.min(6, lvl));
-    P.push(`${h} Child page: ${esc(c.entity)} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""}`);
-    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-      P.push(`> **Reuse — a Freedom form page already exists for this child.** \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` returned \`${esc(c.reuseFreedomPage)}\` (\`kind: freedom\`), so the Freedom related list opens THAT page: nothing is rebuilt here. ${reuseClassicChildSentence(c)} Bind the related list to \`${esc(c.reuseFreedomPage)}\` and verify on-stand that add/open from this list lands on it.`,
-        ">",
-        `> ⚠ **Reconcile the client's Classic customizations onto \`${esc(c.reuseFreedomPage)}\`.** "Superseded" covers the BASE page only — whatever the client added to the Classic child page in their OWN packages is not on the shipped Freedom form, and reuse does not carry it over. Isolate that delta and apply it, the same obligation a main page carries when a Freedom counterpart exists: \`${RECONCILE_REFERENCE}\`. If the client authored nothing on this child, record the packages you checked — "we did not look" is not "there was nothing".`);
-    } else if (boundaryChild(c)) {
-      P.push(...boundaryChildLines(c));
-    } else if (c.cyclic) {
-      P.push(`> ↩ **Already mapped above (cycle)** — this page references back into an ancestor page on this branch (\`${esc(c.resolvedFrom || c.editPage || c.entity)}\`); its full spec appears higher in this plan and is not repeated here.`);
-    } else if (c.spec) {
-      P.push("", demoteHeadings(c.spec, lvl - 2)); // nest the child's own headings under this level
-      for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
-    } else if (c.specError) {
-      P.push(`> ⚠ child schema supplied but failed to parse: ${esc(c.specError)} — fix the child manifest and re-run.`);
-    } else if (typeof c.editPage === "string" && c.editPage) {
-      P.push(`> ⚠ **\`${esc(c.editPage)}\` is a REAL Classic edit page — you MUST fetch it and map it here** (add it to \`childPageSchemas\` / run \`migrate.mjs --plan\` on it, then paste its design spec). NOT optional: **"view-only", "native", and "out of scope" are NOT skip reasons when the page exists.** There is no "out of scope" in this migration — limiting scope is the USER's decision to request, never yours to self-declare.`);
-    } else if (c.editPage === false) {
-      P.push(`> **Recorded: no separate child page.** \`list-pages\` by entity \`${esc(c.entity)}\` found no Classic \`*Page\` (recorded in the manifest) → a read-only / attach-only related list, nothing to migrate here. ⚠ ONE CHECK BEFORE ACCEPTING THAT: a TYPED entity registers a per-type edit card in \`SysModuleEdit\` instead of a single \`<Entity>Page\`, so this recorded answer is only as strong as the call that produced it — confirm \`list-entity-client-schemas\` by entity \`${esc(c.entity)}\` also returns no \`editPages\`. A real run recorded this for an entity with ~18 typed edit pages, and the plan asserted there was nothing to migrate.`);
-    } else if (c.editable === false) {
-      // Read-only is a fact about add-record, not about page existence, so this row stays OPEN and the wording
-      // says so — the gate blocks on it, and a reassuring note over a blocking gate is how a plan contradicts itself.
-      P.push(`> ⚠ **Read/attach-only — the child page question is still OPEN.** The classic detail hides add-record, which stops NEW records; it does not stop opening EXISTING ones, so a page may still exist and still govern the record UI. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Read-only ALONE does not resolve this child — the structure gate blocks until the page answer is recorded.`);
-    } else {
-      P.push(`> **\`<FILL: verify child page>\`** — NOT yet verified. Run \`list-pages\` **by entity \`${esc(c.entity)}\`** and record the answer: ${CHILD_PAGE_ANSWERS} Then re-run.`);
-    }
+    const { lines, recurse } = childBodyLines(c, lvl);
+    P.push(...lines);
+    if (recurse) for (const g of (c.childPages || [])) renderChild(g, lvl + 1); // EMBED grandchildren recursively
     P.push("");
   };
   for (const c of childs) renderChild(c, 4);
@@ -1490,10 +1741,22 @@ function renderTypedSharedBlock(result, opts, entity, cs, someBindOnly) {
 }
 // The FULL per-type form spec for each typed page (bind-only / cyclic / folded spec / parse-error / unresolved).
 // Returns the lines. Extracted for Sonar CC 15.
+// ENG-96327/ENG-96553 — the Type a per-type form is for, as a heading suffix. `list-entity-client-schemas` resolves
+// the Type NAME on-stand and the agent puts it on each `typedPages` entry as `typeName` (mapped from the tool's
+// `typeColumnDisplayValue`); `typeColumnDisplayValue` is ALSO accepted verbatim. When only the raw `typeColumnValue`
+// GUID is present, the plan shows it with a ⚠ to resolve it — a bare GUID tells the approver nothing about which Type
+// the form is for. A `type` that is already a readable string shows as-is.
+const TYPED_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function typedTypeSuffix(t) {
+  const label = t.typeName || t.typeColumnDisplayValue || t.type;
+  if (!label) return "";
+  const guid = !t.typeName && !t.typeColumnDisplayValue && typeof t.type === "string" && TYPED_GUID.test(t.type);
+  return ` — type "${esc(label)}"${guid ? " ⚠ resolve the type name on-stand" : ""}`;
+}
 function renderTypedPageRows(typed) {
   const P = ["### Typed page mappings", ""];
   for (const t of typed) {
-    const typeNote = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeNote = typedTypeSuffix(t);
     P.push(`#### Typed form: ${esc(t.schema)}${typeNote}`);
     if (t.bindOnly) P.push(`> **Bind-only** — layout identical to the base; no separate form. Bind the **Shared form (base) above** for this Type (by the Type column).`);
     else if (t.cyclic) P.push(`> ↩ **Already mapped above (cycle)** — this typed form references back into an ancestor page on this branch; its spec appears higher in this plan. Not re-embedded (would recurse forever); the structure gate treats it as resolved.`);
@@ -1529,7 +1792,7 @@ function buildScopeRows(pm, opts, entity, typed, fill) {
   if (!typed.length) rows.push(`| ${esc(entity)} form page | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   else if (someBindOnly) rows.push(`| ${esc(entity)} shared form (base) | ${fill(pm.formTemplate || opts.template, "<FILL: Freedom form template>")} | ${mainCall} |`);
   for (const t of typed) {
-    const typeSuffix = t.type ? ` — type "${esc(t.type)}"` : "";
+    const typeSuffix = typedTypeSuffix(t); // ENG-96327 (c2ae185) — the RESOLVED Type name (typeName / typeColumnDisplayValue); a raw GUID only as a ⚠ fallback
     const cls = `${esc(t.schema)}${typeSuffix} (typed form)`;
     let tgt;
     if (t.bindOnly) tgt = "bind shared form by Type";
@@ -1556,40 +1819,66 @@ function boundaryScopeTarget(c) {
 }
 
 // Child edit pages belong in Main scope too — each related list's child entity opens its OWN form on add/edit.
-// Honest label by resolution state (mapped/real page → Rebuild; verified-none → Reuse; shipped Freedom form →
-// Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped above;
-// else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a page
-// exists).
+// Honest label by resolution state (mapped/real page → Rebuild; verified-none → Without edit page; shipped Freedom
+// form → Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped
+// above; else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a
+// page exists). Returns { target, call, label } so both the scope row AND the Call legend read the same value.
+function childScopeMeta(c) {
+  if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage)
+    return { target: `existing Freedom form \`${esc(c.reuseFreedomPage)}\``, call: "Reuse (Freedom)", label: esc(c.entity) };
+  // ENG-95861 — the section boundary. Resolved exactly as the other three are (the structure gate agrees), and
+  // rendered as its OWN call: `Without edit page` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom
+  // form took over", and both are false here — the Classic card stays, and this list keeps opening it.
+  if (boundaryChild(c))
+    return { target: boundaryScopeTarget(c), call: "Reuse (Classic)", label: esc(c.entity) };
+  // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
+  // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
+  if (c.cyclic)
+    return { target: "↩ already mapped above (cycle) — same page, mapped higher in this plan", call: "Mapped above", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  // ENG-96327 — a folded child with 0 form fields is an inline-editable grid (its body is only an attribute
+  // lookup-filter + column-render methods), NOT a form page. "Rebuild (child) → form page" with an empty Layout
+  // misled the reader — there is no form to build; the related list itself is the editable grid.
+  if (c.formless === "inline-grid")
+    return { target: "inline-editable related list — NO separate form page; build it as an editable `crt.DataGrid` and port its logic (lookup filter / column config) as handlers", call: "Inline grid", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  if (c.formless === "empty")
+    return { target: "⚠ folded to 0 fields with no behaviour — verify the child bundle/seed before building", call: "⚠ verify", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+  // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
+  // recommendation banner. Unknown count (unmapped real page) → generic.
+  if (c.spec || (typeof c.editPage === "string" && c.editPage))
+    return { target: rebuildChildTarget(c), call: "Rebuild (child)", label: esc(c.editPage || (c.entity + " form page")) };
+  // Only a recorded "no *Page exists" is `Without edit page` — `editable:false` does NOT reach this arm. The scope
+  // table must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
+  if (c.editPage === false)
+    return { target: "— no separate page (read/attach-only)", call: "Without edit page", label: esc(c.entity) };
+  return { target: "⚠ verify — does a Classic `*Page` exist for this child?", call: "⚠ resolve", label: esc(c.entity) };
+}
 function buildChildScopeRows(childs) {
   return childs.map((c) => {
-    let target, call, label;
-    if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) {
-      target = `existing Freedom form \`${esc(c.reuseFreedomPage)}\``;
-      call = "Reuse (Freedom)"; label = esc(c.entity);
-    } else if (boundaryChild(c)) {
-      // ENG-95861 — the section boundary. Resolved exactly as the other three are (the structure gate agrees), and
-      // rendered as its OWN call: `Reuse` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom form
-      // took over", and both are false here — the Classic card stays, and this list keeps opening it.
-      target = boundaryScopeTarget(c); call = "Reuse (Classic)"; label = esc(c.entity);
-    } else if (c.cyclic) {
-      // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
-      // resolved, so the scope table must say so too — it used to fall through to "⚠ resolve" and contradict the gate.
-      target = "↩ already mapped above (cycle) — same page, mapped higher in this plan";
-      call = "Mapped above"; label = esc(c.resolvedFrom || c.editPage || c.entity);
-    } else if (c.spec || (typeof c.editPage === "string" && c.editPage)) {
-      // template by field count via the SHARED rule (childTemplateChoice) so this AGREES with the per-child
-      // recommendation banner. Unknown count (unmapped real page) → generic.
-      target = rebuildChildTarget(c);
-      call = "Rebuild (child)"; label = esc(c.editPage || (c.entity + " form page"));
-    } else if (c.editPage === false) {
-      // Only a recorded "no *Page exists" is a Reuse — `editable:false` does NOT reach this arm. The scope table
-      // must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
-      target = "— no separate page (read/attach-only)"; call = "Reuse"; label = esc(c.entity);
-    } else {
-      target = "⚠ verify — does a Classic `*Page` exist for this child?"; call = "⚠ resolve"; label = esc(c.entity);
-    }
+    const { target, call, label } = childScopeMeta(c);
     return `| ${label} — opened by detail "${esc(c.via)}"${c.editable === false ? " · view/attach-only" : ""} | ${target} | ${call} |`;
   });
+}
+// The Call-column glossary. Only the values that ACTUALLY occur in this plan's child rows are printed — an
+// unconditional full glossary lectured about states (⚠ resolve / the two Reuse kinds / a cycle) a plan with every
+// child described never contains, which read as noise ("what is there to resolve?"). Fixed order regardless of
+// appearance so the legend reads the same across plans; `Mapped above` is defined here too (it used to be emitted
+// as a Call with no glossary entry).
+const CHILD_CALL_LEGEND = {
+  "Rebuild (child)": "**`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below).",
+  "Without edit page": "**`Without edit page`** = read/attach-only related list, no separate child page.",
+  "Reuse (Freedom)": "**`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped).",
+  "Reuse (Classic)": "**`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable.",
+  "Mapped above": "**`Mapped above`** = the same child page is already mapped higher in this plan (a cycle) — nothing is rebuilt here.",
+  "Inline grid": "**`Inline grid`** = the child edit page folded to 0 form fields — an inline-editable grid (ConfigurationGrid detail), not a form page. Build the related list as an editable `crt.DataGrid` and port its logic; do NOT build a form.",
+  "⚠ verify": "**`⚠ verify`** = the child folded to 0 fields with no behaviour (likely a bad bundle/seed) — verify the child schema before building.",
+  "⚠ resolve": "**`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).",
+};
+const CHILD_CALL_ORDER = ["Rebuild (child)", "Inline grid", "Without edit page", "Reuse (Freedom)", "Reuse (Classic)", "Mapped above", "⚠ verify", "⚠ resolve"];
+function renderChildScopeLegend(childs) {
+  if (!childs.length) return [];
+  const present = new Set(childs.map((c) => childScopeMeta(c).call));
+  const defs = CHILD_CALL_ORDER.filter((k) => present.has(k)).map((k) => CHILD_CALL_LEGEND[k]);
+  return defs.length ? ["> " + defs.join(" ")] : [];
 }
 
 // The "Add mini-page mapping" block (folded mini-page spec, or a ⚠ parse-error note). Empty when no mini page.
@@ -1603,6 +1892,47 @@ function renderMiniPageMapping(result) {
   return lines;
 }
 
+// A bare item gave no decision and no `sourcePackage`, so it goes to `unrecorded` rather than reading as
+// "stays stand-only" - an answer the agent never gave. `saveInPackage` means the run's OWN target package:
+// routing a dashboard to its SOURCE package would be this migration's only write outside that target.
+function dashboardDecision(d) {
+  const name = esc(typeof d === "string" ? d : (d?.caption || d?.id || ""));
+  if (!name) return null;
+  if (!d || typeof d !== "object") return { bucket: "unrecorded", entry: { name, id: "" } };
+  const id = String(d.id || "");
+  if (d.skip) {
+    return { bucket: "skipped", entry: { name: typeof d.skip === "string" ? `${name} — ${esc(d.skip)}` : name, id } };
+  }
+  const save = typeof d.saveInPackage === "boolean" ? d.saveInPackage : !!d.sourcePackage;
+  return { bucket: save ? "packaged" : "standOnly", entry: { name, id } };
+}
+// Derived once, so the plan, the checklist and the verify gate never disagree about the same dashboard.
+function dashboardDecisions(items) {
+  const buckets = { packaged: [], standOnly: [], skipped: [], unrecorded: [] };
+  for (const d of items) {
+    const decision = dashboardDecision(d);
+    if (decision) buckets[decision.bucket].push(decision.entry);
+  }
+  return buckets;
+}
+// Captions AND decisions, because the captions are what the human approves and the decisions are what they
+// change. How many process runs that takes is the agent's mechanics and lives in the step-7 rule, not here.
+function dashboardsSigLines(s, targetPackage = "") {
+  const label = "- **Section dashboards:**";
+  if (s?.resolved !== true) return [`${label} \u26a0 not resolved \u2014 run the on-stand check`];
+  if (!s.present) return [`${label} none (checked on-stand \u2192 not migrated)`];
+  const items = dashboardItems(s);
+  const d = dashboardDecisions(items);
+  const moving = d.packaged.length + d.standOnly.length;
+  const pkg = targetPackage ? `\`${esc(targetPackage)}\`` : "the run's target package";
+  const L = [`${label} ${items.length} found on-stand \u00b7 ${moving} to migrate with \`MigrateDashboardsProcess\`. The split below is a decision, not a reading \u2014 say so if you want it changed.`];
+  const bucket = (names, text) => { if (names.length) L.push(`  - ${text} (${names.length}):`, ...names.map((e) => `    - ${e.name}`)); };
+  bucket(d.packaged, `saved into ${pkg}`);
+  bucket(d.standOnly, "left stand-only, as a user-level schema");
+  bucket(d.skipped, "\u26a0 NOT migrated, by recorded decision");
+  bucket(d.unrecorded, "\u26a0 written as a bare string \u2014 rewrite as `{ id, caption, sourcePackage? }`");
+  return L;
+}
 export function renderPlan(result, opts = {}) {
   const cs = result.changeSet || {};
   const entity = esc(result.entity || "?"); // stand-derived → esc (superset of strip): one line AND neutralize inline HTML/link/backtick before it feeds the plan title headings
@@ -1687,7 +2017,7 @@ export function renderPlan(result, opts = {}) {
     }
     return `- **${label}:** present${presentNote} → build it${multiDcm}`;
   };
-  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), sigLine("deduplication", "On-save duplicate check"), "");
+  P.push("### On-stand signals", sigLine("dcm", "DCM case"), sigLine("processes", "Connected processes"), sigLine("printables", "Printables"), ...dashboardsSigLines(signals.dashboards, opts.targetPackage), sigLine("deduplication", "On-save duplicate check"), "");
   // Main scope = the index of the pages this migration covers; each row is expanded below IN THIS ORDER
   // (list page → form page → child pages) under its own `### … page` / `### Child page mappings` section.
   // Call = Rebuild (no Freedom counterpart — the fully-custom case) OR Update (reconcile) when a Freedom page
@@ -1708,16 +2038,12 @@ export function renderPlan(result, opts = {}) {
   // add/edit, so it is a page in the migration TREE (a recursive sub-migration), not a side note. The
   // target is a fixed clean value (NOT a free-text FILL — that invited inconsistent status prose); the
   // "does a Freedom form already exist / follow-on" nuance lives in the Child page mappings section below.
-  P.push(...buildChildScopeRows(childs), "");
-  if (childs.length) P.push("> **`Rebuild (child)`** = recursive sub-migration (mapping under **Child page mappings** below). **`Reuse`** = read/attach-only related list, no separate child page. **`Reuse (Freedom)`** = the child entity already has a shipped Freedom form page, so the related list opens that one and nothing is rebuilt (the Classic child page is superseded, not skipped). **`Reuse (Classic)`** = a cross-section boundary the user approved: that child entity owns another section, so its Classic card stays Classic and this related list keeps opening it — nothing is folded and nothing is built, so this row publishes no deliverable. **`⚠ resolve`** = not yet verified — check `list-pages` by the CHILD entity before approval (the structure gate blocks until every child is resolved).");
-  // DCM case present (resolved on-stand) → the form page MUST ship a stage progress bar. The progress bar is NOT
-  // in the plain Freedom templates, so the template choice is steered to `PageWithTabsAndProgressBarTemplate`
-  // (ships the bar + top island); hand-adding `crt.EntityStageProgressBar` into a plain template's MainContainer
-  // is the FALLBACK. This steer applies to BOTH typed and NON-typed pages (it used to be typed-only, so a
-  // non-typed DCM page silently kept whatever plain form template the agent picked).
-  // Template banner, then the LIST PAGE first (so the Add mini-page mapping sits right after it), then the
-  // add-mini-page mapping — one combined push (Sonar S7778); the form / per-type mappings follow below.
+  // Main-scope rows + Call legend, then the DCM template banner, then the LIST PAGE first (so the Add mini-page
+  // mapping sits right after it), then the add-mini-page mapping — ONE combined push (Sonar S7778); the form /
+  // per-type mappings follow below. (DCM present → the banner steers to `PageWithTabsAndProgressBarTemplate`, which
+  // ships the stage progress bar the plain templates lack; hand-adding `crt.EntityStageProgressBar` is the fallback.)
   P.push(
+    ...buildChildScopeRows(childs), "", ...renderChildScopeLegend(childs),
     ...renderTemplateBanner(result, entity, typed, someBindOnly, formTpl),
     "", renderDesignSpec(result, { ...opts, embedded: true, listPageOnly: true }), "",
     ...renderMiniPageMapping(result),
@@ -1730,7 +2056,7 @@ export function renderPlan(result, opts = {}) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Logic/⚠ Imperative logic/⚠ Imperative members/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
@@ -1743,7 +2069,7 @@ export function renderPlan(result, opts = {}) {
 // Form — Layout checklist rows, grouped at top-level tab/region (fields counted, details/widgets listed).
 // Own fn so checklistGroups stays under Sonar CC 15.
 function buildLayoutGroupRows(cs, regionOf) {
-  const top = (r) => { const s = String(r).split(" › ")[0]; return s === "Header / top" ? "Header" : s; };
+  const top = (r) => { const s = String(r).split(" › ")[0]; return s === HEADER_TOP_REGION ? "Header" : s; };
   const order = [], byRegion = new Map();
   const add = (region, label) => {
     const k = top(region);
@@ -1753,7 +2079,10 @@ function buildLayoutGroupRows(cs, regionOf) {
   };
   for (const f of (cs.viewConfigDiff || []).filter(isField)) add(regionOf(f.parentName), null);
   for (const d of cs.details || []) add(d.tab ? regionOf(d.tab) : "⚠ unplaced", `${esc(d.caption || d.detailSchema || d.entity || "detail")}${d.editable ? " (editable)" : ""} — related list`);
-  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : "Header / top", esc(w.widget));
+  for (const w of cs.widgets || []) add(w.placement === "tab-next-to-feed" ? "Tab · Next steps (new)" : HEADER_TOP_REGION, esc(w.widget));
+  for (const w of cs.cardWidgets || []) {
+    add(regionOf(w.region), `${esc(w.widgetKey)} (card widget)`);
+  }
   return order.map((k) => {
     const e = byRegion.get(k);
     const parts = [];
@@ -1796,7 +2125,7 @@ function standardFeatureRows(cs) {
   return rows;
 }
 
-function buildCoverageRows(cs, pm, result) {
+function buildCoverageRows(cs, pm, result, regionOf) {
   const cover = [];
   if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\``, vk: { type: "template", exp: pm.formTemplate } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
@@ -1825,6 +2154,15 @@ function buildCoverageRows(cs, pm, result) {
   // rather than one row per element. Without a vk row here they are built but ungated: `--verify` would exit 0 on a
   // page that dropped every one of them, and a builder would never fetch their documentation.
   cover.push(...tableElementRows(cs));
+  // ENG-95806 — one on-stand row per CARD WIDGET: the converted+placed Freedom element is a config record not
+  // derivable from get-page's component list (it depends on the migrator's ConvertCardWidgetsProcess), so it gates
+  // via an explicit on-stand evidence boolean the agent supplies in `--built` (`built["cardWidget:<recordId>:<widgetKey>"]`):
+  // true → Done; false → MISSING (a Failed conversion stays flagged/BLOCKED, never a hand-built substitute); absent →
+  // unverified. This is what stops `--verify` exiting 0 while a card widget is still unconverted.
+  // The key is scoped by BOTH recordId and widgetKey: the same widgetKey can legitimately recur under different
+  // recordId's (the recordId-batching model), so keying by widgetKey alone would collapse two widgets into one gate.
+  for (const w of cs.cardWidgets || [])
+    cover.push({ label: `Card widget \`${esc(w.widgetKey)}\` (record \`${esc(w.recordId)}\`) — converted via \`ConvertCardWidgetsProcess\` and placed in ${regionOf(w.region)}`, vk: { type: "onstand", evidence: `cardWidget:${w.recordId}:${w.widgetKey}`, what: "converted card-widget placement check", miss: "the card widget was not converted/placed — a Failed conversion stays TODO/BLOCKED, never hand-built" } });
   if (expTabs) cover.push({ label: `Tabs — ${expTabs} expected`, vk: { type: "tabs", n: expTabs } });
   if (expDetails) cover.push({ label: `Related lists — ${expDetails} expected`, vk: { type: "details", n: expDetails } });
   // The Freedom component type each standard feature is GATED on — read by `hasType(vk.ftype)` in renderVerify AND
@@ -1834,7 +2172,12 @@ function buildCoverageRows(cs, pm, result) {
   // the plan could disagree about which component a feature means. The table's types are checked against the
   // component registry, which is what replaced "confirm the exact crt.* on-stand" for these rows.
   cover.push(...standardFeatureRows(cs));
-  if (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present) {
+  // `cs.dcmActive` (from the mapper) scopes DCM to THIS page's entity — a child edit page does not inherit the
+  // parent's case, so it demands no case bar. The mapper sets it on every real changeSet; a hand-built changeSet
+  // (no `dcmActive` key) falls back to the raw resolved signal, which is the unscoped main-page reading it always
+  // had. On a main/typed page dcmActive tracks the resolved signal exactly, so this is unchanged for them.
+  const dcmActive = cs.dcmActive ?? (result.signals?.dcm?.resolved === true && !!result.signals.dcm.present);
+  if (dcmActive) {
     cover.push({ label: "DCM case progress bar", vk: { type: "dcm-bar" } }, { label: "DCM Next steps", vk: { type: "dcm-next" } });
   }
   return cover;
@@ -1864,7 +2207,7 @@ function buildPageRows(result, opts, pm, typed, fill, isMain) {
   if (!typed.length) pages.push({ label: formPageLabel(pm, opts, fill, isMain), vk: { type: "formpage" } });
   // Typed forms EXIST as a gated deliverable: the per-type pages must actually be built. Not derivable from the
   // parent page's get-page → gated via on-stand evidence `built.typedFormsBuilt` (absent → unverified, not skip).
-  for (const t of typed) { const ts = t.type ? ` — type "${esc(t.type)}"` : ""; const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
+  for (const t of typed) { const ts = typedTypeSuffix(t); const bo = t.bindOnly ? " (bind by Type)" : ""; pages.push({ label: `Typed form \`${esc(t.schema)}\`${ts}${bo}`, vk: { type: "onstand", evidence: "typedFormsBuilt", what: "per-type edit-page existence check", miss: "a per-type form was not built" } }); }
   // A built typed form opens NOTHING until each Type is routed to it (Classic keeps this in per-type `SysModuleEdit`
   // rows; Freedom needs the equivalent RelatedPage binding PER Type). Without it, only one Type's form is ever
   // reached and the rest are dead schemas — a mechanical completeness deliverable, not a per-form one, so it is ONE
@@ -2258,6 +2601,45 @@ function rootAssignPageKeys(result, isMain) { if (isMain) assignPageKeys(result)
 // count derived from THIS page's ChangeSet can never be closed by another page's components. Each per-page helper
 // is handed this page's own `cs`; in particular `regionResolver` is rebuilt per call (it closes over the diff it
 // was built from, so the main page's instance would return garbage region labels for a child's fields).
+// The delivery row is emitted for EVERY run, both directions. Conditioned on "something is packaged" it
+// silently disappeared whenever an item's shape was wrong, and `--verify` then exited 0 having checked
+// nothing at all.
+function buildDashboardRows(result, opts) {
+  const sd = result.signals?.dashboards;
+  if (sd?.resolved !== true || !sd.present) return [];
+  const items = dashboardItems(sd);
+  const d = dashboardDecisions(items);
+  const moving = d.packaged.length + d.standOnly.length;
+  // Every dashboard deliberately left behind: nothing to build, migrate or verify. The decision itself is
+  // still visible — the plan's signal lines name each one.
+  if (!moving && !d.unrecorded.length) return [];
+  const target = opts?.targetPackage ? String(opts.targetPackage) : "";
+  const pkg = target ? "`" + esc(target) + "`" : "the run's target package";
+  // What the gate compares the migrator's log against: every dashboard the plan is moving, and where to.
+  const expect = [
+    ...d.packaged.map((e) => ({ id: e.id, caption: e.name, pkg: target })),
+    ...d.standOnly.map((e) => ({ id: e.id, caption: e.name, pkg: "" })),
+  ];
+  const skipped = d.skipped.length ? `, ${d.skipped.length} left behind by recorded decision` : "";
+  const bareStrings = d.unrecorded.length ? ` ⚠ ${d.unrecorded.length} item(s) are written as bare strings — rewrite each as \`{ id, caption, sourcePackage? }\`; as they stand they carry no id, so nothing can migrate or check them.` : "";
+  return [
+    { label: "Dashboards element on the Freedom list page (`crt.Dashboards`) — the migration TARGET; without it `MigrateDashboardsProcess` has nowhere to write. `ListPageV3Template` ships it as `Dashboards` under `DashboardsContainer` (INHERITED — it shows up in the list page's own ops as a type-less `merge` on that name, not as a `crt.Dashboards` insert); on any other list template ADD the Dashboards tab + container + element to that same page.", vk: { type: "feature", ftype: "crt.Dashboards", byName: "Dashboards", viaTpl: "ListPageV3Template" } },
+    { label: `Dashboards migrated — ${moving} of ${items.length} classic dashboard(s) moved by \`MigrateDashboardsProcess\`${skipped}.`, vk: { type: "dashboards", check: "migrated", expect } },
+    { label: "No unresolved partial migration — the migrator reports `Partially migrated` for a dashboard it created but could not finish (a widget it could not convert, rights it could not bind). Taking one as it stands is the USER's decision: this row asserts only that each was shown to them and answered, never that nothing was missing.", vk: { type: "dashboards", check: "partials", expect } },
+    { label: `Delivery as planned — ${d.packaged.length} dashboard(s) must land in ${pkg} and ${d.standOnly.length} as user-level schema(s), exactly as the approved plan splits them. Read each back in the store its decision names: absence from \`SysSchema\` is not absence when the decision was stand-only.${bareStrings}`, vk: { type: "dashboards", check: "delivery", expect, unrecorded: d.unrecorded.length } },
+  ];
+}
+// Process/Print each get their own row (machine: a crt.Button must exist); native view controls fold into one.
+function buildCardActionRows(cs) {
+  const acts = cs.cardActions || [];
+  const rows = acts.filter((a) => /process|print/i.test(a))
+    .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
+  const natives = acts.filter((a) => !/process|print/i.test(a));
+  if (natives.length) {
+    rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
+  }
+  return rows;
+}
 export function checklistGroups(result, opts = {}) {
   const cs = result.changeSet || {};
   const pm = opts.planMeta || {};
@@ -2312,9 +2694,10 @@ export function checklistGroups(result, opts = {}) {
   // Form — Layout (top-level tab/region placement) + Coverage (machine-verifiable counts/components) — see helpers.
   const regionOf = regionResolver(cs.viewConfigDiff || [], cs.resources || {});
   G("Form — Layout (by tab/region)", buildLayoutGroupRows(cs, regionOf));
-  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result));
-  // Form — Logic: business rules folded to a count; ONE row per handler (the dropped-in-prose case). Agent-confirmed.
-  const logicItems = [];
+  G("Form — Coverage (verified)", buildCoverageRows(cs, pm, result, regionOf));
+  // Form — Business rules: business rules folded to a count. Form — Custom methods: ONE row per handler (the
+  // dropped-in-prose case). Split into two groups to MIRROR the plan's two behaviour sections. Agent-confirmed.
+  const ruleItems = [];
   const ruleN = (cs.pageBusinessRules || []).length + new Set((cs.entityBusinessRules || []).map((r) => r.targetAttribute)).size;
   // The rule IDENTITIES — each rule's target element/attribute, the column its logic governs (a page rule's
   // `element`, an entity rule's `targetAttribute`). Published in the vk so `--verify` and `--checklist` have the same
@@ -2327,29 +2710,33 @@ export function checklistGroups(result, opts = {}) {
     ...(cs.pageBusinessRules || []).map((r) => r.element),
     ...(cs.entityBusinessRules || []).map((r) => r.targetAttribute),
   ].filter(Boolean))];
-  if (ruleN) logicItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  if (ruleN) ruleItems.push({ label: `Business rules × ${ruleN}`, vk: { type: "rule", n: ruleN, names: ruleIds } });
+  G("Form — Business rules", ruleItems);
   // Every handler keeps its OWN checklist row (nothing folded away — this table exists so nothing is lost), but a
   // helper the plan folded under a caller says so, or the checklist would read as a demand for its own Freedom
   // artifact and the two documents would disagree about what "done" means for it.
+  const methodItems = [];
   const foldedUnder = new Map(foldByCaller(cs.handlerStubs || []).ordered
     .filter((o) => o.parent).map((o) => [o.stub.sourceMethod, o.parent]));
   for (const h of cs.handlerStubs || []) {
     const parent = foldedUnder.get(h.sourceMethod);
-    logicItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
+    methodItems.push({ label: `Handler — \`${esc(h.sourceMethod)}\`` + (parent ? ` (ported with \`${esc(parent)}\`)` : "") });
   }
-  G("Form — Logic", logicItems);
-  // Card actions — Process/Print each their own row (machine: a crt.Button must exist); native view controls folded.
-  const acts = cs.cardActions || [];
-  const actItems = acts.filter((a) => /process|print/i.test(a)).map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
-  const natives = acts.filter((a) => !/process|print/i.test(a));
-  if (natives.length) actItems.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})` });
-  G("Card actions", actItems);
-  // ⚠ Imperative members worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
+  G("Form — Custom methods", methodItems);
+  // The section dashboards are the LIST page's deliverables - the element lives on it, the migrated dashboards
+  // appear in it - so they gate under the LIST page's key. That is what lets the element row read the page it is
+  // actually about instead of guessing from the form page's ops. Two exceptions take the form page's key, both
+  // for the same reason (there is no list page to gate): a sub-scope, and an approved pages-only-no-menu run.
+  const dashKey = isMain && opts.sectionHostMode !== "pages-only-no-menu" ? "list" : pageKey;
+  const dashRows = buildDashboardRows(result, opts).filter(Boolean);
+  if (dashRows.length) groups.push(pageGroup(dashKey, "Dashboards", dashRows));
+  G("Card actions", buildCardActionRows(cs));
+  // ⚠ Other declared logic worklist — one row per member, marked ported / dropped / blocked like a method. PLAIN rows,
   // like the `Handler — …` rows above and unlike the evidence rows below: work to record, not open questions closed
   // by a filed record. Without this group these members have no row anywhere in the control table.
   // One kind BROADER than the plan table: `attribute-dependency` is kept out of the plan (the method it triggers
   // carries it there) but kept here, because the attribute is its own member and the method's row reports the method.
-  G("⚠ Imperative members worklist", (cs.needsDecision || [])
+  G("⚠ Other declared logic worklist", (cs.needsDecision || [])
     .filter((n) => MEMBER_WORKLIST_KINDS.has(n.kind))
     .map((d) => ({ label: `[${esc(d.kind)}] ${esc(d.item)}` })));
   // ⚠ Confirm worklist — same items as the Confirm section (kinds not shown elsewhere). Removals are not decisions.
@@ -2585,6 +2972,29 @@ function resolveFeatureVk(vk, ctx) {
   const also = alts.length ? ` (nor its analog ${alts.map((t) => esc(t)).join("/")})` : "";
   return ["❌ MISSING", `NO ${vk.ftype}${also} on the built page`, "missing"];
 }
+// An element the LIST TEMPLATE ships is never re-declared, so `hasType` can NEVER see it: it surfaces as a
+// type-LESS `merge` keyed by its NAME. Measured on Cases_ListPage, AIPlatformEntityEvents_ListPage and
+// DashboardsMigrationLog_ListPage - `{operation:"merge",name:"Dashboards"}` in each, with `crt.Dashboards`
+// only in the merged bundle. The type check stays for the hand-added case, which does carry a type.
+// Keyed to the LIST page, so `ctx.entryAbsent` has already answered "nobody showed me that page" (⚠,
+// never ❌) before this runs. Everything reaching here was measured on the page, so a hard ❌ is honest
+// for any template - no guess from the template name needed.
+function resolveInheritableFeature(vk, ctx) {
+  if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
+  const nameMatches = (o) => o.name === vk.byName || String(o.name || "").startsWith(vk.byName + "_");
+  const isRemove = (o) => String(o.operation || "") === "remove";
+  // A page that DROPS the inherited element still reports it as an op keyed by the same NAME, so matching on
+  // the name alone called the one shape this row exists to catch "built". `merge`, `insert` and `move` all
+  // leave the element in place; `remove` is the only one that takes it away, and it gets its own verdict.
+  const named = ctx.ops.find((o) => !isRemove(o) && nameMatches(o));
+  if (named) {
+    return ["✅ Done", `\`${esc(named.name)}\` present on the built list page — shipped by \`${esc(vk.viaTpl)}\`, so it carries no \`type\` of its own`, "ok"];
+  }
+  if (ctx.ops.some((o) => isRemove(o) && nameMatches(o))) {
+    return ["❌ MISSING", `\`${esc(vk.byName)}\` is explicitly REMOVED on the built list page — ${esc(vk.ftype)} is the migrator's write target, so there is nowhere for it to write; restore the element`, "missing"];
+  }
+  return ["❌ MISSING", `NO ${vk.ftype} and no \`${esc(vk.byName)}\` component on the built list page — add the Dashboards tab + container + element to it`, "missing"];
+}
 export function resolveComponentVk(vk, ctx) {
   const { hasType, parentTpl } = ctx;
   // D6 tri-state, the same one `resolveFormPageVk` / `resolveImageVk` / `resolveCountVk` apply: NO
@@ -2594,6 +3004,7 @@ export function resolveComponentVk(vk, ctx) {
   // R5's not-checkable for an analog component: a page the payload cannot see resolves ⚠ unverified, never MISSING.
   // `false` (reported absent) and a present-but-empty entry still fall through to the hard ❌ below.
   if (ctx.entryAbsent) return absentEntry(ctx, componentNoun(vk));
+  if (vk.type === "feature" && vk.byName) return resolveInheritableFeature(vk, ctx);
   if (vk.type === "feature") return resolveFeatureVk(vk, ctx);
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
@@ -2710,6 +3121,64 @@ function resolveOnstandVk(vk, ctx) {
   if (v === false) return ["❌ MISSING", `NOT wired (built.${vk.evidence} = false)${vk.miss ? " — " + vk.miss : ""}`, "missing"];
   return ["⚠ verify", `not confirmed — supply built.${vk.evidence} (true/false)${what}`, "unverified", "verifier"];
 }
+// --- per-dashboard verification ----------------------------------------------------------------------------
+// The plan names every dashboard and its destination, so the gate compares against THAT list: one boolean for
+// the whole run lets eleven of twelve close the row and never mentions the twelfth.
+// `Skipped` is settled - an already-migrated dashboard returns it, and a deliberate re-run is safe (step 7
+// rule 5). `Partially migrated` means the dashboard EXISTS, so it settles the migrated row too.
+const DASH_EXISTS = new Set(["Success", "Skipped", "Partially migrated"]);
+const DASH_NEED = "supply `built.dashboards` - one entry per dashboard the plan lists, `{ id, status,"
+  + " schemaName, package? }`, transcribed from `DashboardMigrationLog`";
+const dashStatus = (row) => String(row?.status || "");
+const dashNames = (list) => list.map((e) => esc(e.caption || e.id || "?")).join(", ");
+function dashReported(vk, ctx) {
+  const rows = (Array.isArray(ctx.root?.dashboards) ? ctx.root.dashboards : [])
+    .filter((row) => row && typeof row === "object");
+  const byId = new Map(rows.map((row) => [String(row.id || ""), row]));
+  const expect = Array.isArray(vk.expect) ? vk.expect : [];
+  return { byId, expect, unreported: expect.filter((e) => !byId.has(e.id)) };
+}
+function resolveDashboardsVk(vk, ctx) {
+  const { byId, expect, unreported } = dashReported(vk, ctx);
+  if (!expect.length) return ["✅ Done", "no dashboard is being migrated", "ok"];
+  if (vk.check === "delivery" && vk.unrecorded) {
+    return ["⚠ verify", `${vk.unrecorded} dashboard(s) in the plan are written as bare strings - rewrite each as \`{ id, caption, sourcePackage? }\`; as they stand they carry no id, so nothing can check them`, "unverified", "verifier"];
+  }
+  if (unreported.length) {
+    return ["⚠ verify", `${unreported.length} of ${expect.length} dashboard(s) not reported (${dashNames(unreported)}) - ${DASH_NEED}`, "unverified", "verifier"];
+  }
+  if (vk.check === "migrated") return resolveDashboardsMigrated(expect, byId);
+  if (vk.check === "partials") return resolveDashboardsPartials(expect, byId);
+  return resolveDashboardsDelivery(expect, byId);
+}
+function resolveDashboardsMigrated(expect, byId) {
+  const bad = expect.filter((e) => !DASH_EXISTS.has(dashStatus(byId.get(e.id))));
+  if (bad.length) {
+    return ["❌ MISSING", bad.map((e) => `${esc(e.caption || e.id)}: ${esc(dashStatus(byId.get(e.id)) || "no status")}`).join("; "), "missing"];
+  }
+  return ["✅ Done", `all ${expect.length} reported by the migrator as Success / Skipped / Partially migrated`, "ok"];
+}
+// The partials row asserts the CONVERSATION, never the outcome: a dashboard the user knowingly took as it
+// stands is closed, one they were never shown is not - which is why an unanswered partial reads unverified
+// rather than missing.
+function resolveDashboardsPartials(expect, byId) {
+  const partial = expect.filter((e) => dashStatus(byId.get(e.id)) === "Partially migrated");
+  if (!partial.length) return ["✅ Done", "no dashboard came back Partially migrated", "ok"];
+  const open = partial.filter((e) => byId.get(e.id).acceptedByUser !== true);
+  if (open.length) {
+    return ["⚠ verify", `${dashNames(open)} came back Partially migrated and the user has not answered - show them what is missing and record \`acceptedByUser\``, "unverified", "verifier"];
+  }
+  return ["✅ Done", `${partial.length} partial outcome(s), each put to the user and accepted`, "ok"];
+}
+function resolveDashboardsDelivery(expect, byId) {
+  const wrong = expect.filter((e) => String(byId.get(e.id).package || "") !== e.pkg);
+  if (wrong.length) {
+    return ["❌ MISSING", wrong.map((e) => `${esc(e.caption || e.id)}: in ${esc(String(byId.get(e.id).package || "no package (user-level)"))}, planned ${esc(e.pkg || "no package (user-level)")}`).join("; "), "missing"];
+  }
+  const packaged = expect.filter((e) => e.pkg).length;
+  return ["✅ Done", `${packaged} packaged and ${expect.length - packaged} user-level, each where the plan said`, "ok"];
+}
+const VK_DASHBOARDS = new Set(["dashboards"]);
 const VK_ONSTAND = new Set(["onstand"]);
 // PACKAGE PLACEMENT — the built page's own package, read off THIS page's entry. A page saved into the wrong
 // package is built and invisible to the customer's app; nothing in its body shows that, so `get-page`'s page
@@ -2922,6 +3391,7 @@ export function resolveVk(vk, ctx) {
   if (VK_LIST.has(vk.type)) return vk.type === "listcolumns" ? resolveListColumnsVk(vk, ctx) : resolveListFilterVk(vk, ctx);
   if (VK_COMPONENT.has(vk.type)) return resolveComponentVk(vk, ctx);
   if (VK_RULE.has(vk.type)) return resolveRuleVk(vk, ctx);
+  if (VK_DASHBOARDS.has(vk.type)) return resolveDashboardsVk(vk, ctx);
   if (VK_ONSTAND.has(vk.type)) return resolveOnstandVk(vk, ctx);
   if (VK_PLACEMENT.has(vk.type)) return resolvePlacementVk(vk, ctx);
   if (VK_ENTITY.has(vk.type)) return resolveEntityVk(vk, ctx);
@@ -3096,6 +3566,11 @@ export function planGaps(result) {
   if (result?.gate?.blocked) g.push(`gate BLOCKED (${(result.gate.reasons || []).length} correctness signal(s))`);
   if (result?.structure?.complete === false) g.push(`structure INCOMPLETE (${(result.structure.issues || []).length} missing input(s))`);
   if (result?.coverage?.complete === false) g.push(`coverage INCOMPLETE (${(result.coverage.issues || []).length} unaccounted member(s))`);
+  // ENG-94714 — the LIST deliverable's own gate. Without this leg `listGate.blocked` was prose in the plan's
+  // `### List page` block and nothing else: `planGaps` stayed `[]`, so the CLI exited 0 and every consumer that
+  // gates on `planGaps.length` (the engine README's own contract, the freedom-build-executor) treated a list
+  // page built from an unreadable section `diff` as buildable. Same shape as the legs above so no caller changes.
+  if (result?.listGate?.blocked) g.push(`list gate BLOCKED (${(result.listGate.reasons || []).length} section-evidence gap(s))`);
   return g;
 }
 function verifyVerdict(missing, unverified) {
