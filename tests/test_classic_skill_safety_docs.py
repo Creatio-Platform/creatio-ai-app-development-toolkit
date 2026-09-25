@@ -172,9 +172,9 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"evidence-placement rule incomplete; missing {missing}")
         # Regex-tolerant: a lightly reworded reintroduction ("copy it from there",
-        # "This goes in the Evidence column") must fail the same as the original, in the
-        # builder's brief that carries the rule and in SKILL.md alike.
-        for path in (BUILD_PAGE, MIGRATION_SKILL):
+        # "This goes in the Evidence column") must fail the same as the original, in
+        # SKILL.md and in every split reference, the builder's brief included.
+        for path in (MIGRATION_SKILL, *MIGRATION_SPLIT_REFERENCES):
             content = flat(read_text(path))
             self.assertNotRegex(content, r"copy(\s+\w+)? from there", path.name)
             self.assertNotRegex(content, r"goes in the (\*\*)?Evidence(\*\*)? column", path.name)

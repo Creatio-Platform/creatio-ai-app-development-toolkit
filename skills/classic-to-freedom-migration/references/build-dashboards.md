@@ -1,23 +1,34 @@
 # Migrating a section's Classic dashboards (step 7.7)
 
-Handed, with `./references/build-task-execution.md` and
+Handed, with `./references/build-task-execution.md`, `./references/build-page.md` and
 `./references/classic-to-freedom-mapping.md`, to the task that migrates the section's dashboards. It
 runs last, because it writes into the built list page. SKILL.md step 2 found the dashboards and step
-4.2's `signals.dashboards` recorded them and the plan's delivery split.
+4.2's `signals.dashboards` recorded them and the plan's delivery split. The state, scope and
+existence-check rules in `build-task-execution.md` bind every call below.
+
+**You cannot reach the user; the driver can.** Every step below that needs the user goes through
+your task file: a question is a `not-built — needs-decision` row with its `Decision needed (row N):`
+line under `## Notes`, a hand-off is a line under `## Notes` the driver relays (step 7.7 of
+`./references/orchestrate-build.md`).
 
 **7.7 Classic dashboards (from step 2).** If `discovery.md` lists any, install the Dashboards
 Migrator through clio:
 `clio-run-destructive { "command": "install-dashboards-migrator", "args": { "environment-name": "<ResolvedEnvironment>" } }`
-— resolve the contract with `get-tool-contract` first, and confirm the environment with the user
-before calling, because the install runs a configuration build and restarts the instance. The tool
-waits the instance back and probes the package's own `Ping`, so `success` means installed **and**
-serving; a refusal names the fix (update clio, or a downgrade the user must decide). A clio that
-reports the command as unknown is too old — ask the user to update clio rather than looking for
-another route. Then hand the migration itself to the user: System Designer → **Dashboards
-migration** → the section (or specific dashboards) → target Freedom UI page = the list page you
-built → **Migrate**; results land in the **Dashboards migration log** section. Record the installed
-version (`list-packages`) and the migration outcome in `worklog.md`; the DoD row stays open until
-both are recorded or `discovery.md` says `none`. A clio too old to carry the verb is the one case
+— resolve the contract with `get-tool-contract` first. The install runs a configuration build and
+restarts the instance, so the driver must confirm the environment with the user before calling and
+hand you that confirmation in your prompt. Without it, do NOT call the install: record the row
+`not-built — needs-decision` with `Decision needed (row N): confirm <environment> for
+install-dashboards-migrator (configuration build + instance restart)`. The tool waits the instance
+back and probes the package's own `Ping`, so `success` means installed **and** serving; a refusal
+names the fix (update clio, or a downgrade the user must decide — a `needs-decision` row). A clio
+that reports the command as unknown is too old — record the row `not-built — blocked` with "clio
+too old for install-dashboards-migrator: update clio" under `## Notes` for the driver to raise,
+rather than looking for another route. Then the migration itself is the user's: write the hand-off
+under `## Notes` for the driver to relay — System Designer → **Dashboards migration** → the section
+(or specific dashboards) → target Freedom UI page = the list page you built → **Migrate**; results
+land in the **Dashboards migration log** section. Record the installed version (`list-packages`) in
+`worklog.md`; the driver records the migration outcome the user reports, and the DoD row stays open
+until both are recorded or `discovery.md` says `none`. A clio too old to carry the verb is the one case
 that closes it differently: record the gap in `worklog.md`, leave the task `DONE` rather than
 `VALIDATED`, and carry on — the rest of the migration does not wait on it.
 

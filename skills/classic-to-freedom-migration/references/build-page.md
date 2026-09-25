@@ -7,31 +7,24 @@ Handed, with `./references/build-task-execution.md` and
 ## Everything else about building a page
 
 This file is the per-page build procedure, unchanged from when it was one monolithic step of
-`SKILL.md`. Read the parts that apply to your task's rows — the preflight in
-`build-task-execution.md` applies to every task, the `creatio-ui-guidelines` done-gate applies to
+`SKILL.md`. Read the parts that apply to your task's rows — the state, scope and preflight rules in
+`build-task-execution.md` apply to every task, the `creatio-ui-guidelines` done-gate applies to
 every task that touches a page's layout, and the clio-safety rules apply to every write.
 
-1. Re-read the approved `plan.md`, your page's `--spec` slice and your own task file to recover
-   state. You do NOT record the approval — the orchestrator did that in `decisions.md` before
-   slicing, and a build that finds no approval entry is a stop for the orchestrator, not something
-   you work around.
-2. Section sequencing at whole-package scope is the orchestrator's (step 7.6,
-   `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
-   one starts. Your task belongs to exactly one section — never reach into another.
-3. **The page TREE is sliced across tasks, not walked by you.** Each page — the record page, each
+1. **The page TREE is sliced across tasks, not walked by you.** Each page — the record page, each
    typed page, the mini page, each `Rebuild (child)` — is its own artifact with its own task (or its
    own chain of them), and the queue already orders them leaf-first, so a child page's form exists
    by the time the parent's related list is built. Your `writesTo:` names the one artifact you may
    write. Build the page YOUR task names and no other, even when its spec mentions a child: reaching
    into another page's task is how two sub-agents write the same schema. Your page's own spec is the
    one under `### Child page mappings` when your page key is a child.
-4. Subtask order INSIDE your task, in the order the platform requires: template creation or
+2. Subtask order INSIDE your task, in the order the platform requires: template creation or
    existing-page selection → entity/data-source adjustments → layout → business rules →
    details/related lists/standard features → handlers/converters/validators → backend/service →
    localization/bindings. (App/package/section scaffolding and the switch-over are not yours: the
    scaffolding is its own task, ahead of every page, and a switch-over happens only when the user
-   approved one.) **Re-check for an existing Freedom artifact before every create** — a second run
-   over the same folder must not duplicate a page that is already there.
+   approved one.) The existence re-check before every create (`build-task-execution.md`) holds for
+   each subtask here too.
    - **Build every native feature UP FRONT as its native component — never build a generic
      Expanded-list/DataGrid first and "switch" it later.** A Visa = Approvals *because it is an
      Approval* — and Approvals is **TWO** components (`get-component-info` returns both): the

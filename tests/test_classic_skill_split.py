@@ -145,6 +145,23 @@ class ReferencePlacementTests(unittest.TestCase):
     def test_step_4_2_cites_the_conditional_manifest_inputs(self):
         step42 = section(read(SKILL), "**4.2 — ", "**4.3 — ")
         self.assertIn("./references/manifest-conditional-inputs.md", step42)
+        # One citation per section of the reference, each pointing at that section.
+        anchors = re.findall(r"^## (.+?) — ", read(REFERENCES / "manifest-conditional-inputs.md"), re.M)
+        self.assertGreaterEqual(len(anchors), 5, f"reference sections found: {anchors}")
+        for anchor in anchors:
+            self.assertIn(
+                f"`./references/manifest-conditional-inputs.md` → *{anchor}*", step42,
+                f"step 4.2 does not cite the {anchor!r} section of the reference",
+            )
+        # Each citation stays behind the signal that makes it apply.
+        for trigger in (
+            "`changeSet.profileCards`",
+            "record `manifest.addRecordMiniPage: false` when there is verifiably none",
+            "when chain 1 returns any dashboard",
+            "open a different edit page per Type",
+            "tells you a child entity has a section of its own",
+        ):
+            self.assertIn(trigger, step42, f"step 4.2 lost the condition {trigger!r}")
 
     def test_step_3_1_cites_the_scaffolding_brief(self):
         step31 = section(read(SKILL), "**3.1 — ", "### 4. ")

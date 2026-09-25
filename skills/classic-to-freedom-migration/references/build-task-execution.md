@@ -75,6 +75,20 @@ Every task that writes the stand is bound by this section. A page build then con
 dashboards migration with `./references/build-dashboards.md` — whichever your orchestrator handed
 you.
 
+**Recover state, then stay inside your task.**
+
+- Re-read the approved `plan.md`, your own task file and, for a page, your page's `--spec` slice to
+  recover state. You do NOT record the approval — the orchestrator did that in `decisions.md` before
+  slicing, and a build that finds no approval entry is a stop for the orchestrator, not something
+  you work around.
+- Section sequencing at whole-package scope is the orchestrator's (step 7.6,
+  `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
+  one starts. Your task belongs to exactly one section — never reach into another.
+- Your `writesTo:` names the one artifact you may write. Write that artifact and no other: reaching
+  into another task's artifact is how two sub-agents write the same schema.
+- **Re-check for an existing Freedom artifact before every create** — an app, a section, a page, a
+  rule — a second run over the same folder must not duplicate one that is already there.
+
 **Build preflight (Contract rule 7), scoped to YOUR task.** Before you create or edit the artifact
 your task names: (a) the plan's `⚠ Confirm` list is your worklist — every item is RESOLVED by
 running its on-stand query and recording the answer (DCM `SysSchema ManagerName='DcmSchemaManager'`,
@@ -103,8 +117,8 @@ each page you build. It catches layout defects the migration engine does not mod
 ExpansionPanels, lone-field islands, spacing/color/border-radius mismatches, accessibility. Do not
 wait for the user to ask for a UI review.
 
-1. Use the safest Clio operation: `create-page` only when the page does not exist; `get-page` before
-   `update-page`; `validate-page` before saving; the business-rule creators for supported rules;
+1. Use the safest Clio operation: `create-app`, `create-app-section` and `create-page` only when
+   that artifact does not exist yet; `get-page` before `update-page`; `validate-page` before saving; the business-rule creators for supported rules;
    `update-client-unit-schema` only for non-page schemas or when raw updates are explicitly needed.
    - **A `success` from `validate-page`/`update-page` is NOT proof the page works** — clio reports
      `success` for bodies that fail at runtime. After saving a page, and always before building

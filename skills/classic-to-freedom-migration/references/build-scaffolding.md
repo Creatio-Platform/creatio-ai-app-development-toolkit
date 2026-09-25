@@ -3,7 +3,9 @@
 Handed, with `./references/build-task-execution.md`, to the run's `Scaffolding` task. The placement
 facts and the `sectionHost.mode` the user chose are in the approved plan (SKILL.md step 3.1); this
 file is how the build carries that choice out, and how a form page moves to the template the plan
-names (SKILL.md step 5).
+names (SKILL.md step 5). The state, scope and existence-check rules in `build-task-execution.md`
+bind every call below: `find-app` / `list-app-sections` / `list-pages` before any `create-app`,
+`create-app-section` or `create-page`, so a second run over the same folder duplicates nothing.
 
 ## `new-app` is one call
 

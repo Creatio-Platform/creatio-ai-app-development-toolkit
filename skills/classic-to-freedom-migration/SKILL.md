@@ -490,7 +490,7 @@ and step 8's driver side. What follows is the part you keep in view while the bu
 → 7.3 — as paths, never pasted bodies. No sub-agent is handed this file.
 
 **7.7 Classic dashboards** — when `discovery.md` lists any, the task that migrates them is handed
-`./references/build-dashboards.md`; it runs last, against the built list page.
+`./references/build-dashboards.md`; it runs last, against the built list page. A builder cannot reach the user, so YOU confirm the environment with the user before `--start` (the migrator install is destructive: configuration build + restart) and pass that confirmation in its prompt, and you relay the System Designer migration hand-off to the user → `./references/orchestrate-build.md` 7.7.
 
 ### 8. Validate
 
