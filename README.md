@@ -5,6 +5,7 @@ AI-driven toolkit for turning natural-language Creatio app requests into BA-styl
 The toolkit is installed as a local plugin or skill surface for coding agents. It keeps the workflow business-first: clarify the app request, produce the Business Plan, wait for approval, then implement through clio MCP using the approved plan.
 
 Installer-supported agents: Codex CLI/Desktop, Claude Code, Cursor, and GitHub Copilot CLI.
+The Classic→Freedom migration build (step 7 of `classic-to-freedom-migration`) dispatches one sub-agent per task, so it runs on Claude Code, Codex and GitHub Copilot CLI; a session that forbids sub-agents is asked once whether to build inline instead.
 Other MCP-capable agents can use the repository manually if they can read the same instructions and connect to clio MCP.
 
 ## Quick Start

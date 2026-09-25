@@ -13,8 +13,9 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
 2. **ONE task, this one. Do not pick up a second task file in this session** — not to "keep the page coherent",
    not because the next task looks small, not because you already have the page body open. This holds for the
    NEXT chunk of the very page you just built: those are separate tasks and separate sub-agents, and taking them
-   one after another in this session is the violation, not a way of finishing the page. Your task's front matter
-   names the artifact it writes (`writesTo:`) and the tasks that had to close before it (`dependsOn:`); everything
+   one after another in this session is the violation, not a way of finishing the page. (The one run this does
+   not bind is `Route: inline` — SKILL.md step 7.0 — where the orchestrator's own session builds every task,
+   still one at a time.) Your task's front matter names the artifact it writes (`writesTo:`) and the tasks that had to close before it (`dependsOn:`); everything
    your task needs from those is in their `## Notes`, which you read rather than redo. Before you finish, copy the
    **dispatch token** you were handed when this task was started into `agentNonce:`, verbatim. Do not invent one:
    the token was issued to this task alone, and a task closed carrying a different token — or none — fails the
