@@ -450,6 +450,63 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         dod = read_text(ROOT / "skills/classic-to-freedom-migration/references/migration-documentation.md")
         self.assertIn("Classic dashboards: the Dashboards Migrator is installed", dod)
 
+    def test_step7_resolves_its_dispatch_route_before_the_first_start(self):
+        # Step 7 requires one sub-agent per task but named no mechanism, so a session that
+        # forbids `Agent` either stopped to ask or dispatched against the host rule.
+        # The route list must sit inside step 7, ahead of 7.1, and name each
+        # supported host plus the `Route:` line the report reads.
+        content = read_text(MIGRATION_SKILL)
+        step7 = content[content.index("### 7. Implement The Approved Plan"):content.index("### 8.")]
+        self.assertLess(step7.index("**7.0 The dispatch route"), step7.index("**7.1 Record the approval"))
+        intro = paragraph(step7, "**7.0 The dispatch route")
+        missing = missing_markers(
+            intro,
+            ["before the first `--start`", "`Route: agent` · `codex` · `copilot` · `inline`", "step-8 handoff"],
+        )
+        self.assertFalse(missing, f"step 7.0 must name the route line; missing {missing}")
+        routes = paragraph(step7, "1. **Claude Code — the `Agent` tool.**")
+        missing = missing_markers(
+            routes,
+            [
+                "the task's `--start` token",
+                "built-in `default` agent",
+                "~/.codex/agents/*.toml",
+                "built-in `general-purpose` agent",
+                ".github/agents/",
+                "include-custom-instructions: true",
+                "Reachable ONLY through the route gate below",
+            ],
+        )
+        self.assertFalse(missing, f"step 7.0 must name every host's mechanism; missing {missing}")
+        report = paragraph(content, "Report what passed, what could not run")
+        self.assertIn("step-7 dispatch route", report)
+
+    def test_step7_route_gate_asks_once_and_keeps_the_dispatch_gate(self):
+        # The inline route is the only run the one-sub-agent rule does not bind, so the gate
+        # that opens it and the token rule that still holds under it are pinned together.
+        content = read_text(MIGRATION_SKILL)
+        gate = paragraph(content, "> **ROUTE GATE.** A Claude Code session")
+        missing = missing_markers(
+            gate,
+            [
+                "do not dispatch against it and do not start building",
+                "exactly ONE `AskUserQuestion`",
+                "Grant `Agent` for this build",
+                "or build in this session",
+                "stop until it is answered",
+                "covers the WHOLE run",
+                "never switch mid-run",
+                "`--start` opens each one and prints its token",
+                "the dispatch gate still fails a task closed without the token issued for it",
+                "YOU copy it into that task's `agentNonce:`",
+                "valid only under `Route: inline`",
+                "never hold two tasks open",
+            ],
+        )
+        self.assertFalse(missing, f"step 7 route gate lost a guarantee; missing {missing}")
+        rule2 = paragraph(content, "**`--start` prints a DISPATCH TOKEN.")
+        self.assertIn("`Route: inline` is the one exception — 7.0.", flat(rule2))
+
 
 if __name__ == "__main__":
     unittest.main()
