@@ -178,7 +178,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     // A custom getActions item is not a template control: it gets its own row, and only the table's own controls
     // fold into the native row — else a page whose template ships every native control reads as missing one.
     const acts = checklistGroups({ entity: "X", changeSet: { cardActions: ["PrintButton", "ViewOptionsButton", "ReloadDataButton", "TagButton", "calculateSaaSMetrics", "RunProcess"] } }, {})
-      .flatMap((x) => x.rows).filter((r) => /^Card action/.test(r.label));
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
     const native = acts.find((r) => r.label.startsWith("Card actions — native"));
     check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; the native row holds only the template's controls",
       () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ViewOptions,ReloadData,Tag"
@@ -206,7 +206,7 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
         && st(resolveVk(custom, builtWith({ name: "MenuItem_other", caption: "Recalculate totals" }))) === "⚠ verify",
       () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
     const hinted = checklistGroups({ entity: "X", changeSet: { cardActions: ["printContract", "runApprovalProcess"] } }, {})
-      .flatMap((x) => x.rows).filter((r) => /^Card action/.test(r.label));
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
     check("checklist: a custom hint containing `print` / `process` still needs an element named for it — the template's Actions button alone reads ⚠ verify",
       () => hinted.length === 2 && hinted.every((r) => r.vk?.type === "card" && r.vk.names?.length === 1)
         && hinted.every((r) => st(resolveVk(r.vk, ctx)) === "⚠ verify"),
