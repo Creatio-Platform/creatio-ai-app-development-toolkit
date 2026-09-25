@@ -175,6 +175,59 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       && g.filter((r) => r.label.startsWith("Card actions — native")).every((r) => r.vk?.type === "cardnative"),
     () => g.filter((r) => /^(Side profile|Tab · |Header|Handler|Card actions — native)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
   {
+    // A custom getActions item is not a template control: it gets its own row, and only the table's own controls
+    // fold into the native row — else a page whose template ships every native control reads as missing one.
+    const acts = checklistGroups({ entity: "X", changeSet: { cardActions: ["PrintButton", "ViewOptionsButton", "ReloadDataButton", "TagButton", "calculateSaaSMetrics", "RunProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
+    const native = acts.find((r) => r.label.startsWith("Card actions — native"));
+    check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; the native row holds only the template's controls",
+      () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ViewOptions,ReloadData,Tag"
+        && acts.some((r) => r.label === "Card action — calculateSaaSMetrics" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — RunProcess" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — Print" && r.vk?.type === "card"),
+      () => acts.map((r) => [r.label, r.vk]));
+    check("cardnative: the Contract native row (ViewOptions / ReloadData / Tag) closes ✅ against a page carrying the template's controls",
+      () => st(resolveVk(native.vk, ctx)) === "✅ Done", () => resolveVk(native.vk, ctx));
+    const custom = acts.find((r) => r.label === "Card action — calculateSaaSMetrics").vk;
+    const withItem = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", name: "CalculateSaaSMetricsMenuItem" }] }] } } } }, "main");
+    check("card: a custom action closes ✅ only on an element named for it — the template's own Actions button alone reads ⚠ verify",
+      () => st(resolveVk(custom, ctx)) === "⚠ verify" && /calculateSaaSMetrics/.test(ev(resolveVk(custom, ctx)))
+        && st(resolveVk(custom, withItem)) === "✅ Done",
+      () => [resolveVk(custom, ctx), resolveVk(custom, withItem)]);
+    const builtWith = (item) => verifyCtx({ pages: { main: { ...page(), resources: { MenuItem_calc_caption: "Calculate SaaS metrics" }, viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", ...item }] }] } } } }, "main");
+    const variants = [{ name: "CalculateSaasMetricsMenuItem" }, { name: "CalculateSAASMetricsMenuItem" },
+      { name: "MenuItem_calc", caption: "Calculate SaaS metrics" },
+      { name: "MenuItem_calc", caption: "#ResourceString(MenuItem_calc_caption)#" },
+      { name: "MenuItem_calc", clicked: { request: "usr.CalculateSaaSMetricsRequest" } }];
+    check("card: a custom action closes ✅ whatever the casing of the element name, or on a caption / clicked.request that names it",
+      () => variants.every((v) => st(resolveVk(custom, builtWith(v))) === "✅ Done")
+        && st(resolveVk(custom, builtWith({ name: "MenuItem_other", caption: "Recalculate totals" }))) === "⚠ verify",
+      () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    // The name must sit on word boundaries: a verb-prefixed neighbour ("Recalculate SaaS metrics") is another action.
+    const lookalikes = [{ name: "RecalculateSaaSMetricsMenuItem" }, { name: "MenuItem_other", caption: "Recalculate SaaS Metrics" },
+      { name: "MenuItem_other", clicked: { request: "usr.RecalculateSaaSMetricsRequest" } }, { name: "CalculateSaaSMetricsDailyMenuItem" }];
+    check("card: an element whose name, caption or request only contains the action name inside a longer word does not close it",
+      () => st(resolveVk(custom, builtWith(lookalikes[0]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[1]))) === "⚠ verify"
+        && st(resolveVk(custom, builtWith(lookalikes[2]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[3]))) === "✅ Done",
+      () => lookalikes.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    const short = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
+      .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
+    check("card: a short action name (`post`) closes on a whole word (`PostMenuItem`, caption \"Post\") but not inside another (`RepostMenuItem`, `PostponeMenuItem`)",
+      () => st(resolveVk(short, builtWith({ name: "PostMenuItem" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "MenuItem_x", caption: "Post" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "RepostMenuItem" }))) === "⚠ verify"
+        && st(resolveVk(short, builtWith({ name: "PostponeMenuItem" }))) === "⚠ verify",
+      () => [short, ...["PostMenuItem", "RepostMenuItem", "PostponeMenuItem"].map((n) => resolveVk(short, builtWith({ name: n })))]);
+    const hinted = checklistGroups({ entity: "X", changeSet: { cardActions: ["printContract", "runApprovalProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
+    check("checklist: a custom hint containing `print` / `process` still needs an element named for it — the template's Actions button alone reads ⚠ verify",
+      () => hinted.length === 2 && hinted.every((r) => r.vk?.type === "card" && r.vk.names?.length === 1)
+        && hinted.every((r) => st(resolveVk(r.vk, ctx)) === "⚠ verify"),
+      () => hinted.map((r) => [r.label, r.vk, resolveVk(r.vk, ctx)]));
+  }
+  {
     const tabResult = { entity: "X", changeSet: { resources: { BasicTabCaption: "Basic information" }, viewConfigDiff: [
       { name: "Name", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
       { name: "Name_2", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
