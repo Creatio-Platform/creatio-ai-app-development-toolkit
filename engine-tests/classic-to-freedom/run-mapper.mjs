@@ -5991,8 +5991,14 @@ check("F2 dashboards verify: a non-V3 template gets the SAME ⚠ for the same mi
      the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
 const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
 const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
-const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
-const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
+const MAPPING_REF = "classic-to-freedom-mapping.md";
+// "The skill" is SKILL.md plus the procedure references it hands out by reader (the dashboards brief, the
+// conditional manifest inputs, the orchestration reference) — every reference except the mapping one, which is
+// the other side of the one-owner rule below.
+const skillFlat = [path.join(SKILL_DIR, "SKILL.md"),
+  ...fs.readdirSync(path.join(SKILL_DIR, "references")).filter((f) => f.endsWith(".md") && f !== MAPPING_REF).sort()
+    .map((f) => path.join(SKILL_DIR, "references", f))].map(flatten).join(" ");
+const mappingFlat = flatten(path.join(SKILL_DIR, "references", MAPPING_REF));
 // One fact, one owner. The trap and its recipe are PROCEDURE, so they live in the skill that executes them;
 // the reference names the parameter and points there. Requiring BOTH documents to carry it, as this pair of
 // goldens would, locks the duplication in place - a reader then has two copies to keep in step, and the
@@ -12910,8 +12916,8 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
-  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what SKILL.md 7.5 and step 8 tell the
-  // orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
+  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
+  // (`references/orchestrate-build.md`) and SKILL.md step 8 tell the orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
   // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page
   // makes those rows untrustworthy, so no round may be written from them.
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ft_"));

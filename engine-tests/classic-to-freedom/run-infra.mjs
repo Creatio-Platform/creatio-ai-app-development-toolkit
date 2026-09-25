@@ -894,24 +894,40 @@ check("build-workflows: a single-line DOUBLE-quoted import is dropped without ar
 // because the thing that can silently regress is a sentence, and the failure is invisible (every gate still
 // passes; the orchestrator simply re-derives a decision the engine already makes, and the two then disagree).
 {
-  const skill = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/SKILL.md", import.meta.url)), "utf8");
-  const engineReadme = readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/engine/README.md", import.meta.url)), "utf8");
-  const step7 = skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8."));
-  check("doc lint (anti-vacuity): step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
+  // Step 7 is split by reader: SKILL.md keeps the six rules in short form with the `--next` invocation, and sends the
+  // driver to `references/orchestrate-build.md` ONCE, at approval, for the contract in full. So each sentence is
+  // linted in the file that carries it, and each slice has its own anti-vacuity guard. Both are whitespace-flattened:
+  // these docs hard-wrap, and a phrase straddling a line break is still the same sentence.
+  const flatten = (t) => t.replace(/\s+/g, " ");
+  const read = (rel) => readFileSync(fileURLToPath(new URL("../../skills/classic-to-freedom-migration/" + rel, import.meta.url)), "utf8");
+  const skill = read("SKILL.md");
+  const orchestrate = read("references/orchestrate-build.md");
+  const engineReadme = read("engine/README.md");
+  const step7 = flatten(skill.slice(skill.indexOf("### 7. Implement The Approved Plan"), skill.indexOf("### 8.")));
+  const orchStep7 = flatten(orchestrate.slice(orchestrate.indexOf("## Step 7"), orchestrate.indexOf("## Step 8")));
+  const orchStep8 = orchestrate.slice(orchestrate.indexOf("## Step 8"));
+  check("doc lint (anti-vacuity): SKILL.md step 7 was located and is a real section — a slice that came back empty would make every check below pass while reading nothing",
     () => step7.length > 2000 && /7\.2 The orchestrator contract/.test(step7),
     () => ({ len: step7.length, head: step7.slice(0, 120) }));
+  check("doc lint (anti-vacuity): the orchestration reference's step 7 was located and holds the contract in full",
+    () => orchStep7.length > 20000 && /7\.2 The orchestrator contract/.test(orchStep7) && /7\.5 Repair/.test(orchStep7),
+    () => ({ len: orchStep7.length, head: orchStep7.slice(0, 120) }));
+  check("doc lint: SKILL.md step 7 sends the driver to the orchestration reference ONCE, when the plan is approved — a reference nothing sends the driver to is a contract nobody reads",
+    () => /read `\.\/references\/orchestrate-build\.md` ONCE/.test(step7),
+    () => step7.slice(0, 600));
   check("doc lint (AC4): step 7 carries the INVOCATION — the orchestrator is given the command that answers which task to start, not left to infer that one exists",
-    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7),
-    () => step7.split("\n").filter((l) => /--next/.test(l)).slice(0, 4));
+    () => /--tasks <migration-folder>\/build-tasks --next/.test(step7) && /--tasks <migration-folder>\/build-tasks --next/.test(orchStep7),
+    () => step7.split("`").filter((l) => /--next/.test(l)).slice(0, 4));
   check("doc lint (AC4): step 7 says DO NOT pick the next task off `index.md` — the instruction that stops the contract regressing to scheduling off a derived report",
-    () => /do not pick one from `index\.md`/i.test(step7) && /where you pick the next task from/i.test(step7),
-    () => step7.split("\n").filter((l) => /index\.md/.test(l)).slice(0, 6));
-check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
-    () => !/One task at a time, in the `Step` order the index lists/.test(step7),
-    () => step7.split("\n").filter((l) => /`Step` order/.test(l)).slice(0, 4));
+    () => /do not pick one from `index\.md`/i.test(step7) && /do not pick one from `index\.md`/i.test(orchStep7)
+      && /where you pick the next task from/i.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /index\.md/.test(l)).slice(0, 6));
+  check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in the `Step` order the index lists — that sentence and `--next` are two answers to one question, and a reader is free to follow either",
+    () => ![step7, orchStep7].some((t) => /One task at a time, in the `Step` order the index lists/.test(t)),
+    () => orchStep7.split(". ").filter((l) => /`Step` order/.test(l)).slice(0, 4));
   check("doc lint (AC4): step 7 states what each empty answer asks of the reader — in particular that `waiting` is not a failure and a halted run exits 2, because an orchestrator acts on the exit code",
-    () => /is not a failure/.test(step7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(step7),
-    () => step7.split("\n").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
+    () => /is not a failure/.test(orchStep7) && /exits? \*\*2\*\*|exit \*\*2\*\*/.test(orchStep7),
+    () => orchStep7.split(". ").filter((l) => /exit|failure/i.test(l)).slice(0, 6));
   check("doc lint: the engine README documents the mode, its verdicts and the clock-is-not-in-flight rule — the reference a reader reaches for when the skill's summary is not enough",
     () => /--tasks <dir> --next/.test(engineReadme) && /KEEPS its clock/.test(engineReadme)
       && /startBlocker/.test(engineReadme),
@@ -920,9 +936,9 @@ check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in 
   // Step 8's exit-code dictionary is where an orchestrator looks up "what does exit 2 mean?". Every check above is
   // sliced to step 7, so a verdict added to the engine and documented only there leaves the dictionary answering the
   // same question a second, shorter way, and nothing sees it. Assert the count the dictionary states matches the
-  // verdicts it enumerates, and that every verdict the engine can print has an entry.
-  const step8 = skill.slice(skill.indexOf("### 8. Validate"));
-  const dictLine = step8.split("\n").find((l) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(l)) || "";
+  // verdicts it enumerates, and that every verdict the engine can print has an entry. The dictionary is one
+  // paragraph, hard-wrapped, so it is read as a paragraph and flattened.
+  const dictLine = flatten(orchStep8.split(/\n\s*\n/).find((p) => /^\*\*Exit 2 is [A-Z]+ different verdicts/.test(p.trimStart())) || "").trim();
   const statedCounts = { THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7 };
   const verdictMarks = (dictLine.match(/⛔/g) || []).length;
   // A REFUSAL is one of them: a mode that declines to touch the folder prints its banner and exits 2 like any
