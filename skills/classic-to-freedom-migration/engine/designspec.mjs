@@ -17,7 +17,7 @@
 // enters the Markdown — this alone kills all line-based injection (headings/quotes/fences/new table rows),
 // since an injected char cannot start a new line. Safe for engine-authored text too (single-line).
 import { resourceKey, HEADER_TOP_REGION } from "./engine.mjs"; // canonical resource-key normalization + the shared "Header / top" region sentinel
-import { featureVerifyType, featureVerifyExtraTypes, analogsOf,
+import { featureVerifyType, featureVerifyExtraTypes, analogsOf, knownCardActions,
   // the guidance item that OWNS the canonical settings for Feed / Attachments, the companion artifact an
   // attachments component is inert without, and the two resolvers that say which plan row is covered by that item.
   // Both constants are NAMES this file renders; neither is a property value.
@@ -2906,12 +2906,19 @@ function buildDashboardRows(result, opts) {
     { label: `Delivery as planned — ${d.packaged.length} dashboard(s) must land in ${pkg} and ${d.standOnly.length} as user-level schema(s), exactly as the approved plan splits them. Read each back in the store its decision names: absence from \`SysSchema\` is not absence when the decision was stand-only.${bareStrings}`, vk: { type: "dashboards", check: "delivery", expect, unrecorded: d.unrecorded.length } },
   ];
 }
-// Process/Print each get their own row (machine: a crt.Button must exist); native view controls fold into one.
+// Process/Print and every custom `getActions` item each get their own row (machine: a crt.Button must exist); only
+// the template's own view controls (the table's card-action rows) fold into the native row. A custom action such as
+// `calculateSaaSMetrics` is not shipped by any template, so folding it there would read a correct page as missing it.
+const TEMPLATE_CARD_ACTIONS = knownCardActions();
 function buildCardActionRows(cs) {
   const acts = cs.cardActions || [];
-  const rows = acts.filter((a) => /process|print/i.test(a))
-    .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`, vk: { type: "card" } }));
-  const natives = acts.filter((a) => !/process|print/i.test(a));
+  const isNative = (a) => TEMPLATE_CARD_ACTIONS.has(a) && !/process|print/i.test(a);
+  // A custom action also carries its name: `hasType("crt.Button")` alone is satisfied by the template's own Actions
+  // button, so the name is what tells a built custom action from an unbuilt one.
+  const rows = acts.filter((a) => !isNative(a))
+    .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`,
+      vk: /process|print/i.test(a) ? { type: "card" } : { type: "card", names: [a.replace(/Button$/, "")] } }));
+  const natives = acts.filter(isNative);
   if (natives.length) {
     // the template ships these controls under stable element names, so the row is machine-checkable.
     rows.push({ label: `Card actions — native (${natives.map((a) => esc(a.replace(/Button$/, ""))).join("/")})`,
@@ -3381,7 +3388,20 @@ export function resolveComponentVk(vk, ctx) {
   if (vk.type === "feature") return resolveFeatureVk(vk, ctx);
   if (vk.type === "dcm-bar") { const ok = hasType("crt.EntityStageProgressBar") || /ProgressBar/i.test(parentTpl); return ok ? ["✅ Done", hasType("crt.EntityStageProgressBar") ? "crt.EntityStageProgressBar built" : `provided by ${esc(parentTpl)}`, "ok"] : ["❌ MISSING", `no crt.EntityStageProgressBar and template is \`${esc(parentTpl)}\``, "missing"]; }
   if (vk.type === "dcm-next") return hasType("crt.NextSteps") ? ["✅ Done", "crt.NextSteps built", "ok"] : ["❌ MISSING", "no crt.NextSteps tab on the built page", "missing"];
+  if ((vk.names || []).length) return resolveCustomCardActionVk(vk, ctx);
   return hasType("crt.Button") ? ["✅ Done", "a crt.Button is present — confirm it triggers the action", "ok"] : ["⚠ verify", "no crt.Button found — confirm the action", "unverified"]; // card
+}
+// A custom `getActions` item is Done only when a built element carries the action's own camelCase tokens
+// (`CalculateSaaSMetricsMenuItem` for `calculateSaaSMetrics`). Any crt.Button is not evidence — the template's
+// Actions button is one — so no match reads ⚠ verify, never ✅.
+function resolveCustomCardActionVk(vk, ctx) {
+  const builtTokens = ctx.ops.map((o) => tokensOf(o.name));
+  const missing = vk.names.filter((n) => {
+    const seq = tokensOf(n);
+    return !seq.length || !builtTokens.some((toks) => tokenSeqIn(toks, seq));
+  });
+  if (!missing.length) return ["✅ Done", `an element named for ${vk.names.map(esc).join(", ")} is present — confirm it triggers the action`, "ok"];
+  return ["⚠ verify", `no built element is named for ${missing.map(esc).join(", ")} — confirm the action is built`, "unverified"];
 }
 // BUSINESS RULES. A page's declarative rules do NOT live in its body: each persists as a separate
 // BusinessRule_* schema, invisible to `viewConfig`, so the row's evidence is `--built.pages[<key>].businessRules` —

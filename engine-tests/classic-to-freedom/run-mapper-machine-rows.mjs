@@ -175,6 +175,28 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       && g.filter((r) => r.label.startsWith("Card actions — native")).every((r) => r.vk?.type === "cardnative"),
     () => g.filter((r) => /^(Side profile|Tab · |Header|Handler|Card actions — native)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
   {
+    // A custom getActions item is not a template control: it gets its own row, and only the table's own controls
+    // fold into the native row — else a page whose template ships every native control reads as missing one.
+    const acts = checklistGroups({ entity: "X", changeSet: { cardActions: ["PrintButton", "ViewOptionsButton", "ReloadDataButton", "TagButton", "calculateSaaSMetrics", "RunProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => /^Card action/.test(r.label));
+    const native = acts.find((r) => r.label.startsWith("Card actions — native"));
+    check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; the native row holds only the template's controls",
+      () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ViewOptions,ReloadData,Tag"
+        && acts.some((r) => r.label === "Card action — calculateSaaSMetrics" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — RunProcess" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — Print" && r.vk?.type === "card"),
+      () => acts.map((r) => [r.label, r.vk]));
+    check("cardnative: the Contract native row (ViewOptions / ReloadData / Tag) closes ✅ against a page carrying the template's controls",
+      () => st(resolveVk(native.vk, ctx)) === "✅ Done", () => resolveVk(native.vk, ctx));
+    const custom = acts.find((r) => r.label === "Card action — calculateSaaSMetrics").vk;
+    const withItem = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", name: "CalculateSaaSMetricsMenuItem" }] }] } } } }, "main");
+    check("card: a custom action closes ✅ only on an element named for it — the template's own Actions button alone reads ⚠ verify",
+      () => st(resolveVk(custom, ctx)) === "⚠ verify" && /calculateSaaSMetrics/.test(ev(resolveVk(custom, ctx)))
+        && st(resolveVk(custom, withItem)) === "✅ Done",
+      () => [resolveVk(custom, ctx), resolveVk(custom, withItem)]);
+  }
+  {
     const tabResult = { entity: "X", changeSet: { resources: { BasicTabCaption: "Basic information" }, viewConfigDiff: [
       { name: "Name", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
       { name: "Name_2", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },

@@ -351,6 +351,13 @@ const FEATURE_ENTITY_ROWS = [
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.FileList" },
     meta: { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
+  // A custom-named approvals detail (`UsrSchema7Detail` over `UsrContractVisa`) misses the `VisaDetailV2` suffix row.
+  // Without this fallback it is counted as a related list the gate expects as a `crt.DataGrid`, while the builder
+  // correctly ships a `crt.ApprovalList` — so the row can never close on a correct page.
+  row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("Visa") } },
+    role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
+    verify: { componentType: "crt.ApprovalList" },
+    meta: { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)", templateProvided: false, uiShape: "component", byEntity: true } }),
   row({ match: { by: MATCH.ENTITY, entity: "ContactCommunication" },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.CommunicationOptions" },

@@ -1098,6 +1098,24 @@ check("#11: *File-entity detail → Attachments feature (templateProvided, infer
 check("#11: entity-inferred Attachments carries a 'confirm / inferred' note",
   filecs.needsDecision.some(n => n.kind === "standard-feature" && /inferred from the entity/.test(n.reason)));
 
+/* ---- a detail over a *Visa entity is recognised as Approvals when its schema name misses the VisaDetailV2 suffix, so
+   the Related-lists count does not expect a crt.DataGrid for what the builder correctly ships as a crt.ApprovalList ---- */
+const visaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema7Detail", entitySchemaName: "UsrContractVisa", detailColumn: "UsrContract", masterColumn: "Id" },
+    Items: { schemaName: "Schema8Detail", entitySchemaName: "UsrContractItem", detailColumn: "UsrContract", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 }),
+         di({ name: "Items", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const visacs = mapToFreedom(mergeHierarchy([visaClient]));
+check("*Visa-entity detail → Approvals feature (component, inferred), NOT a related list; a plain detail beside it stays a list",
+  visacs.standardFeatures.some(s => s.feature === "Approvals" && s.uiShape === "component" && s.inferredFromEntity)
+  && !visacs.details.some(d => d.entity === "UsrContractVisa") && visacs.details.some(d => d.entity === "UsrContractItem"),
+  () => ({ features: visacs.standardFeatures.map(s => s.feature), details: visacs.details.map(d => d.entity) }));
+const visaChecklist = renderChecklist({ entity: "X", changeSet: visacs }, {});
+check("*Visa-entity detail: the checklist expects 1 related list and gates the approval list on its own Approvals row",
+  /Related lists — 1 expected/.test(visaChecklist) && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
+  () => visaChecklist.split("\n").filter(l => /Related lists|Approvals/.test(l)));
+
 /* ---- ContactCommunication → the native Communication-options component (NOT a plain grid), inferred by entity ---- */
 const commClient = L("Client", { entity: "X", details: {
     Comm: { schemaName: "Schema9Detail", entitySchemaName: "ContactCommunication", detailColumn: "Contact", masterColumn: "Id" } },
@@ -3136,6 +3154,9 @@ check("feature resolution is exact-name first, then longest suffix, then the ENT
   resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
   && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
   && resolveFeatureRow("ApplicantVisaDetail") === null
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa")?.meta.feature === "Approvals"
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa")?.meta.byEntity === true
+  && resolveFeatureRow("Schema7Detail", "UsrVisaReason") === null
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
