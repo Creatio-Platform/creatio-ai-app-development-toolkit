@@ -246,7 +246,7 @@ export function resolveSplit(split, groups, identity = new Map()) {
     });
   }
   errors.push(...unknownWriteTargets(items, index), ...splitFoldedChains(items),
-    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items));
+    ...routingBeforeTypedPages(items), ...reviewBeforeItsPage(items), ...attributeAfterItsWriter(items));
   return { items, errors, unplaced: unconsumed(index) };
 }
 
@@ -304,6 +304,38 @@ function routingBeforeTypedPages(items) {
     out.push(`\`${it.id}\` carries the per-type routing row but sits BEFORE ${after.length} item(s) that build a typed`
       + ` page (${shown}${more}) — routing binds each Type's form by the Type column, and a form that has not been`
       + " built yet cannot be bound. Move it after them.");
+  });
+  return out;
+}
+
+// THE FOURTH CHECKED SEAM. A handler that sets a virtual attribute the page has not declared yet is inert, so the
+// sub-agent holding it can only record its rows blocked. A handler row carries the attributes its own body sets
+// (`writesAttrs`), which makes this ordering checkable: a page's `[attribute-virtual] X` row goes in the same item
+// as, or an earlier item than, every handler row on that page writing X.
+// Matched on the RECORDED writes, not on "every handler of the page": an earlier item holding a handler that sets
+// none of the page's virtual attributes is a correct split. Writes made any other way (a helper that is not folded
+// under the handler, a model setter) are not recorded, so the rule cannot see them.
+function attributeAfterItsWriter(items) {
+  const firstWriter = new Map();          // "page|attribute" -> the EARLIEST item whose handler writes it
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (r.vk?.type !== "handler") continue;
+      for (const attr of r.writesAttrs || []) {
+        const k = `${r.pageKey}|${attr}`;
+        if (!firstWriter.has(k)) firstWriter.set(k, { i, id: it.id, method: r.vk.method });
+      }
+    }
+  });
+  const out = [];
+  items.forEach((it, i) => {
+    for (const r of it.rows) {
+      if (r.vk?.type !== "vmattr") continue;
+      const w = firstWriter.get(`${r.pageKey}|${r.vk.name}`);
+      if (!w || w.i >= i) continue;
+      out.push(`\`[attribute-virtual] ${r.vk.name}\` on \`${r.pageKey}\` is in \`${it.id}\`, but \`${w.method}\`, which sets`
+        + ` it, is in \`${w.id}\` — an EARLIER item, so that handler would be built before the attribute it writes`
+        + ` exists. Move the attribute row into \`${w.id}\` or an item before it.`);
+    }
   });
   return out;
 }
