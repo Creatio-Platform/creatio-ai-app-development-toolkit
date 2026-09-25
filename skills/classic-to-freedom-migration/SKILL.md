@@ -132,6 +132,7 @@ Every migration is tracked through a persisted document set — the shared sourc
 - `plan.md` is the **engine-written `--plan --out plan.md` output** (Contract rule 2), its values supplied via `manifest.planMeta`, plus its provenance; it is **frozen after approval** — changes go through `decisions.md` and re-approval.
 - `customizations.md` is the **`classic-ui-expert` sub-agent's report** (step 5.1) when that run applies — behaviour cards with acceptance criteria, written by that skill, linked from the plan's `Adjustments`, and never hand-edited.
 - Cardinal rule: read `README.md` + `roadmap.md` at the start of every session (single-section: `plan.md` + `worklog.md`); after every meaningful action update `roadmap.md` and append to `worklog.md`.
+- **Read discipline** binds your own reads too: big output goes to a file and comes back as a `grep -n` + `sed -n` window, JSON is queried rather than printed, a file you already hold is not re-read. The full block is in `./references/orchestrate-build.md`.
 
 ## Workflow
 
