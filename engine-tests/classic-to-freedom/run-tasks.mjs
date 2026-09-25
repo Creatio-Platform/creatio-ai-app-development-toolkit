@@ -1165,6 +1165,26 @@ const BULK_GROUPS = [{ pageKey: "main", baseTitle: "Form — Logic", rows:
   Array.from({ length: 12 }, (_, i) => ({ label: `Handler — \`h${i}\`` })) },
   { pageKey: "main", baseTitle: "Card actions", rows: [{ label: "Card action — Print" }] }];
 const bulkSplit = (items) => resolveSplit({ items }, BULK_GROUPS, new Map());
+// TWO ROWS, ONE KEY. `rowKey` masks digits and truncates at 80 characters, so each pair below shares a key while
+// the labels differ. Each item names the row the OTHER would take first, and must still get the row it named.
+const LONG = "Detail — a related list whose caption runs long enough that the structural key stops before the end ";
+const TWIN_GROUPS = [{ pageKey: "main", baseTitle: "Form — Layout", rows: [
+  { label: "Tab 1 — fields" }, { label: "Tab 2 — fields" },
+  { label: `${LONG}(Orders)` }, { label: `${LONG}(Invoices)` },
+] }];
+const twinSplit = () => resolveSplit({ items: [
+  { id: "second", title: "s", pageKey: "main", writesTo: "main", rows: ["Tab 2 — fields", `${LONG}(Invoices)`] },
+  { id: "first", title: "f", pageKey: "main", writesTo: "main", rows: ["Tab 1 — fields", `${LONG}(Orders)`] },
+] }, TWIN_GROUPS, new Map());
+check("split: an item naming one of two rows that share a `rowKey` gets the row whose label it wrote, even when it resolves first — the first free row of the key belonged to the other item",
+  () => {
+    const r = twinSplit();
+    const labels = (id) => r.items.find((i) => i.id === id).rows.map((x) => x.label);
+    return rowKey("Tab 1 — fields") === rowKey("Tab 2 — fields") && rowKey(`${LONG}(Orders)`) === rowKey(`${LONG}(Invoices)`)
+      && r.errors.length === 0
+      && JSON.stringify(labels("second")) === JSON.stringify(["Tab 2 — fields", `${LONG}(Invoices)`])
+      && JSON.stringify(labels("first")) === JSON.stringify(["Tab 1 — fields", `${LONG}(Orders)`]);
+  }, () => { const r = twinSplit(); return { errors: r.errors, items: r.items.map((i) => [i.id, i.rows.map((x) => x.label)]) }; });
 check("split: `@<group>` claims every unclaimed row of that group — a plan whose checklist runs to several hundred rows has to be expressible in a file a person or an agent can actually write",
   () => {
     const r = bulkSplit([

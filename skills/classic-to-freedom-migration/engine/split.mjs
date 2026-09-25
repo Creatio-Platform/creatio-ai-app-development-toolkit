@@ -161,6 +161,7 @@ const groupClaim = (label) => {
 // `Handler — h11` ONE key, so counting claims per key cannot say WHICH of them an item took — a second group claim
 // re-took the first five rows because the key still had capacity. Marking the row object settles it: `byPage` and
 // `byGroup` hold the same objects, so a row claimed by name is visibly gone from its group and the other way round.
+const exactLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 function claimRow(entry, pageKey, itemId, index) {
   const page = entryPage(entry, pageKey);
   const key = rowKey(entryLabel(entry));
@@ -169,7 +170,11 @@ function claimRow(entry, pageKey, itemId, index) {
     return { error: `\`${itemId}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
       + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page` };
   }
-  const free = found.find((r) => !r.claimedBy);
+  // THE ROW THE ITEM NAMED, when it named one exactly. `rowKey` masks digits and truncates, so `Tab 1 — fields`
+  // and `Tab 2 — fields` share a key; taking the first free row of the key hands an item the row another item
+  // wrote. The first free occurrence is the fallback only for an entry that matches no row's full text.
+  const named = exactLabel(entryLabel(entry));
+  const free = found.find((r) => !r.claimedBy && exactLabel(r.label) === named) || found.find((r) => !r.claimedBy);
   if (!free) {
     // Every occurrence the plan carries is already spoken for. With identical text there is no way to say WHICH
     // claim is the extra one, so the earlier owners and this one are all named.
