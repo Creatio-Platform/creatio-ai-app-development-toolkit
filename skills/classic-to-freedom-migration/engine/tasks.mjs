@@ -3802,21 +3802,39 @@ function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, 
     t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, carriedOf(t), editedOf(t));
   }
 }
-// The OPEN rows of other tasks that share a decision subject with a row this decision addressed: not built, not
-// decided, not a plan boundary. Listed for the person, never written.
-function openSubjectSiblings(tasks, touched) {
-  const subjects = new Set(touched.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
-  const addressed = new Set(touched.map((x) => x.task));
+// The OPEN rows, in any task including the decided row's own, that share a decision subject with a row this
+// decision addressed: not written in this run, not built, not decided, not a plan boundary. Listed for the
+// person, never written.
+function openSubjectSiblings(tasks, placedRows, writtenRows) {
+  const subjects = new Set(placedRows.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
+  const written = (t, n) => writtenRows.some((x) => x.task === t && x.n === n);
   const out = [];
   if (!subjects.size) return out;
   for (const t of tasks) {
-    if (t.unread || addressed.has(t)) continue;
+    if (t.unread) continue;
     (t.rows || []).forEach((r, i) => {
-      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1)) return;
+      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1) || written(t, i + 1)) return;
       out.push({ task: t, n: i + 1, subject: r.subject });
     });
   }
   return out;
+}
+// The `D<N>` entries of `decisions` (the Map from readDecisions) that no task's `decisions:` line cites, as
+// `{ id, title }` in file order. `Adjustment N` keys are not `--decide` targets and are never returned.
+export function unappliedDecisions(tasks, decisions) {
+  const cited = new Set();
+  for (const t of tasks || []) {
+    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
+    for (const d of map?.values() || []) cited.add(decisionOf(d));
+  }
+  return [...(decisions || new Map()).entries()]
+    .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
+    .map(([id, title]) => ({ id, title }));
+}
+// Whether the folder has had no dispatch yet: no closed timing sample, and no open clock except `startedId`'s.
+export function firstDispatchPending(dir, startedId = null) {
+  const { running, samples } = readTimingsFile(dir);
+  return !samples.length && Object.keys(running).every((id) => id === startedId);
 }
 export function applyDecision(dir, result, opts = {}) {
   const { decision, mode, destination, decisions } = opts;
@@ -3886,7 +3904,7 @@ export function applyDecision(dir, result, opts = {}) {
   const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode, destination: destination || null,
     touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged,
-    siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
+    siblings: openSubjectSiblings(merged.tasks, placed(touched), [...touched, ...cascaded]) };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are

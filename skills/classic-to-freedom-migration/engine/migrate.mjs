@@ -60,7 +60,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
-  applyDecision, revokeDecision, decidedRowKeys,
+  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
   REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
@@ -3122,8 +3122,19 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // round), or parked after its rounds. The gate reads the same folder state in either mode.
   const notBuilt = unroutedNotBuilt(set.tasks);
   if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
-  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set));
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set),
+    ...unappliedDecisionLines(set, dir, startId));
   return lines.join("\n") + "\n";
+}
+
+// Before the first dispatch only: the decisions.md entries no row cites. Printed, never written, and no gate.
+function unappliedDecisionLines(set, dir, startedId = null) {
+  if (!firstDispatchPending(dir, startedId)) return [];
+  const open = unappliedDecisions(set.tasks, readDecisions(path.join(dir, "..")));
+  if (!open.length) return [];
+  return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,
+    ...open.map((d) => `  · ${d.id} — ${d.title}`),
+    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>\` before dispatch.`];
 }
 
 // `--tasks <dir> --next` — WHICH TASKS ARE STARTABLE RIGHT NOW, answered by the engine.
@@ -3239,7 +3250,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
   if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
-  return nextAnswerLines(answer, dir, cmdFor).join("\n") + "\n";
+  return [...nextAnswerLines(answer, dir, cmdFor), ...unappliedDecisionLines(set, dir)].join("\n") + "\n";
 }
 
 // `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
@@ -3438,11 +3449,11 @@ function decideTouchedLines(res, opts) {
   lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
   return lines;
 }
-// The open rows on another task that share a subject with a decided row, each with the command that applies the
+// The open rows, in any task, that share a subject with a decided row, each with the command that applies the
 // same answer to it. Listed only: each row is closed by the person running its command.
 function decideSiblingLines(res, cmdFor) {
   if (!res.siblings?.length) return [];
-  return ["", `${res.siblings.length} open row(s) on other tasks share a subject with the decided row(s) and were NOT`
+  return ["", `${res.siblings.length} open row(s) share a subject with the decided row(s) and were NOT`
     + " touched. To apply the same answer to them, run:",
     ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
 }
