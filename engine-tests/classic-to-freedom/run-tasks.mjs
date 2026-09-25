@@ -7432,6 +7432,25 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
   check("split: a handler on ANOTHER page writing an attribute of the same name does not refuse — each page declares its own view-model attributes",
     () => writeSplit(otherPageFirst).errors.length === 0, () => writeSplit(otherPageFirst).errors);
 
+  // TWO writers of one attribute. The attribute has to precede the EARLIEST of them: a later writer sitting after
+  // the attribute is fine, an earlier one is not, whatever else writes it further down.
+  const SECOND_WRITER = "Handler — `setLegalEntityAgain`";
+  const TWO_WRITER_GROUPS = WRITE_GROUPS.map((g) => (g.pageKey === "main" && g.baseTitle === "Form — Custom methods"
+    ? { ...g, rows: [...g.rows, { label: SECOND_WRITER, vk: { type: "handler", method: "setLegalEntityAgain" }, writesAttrs: ["LegalEntity"] }] }
+    : g));
+  const twoWriterSplit = (items) => resolveSplit({ items }, TWO_WRITER_GROUPS, new Map());
+  const writerBetween = [item("writer-a", "main", [WRITER, OTHER]), item("attrs", "main", [ATTR]),
+    item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, an attribute placed after the FIRST writer is refused once, naming that writer and its item — a later writer does not hide it",
+    () => {
+      const r = twoWriterSplit(writerBetween);
+      return r.errors.length === 1 && r.errors[0].includes("`setLegalEntity`") && r.errors[0].includes("`writer-a`")
+        && !r.errors[0].includes("setLegalEntityAgain") && !r.errors[0].includes("`writer-b`");
+    }, () => twoWriterSplit(writerBetween).errors);
+  const attrWithFirstWriter = [item("writer-a", "main", [WRITER, OTHER, ATTR]), item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, the attribute in the FIRST writer's item resolves even though a second writer comes later",
+    () => twoWriterSplit(attrWithFirstWriter).errors.length === 0, () => twoWriterSplit(attrWithFirstWriter).errors);
+
   // The same rule through the real engine: the handler row gets its write targets from the method's own body.
   const wBody = 'define("MPage",[],function(){return{entitySchemaName:"M",'
     + 'attributes:{"LegalEntity":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN},'
