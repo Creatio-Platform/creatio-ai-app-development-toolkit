@@ -1,8 +1,10 @@
 # Migrating a section's Classic dashboards (step 7.7)
 
 Handed, with `./references/build-task-execution.md`, `./references/build-page.md` and
-`./references/classic-to-freedom-mapping.md`, to the task that migrates the section's dashboards. It
-runs last, because it writes into the built list page. SKILL.md step 2 found the dashboards and step
+`./references/classic-to-freedom-mapping.md`, to the list page's build task — the one whose
+deliverables carry the section-dashboard rows; the engine emits no separate dashboards task. Do this
+part after the list page body is built, within that task, because it writes into the built list
+page. SKILL.md step 2 found the dashboards and step
 4.2's `signals.dashboards` recorded them and the plan's delivery split. The state, scope and
 existence-check rules in `build-task-execution.md` bind every call below.
 
@@ -29,13 +31,13 @@ under `## Notes` for the driver to relay — System Designer → **Dashboards mi
 land in the **Dashboards migration log** section. Record the installed version (`list-packages`) in
 `worklog.md`; the driver records the migration outcome the user reports, and the DoD row stays open
 until both are recorded or `discovery.md` says `none`. A clio too old to carry the verb is the one case
-that closes it differently: record the gap in `worklog.md`, leave the task `DONE` rather than
-`VALIDATED`, and carry on — the rest of the migration does not wait on it.
+that closes it differently: record the gap in `worklog.md` beside that `not-built — blocked` row and
+finish the rest of your task — closing that row is the driver's decision, not yours.
 
-**Section dashboards — hand off to the migrator, LAST, and never rebuild them by hand.** When
-`signals.dashboards` says the section has 7x dashboards, **`MigrateDashboardsProcess`**
-(`CrtDashboardsMigratorApp`) migrates them; it runs last because it needs the *built* page to write
-into. Storage model, the target page's ready-made structure, why the binding scan must be
+**Section dashboards — hand off to the migrator, after the list page body, and never rebuild them
+by hand.** When `signals.dashboards` says the section has 7x dashboards,
+**`MigrateDashboardsProcess`** (`CrtDashboardsMigratorApp`) migrates them; it comes after the list
+page body because it needs the *built* page to write into. Storage model, the target page's ready-made structure, why the binding scan must be
 package-agnostic, and the scope boundary: `./references/classic-to-freedom-mapping.md` → *Section
 dashboards*.
 

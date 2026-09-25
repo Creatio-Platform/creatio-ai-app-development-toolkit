@@ -219,7 +219,7 @@ answered on the stand is recorded there and is not repeated in its own file.
 | Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows |
 | Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows |
 | Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when the plan lists dashboards |
-| Dashboards migration (7.7) | its deliverables are the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md`, `./references/classic-to-freedom-mapping.md` |
+| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md`, `./references/classic-to-freedom-mapping.md` |
 | Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` |
 | Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` |
 
@@ -306,16 +306,21 @@ than beside it.
 (entities/data sources → own sections → replacing/extension deltas → backend). Each section gets its
 own slice, its own task folder and its own step 8 before the next one starts.
 
-**7.7 Classic dashboards** are migrated by the task handed `./references/build-dashboards.md` (7.3),
-last, against the built list page. Two of its steps need the user, and a builder cannot reach the
-user, so both are yours:
+**7.7 Classic dashboards** are migrated inside the list page's build task — the one whose
+deliverables carry the section-dashboard rows, handed `./references/build-dashboards.md` too (7.3);
+the engine emits no separate dashboards task. The builder does it after the list page body, since it
+writes into the built page. Two of its steps need the user, and a builder cannot reach the user, so
+both are yours:
 
-- **Before you `--start` that task, confirm the target environment with the user** for
+- **Before you `--start` that list-page task, confirm the target environment with the user** for
   `install-dashboards-migrator` — a destructive clio call that runs a configuration build and
   restarts the instance. Record the answer in `decisions.md` and put it in the sub-agent's prompt;
   without it the builder records the row `needs-decision` instead of installing. A builder that
   reports a clio too old for the verb (a `blocked` row) is yours to raise: ask the user to update
-  clio.
+  clio. If they do not, the rest of the migration does not wait on it: record the gap in
+  `worklog.md` and a decision in `decisions.md`, then close that row with
+  `--decide D<N> --postponed --to <destination> --row <task>:<n>` (or `--wont-do`) — left open, it
+  is re-filed as a repair task every round until the three-round cap parks it.
 - **The System Designer Dashboards migration run is the user's.** Relay the hand-off the builder
   writes under `## Notes` (the section, the target list page, **Migrate**, the **Dashboards
   migration log**), and record the outcome the user reports in `worklog.md`.

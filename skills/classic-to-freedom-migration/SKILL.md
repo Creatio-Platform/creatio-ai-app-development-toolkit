@@ -489,8 +489,8 @@ and step 8's driver side. What follows is the part you keep in view while the bu
 **7.3 Each sub-agent is handed the briefs its task kind names** in the table in `./references/orchestrate-build.md`
 → 7.3 — as paths, never pasted bodies. No sub-agent is handed this file.
 
-**7.7 Classic dashboards** — when `discovery.md` lists any, the task that migrates them is handed
-`./references/build-dashboards.md`; it runs last, against the built list page. A builder cannot reach the user, so YOU confirm the environment with the user before `--start` (the migrator install is destructive: configuration build + restart) and pass that confirmation in its prompt, and you relay the System Designer migration hand-off to the user → `./references/orchestrate-build.md` 7.7.
+**7.7 Classic dashboards** — when `discovery.md` lists any, the list page's build task (the one carrying the section-dashboard rows; there is no separate dashboards task) is also handed
+`./references/build-dashboards.md` and migrates them after the page body. A builder cannot reach the user, so YOU confirm the environment with the user before that task's `--start` (the migrator install is destructive: configuration build + restart) and pass that confirmation in its prompt, and you relay the System Designer migration hand-off to the user → `./references/orchestrate-build.md` 7.7.
 
 ### 8. Validate
 
@@ -526,7 +526,7 @@ Read each only when the step that names it says so:
 - `./references/orchestrate-build.md` — step 7 in full (7.1–7.6: slicing, the orchestrator contract, the task-kind → brief table, read-back and judge, repair, whole-package scope) and step 8's driver side. Read ONCE, when the plan is approved.
 - `./references/build-page.md` — the per-page build procedure, what a builder owes the step-8 close report, and the build-time Known Traps. Handed to page-build and repair sub-agents.
 - `./references/build-scaffolding.md` — the `new-app` one-call scaffold, the package-composition rule and the re-template sequence. Handed to the Scaffolding sub-agent.
-- `./references/build-dashboards.md` — step 7.7: installing the Dashboards Migrator and running `MigrateDashboardsProcess`. Handed to the sub-agent that migrates the section's dashboards.
+- `./references/build-dashboards.md` — step 7.7: installing the Dashboards Migrator and running `MigrateDashboardsProcess`. Handed to the list page's build task when it carries the section-dashboard rows.
 - `./references/read-back-brief.md` / `./references/judge-brief.md` / `./references/reference-cache-brief.md` — the briefs of the step-7.4 read-back, the judge (`Quality gates`) and the `Reference cache` sub-agents.
 - `./references/behaviour-analysis-run.md` — how to run the step-5.1 behaviour analysis. Read only when step 5.1's condition holds.
 - `./references/manifest-conditional-inputs.md` — the step-4.2 manifest inputs that apply only when a surface signal exists (profile cards, the add-record mini page, dashboard delivery, typed pages, a section boundary).

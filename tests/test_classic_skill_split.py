@@ -19,6 +19,7 @@ SKILL_DIR = ROOT / "skills/classic-to-freedom-migration"
 SKILL = SKILL_DIR / "SKILL.md"
 REFERENCES = SKILL_DIR / "references"
 ORCHESTRATE = REFERENCES / "orchestrate-build.md"
+TASKS_ENGINE = SKILL_DIR / "engine/tasks.mjs"
 
 # The body budget, in bytes. The driver pays for every one of them on every run,
 # before it has read a single page of the stand.
@@ -79,6 +80,35 @@ def brief_table(text):
     return rows
 
 
+def brief_table_recognisers(text):
+    """The "How to recognise it" cell of every row of the step-7.3 task-kind table."""
+    step = section(text, "**7.3 What each sub-agent is handed.**", "**7.4 ")
+    cells = []
+    for line in step.splitlines():
+        row = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.lstrip().startswith("|") and len(row) >= 3 and not set(row[0]) <= set("-: "):
+            cells.append(row[1])
+    return cells[1:]  # drop the header row
+
+
+def engine_task_labels():
+    """What tasks.mjs writes into a task file's `group:`, `writesTo:` and `kind:` lines.
+
+    Read from the engine source, so a label renamed there is a label renamed here.
+    """
+    source = read(TASKS_ENGINE)
+    consts = dict(re.findall(r'^(?:export )?const (\w+) = "([^"]+)";', source, re.M))
+    table = section(source, "const ARTIFACT_LABEL = new Map([", "]);")
+    groups = {consts.get(v, v.strip('"')) for v in re.findall(r'\[\w+, (\w+|"[^"]+")\]', table)}
+    fallback = re.search(r'const artifactLabel = \(artifact\) =>\s*\n?\s*ARTIFACT_LABEL\.get\(artifact\) \|\| '
+                         r'\(artifact\.startsWith\("review:"\) \? (\w+) : "([^"]+)"\);', source)
+    if not fallback:
+        raise AssertionError("artifactLabel() no longer has the shape this test reads")
+    groups |= {consts[fallback.group(1)], fallback.group(2)}
+    writes = {consts[k] for k in ("ARTIFACT_SCAFFOLD", "ARTIFACT_WHOLE")}
+    return groups, writes, consts["REPAIR_KIND"]
+
+
 class SkillBodyBudgetTests(unittest.TestCase):
     def test_skill_body_stays_within_its_byte_budget(self):
         size = len(SKILL.read_bytes())
@@ -115,6 +145,21 @@ class BriefRoutingTableTests(unittest.TestCase):
         }
         self.assertFalse(set(BRIEFS) - on_disk, f"brief files missing: {set(BRIEFS) - on_disk}")
         self.assertFalse(on_disk - named, f"briefs no task kind is handed: {on_disk - named}")
+
+    def test_the_table_recognises_tasks_by_the_labels_the_engine_writes(self):
+        # The table is the only place that decides which briefs a sub-agent gets, and it
+        # keys on strings tasks.mjs writes. A label renamed on one side only would send a
+        # task to the "not recognised" fallback while every other guard stays green.
+        groups, writes, repair = engine_task_labels()
+        self.assertGreaterEqual(len(groups), 5, f"read only {groups} from tasks.mjs")
+        cells = " ".join(brief_table_recognisers(read(ORCHESTRATE)))
+        table_groups = {g.rstrip("…").strip() for g in re.findall(r"`group: ([^`]+)`", cells)}
+        self.assertEqual(table_groups, groups,
+                         "the 7.3 table's `group:` labels and the engine's task groups differ")
+        table_writes = set(re.findall(r"`writesTo: ([a-z]+)`", cells))
+        self.assertEqual(table_writes, writes,
+                         "the 7.3 table's `writesTo:` values and the engine's artifacts differ")
+        self.assertIn(f"`kind: {repair}`", cells, "the repair row does not use the engine's repair kind")
 
     def test_the_mapping_reference_goes_to_every_page_builder(self):
         rows = brief_table(read(ORCHESTRATE))

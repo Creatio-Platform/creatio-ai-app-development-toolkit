@@ -495,5 +495,73 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertIn("Classic dashboards: the Dashboards Migrator is installed", dod)
 
 
+MANIFEST_CONDITIONAL = MIGRATION_REFERENCES / "manifest-conditional-inputs.md"
+BEHAVIOUR_RUN = MIGRATION_REFERENCES / "behaviour-analysis-run.md"
+
+
+def block_with(text, anchor):
+    """The single blank-line-separated block containing `anchor`, quote markers removed.
+
+    The rules below were moved out of SKILL.md into references only the step that needs
+    them reads. Pinning them to their own block, not the whole file, is what turns a rule
+    that drifts into a neighbouring paragraph red. Blockquote markers are dropped first,
+    so a phrase that re-wrapping split across two quoted lines still matches.
+    """
+    unquoted = re.sub(r"(?m)^[ \t]*>[ \t]?", "", text)
+    blocks = [b for b in unquoted.split("\n\n") if flat(anchor) in flat(b)]
+    if len(blocks) != 1:
+        raise AssertionError(f"{len(blocks)} blocks contain {anchor!r}; need exactly one")
+    return blocks[0]
+
+
+class ClassicSkillRelocatedSafetyTests(unittest.TestCase):
+    """Safety rules the split moved into conditional references, pinned where they now live."""
+
+    def test_dashboard_delivery_never_skips_a_row_that_fails_to_parse(self):
+        para = block_with(read_text(MANIFEST_CONDITIONAL), "Strip a leading BOM before parsing")
+        missing = missing_markers(para, [
+            "`JSON.parse` throws",
+            "Do NOT catch that and skip the row",
+            "a skipped row reports its dashboard as stand-only",
+            "Do NOT narrow the scan by package",
+        ])
+        self.assertFalse(missing, f"dashboard-delivery BOM rule lost {missing}")
+
+    def test_bind_only_is_never_a_way_past_a_typed_page_that_will_not_fold(self):
+        item = block_with(read_text(MANIFEST_CONDITIONAL), "is NEVER a way to get past a typed page")
+        missing = missing_markers(item, [
+            "use it **strictly** when you have VERIFIED that type's layout is **identical to the base**",
+            "**BLOCKER to RESOLVE**",
+            "**silently loses that delta**",
+            "`bindOnly` requires positive evidence of \"identical\", not the absence of a working fold",
+            "**The structure gate BLOCKS the plan until every typed page is folded or `bindOnly`**",
+        ])
+        self.assertFalse(missing, f"bindOnly guard-rail lost {missing}")
+
+    def test_section_boundary_is_asked_before_the_fold_and_recorded(self):
+        para = block_with(read_text(MANIFEST_CONDITIONAL),
+                          "the SECTION BOUNDARY, and it has to be asked BEFORE the fold")
+        missing = missing_markers(para, [
+            "stop and ask ONE question",
+            "let the SCOPE decide which",
+            "the user's answer settles it either way, and the engine does not auto-default",
+            "never invent one",
+            "its page is **never folded**",
+        ])
+        self.assertFalse(missing, f"opensClassicPage boundary rule lost {missing}")
+
+    def test_a_blocked_route_is_one_question_then_a_stop(self):
+        para = block_with(read_text(BEHAVIOUR_RUN), "ROUTE GATE — resolve it in ONE turn")
+        missing = missing_markers(para, [
+            "no sentence here can grant a permission it withholds",
+            "do **not** slide into route 3 and start working",
+            "Issue exactly ONE `AskUserQuestion`",
+            "and stop until it is answered",
+            "**Never mention the option in passing and keep going**",
+            "**While the gate is open, do NOTHING a workflow phase already owns.**",
+        ])
+        self.assertFalse(missing, f"host-permission route gate lost {missing}")
+
+
 if __name__ == "__main__":
     unittest.main()
