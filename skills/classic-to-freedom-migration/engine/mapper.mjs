@@ -1310,7 +1310,7 @@ function mapDetails(ctx, containers, profileRegion) {
   const matchDetailFeature = (d, dentity) => {
     // ONE resolution, in the table's own documented order: exact schema name, then longest suffix, then the
     // ENTITY fallbacks. `meta.byEntity` is what tells the plan the match was inferred rather than named.
-    const r = resolveFeatureRow(d.schemaName, dentity);
+    const r = resolveFeatureRow(d.schemaName, dentity, { detailColumn: d.detailColumn });
     return { feat: r ? featureView(r) : null, featByEntity: !!r?.meta?.byEntity };
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.

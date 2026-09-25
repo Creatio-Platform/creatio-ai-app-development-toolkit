@@ -195,6 +195,22 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => st(resolveVk(custom, ctx)) === "⚠ verify" && /calculateSaaSMetrics/.test(ev(resolveVk(custom, ctx)))
         && st(resolveVk(custom, withItem)) === "✅ Done",
       () => [resolveVk(custom, ctx), resolveVk(custom, withItem)]);
+    const builtWith = (item) => verifyCtx({ pages: { main: { ...page(), resources: { MenuItem_calc_caption: "Calculate SaaS metrics" }, viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", ...item }] }] } } } }, "main");
+    const variants = [{ name: "CalculateSaasMetricsMenuItem" }, { name: "CalculateSAASMetricsMenuItem" },
+      { name: "MenuItem_calc", caption: "Calculate SaaS metrics" },
+      { name: "MenuItem_calc", caption: "#ResourceString(MenuItem_calc_caption)#" },
+      { name: "MenuItem_calc", clicked: { request: "usr.CalculateSaaSMetricsRequest" } }];
+    check("card: a custom action closes ✅ whatever the casing of the element name, or on a caption / clicked.request that names it",
+      () => variants.every((v) => st(resolveVk(custom, builtWith(v))) === "✅ Done")
+        && st(resolveVk(custom, builtWith({ name: "MenuItem_other", caption: "Recalculate totals" }))) === "⚠ verify",
+      () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    const hinted = checklistGroups({ entity: "X", changeSet: { cardActions: ["printContract", "runApprovalProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => /^Card action/.test(r.label));
+    check("checklist: a custom hint containing `print` / `process` still needs an element named for it — the template's Actions button alone reads ⚠ verify",
+      () => hinted.length === 2 && hinted.every((r) => r.vk?.type === "card" && r.vk.names?.length === 1)
+        && hinted.every((r) => st(resolveVk(r.vk, ctx)) === "⚠ verify"),
+      () => hinted.map((r) => [r.label, r.vk, resolveVk(r.vk, ctx)]));
   }
   {
     const tabResult = { entity: "X", changeSet: { resources: { BasicTabCaption: "Basic information" }, viewConfigDiff: [

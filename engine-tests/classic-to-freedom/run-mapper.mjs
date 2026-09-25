@@ -1116,6 +1116,16 @@ check("*Visa-entity detail: the checklist expects 1 related list and gates the a
   /Related lists — 1 expected/.test(visaChecklist) && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
   () => visaChecklist.split("\n").filter(l => /Related lists|Approvals/.test(l)));
 
+/* ---- an entity that only ends in `Visa` (a business list of travel visas keyed by another column) stays a related list ---- */
+const bizVisaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema9Detail", entitySchemaName: "UsrEmployeeVisa", detailColumn: "UsrOwner", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const bizVisacs = mapToFreedom(mergeHierarchy([bizVisaClient]));
+check("an entity ending in `Visa` that is not `<detailColumn>Visa` stays a related list — no Approvals row, no crt.Approval gate",
+  !bizVisacs.standardFeatures.some(s => s.feature === "Approvals") && bizVisacs.details.some(d => d.entity === "UsrEmployeeVisa"),
+  () => ({ features: bizVisacs.standardFeatures.map(s => s.feature), details: bizVisacs.details.map(d => d.entity) }));
+
 /* ---- ContactCommunication → the native Communication-options component (NOT a plain grid), inferred by entity ---- */
 const commClient = L("Client", { entity: "X", details: {
     Comm: { schemaName: "Schema9Detail", entitySchemaName: "ContactCommunication", detailColumn: "Contact", masterColumn: "Id" } },
@@ -3154,9 +3164,11 @@ check("feature resolution is exact-name first, then longest suffix, then the ENT
   resolveFeatureRow("VisaDetailV2")?.meta.feature === "Approvals"
   && resolveFeatureRow("ApplicantEmailDetailV2")?.meta.feature === "Emails"
   && resolveFeatureRow("ApplicantVisaDetail") === null
-  && resolveFeatureRow("Schema7Detail", "UsrContractVisa")?.meta.feature === "Approvals"
-  && resolveFeatureRow("Schema7Detail", "UsrContractVisa")?.meta.byEntity === true
-  && resolveFeatureRow("Schema7Detail", "UsrVisaReason") === null
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract" })?.meta.feature === "Approvals"
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract" })?.meta.byEntity === true
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa") === null
+  && resolveFeatureRow("Schema9Detail", "UsrEmployeeVisa", { detailColumn: "UsrEmployee2" }) === null
+  && resolveFeatureRow("Schema7Detail", "UsrVisaReason", { detailColumn: "UsrVisa" }) === null
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
@@ -7246,7 +7258,7 @@ const vOk = renderVerify(vResult, {}, {
     // Approvals is TWO required components — the module ABOVE the island (`crt.Approval`) AND the
     // list (`crt.ApprovalList`). A page with "all deliverables present" must build both, or this fixture is no
     // longer testing what its name says.
-    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "Btn", type: "crt.Button" }],
+    { name: "CC", type: "crt.CommunicationOptions" }, { name: "AW", type: "crt.Approval" }, { name: "AL", type: "crt.ApprovalList" }, { name: "SecurityCheckProcessButton", type: "crt.Button" }],
   parentSchemaName: "PageWithTabsAndProgressBarTemplate", miniPageBuilt: true,
   // on-stand reachability evidence: the mini-wiring / section-registration rows are gated and only
   // clear when the agent supplies these — an unwired/unregistered migration can NOT reach `complete` without them.

@@ -353,8 +353,11 @@ const FEATURE_ENTITY_ROWS = [
     meta: { feature: FEATURE_ATTACHMENTS, freedom: "Freedom Attachments & notes", templateProvided: true, uiShape: "component", byEntity: true } }),
   // A custom-named approvals detail (`UsrSchema7Detail` over `UsrContractVisa`) misses the `VisaDetailV2` suffix row.
   // Without this fallback it is counted as a related list the gate expects as a `crt.DataGrid`, while the builder
-  // correctly ships a `crt.ApprovalList` — so the row can never close on a correct page.
-  row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("Visa") } },
+  // correctly ships a `crt.ApprovalList` — so the row can never close on a correct page. The entity must be exactly
+  // `<detailColumn>Visa` (`UsrContractVisa` keyed by `UsrContract`): a `Visa` suffix alone also names business lists
+  // such as an employee's travel visas, which must stay related lists rather than gate two approval components.
+  row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v, c) => typeof v === "string"
+      && typeof c?.detailColumn === "string" && c.detailColumn !== "" && v === `${c.detailColumn}Visa` } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.ApprovalList" },
     meta: { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)", templateProvided: false, uiShape: "component", byEntity: true } }),
@@ -484,7 +487,9 @@ export function rowForItem(item) {
 // `rows` is a parameter for the same reason it is on `resolveRow`: the longest-suffix rule can only be pinned
 // against a table that HAS two overlapping suffixes, and today's rows do not overlap — so a check written against
 // the live table would pass whichever way the sort ran.
-export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS } = {}) {
+// `detailColumn` is the detail's FK to the master; the `*Visa` entity row needs it to tell an approvals detail from a
+// business list whose entity name merely ends in `Visa`.
+export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS, detailColumn = null } = {}) {
   const suffixRows = rows.filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX);
   if (schemaName) {
     const exact = suffixRows.find((r) => r.match.schemaNameSuffix === schemaName);
@@ -497,7 +502,7 @@ export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_RO
     const byEntity = rows.filter((r) => r.match.by === MATCH.ENTITY);
     const exact = byEntity.find((r) => r.match.entity === entity && !r.match.qualifiers);
     if (exact) return exact;
-    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity }));
+    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity, detailColumn }));
     if (pred) return pred;
   }
   return null;
