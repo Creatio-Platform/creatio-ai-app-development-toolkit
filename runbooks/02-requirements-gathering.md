@@ -135,7 +135,8 @@ Do not expose any of the following in the Business Plan:
 - implementation choreography
 
 Use tables only in `## 3. Object Model` unless the developer explicitly asks for a tabular business matrix elsewhere.
-Sections `1`, `2`, `4`, `5`, `6`, `7`, and `8` must use short paragraphs and bullets, not tables.
+Every other section — `1`, `2`, `4`, `5`, `6`, `7`, the conditional `## 8. Portal section`, and Edge Cases
+(`## 8`, or `## 9` when the Portal section is present) — must use short paragraphs and bullets, not tables.
 
 ## Pre-Write Self-Check
 
@@ -321,13 +322,17 @@ structure. It describes the EXTERNAL audience's view (the `All external users` r
 - `external access:` per exposed section — the object operations granted to `All external users`, e.g.
   `external access: read` or `external access: read, create, edit`. Default `read`; widen only where
   external users genuinely author records.
+- `external record scope:` per exposed section — WHICH records the external audience sees: `own contact`
+  (records of the portal user themselves), `own account` (records of the user's company), or `all`
+  (shared reference data every external user may read). There is NO default — ask the developer. An
+  object grant to `All external users` reaches EVERY record, so without this decision one customer
+  sees another's records.
 
 Keep the external field set DELIBERATELY SMALL — significantly fewer fields than the internal page.
 Expose only what the customer needs; NEVER surface internal-only information to external users (assigned
 agent/owner, internal notes/comments, costs/margins, internal status or reason codes, other customers'
 data). Choosing the external `list columns:` and form fields is data minimisation, not a copy of the
-internal surface. Per-record confidentiality (one external company not seeing another's records) is
-record-level access — call it out in `## 9. Edge Cases and Exceptions`, not here.
+internal surface.
 
 `## 7. Analytics` is mandatory and the agent ALWAYS proposes it — never wait for the developer to ask. Propose analytics **as a domain expert**: for each role and section, propose exactly the dashboards, metrics, and charts that an experienced practitioner in the app's business domain would expect to see, so the boards are meaningful out of the box rather than generic filler. When the request does not pin a concrete widget set, use domain-aware judgment to propose one (same posture as the domain-baseline rule for the object model). The section must be populated — an empty or `TBD` `## 7. Analytics` fails the draft.
 
@@ -450,7 +455,7 @@ The BA draft is incomplete if any of the following is true:
 
 ## Technical Implementation Handoff
 
-Present the Technical Implementation Handoff immediately after the 8-section Business Plan in the same message, before asking for approval.
+Present the Technical Implementation Handoff immediately after the 8-section Business Plan (plus the conditional `## 8. Portal section` when present) in the same message, before asking for approval.
 
 This block is **not** a BA section. It is not numbered and not subject to BA format rules.
 It is consumed by the implementation stage that runs after Gate R approval with clio MCP tools.
@@ -480,4 +485,5 @@ It is consumed by the implementation stage that runs after Gate R approval with 
 ### Population rules
 
 - Set `Environment` to its deferred values; populate `Reuse Discovery Signals` from the business analysis (any concept that might map to an existing platform or custom entity).
+- When `## 8. Portal section` is present, the implementation stage reads each section's `external access:` and `external record scope:` from §8 directly. `own contact` / `own account` needs record-level rights, which the current tooling does not set up (ENG-100406): the implementation must tell the developer that step is manual and must not report the portal as done without it.
 - Do not expose internal checklist markers, validation vocabulary, or tool payloads in this block.
