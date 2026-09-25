@@ -138,7 +138,7 @@ Append-only. Every entry has a date.
   ```
 
 ### worklog.md — session log and evidence
-Append-only, chronological. One entry per working session.
+Append-only, chronological. One entry per working session. The first entry opens with the run diagnostics block (SKILL.md step 1.2a), so the log alone names the skill, clio and stand versions the run used.
 
 ### build-tasks/ — the approved plan, cut into one-task files (both scopes)
 Engine-written, and not documentation: it is how the orchestrator schedules work and how a killed session resumes.
@@ -267,6 +267,7 @@ Ordered by dependency. Status vocabulary: TODO / WIP / BLOCKED / DONE / VALIDATE
 # Worklog
 
 ## <date> — <session summary>
+<first entry only: the `### Run diagnostics` block from `engine/diagnostics.mjs`, verbatim — SKILL.md step 1.2a>
 - Scope: <what this session covered>
 - Actions: <operations/tools used>
 - Read-back evidence: <schema UId, package, SCHEMA_DEPS, handlers, resources, validation>

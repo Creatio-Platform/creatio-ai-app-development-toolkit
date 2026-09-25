@@ -274,11 +274,9 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
 // So the answer is scoped, not moved: this gate blocks the LIST deliverable and leaves `gate.blocked` alone. The
 // form-page plan stays approvable, the list page says it is not, and neither statement is made on the other's
 // evidence. `blocked: false` with no section at all is the normal case for a mini/child fold.
-function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
+function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff, sectionLayerCount }) {
   const reasons = [];
-  if (sectionParseErrors.length) {
-    reasons.push(`the section schema body failed to parse (${sectionParseErrors.map((e) => e.pkg).join(", ")}) — every element the section declares in its view \`diff\` is unreadable, so the list page below is built from the method-body signals alone. Fix the body (or re-collect the section bundle) and re-run`);
-  }
+  if (sectionParseErrors.length) reasons.push(sectionParseReason(sectionParseErrors, sectionLayerCount));
   const sectionStruct = parseDiagnostics.filter((d) => d.role === "section" && isStructuralDiag(d));
   if (sectionStruct.length) {
     const fields = [...new Set(sectionStruct.map((d) => `${d.pkg ? d.pkg + " " : ""}${d.path} (${d.kind})`))].join(", ");
@@ -295,6 +293,17 @@ function computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff }) {
     reasons.push(`the section fold could not resolve parent(s): ${sectionEff.unresolvedParents.join(", ")} — supply the section's own template chain as \`section.seed\` (a second \`get-classic-page-sources\` rooted at the *Section schema), or its elements cannot be placed on a list region`);
   }
   return { blocked: reasons.length > 0, reasons };
+}
+
+// The list-gate reason for section layers that will not parse. Scoped to the failed layers: the other layers'
+// `diff` is still folded, so their elements are still in the plan.
+function sectionParseReason(sectionParseErrors, sectionLayerCount) {
+  const pkgs = sectionParseErrors.map((e) => e.pkg).join(", ");
+  const fix = "Fix the body (or re-collect the section bundle) and re-run";
+  if (sectionParseErrors.length >= sectionLayerCount) {
+    return `the section schema body failed to parse in every layer (${pkgs}) — no element the section declares in its view \`diff\` is readable, so the list page below is built from the method-body signals alone. ${fix}`;
+  }
+  return `${sectionParseErrors.length} of ${sectionLayerCount} section layer(s) failed to parse (${pkgs}) — elements THOSE layers declare in their view \`diff\` may be missing below; elements from the other layers are still read. ${fix}`;
 }
 
 // The structure issue a single TYPED page contributes (folded / bindOnly / cycle / empty-layout / unread-rules /
@@ -2577,7 +2586,7 @@ export function runMigration(manifest, opts = {}) {
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
   // …and the LIST page's own verdict, on the section's evidence alone. Separate from `gate` on purpose:
   // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
-  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
+  const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff, sectionLayerCount: sectionSchemas.length });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
   // generated clean while the agent skips the parts it kept dodging (detail schemas, child-page mappings).
   // Unlike the SKILL rules this is enforced in code: the CLI turns `!complete` into a loud banner + non-zero
