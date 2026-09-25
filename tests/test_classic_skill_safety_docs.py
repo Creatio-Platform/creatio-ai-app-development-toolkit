@@ -5,6 +5,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 MIGRATION_SKILL = ROOT / "skills/classic-to-freedom-migration/SKILL.md"
+MIGRATION_REFERENCES = ROOT / "skills/classic-to-freedom-migration/references"
+# The builder's brief: the step-8 evidence and gate-toggle rules bind the sub-agent that
+# builds a page, so they live in the file that sub-agent is handed, not in SKILL.md.
+BUILD_PAGE = MIGRATION_REFERENCES / "build-page.md"
+BUILD_DASHBOARDS = MIGRATION_REFERENCES / "build-dashboards.md"
+# Every reference the skill split created. The presence guard below covers them, so a
+# renamed or emptied brief fails loudly instead of leaving a sub-agent handed nothing.
+MIGRATION_SPLIT_REFERENCES = tuple(
+    MIGRATION_REFERENCES / name
+    for name in (
+        "orchestrate-build.md",
+        "build-task-execution.md",
+        "build-page.md",
+        "build-scaffolding.md",
+        "build-dashboards.md",
+        "read-back-brief.md",
+        "judge-brief.md",
+        "reference-cache-brief.md",
+        "behaviour-analysis-run.md",
+        "manifest-conditional-inputs.md",
+    )
+)
 CARD_CONTRACT = ROOT / "skills/classic-ui-expert/references/08-card-contract.md"
 MEMBER_LEDGER = ROOT / "skills/classic-ui-expert/references/03-member-ledger.md"
 REFERENCE_FOLLOWING = ROOT / "skills/classic-ui-expert/references/05-reference-following.md"
@@ -60,18 +82,35 @@ def paragraph(text, head):
     return matches[0]
 
 
-def bullet(text, head):
-    """The single list item starting with `head`.
+LIST_ITEM_START = re.compile(r"\s*(?:[-*+]|\d+\.)\s")
 
-    A bullet is one physical line inside a block with no blank lines, so paragraph()
-    cannot scope it — line scoping gives the same guarantee: a marker that drifts into a
-    neighbouring bullet turns the assertion red instead of staying green. Same uniqueness
-    and flattening rules as paragraph().
+
+def bullet(text, head):
+    """The single list item starting with `head`, with its wrapped continuation lines.
+
+    A list item sits inside a block with no blank lines, so paragraph() cannot scope it —
+    item scoping gives the same guarantee: a marker that drifts into a neighbouring item
+    turns the assertion red instead of staying green. The item ends at a blank line or at
+    the next line that opens an item at the same or a shallower indent, so a hard-wrapped
+    item is read whole. A table row is one physical line and is returned alone. Same
+    uniqueness and flattening rules as paragraph().
     """
-    matches = [ln for ln in text.splitlines() if flat(ln).lstrip().startswith(flat(head))]
-    if len(matches) != 1:
-        raise AssertionError(f"{len(matches)} list items start with {head!r}; need exactly one")
-    return matches[0]
+    lines = text.splitlines()
+    starts = [i for i, ln in enumerate(lines) if flat(ln).lstrip().startswith(flat(head))]
+    if len(starts) != 1:
+        raise AssertionError(f"{len(starts)} list items start with {head!r}; need exactly one")
+    first = starts[0]
+    if lines[first].lstrip().startswith("|"):
+        return lines[first]
+    indent = len(lines[first]) - len(lines[first].lstrip())
+    item = [lines[first]]
+    for ln in lines[first + 1:]:
+        if not ln.strip() or ln.lstrip().startswith(("#", "|", "```")):
+            break
+        if LIST_ITEM_START.match(ln) and len(ln) - len(ln.lstrip()) <= indent:
+            break
+        item.append(ln)
+    return "\n".join(item)
 
 
 class ClassicSkillSafetyDocTests(unittest.TestCase):
@@ -99,13 +138,14 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
             SURFACE_RESOLUTION,
             CLASSIC_SKILL,
             PLATFORM_PATTERNS,
+            *MIGRATION_SPLIT_REFERENCES,
         ):
             self.assertTrue(read_text(path).strip(), f"{path} is missing or empty")
 
     # --- the rule this branch exists to add -------------------------------------
 
     def test_evidence_paragraph_requires_a_line_per_ac(self):
-        para = paragraph(read_text(MIGRATION_SKILL), EVIDENCE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), EVIDENCE_HEAD)
         missing = missing_markers(
             para,
             [
@@ -121,8 +161,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # A paragraph closing on "copy from there" is what this replaces:
         # / "It goes in the Evidence column", whose referent is the card+AC *citation* —
         # the weaker rule the per-AC rule supersedes.
-        content = read_text(MIGRATION_SKILL)
-        para = paragraph(content, PLACEMENT_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), PLACEMENT_HEAD)
         missing = missing_markers(
             para,
             [
@@ -133,15 +172,18 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"evidence-placement rule incomplete; missing {missing}")
         # Regex-tolerant: a lightly reworded reintroduction ("copy it from there",
-        # "This goes in the Evidence column") must fail the same as the original.
-        self.assertNotRegex(flat(content), r"copy(\s+\w+)? from there")
-        self.assertNotRegex(flat(content), r"goes in the (\*\*)?Evidence(\*\*)? column")
+        # "This goes in the Evidence column") must fail the same as the original, in the
+        # builder's brief that carries the rule and in SKILL.md alike.
+        for path in (BUILD_PAGE, MIGRATION_SKILL):
+            content = flat(read_text(path))
+            self.assertNotRegex(content, r"copy(\s+\w+)? from there", path.name)
+            self.assertNotRegex(content, r"goes in the (\*\*)?Evidence(\*\*)? column", path.name)
 
     def test_condition_substitution_is_a_deviation_never_self_approved(self):
         # The round-4 defect this rule closes: one of three conjunctive gates was swapped
         # for a guard judged "strictly stronger", inverting the card's negative AC. Every
         # other rule tied to a measured failure is pinned here; this one was not.
-        item = bullet(read_text(MIGRATION_SKILL), CONDITION_HEAD)
+        item = bullet(read_text(BUILD_PAGE), CONDITION_HEAD)
         missing = missing_markers(
             item,
             [
@@ -173,7 +215,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
     # --- gate-toggle safety, scoped to its own paragraph -------------------------
 
     def test_gate_toggle_names_the_row_it_touches(self):
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["SysSettingsValue", "culture/user/role", "per-role override"]
         )
@@ -182,7 +224,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
     def test_gate_toggle_default_denies_raw_value_logging(self):
         # The invariant is "never echo a non-Boolean value", not any particular noun for
         # the row type — pin the invariant so a terminology fix does not turn this red.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["resolved effective state", "never the literal value"]
         )
@@ -191,7 +233,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
     def test_gate_toggle_only_ever_toggles_a_boolean_row(self):
         # A Text/String/Lookup row may hold a secret no metadata flags as encrypted, and
         # toggling overwrites it — the held copy can be lost to context compaction.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["Only a Boolean row is toggled", "`⚠ Partial — unexercised`"]
         )
@@ -201,7 +243,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # Feature toggles outnumber system-setting gates on a customized stand (156 vs 106
         # schemas, a workspace census), so refusing to exercise them costs more coverage than
         # the secret-exposure risk it avoids. Same four steps, different tools.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para,
             [
@@ -218,7 +260,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # require CREATING an override row, where "restore" is deletion and there is no
         # held value for the confirm check to compare — without this branch, a stray
         # override outlives the run and the restore check cannot even see it.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para,
             [
@@ -230,7 +272,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"created rows must restore by deletion; missing {missing}")
 
     def test_an_untoggleable_gate_of_either_kind_has_a_disposition(self):
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["if you cannot toggle it at all", "`⚠ Partial — unexercised`"]
         )
@@ -240,7 +282,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # Pin the CAPTURE and the comparison together. Pinning only "the pre-toggle value
         # you held" passes on prose that compares against a value it never told you to
         # keep — a dangling back-reference reads as complete and is not.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para,
             [
@@ -255,14 +297,14 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         self.assertFalse(missing, f"restore must be unconditional; missing {missing}")
 
     def test_gate_toggle_escalates_an_unconfirmed_restore(self):
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["Confirm the restore, don't assume it", "blocking risk"]
         )
         self.assertFalse(missing, f"unconfirmed restore must be blocking; missing {missing}")
 
     def test_gate_toggle_groups_acs_behind_one_window(self):
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         self.assertIn("toggle window", flat(para))
         self.assertIn("toggle once, run them all, restore once", flat(para))
 
@@ -270,7 +312,7 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # A flipped gate changes behaviour for every concurrent user of a shared stand
         # while the window is open — restore-on-exit does not cover the window itself,
         # so the toggle is announced, never silent.
-        para = paragraph(read_text(MIGRATION_SKILL), GATE_HEAD)
+        para = paragraph(read_text(BUILD_PAGE), GATE_HEAD)
         missing = missing_markers(
             para, ["Announce the window before opening it", "every concurrent user"]
         )
@@ -433,8 +475,10 @@ class ClassicSkillSafetyDocTests(unittest.TestCase):
         # either redrew them as a Freedom page or dropped them silently. The install is a
         # destructive clio tool (configuration build + restart), so the route and the hand-off
         # to the user are pinned, not only the tool name.
+        # The procedure lives in the brief of the sub-agent that runs it; SKILL.md keeps
+        # the step-2 discovery that decides whether there is anything to migrate.
         content = read_text(MIGRATION_SKILL)
-        step = bullet(content, "**7.7 Classic dashboards (from step 2).**")
+        step = bullet(read_text(BUILD_DASHBOARDS), "**7.7 Classic dashboards (from step 2).**")
         missing = missing_markers(
             step,
             [
