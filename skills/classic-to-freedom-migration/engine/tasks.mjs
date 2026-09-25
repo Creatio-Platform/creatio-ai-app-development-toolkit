@@ -714,12 +714,15 @@ function withDependencies(tasks) {
 // claimant, so inserting a sibling that sorts earlier can take `child:<Entity>` and push the already-built page to
 // `child:<Entity>@<Via>`. Keyed on the key alone, the never-built newcomer would inherit the built page's id — and
 // with it a recorded `done`. `pageDedupeId` identifies the PHYSICAL page and does not move, so it is what the id
-// hashes. `main` and `list` are not in the walk and are their own identity.
+// hashes. `main` and `list` are not in the walk and are their own identity. They are still pages the plan builds,
+// so they are in the map: `--add` validates a declaration against its keys, and without them no fix could name
+// the main form page.
 function pageIdentities(result) {
   const map = new Map();
   for (const node of subPageNodes(result)) {
     if (node.pageKey) map.set(node.pageKey, node.pageDedupeId || node.pageKey);
   }
+  for (const key of ["main", LIST_PAGE_KEY]) if (!map.has(key)) map.set(key, key);
   return map;
 }
 

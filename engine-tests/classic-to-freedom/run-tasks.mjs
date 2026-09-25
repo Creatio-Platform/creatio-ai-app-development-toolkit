@@ -3332,6 +3332,43 @@ check("minted: a REFUSED set writes NOTHING - one bad declaration in a batch lea
     return res.refused === true && fs.readdirSync(d).length === before;
   }, () => addTasks(tmp("mint-allornothing-d"), RUN, [DECL, { ...DECL, id: "orch-second", pageKey: "child:NOPE" }], OPTS).problems);
 
+// THE MAIN FORM PAGE AND THE LIST PAGE ARE PAGES A DECLARATION CAN NAME. They are not in the sub-page walk, and
+// a validator built from that walk alone refused the most common fix target on a live run — the orchestrator then
+// parked the fix in another task's notes, where `--verify` does not check it.
+const mintedOn = (pageKey, group, name) => {
+  const target = taskAt(SET, pageKey, group);
+  return { target, ...minted({ id: `orch-${name}`, pageKey, writesTo: target.writesTo }, name) };
+};
+for (const [pageKey, group] of [["main", "Page build"], [LIST_PAGE_KEY, "Page build"]]) {
+  check(`minted: a declaration on \`${pageKey}\` with the engine's own \`writesTo\` is ACCEPTED, and the written task writes the same artifact as the engine's task on that page`,
+    () => {
+      const { target, d, res } = mintedOn(pageKey, group, `mint-on-${pageKey}`);
+      const t = res.set?.tasks.find((x) => x.id === `orch-mint-on-${pageKey}`);
+      return !!target && res.refused === false && t?.origin === "orchestrator" && t.writesTo === target.writesTo
+        && fs.existsSync(path.join(d, res.written[0].file));
+    }, () => { const { target, res } = mintedOn(pageKey, group, `mint-on-${pageKey}-d`);
+      return { target: target && { id: target.id, writesTo: target.writesTo }, problems: res.problems,
+        written: res.set?.tasks.find((x) => x.id === `orch-mint-on-${pageKey}-d`) }; });
+}
+
+// The same section with its one detail taken out of the page body, so the sub-page walk is empty.
+const NO_SUB = { ...manifestOf(), detailSchemas: {}, childPageSchemas: {},
+  schemas: [{ pkg: "P", body: mainBody({}).replace(/details:\{[^}]*\}\}/, "details:{}")
+    .replace('{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},', "") }] };
+const RUN_NO_SUB = runMigration(NO_SUB);
+const OPTS_NO_SUB = optsOf(NO_SUB);
+check("minted: on a plan with NO sub-pages a declaration on `main` is still accepted — the valid-page list is never empty",
+  () => {
+    const d = tmp("mint-nosub");
+    const set = syncTaskDir(d, RUN_NO_SUB, OPTS_NO_SUB);
+    const main = set.tasks.find((t) => t.pageKey === "main" && t.writesTo === "page:main");
+    const res = addTasks(d, RUN_NO_SUB, { ...DECL, pageKey: "main", writesTo: main?.writesTo }, OPTS_NO_SUB);
+    return subPageNodes(RUN_NO_SUB).length === 0 && !!main && res.refused === false;
+  }, () => { const d = tmp("mint-nosub-d"); const set = syncTaskDir(d, RUN_NO_SUB, OPTS_NO_SUB);
+    const main = set.tasks.find((t) => t.pageKey === "main" && t.writesTo === "page:main");
+    return { subPages: subPageNodes(RUN_NO_SUB).length, main: main?.writesTo,
+      problems: addTasks(d, RUN_NO_SUB, { ...DECL, pageKey: "main", writesTo: main?.writesTo }, OPTS_NO_SUB).problems }; });
+
 console.log("\n===== review round: the held-back boundary is reported, and the stamp fires only on an edit =====");
 // A row the ledger settled by decision is not routed. Everything that decides that must also SAY it, or the row
 // is dropped in silence.
