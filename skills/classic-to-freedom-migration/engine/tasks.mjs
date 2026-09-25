@@ -816,6 +816,9 @@ export const parseDecisionsMap = (s) => {
 // ⚠ THE LABEL ALONE, with no occurrence suffix — unlike `rowKeys`, which appends `::n`. Two rows of one task that
 // carry identical `Deliverable` text are ONE key here: they are routed once and they close together.
 const coverKey = (label) => shortHash(String(label || "").trim().toLowerCase().replace(/\s+/g, " "));
+// The page a row belongs to. A collapsed whole-run task carries `pageKey: run` while each row keeps its source
+// page, so every residual and repair key is built from the row's page first.
+const rowPageOf = (task, row) => row?.pageKey || task.pageKey;
 
 function renderFrontMatter(task, set) {
   const v = {
@@ -1626,7 +1629,7 @@ export function notBuiltRows(tasks) {
 function latestPerDeliverable(items) {
   const best = new Map();
   for (const it of items) {
-    const k = `${it.task.pageKey} ${coverKey(it.row.label)}`;
+    const k = `${rowPageOf(it.task, it.row)} ${coverKey(it.row.label)}`;
     const round = it.task.repairRound || 0;
     if (best.has(k) && best.get(k).round >= round) continue;
     best.set(k, { round, it });
@@ -1667,7 +1670,9 @@ export function notBuiltOpenRows(tasks) {
     // null) STAYS routable: the round asks the next agent to record whatever happened, which is a repair
     // task can do.
     if (it.cause && !ROUTABLE_NOT_BUILT_CAUSES.has(it.cause)) continue;
-    const key = it.task.pageKey;
+    // The ROW's page, which a collapsed whole-run task (`pageKey: run`) does not share: the repair round goes to
+    // the page that owns the deliverable, so it gets that page's artifact and is chained behind its writers.
+    const key = rowPageOf(it.task, it.row);
     if (!pages[key]) pages[key] = { openRows: [] };
     pages[key].openRows.push({
       deliverable: it.row.label,
@@ -1698,7 +1703,7 @@ function settledBoundaries(tasks) {
     if (t.unread) continue;
     for (const r of t.rows || []) {
       if (r.outcomeKind !== O_NOT_APPLICABLE || !String(r.outcomeReason || "").trim()) continue;
-      out.set(`${t.pageKey} ${coverKey(r.label)}`, { task: t, row: r });
+      out.set(`${rowPageOf(t, r)} ${coverKey(r.label)}`, { task: t, row: r });
     }
   }
   return out;
@@ -1801,7 +1806,7 @@ const ROW_SETTLED = new Set([O_BUILT, O_NOT_APPLICABLE, O_WONT_DO]);
 function rowVerdicts(t) {
   const settled = new Set(), unsettled = new Set();
   for (const r of t.rows || []) {
-    (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${t.pageKey} ${coverKey(r.label)}`);
+    (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${rowPageOf(t, r)} ${coverKey(r.label)}`);
   }
   return { settled, unsettled };
 }
@@ -1885,7 +1890,7 @@ function resolvePartials(set) {
     if (!owed.length) continue;
     let settled = 0;
     for (const o of owed) {
-      o.row.residual = residualOf(`${t.pageKey} ${coverKey(o.row.label)}`);
+      o.row.residual = residualOf(`${rowPageOf(t, o.row)} ${coverKey(o.row.label)}`);
       if (o.row.residual === "closed") settled++;
     }
     // Only a `partial` is CLOSED by its residual; any other word was not held open by these rows.
@@ -2671,7 +2676,7 @@ function unrouteStalled(set, stalled) {
   if (!keys.size) return;
   for (const t of set.tasks || []) {
     for (const o of owedRows(t)) {
-      if (o.row.residual === "open" && keys.has(`${t.pageKey} ${coverKey(o.row.label)}`)) o.row.residual = null;
+      if (o.row.residual === "open" && keys.has(`${rowPageOf(t, o.row)} ${coverKey(o.row.label)}`)) o.row.residual = null;
     }
   }
 }

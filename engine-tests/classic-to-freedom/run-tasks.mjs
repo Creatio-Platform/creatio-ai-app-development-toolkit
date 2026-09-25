@@ -1723,6 +1723,43 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
         && whole.rows.every((r) => r.pageKey && r.pageKey !== "run")
         && new Set(whole.rows.map((r) => r.pageKey)).size >= 2; },
     () => (small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE)?.rows || []).map((r) => [r.label, r.pageKey]));
+  // A COLLAPSED RUN ROUTES EACH RESIDUAL TO ITS ROW'S PAGE. The whole-run task is `pageKey: run`; two rows with
+  // one label on two pages must open two repair rounds, each on its own page, and closing one must not close the
+  // other.
+  {
+    const SMALL = checklistOpts(MANIFEST);
+    const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === "Fields — 1 expected"
+      && (x.r.pageKey === "main" || x.r.pageKey === "child:C1"));
+    const d = tmp("collapsed-route");
+    syncTaskDir(d, RUN, SMALL);
+    clearDepsOf(d, whole.id, RUN, SMALL);
+    startTask(d, whole.id, RUN, { ...SMALL, dispatchToken: `tok-${whole.id}` }, null, AT(40));
+    const fp = taskFilePath(d, whole.id);
+    let text = allBuilt(fs.readFileSync(fp, "utf8"));
+    for (const x of twins) text = setOutcome(text, x.n, NOT_BUILT_BLOCKED);
+    fs.writeFileSync(fp, text);
+    editFrontMatter(d, whole.id, "agentNonce", `tok-${whole.id}`);
+    syncTaskDir(d, RUN, { ...SMALL, now: AT(41) });
+    const routed = syncRepairDir(d, RUN, {}, SMALL);
+    const pages = routed.written.map((t) => t.pageKey).sort();
+    check("collapsed run: two not-built rows sharing a label on two pages open TWO repair rounds, one per row's own page, each writing that page's artifact — keyed on the task's `run` they collapsed into one round on a page that does not exist",
+      () => twins.length === 2 && JSON.stringify(pages) === JSON.stringify(["child:C1", "main"])
+        && routed.written.every((t) => t.writesTo && t.writesTo !== "page:run"),
+      () => ({ twins: twins.map((x) => [x.n, x.r.pageKey]), written: routed.written.map((t) => [t.pageKey, t.writesTo, t.cause]) }));
+    const mainRound = routed.written.find((t) => t.pageKey === "main");
+    if (mainRound) {
+      clearDepsOf(d, mainRound.id, RUN, SMALL, 50);
+      runTask(d, mainRound.id, RUN, SMALL, 52);
+    }
+    const after = syncRepairDir(d, RUN, {}, SMALL);
+    const w = after.set.tasks.find((t) => t.id === whole.id);
+    const residuals = twins.map((x) => w.rows[x.n - 1].residual);
+    check("collapsed run: closing the round on ONE page settles only that page's row — the other page's twin stays open and the whole task stays `partial`",
+      () => !!mainRound && w.status === "partial" && residuals.filter((x) => x === "closed").length === 1,
+      () => ({ status: w?.status, residuals, written: after.written.map((t) => t.pageKey) }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
   check("small run: the threshold is the RUN's weight, not its row count — the same plan grown past `TASK_BUDGET.run` keeps the per-artifact cut, and one page is still never written by two tasks that are not chained",
     () => {
       const big = buildTaskSet(RUN5, checklistOpts(MANIFEST5));
