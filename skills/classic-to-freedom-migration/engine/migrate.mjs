@@ -3914,7 +3914,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (!rep.set && !planGaps(result).length) refreshTaskIndex(tasksDir, set);
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
-      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure },
+        source: fromDir ? "--from <migration-folder>" : "--built <file>" });
       // The report REPLACES the table as the artifact, so the unread-file banner has to be carried onto it too —
       // prepending it to the table alone loses it on exactly the command an orchestrated run is told to use.
       output = [...problemBanner(readProblems), finalReport.markdown].join("\n") + "\n";

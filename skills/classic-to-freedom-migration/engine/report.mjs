@@ -616,7 +616,7 @@ function postponedUnbackedReasons(postponedRows, decisions) {
     + ` (${where}) — a postponed row is a carry-over only when its decision resolves in decisions.md and it`
     + ` names a destination; otherwise nobody can act on the debt and nothing records who deferred it`];
 }
-export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null }) {
+export function renderFinalReport({ result, verifyRes, set, dir, built = null, repair = null, dirLabel = null, gates = null, source = null }) {
   const ledgerRefused = ledgerReason(set);
   const tasks = planTasks(set?.tasks);
   const tc = taskCounts(tasks);
@@ -677,7 +677,7 @@ export function renderFinalReport({ result, verifyRes, set, dir, built = null, r
     `# Migration result${entity}`, "",
     `**Verdict:** ${verdict}`, "",
     `> Plan \`${esc(String(set?.planVersion || result?.planVersion || "—"))}\` · task folder \`${esc(String(dirLabel || dir || ""))}\`. Written by`
-      + " `migrate.mjs --verify --built <file> --tasks <dir>` from the task files AND the built pages — present it"
+      + ` \`migrate.mjs --verify ${source || "--from <migration-folder>"} --tasks <dir>\` from the task files AND the built pages — present it`
       + ` verbatim; it supersedes \`build-tasks/index.md\`.`,
     "", "## Summary", "",
     ...summaryTable({ tc, openNotBuilt, decidedNotBuilt, boundaries, rc, repair, handLeft }),

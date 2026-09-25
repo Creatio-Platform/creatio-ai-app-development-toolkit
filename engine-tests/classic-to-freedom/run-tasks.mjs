@@ -4966,6 +4966,13 @@ console.log("\n===== the migration result report — one artifact, computed from
     { id: "c-a", file: "c-a.md", group: "Form build", pageKey: "main", status: "done", notes: "", rows: [{ label: "Form page", outcomeKind: "built", outcome: "built" }] },
     { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
   ] };
+  // The banner names the input mode that ran: `--from` is the canonical close command, `--built` the replay.
+  const fromRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-from"), source: "--from <migration-folder>" }).markdown;
+  const builtRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-built"), source: "--built <file>" }).markdown;
+  check("result report: the banner names the input mode that ran — `--verify --from … --tasks …` on a composed run, `--built` only on a replay",
+    () => fromRep.includes("`migrate.mjs --verify --from <migration-folder> --tasks <dir>`") && !fromRep.includes("--built")
+      && builtRep.includes("`migrate.mjs --verify --built <file> --tasks <dir>`"),
+    () => ({ from: fromRep.split("\n").find((l) => l.includes("Written by")), built: builtRep.split("\n").find((l) => l.includes("Written by")) }));
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
   check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, 🟢 COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
     () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
