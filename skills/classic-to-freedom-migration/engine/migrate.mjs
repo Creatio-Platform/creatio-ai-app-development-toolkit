@@ -3129,7 +3129,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
 
 // Before the first dispatch only: the decisions.md entries no row cites. Printed, never written, and no gate.
 function unappliedDecisionLines(set, dir, startedId = null) {
-  if (!firstDispatchPending(dir, startedId)) return [];
+  if (!firstDispatchPending(dir, startedId, set.tasks)) return [];
   const open = unappliedDecisions(set.tasks, readDecisions(path.join(dir, "..")));
   if (!open.length) return [];
   return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,

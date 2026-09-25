@@ -7630,6 +7630,9 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
     check("--decide: an open row of the SAME task sharing the decided row's subject is listed",
       () => n0 > 0 && n5 > 0 && !res.refused && named(res).join(",") === `${SAME_SRC}:${n5}`,
       () => ({ n0, n5, refused: res.problems, named: named(res) }));
+    check("--decide: the decided row itself is never listed as its own sibling",
+      () => !res.refused && !named(res).includes(`${SAME_SRC}:${n0}`) && named(res).includes(`${SAME_SRC}:${n5}`),
+      () => ({ n0, named: named(res) }));
     check("--decide: a listed same-task row keeps its cell blank and gets no `decisions:` entry",
       () => !row5?.outcomeKind && new RegExp(`^decisions: ${n0}:D4$`, "m").test(rawOf(dir)),
       () => ({ row5, decisions: /^decisions:.*$/m.exec(rawOf(dir))?.[0] }));
@@ -7811,7 +7814,96 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
     check("firstDispatchPending: another task's open clock is a dispatch; the started task's own clock is not",
       () => pending(running, "other") === false && pending(running, "mine") === true && pending(running) === false);
     check("firstDispatchPending: a timings file that does not parse is a dispatch", () => pending("{ not json") === false);
+    const mark = (state) => {
+      const file = path.join(base, TIMINGS_FILE);
+      if (state === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, state);
+      return readTimingsFile(base).malformed;
+    };
+    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
+      () => mark("{ not json") === true && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
+      () => ({ bad: mark("{ not json"), absent: mark(null) }));
+    fs.rmSync(path.join(base, TIMINGS_FILE), { force: true });
+    const pendingWith = (tasks) => TASKS_MODULE.firstDispatchPending(base, null, tasks);
+    check("firstDispatchPending: a task with a `built` row is a dispatch, with no timings file",
+      () => pendingWith([{ rows: [{ outcomeKind: "built" }] }]) === false);
+    check("firstDispatchPending: a task with an `agentNonce` is a dispatch, with no timings file",
+      () => pendingWith([{ rows: [], agentNonce: "tok-1" }]) === false && pendingWith([{ rows: [], agentNonce: "  " }]) === true);
+    check("firstDispatchPending: rows closed only by `--decide` are not a dispatch",
+      () => pendingWith([{ rows: [{ outcomeKind: "wont-do" }, { outcomeKind: "postponed" }], decisions: new Map([[1, "D4"], [2, "D5"]]) }]) === true);
     fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const base = tmp("timings-malformed-start");
+    const d = path.join(base, "build-tasks");
+    freezeSplit(d, JSON.stringify(split));
+    syncTaskDir(d, CARD_RUN, opts);
+    fs.writeFileSync(path.join(d, TIMINGS_FILE), "{ not json");
+    const [first] = startableIds(d);
+    startTask(d, first, CARD_RUN, { ...opts, dispatchToken: "tok-m" });
+    const written = fs.readFileSync(path.join(d, TIMINGS_FILE), "utf8");
+    check("readTimingsFile: `--start` over a malformed timings file writes no `malformed` key",
+      () => !!first && /"running"/.test(written) && !/malformed/.test(written), () => written);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  check("unappliedDecisions: a citation on an unread task is not counted",
+    () => TASKS_MODULE.unappliedDecisions([{ unread: true, decisions: new Map([[1, "D4"]]) }],
+      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D4,D5");
+
+  {
+    const { base, dir, cli } = fixture("undecided-built-row");
+    cli();
+    const before = cli("--next");
+    const f = taskFilePath(dir, UNDEC_SRC);
+    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
+      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n, "built"));
+    const after = cli("--next");
+    check("first dispatch: a row recorded `built` with no timings file ends the listing",
+      () => BLOCK.test(before.stdout) && n > 0 && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
+      () => ({ n, before: before.stdout, after: after.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-nonce");
+    cli();
+    const before = cli("--next");
+    editFrontMatter(dir, UNDEC_SRC, "agentNonce", "tok-agent");
+    const after = cli("--next");
+    check("first dispatch: a task carrying an `agentNonce` with no timings file ends the listing",
+      () => BLOCK.test(before.stdout) && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
+      () => ({ before: before.stdout, after: after.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const STUCK = /NOTHING STARTABLE AND NOTHING IN FLIGHT/;
+    const stuckNext = (label, md) => {
+      const f = fixture(label, { md });
+      f.cli();
+      for (const id of startableIds(f.dir)) editFrontMatter(f.dir, id, "status", "blocked");
+      const r = f.cli("--next");
+      const scrub = (s) => String(s || "").replaceAll(f.base, "<base>");
+      fs.rmSync(f.base, { recursive: true, force: true });
+      return { status: r.status, stdout: scrub(r.stdout), stderr: scrub(r.stderr) };
+    };
+    const a = stuckNext("undecided-stuck-with", DECISIONS_MD);
+    const b = stuckNext("undecided-stuck-without", null);
+    const verdictOf = (s) => {
+      const at = s.search(/\n\n\d+ decision\(s\) in decisions\.md/);
+      return (at < 0 ? s : s.slice(0, at)).trimEnd();
+    };
+    check("first dispatch (anti-vacuity): both folders answer `stuck`, and only the one with decisions.md prints the block",
+      () => a.status === 2 && STUCK.test(a.stdout) && STUCK.test(b.stdout) && BLOCK.test(a.stdout) && !BLOCK.test(b.stdout),
+      () => ({ a, b }));
+    check("first dispatch: a `stuck` `--next` has the same exit code, verdict and stderr with and without uncited decisions",
+      () => a.status === b.status && verdictOf(a.stdout) === b.stdout.trimEnd() && a.stderr === b.stderr,
+      () => ({ status: [a.status, b.status], with: verdictOf(a.stdout), without: b.stdout, stderr: [a.stderr, b.stderr] }));
+    check("first dispatch: on a `stuck` `--next` the block follows the verdict text",
+      () => a.stdout.search(BLOCK) > a.stdout.search(STUCK), () => a.stdout);
   }
 
   {

@@ -2826,16 +2826,20 @@ function normalizeRunning(raw) {
 // dispatched task as one nobody was ever sent out for.
 const usableSamples = (samples) => samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0);
 
+// Absent or malformed reads as empty — a forecast is not worth an exception. A file that exists but cannot be
+// read or parsed also carries `malformed: true`.
 export function readTimingsFile(dir) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
     const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => x?.id) : [];
     return { samples, running: normalizeRunning(raw?.running) };
-  } catch { return { samples: [], running: {} }; }   // absent or malformed — a forecast is not worth an exception
+  } catch (e) {
+    return e?.code === "ENOENT" ? { samples: [], running: {} } : { samples: [], running: {}, malformed: true };
+  }
 }
 export const readTimings = (dir) => usableSamples(readTimingsFile(dir).samples);
-const writeTimings = (dir, state) =>
-  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+const writeTimings = (dir, { samples, running }) =>
+  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, samples, running }, null, 2) + "\n");
 
 // CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
 // nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.
@@ -3823,6 +3827,7 @@ function openSubjectSiblings(tasks, placedRows) {
 export function unappliedDecisions(tasks, decisions) {
   const cited = new Set();
   for (const t of tasks || []) {
+    if (t.unread) continue;
     const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
     for (const d of map?.values() || []) cited.add(decisionOf(d));
   }
@@ -3830,14 +3835,14 @@ export function unappliedDecisions(tasks, decisions) {
     .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
     .map(([id, title]) => ({ id, title }));
 }
-// Whether the folder has had no dispatch yet: no closed timing sample, and no open clock except `startedId`'s.
-// A timings file that exists but does not parse counts as a dispatch: the file is written only when a clock starts.
-export function firstDispatchPending(dir, startedId = null) {
-  const file = path.join(dir, TIMINGS_FILE);
-  if (fs.existsSync(file)) {
-    try { JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
-  }
-  const { running, samples } = readTimingsFile(dir);
+// Whether the folder has had no dispatch yet: no task with a `built` row or an `agentNonce`, no closed timing
+// sample, and no open clock except `startedId`'s. Rows closed by `--decide` are not a dispatch. A timings file
+// that exists but does not parse counts as a dispatch: the file is written only when a clock starts.
+const showsDispatch = (t) => !!String(t.agentNonce || "").trim() || (t.rows || []).some((r) => r.outcomeKind === O_BUILT);
+export function firstDispatchPending(dir, startedId = null, tasks = []) {
+  if (tasks.some(showsDispatch)) return false;
+  const { running, samples, malformed } = readTimingsFile(dir);
+  if (malformed) return false;
   return !samples.length && Object.keys(running).every((id) => id === startedId);
 }
 export function applyDecision(dir, result, opts = {}) {
