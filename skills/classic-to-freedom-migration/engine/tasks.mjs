@@ -76,6 +76,9 @@ export const REFUSED_UNREADABLE = "split-unreadable";
 export const REFUSED_UNRESOLVED = "split-unresolved";
 export const REFUSED_COVERAGE = "split-coverage";
 export const REFUSED_CUT = "engine-cut";
+// `timings.json` is present but does not parse. It holds the dispatch evidence, so reading it as empty would
+// report every closed task as never dispatched and the next write would replace the samples for good.
+export const REFUSED_TIMINGS = "timings-unreadable";
 
 // WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
 // frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
@@ -714,12 +717,15 @@ function withDependencies(tasks) {
 // claimant, so inserting a sibling that sorts earlier can take `child:<Entity>` and push the already-built page to
 // `child:<Entity>@<Via>`. Keyed on the key alone, the never-built newcomer would inherit the built page's id — and
 // with it a recorded `done`. `pageDedupeId` identifies the PHYSICAL page and does not move, so it is what the id
-// hashes. `main` and `list` are not in the walk and are their own identity.
+// hashes. `main` and `list` are not in the walk and are their own identity. They are still pages the plan builds,
+// so they are in the map: `--add` validates a declaration against its keys, and without them no fix could name
+// the main form page.
 function pageIdentities(result) {
   const map = new Map();
   for (const node of subPageNodes(result)) {
     if (node.pageKey) map.set(node.pageKey, node.pageDedupeId || node.pageKey);
   }
+  for (const key of ["main", LIST_PAGE_KEY]) if (!map.has(key)) map.set(key, key);
   return map;
 }
 
@@ -810,6 +816,9 @@ export const parseDecisionsMap = (s) => {
 // ⚠ THE LABEL ALONE, with no occurrence suffix — unlike `rowKeys`, which appends `::n`. Two rows of one task that
 // carry identical `Deliverable` text are ONE key here: they are routed once and they close together.
 const coverKey = (label) => shortHash(String(label || "").trim().toLowerCase().replace(/\s+/g, " "));
+// The page a row belongs to. A collapsed whole-run task carries `pageKey: run` while each row keeps its source
+// page, so every residual and repair key is built from the row's page first.
+const rowPageOf = (task, row) => row?.pageKey || task.pageKey;
 
 function renderFrontMatter(task, set) {
   const v = {
@@ -1407,7 +1416,8 @@ function dispatchAttention(dispatch) {
     out.push(`- \`${t.file}\` — recorded \`${t.status}\` but never STARTED through \`--tasks --start ${t.id}\`, so no`
       + " sub-agent was dispatched for it through the engine and its duration was never measured. For a review task"
       + " this is the thing the task exists to prevent: a verdict filed by the context that did the work is not a"
-      + " verdict. Re-open it (`status: todo`), start it, and hand it to its own sub-agent.");
+      + " verdict. Re-open it (clear its `Outcome` cells, then `status: todo`), start it, and hand it to its own"
+      + " sub-agent.");
   }
   for (const t of dispatch?.naUndispatched || []) {
     out.push(`- \`${t.file}\` — recorded \`not-applicable\` with no dispatch record. That does NOT fail the`
@@ -1429,8 +1439,8 @@ function dispatchAttention(dispatch) {
       ? " This is a review task signed by a builder of the very work it judges — a verdict filed by the context"
         + " that did the work is not a verdict, and that is the whole reason this task is separate."
       : "";
-    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (\`status: todo\`), \`--start\` it,`
-      + " and hand the token that prints to a sub-agent of its own.");
+    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (clear its \`Outcome\``
+      + " cells, then `status: todo`), `--start` it, and hand the token that prints to a sub-agent of its own.");
   }
   return out;
 }
@@ -1619,7 +1629,7 @@ export function notBuiltRows(tasks) {
 function latestPerDeliverable(items) {
   const best = new Map();
   for (const it of items) {
-    const k = `${it.task.pageKey} ${coverKey(it.row.label)}`;
+    const k = `${rowPageOf(it.task, it.row)} ${coverKey(it.row.label)}`;
     const round = it.task.repairRound || 0;
     if (best.has(k) && best.get(k).round >= round) continue;
     best.set(k, { round, it });
@@ -1660,7 +1670,9 @@ export function notBuiltOpenRows(tasks) {
     // null) STAYS routable: the round asks the next agent to record whatever happened, which is a repair
     // task can do.
     if (it.cause && !ROUTABLE_NOT_BUILT_CAUSES.has(it.cause)) continue;
-    const key = it.task.pageKey;
+    // The ROW's page, which a collapsed whole-run task (`pageKey: run`) does not share: the repair round goes to
+    // the page that owns the deliverable, so it gets that page's artifact and is chained behind its writers.
+    const key = rowPageOf(it.task, it.row);
     if (!pages[key]) pages[key] = { openRows: [] };
     pages[key].openRows.push({
       deliverable: it.row.label,
@@ -1691,7 +1703,7 @@ function settledBoundaries(tasks) {
     if (t.unread) continue;
     for (const r of t.rows || []) {
       if (r.outcomeKind !== O_NOT_APPLICABLE || !String(r.outcomeReason || "").trim()) continue;
-      out.set(`${t.pageKey} ${coverKey(r.label)}`, { task: t, row: r });
+      out.set(`${rowPageOf(t, r)} ${coverKey(r.label)}`, { task: t, row: r });
     }
   }
   return out;
@@ -1794,7 +1806,7 @@ const ROW_SETTLED = new Set([O_BUILT, O_NOT_APPLICABLE, O_WONT_DO]);
 function rowVerdicts(t) {
   const settled = new Set(), unsettled = new Set();
   for (const r of t.rows || []) {
-    (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${t.pageKey} ${coverKey(r.label)}`);
+    (ROW_SETTLED.has(r.outcomeKind) ? settled : unsettled).add(`${rowPageOf(t, r)} ${coverKey(r.label)}`);
   }
   return { settled, unsettled };
 }
@@ -1878,7 +1890,7 @@ function resolvePartials(set) {
     if (!owed.length) continue;
     let settled = 0;
     for (const o of owed) {
-      o.row.residual = residualOf(`${t.pageKey} ${coverKey(o.row.label)}`);
+      o.row.residual = residualOf(`${rowPageOf(t, o.row)} ${coverKey(o.row.label)}`);
       if (o.row.residual === "closed") settled++;
     }
     // Only a `partial` is CLOSED by its residual; any other word was not held open by these rows.
@@ -2135,6 +2147,20 @@ function computeStatus(task, declared, outcomes, carried, edited = false) {
   return S_DONE;
 }
 
+// Old row number → old label key (off the file's own table) → current row number. An entry whose row is gone
+// from the current plan is dropped rather than left on whatever deliverable now holds that number.
+function rekeyDecisions(map, oldTable, newKeys) {
+  if (!map.size) return map;
+  const oldKeys = rowKeys((oldTable || []).map((r) => r.label));
+  const at = new Map(newKeys.map((k, i) => [k, i + 1]));
+  const out = new Map();
+  for (const [n, d] of map) {
+    const k = oldKeys[n - 1];
+    if (k !== undefined && at.has(k)) out.set(at.get(k), d);
+  }
+  return out;
+}
+
 function carryOver(task, prev) {
   if (!prev) return task;
   const outcomes = prev.outcomes instanceof Map ? prev.outcomes : new Map();
@@ -2166,10 +2192,10 @@ function carryOver(task, prev) {
     // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
     // engine's, and rewriting it away would erase the one fact that shows a task was closed by a shared session.
     agentNonce: prev.meta.agentNonce || "",
-    // Cell-level provenance, carried like the nonce: `--decide` wrote it and `--revoke` reads it. A re-slice
-    // that keeps a row keeps its decision entry; a re-slice that drops a row drops its entry too (the entry
-    // is invisible to renderFrontMatter once the row is gone from the body).
-    decisions: parseDecisionsMap(prev.meta.decisions),
+    // Cell-level provenance, carried like the nonce: `--decide` wrote it and `--revoke` reads it. The map is
+    // keyed by row number, so it is re-keyed through the same label keys the cells were re-attached by: a kept
+    // row keeps its entry at its new number, and a dropped row drops its entry.
+    decisions: rekeyDecisions(parseDecisionsMap(prev.meta.decisions), prev.table, keys),
     recordedDigest: held,
     drifted: held !== task.rowsDigest,
   };
@@ -2650,7 +2676,7 @@ function unrouteStalled(set, stalled) {
   if (!keys.size) return;
   for (const t of set.tasks || []) {
     for (const o of owedRows(t)) {
-      if (o.row.residual === "open" && keys.has(`${t.pageKey} ${coverKey(o.row.label)}`)) o.row.residual = null;
+      if (o.row.residual === "open" && keys.has(`${rowPageOf(t, o.row)} ${coverKey(o.row.label)}`)) o.row.residual = null;
     }
   }
 }
@@ -2729,6 +2755,11 @@ export function cutProblems({ unplaced, surplus }) {
 // the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
 // fall does not matter.
 export function taskSetFor(dir, result, opts = {}, split = null) {
+  const timings = readTimingsFile(dir);
+  if (timings.malformed) {
+    return { refused: true, refusal: REFUSED_TIMINGS, planVersion: result.planVersion || null, tasks: [],
+      problems: [`${TIMINGS_FILE} ${timings.malformed}`] };
+  }
   const frozen = split ? null : readFrozenSplit(dir);
   if (frozen?.errors?.length) {
     return { refused: true, refusal: REFUSED_UNREADABLE, planVersion: result.planVersion || null, tasks: [],
@@ -2826,16 +2857,31 @@ function normalizeRunning(raw) {
 // dispatched task as one nobody was ever sent out for.
 const usableSamples = (samples) => samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0);
 
+// ABSENT AND UNPARSEABLE ARE DIFFERENT ANSWERS. An absent file is a folder nobody dispatched from yet. A file
+// that does not parse still holds the dispatch evidence, so it carries `malformed` (the reason) and every writer
+// refuses rather than replace it with an empty state.
 export function readTimingsFile(dir) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
-    const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => x?.id) : [];
-    return { samples, running: normalizeRunning(raw?.running) };
-  } catch { return { samples: [], running: {} }; }   // absent or malformed — a forecast is not worth an exception
+  let text;
+  try { text = fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"); }
+  catch { return { samples: [], running: {} }; }
+  let raw;
+  try { raw = JSON.parse(text); }
+  catch (e) { return { samples: [], running: {}, malformed: `could not be parsed: ${e.message}` }; }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { samples: [], running: {}, malformed: "does not hold a JSON object" };
+  }
+  const samples = Array.isArray(raw.samples) ? raw.samples.filter((x) => x?.id) : [];
+  return { samples, running: normalizeRunning(raw.running) };
 }
 export const readTimings = (dir) => usableSamples(readTimingsFile(dir).samples);
-const writeTimings = (dir, state) =>
-  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+// Written to a temporary file and renamed over the old one, so a killed write leaves the previous file whole.
+const writeTimings = (dir, state) => {
+  if (state.malformed) throw new Error(`${TIMINGS_FILE} could not be read, so it is not overwritten`);
+  const file = path.join(dir, TIMINGS_FILE);
+  const tmpFile = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+  fs.renameSync(tmpFile, file);
+};
 
 // CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
 // nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.
@@ -3040,6 +3086,13 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // `writeTimings` would leave a running clock behind the refusal.
   const adopted = t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR;
   if (adopted && !statusLineWritable(dir, t.file)) return { ...merged, started: null, statusUnwritable: t.file };
+  // A SETTLED TASK WITH FILLED CELLS CANNOT BE RE-OPENED BY ITS STATUS LINE. The cells outrank the carried word,
+  // so the next sync would derive the closed status again while the new sub-agent is still working, close its
+  // clock early and fail the ledger. Refused before any clock opens, naming the cells to clear.
+  if (SETTLED.has(t.status)) {
+    const filled = (t.rows || []).map((r, i) => (r.outcome ? i + 1 : 0)).filter(Boolean);
+    if (filled.length) return { ...merged, started: null, filledCells: { file: t.file, status: t.status, rows: filled } };
+  }
   // A DECISION, NOT A SCHEDULE — refused in the same shape the query withholds it in, so "which task may I
   // start?" and "may I start this task?" cannot answer differently for the same file.
   if (blocker?.cause === HOLD_STATUS) {
@@ -3685,7 +3738,7 @@ function decideRowTarget(tasks, rowRef) {
   if (!t) return { problems: [`no task with id or file '${rowRef.taskId}' in the folder`], targets: [] };
   if (t.unread) return { problems: [`task '${rowRef.taskId}' could not be read — its body is malformed; --decide cannot address a row it cannot count`], targets: [] };
   const n = Number(rowRef.n);
-  if (!Number.isFinite(n) || n < 1 || n > (t.rows || []).length) {
+  if (!Number.isInteger(n) || n < 1 || n > (t.rows || []).length) {
     return { problems: [`row ${rowRef.n} out of range for task '${t.id}' (1..${(t.rows || []).length})`], targets: [] };
   }
   return { targets: [{ task: t, rowIndices: [n - 1] }] };
@@ -3896,12 +3949,11 @@ export function applyDecision(dir, result, opts = {}) {
 // A repair task closed by CASCADE keeps its closure (the next `--verify` round measures the page as it then
 // stands and re-opens what still needs work). This mirrors the ticket's note: "repair tasks closed by the
 // cascade are NOT revived, because the next --verify round measures the page as it then stands."
-// CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER, and `carryOver` copies the map
-// verbatim onto rows re-sliced from the CURRENT plan while re-attaching every other mark by LABEL. So the
-// moment the plan inserts or drops a row above this one, `n` addresses a different deliverable — and blanking
-// it unconditionally destroys whatever now sits there, including an agent's own `built` record, the one mark
-// this codebase cannot recover. Position keying is the scheme `rowKeys` exists to avoid; until the map itself
-// is label-keyed, the cell must prove it is the one this decision wrote before it is touched.
+// CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER. `carryOver` re-keys it by label on
+// every re-slice, but an adopted file or a hand edit can still leave an entry on a row it was not written for,
+// and blanking that row unconditionally destroys whatever sits there, including an agent's own `built` record,
+// the one mark this codebase cannot recover. So the cell must prove it is the one this decision wrote before it
+// is touched.
 function revokeSkipReason(row, decision) {
   if (!row) return "that row no longer exists in this task";
   const decided = row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED;

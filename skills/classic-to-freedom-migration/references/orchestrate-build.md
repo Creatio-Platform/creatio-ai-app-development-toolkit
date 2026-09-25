@@ -164,15 +164,15 @@ sub-agents before this, one of them caching material nobody else read.
 4. **Re-run `--tasks` after every task.** It refreshes `index.md` from the files, keeps the
    deliverable rows in step with the plan, and fills the index's `Attention` section. Read that
    section — it is where an unrecognised status, a task recorded `done` whose deliverables have
-   since changed, and a task that left the plan surface.
+   since changed, and a task that left the plan surface are listed.
 5. **You may change the task LIST; you may not change the PLAN.** Split a task that turned out to
-   hold two separate pieces of work, or add one the plan does not model, by writing a new file with
-   `origin: orchestrator` by DECLARING it and letting the engine write the file:
+   hold two separate pieces of work, or add one the plan does not model, by DECLARING it and letting
+   the engine write the file (it carries `origin: orchestrator`):
    `node engine/migrate.mjs <manifest> --tasks <migration-folder>/build-tasks --add <decl.json>`,
    where the declaration is
    `{ "id": "<slug>", "pageKey": "<a page key from the plan>", "group": "<title>", "order": <n>, "writesTo": "<the artifact it writes>" | "readOnly": true, "deliverables": ["<row>", ...], "dependsOn": ["<task id>", ...], "stopGate": true }`
    — the last two optional; a list of declarations is fine; one bad declaration refuses the whole
-   set and writes nothing). The engine validates the `pageKey` against the plan, writes the file
+   set and writes nothing. The engine validates the `pageKey` against the plan, writes the file
    with its own `Outcome` table, and from then on the body is yours and is never re-authored. **Do
    not hand-write the file.** Its status is derived from that table like every other task's, and a
    hand-written body the engine cannot parse is a task whose status nothing can derive. Give it a
@@ -197,8 +197,10 @@ sub-agents before this, one of them caching material nobody else read.
 looking for a file, so pass all of it explicitly: the **path to its own task file** (it carries the
 contract, the deliverables, the artifact it writes and the tasks it waits on); the migration folder;
 the environment name; the manifest path and the resolved path to `engine/migrate.mjs`; the approved
-`plan.md`; the `refs/` folder the first task wrote — **paths, never pasted bodies**, because
-inlining the contracts into every build prompt costs more than fetching them does; the briefs its
+`plan.md`; the `refs/` folder when the run has a `Reference cache` task (it holds the guidance
+articles and the design spec; a collapsed run has none) — **paths, never pasted bodies**, because
+inlining a cached file into every build prompt costs more than fetching it does. Tool contracts and
+component docs are not cached: each builder reads them from the tools itself; the briefs its
 task kind names in the table below; and for a task carrying imperative rows, the step-5.1 behaviour
 cards with their acceptance criteria — a handler is ported against its card's AC, never from its
 method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they
@@ -351,8 +353,10 @@ plan-vs-built table, checks the built pages only and says so; it is not the gate
 a task folder.
 
 **The task is NOT done until the VERIFIED gate passes (mandatory) — reality-checked, not
-self-reported.** The gate is `node engine/migrate.mjs <manifest> --verify --from <migration-folder>`
-— **you do not write the payload.** Step 7.4's `--reads` named every file; this composes
+self-reported.** On an orchestrated run the gate is
+`node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`
+(above); on a run with no task folder it is the same command without `--tasks` — **you do not write
+the payload.** Step 7.4's `--reads` named every file; this composes
 `built.json` out of them, writes it and `verify.md` into that folder, and gates on it.
 
 **`--verify --built <file>` is the REPLAY path** — the same gate against a payload already composed
@@ -482,7 +486,7 @@ to build that row, clear its `Outcome` cell and set its task back to `status: to
 
 **Three non-negotiables that close the escape routes (a real run hit all three):**
 1. **The engine's close artifact is the ONLY sanctioned completion/status report — the migration
-   result report on an orchestrated run (`--verify --built … --tasks …`), the `--verify` table on a
+   result report on an orchestrated run (`--verify --from … --tasks …`), the `--verify` table on a
    run with no task folder — present it as-is, and NEVER substitute a hand-authored "done" /
    "contract-validated" / "checkpoint" summary table of your own.** Hand-summaries are exactly where
    deliverables vanish: one run built the pages, wrote its own status table, and silently omitted

@@ -163,6 +163,7 @@ const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
 const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
+const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
@@ -1164,6 +1165,26 @@ const BULK_GROUPS = [{ pageKey: "main", baseTitle: "Form — Logic", rows:
   Array.from({ length: 12 }, (_, i) => ({ label: `Handler — \`h${i}\`` })) },
   { pageKey: "main", baseTitle: "Card actions", rows: [{ label: "Card action — Print" }] }];
 const bulkSplit = (items) => resolveSplit({ items }, BULK_GROUPS, new Map());
+// TWO ROWS, ONE KEY. `rowKey` masks digits and truncates at 80 characters, so each pair below shares a key while
+// the labels differ. Each item names the row the OTHER would take first, and must still get the row it named.
+const LONG = "Detail — a related list whose caption runs long enough that the structural key stops before the end ";
+const TWIN_GROUPS = [{ pageKey: "main", baseTitle: "Form — Layout", rows: [
+  { label: "Tab 1 — fields" }, { label: "Tab 2 — fields" },
+  { label: `${LONG}(Orders)` }, { label: `${LONG}(Invoices)` },
+] }];
+const twinSplit = () => resolveSplit({ items: [
+  { id: "second", title: "s", pageKey: "main", writesTo: "main", rows: ["Tab 2 — fields", `${LONG}(Invoices)`] },
+  { id: "first", title: "f", pageKey: "main", writesTo: "main", rows: ["Tab 1 — fields", `${LONG}(Orders)`] },
+] }, TWIN_GROUPS, new Map());
+check("split: an item naming one of two rows that share a `rowKey` gets the row whose label it wrote, even when it resolves first — the first free row of the key belonged to the other item",
+  () => {
+    const r = twinSplit();
+    const labels = (id) => r.items.find((i) => i.id === id).rows.map((x) => x.label);
+    return rowKey("Tab 1 — fields") === rowKey("Tab 2 — fields") && rowKey(`${LONG}(Orders)`) === rowKey(`${LONG}(Invoices)`)
+      && r.errors.length === 0
+      && JSON.stringify(labels("second")) === JSON.stringify(["Tab 2 — fields", `${LONG}(Invoices)`])
+      && JSON.stringify(labels("first")) === JSON.stringify(["Tab 1 — fields", `${LONG}(Orders)`]);
+  }, () => { const r = twinSplit(); return { errors: r.errors, items: r.items.map((i) => [i.id, i.rows.map((x) => x.label)]) }; });
 check("split: `@<group>` claims every unclaimed row of that group — a plan whose checklist runs to several hundred rows has to be expressible in a file a person or an agent can actually write",
   () => {
     const r = bulkSplit([
@@ -1722,6 +1743,43 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
         && whole.rows.every((r) => r.pageKey && r.pageKey !== "run")
         && new Set(whole.rows.map((r) => r.pageKey)).size >= 2; },
     () => (small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE)?.rows || []).map((r) => [r.label, r.pageKey]));
+  // A COLLAPSED RUN ROUTES EACH RESIDUAL TO ITS ROW'S PAGE. The whole-run task is `pageKey: run`; two rows with
+  // one label on two pages must open two repair rounds, each on its own page, and closing one must not close the
+  // other.
+  {
+    const SMALL = checklistOpts(MANIFEST);
+    const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
+    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === "Fields — 1 expected"
+      && (x.r.pageKey === "main" || x.r.pageKey === "child:C1"));
+    const d = tmp("collapsed-route");
+    syncTaskDir(d, RUN, SMALL);
+    clearDepsOf(d, whole.id, RUN, SMALL);
+    startTask(d, whole.id, RUN, { ...SMALL, dispatchToken: `tok-${whole.id}` }, null, AT(40));
+    const fp = taskFilePath(d, whole.id);
+    let text = allBuilt(fs.readFileSync(fp, "utf8"));
+    for (const x of twins) text = setOutcome(text, x.n, NOT_BUILT_BLOCKED);
+    fs.writeFileSync(fp, text);
+    editFrontMatter(d, whole.id, "agentNonce", `tok-${whole.id}`);
+    syncTaskDir(d, RUN, { ...SMALL, now: AT(41) });
+    const routed = syncRepairDir(d, RUN, {}, SMALL);
+    const pages = routed.written.map((t) => t.pageKey).sort();
+    check("collapsed run: two not-built rows sharing a label on two pages open TWO repair rounds, one per row's own page, each writing that page's artifact — keyed on the task's `run` they collapsed into one round on a page that does not exist",
+      () => twins.length === 2 && JSON.stringify(pages) === JSON.stringify(["child:C1", "main"])
+        && routed.written.every((t) => t.writesTo && t.writesTo !== "page:run"),
+      () => ({ twins: twins.map((x) => [x.n, x.r.pageKey]), written: routed.written.map((t) => [t.pageKey, t.writesTo, t.cause]) }));
+    const mainRound = routed.written.find((t) => t.pageKey === "main");
+    if (mainRound) {
+      clearDepsOf(d, mainRound.id, RUN, SMALL, 50);
+      runTask(d, mainRound.id, RUN, SMALL, 52);
+    }
+    const after = syncRepairDir(d, RUN, {}, SMALL);
+    const w = after.set.tasks.find((t) => t.id === whole.id);
+    const residuals = twins.map((x) => w.rows[x.n - 1].residual);
+    check("collapsed run: closing the round on ONE page settles only that page's row — the other page's twin stays open and the whole task stays `partial`",
+      () => !!mainRound && w.status === "partial" && residuals.filter((x) => x === "closed").length === 1,
+      () => ({ status: w?.status, residuals, written: after.written.map((t) => t.pageKey) }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
   check("small run: the threshold is the RUN's weight, not its row count — the same plan grown past `TASK_BUDGET.run` keeps the per-artifact cut, and one page is still never written by two tasks that are not chained",
     () => {
       const big = buildTaskSet(RUN5, checklistOpts(MANIFEST5));
@@ -1791,6 +1849,57 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     check("clock: an id the folder does not hold marks nothing and says so — a typo must not silently start the wrong task",
       () => { const r = startTask(d, "nosuchid", RUN, OPTS, null, at(0)); return r.started === null && r.unknownId === "nosuchid"; },
       () => startTask(d, "nosuchid", RUN, OPTS, null, at(0)).started);
+  }
+
+  // 1b — a truncated `timings.json` is refused, never read as empty and then overwritten.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    const f = path.join(d, "timings.json");
+    const truncated = fs.readFileSync(f, "utf8").slice(0, 40);
+    fs.writeFileSync(f, truncated);
+    const started = startTask(d, id, RUN, OPTS, null, at(1));
+    const synced = syncTaskDir(d, RUN, OPTS);
+    const cliRun = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("clock: a truncated `timings.json` is REFUSED on `--start` and on a sync, and stays byte-identical — reading it as empty reported every closed task as never dispatched and the next write replaced the evidence",
+      () => started.refused === true && started.refusal === "timings-unreadable" && synced.refused === true
+        && started.problems.some((x) => /timings\.json/.test(x)) && fs.readFileSync(f, "utf8") === truncated,
+      () => ({ started: { refused: started.refused, refusal: started.refusal, problems: started.problems },
+        synced: synced.refusal, same: fs.readFileSync(f, "utf8") === truncated }));
+    check("clock: the CLI answers the same refusal with exit 2, names `timings.json`, and leaves the file as it was",
+      () => cliRun.status === 2 && /timings\.json/.test(cliRun.stdout + cliRun.stderr) && fs.readFileSync(f, "utf8") === truncated,
+      () => ({ status: cliRun.status, out: (cliRun.stdout + cliRun.stderr).slice(0, 600) }));
+    check("clock (control): an ABSENT `timings.json` is still an ordinary empty record — only a file that exists and does not parse is refused",
+      () => { fs.rmSync(f); return syncTaskDir(d, RUN, OPTS).refused !== true; },
+      () => syncTaskDir(d, RUN, OPTS).problems);
+  }
+
+  // 1c — re-opening a closed task by its `status:` line alone cannot hold: the cells outrank it.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    closeCells(d, id);
+    syncTaskDir(d, RUN, { ...OPTS, now: at(10) });
+    const f = taskFilePath(d, id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: todo"));
+    const refused = startTask(d, id, RUN, OPTS, null, at(20));
+    const clockAfterRefusal = readTimingsFile(d).running[id];
+    const cleared = fs.readFileSync(f, "utf8").split("\n")
+      .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+    fs.writeFileSync(f, cleared.replace(/^status: .*$/m, "status: todo"));
+    const restarted = startTask(d, id, RUN, OPTS, null, at(30));
+    const after = syncTaskDir(d, RUN, { ...OPTS, now: at(31) });
+    const t = after.tasks.find((x) => x.id === id);
+    check("clock: `--start` on a closed task whose `Outcome` cells are still filled is REFUSED and names the cells — otherwise the next sync re-derives the closed status under a running sub-agent and fails the ledger",
+      () => refused.started === null && refused.filledCells?.rows.length > 0 && !clockAfterRefusal,
+      () => ({ filledCells: refused.filledCells, started: refused.started?.id, clock: clockAfterRefusal }));
+    check("clock: once the cells are cleared the same task starts, and the next sync keeps it `in-progress` with a passing ledger",
+      () => restarted.started?.id === id && t.status === "in-progress" && after.dispatch.failing.length === 0,
+      () => ({ started: restarted.started?.id, status: t.status, failing: after.dispatch.failing.map((x) => x.id) }));
   }
 
   // 2 — the duration is recorded ONCE, by the first regeneration that sees the task closed.
@@ -3332,6 +3441,64 @@ check("minted: a REFUSED set writes NOTHING - one bad declaration in a batch lea
     return res.refused === true && fs.readdirSync(d).length === before;
   }, () => addTasks(tmp("mint-allornothing-d"), RUN, [DECL, { ...DECL, id: "orch-second", pageKey: "child:NOPE" }], OPTS).problems);
 
+// THE MAIN FORM PAGE AND THE LIST PAGE ARE PAGES A DECLARATION CAN NAME. They are not in the sub-page walk, and
+// a validator built from that walk alone refused the most common fix target on a live run — the orchestrator then
+// parked the fix in another task's notes, where `--verify` does not check it.
+const mintedOn = (pageKey, group, name) => {
+  const target = taskAt(SET, pageKey, group);
+  return { target, ...minted({ id: `orch-${name}`, pageKey, writesTo: target.writesTo }, name) };
+};
+for (const [pageKey, group] of [["main", "Page build"], [LIST_PAGE_KEY, "Page build"]]) {
+  check(`minted: a declaration on \`${pageKey}\` with the engine's own \`writesTo\` is ACCEPTED, and the written task writes the same artifact as the engine's task on that page`,
+    () => {
+      const { target, d, res } = mintedOn(pageKey, group, `mint-on-${pageKey}`);
+      const t = res.set?.tasks.find((x) => x.id === `orch-mint-on-${pageKey}`);
+      return !!target && res.refused === false && t?.origin === "orchestrator" && t.writesTo === target.writesTo
+        && fs.existsSync(path.join(d, res.written[0].file));
+    }, () => { const { target, res } = mintedOn(pageKey, group, `mint-on-${pageKey}-d`);
+      return { target: target && { id: target.id, writesTo: target.writesTo }, problems: res.problems,
+        written: res.set?.tasks.find((x) => x.id === `orch-mint-on-${pageKey}-d`) }; });
+}
+
+// The same section with its one detail taken out of the page body, so the sub-page walk is empty.
+const NO_SUB = { ...manifestOf(), detailSchemas: {}, childPageSchemas: {},
+  schemas: [{ pkg: "P", body: mainBody({}).replace(/details:\{[^}]*\}\}/, "details:{}")
+    .replace('{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},', "") }] };
+const RUN_NO_SUB = runMigration(NO_SUB);
+const OPTS_NO_SUB = optsOf(NO_SUB);
+check("minted: on a plan with NO sub-pages a declaration on `main` is still accepted — the valid-page list is never empty",
+  () => {
+    const d = tmp("mint-nosub");
+    const set = syncTaskDir(d, RUN_NO_SUB, OPTS_NO_SUB);
+    const main = set.tasks.find((t) => t.pageKey === "main" && t.writesTo === "page:main");
+    const res = addTasks(d, RUN_NO_SUB, { ...DECL, pageKey: "main", writesTo: main?.writesTo }, OPTS_NO_SUB);
+    return subPageNodes(RUN_NO_SUB).length === 0 && !!main && res.refused === false;
+  }, () => { const d = tmp("mint-nosub-d"); const set = syncTaskDir(d, RUN_NO_SUB, OPTS_NO_SUB);
+    const main = set.tasks.find((t) => t.pageKey === "main" && t.writesTo === "page:main");
+    return { subPages: subPageNodes(RUN_NO_SUB).length, main: main?.writesTo,
+      problems: addTasks(d, RUN_NO_SUB, { ...DECL, pageKey: "main", writesTo: main?.writesTo }, OPTS_NO_SUB).problems }; });
+
+// THE `decisions:` MAP FOLLOWS ITS ROW, NOT ITS NUMBER. The file below was written when the plan had one row
+// fewer above the decided one; the current plan puts that row back, so the decided deliverable moves from 1 to 2.
+const shiftedDecision = (name) => {
+  const d = tmp(name);
+  const t = taskAt(syncTaskDir(d, RUN, OPTS), "main", "Page build");
+  const f = taskFilePath(d, t.id);
+  const lines = fs.readFileSync(f, "utf8").split("\n");
+  const rowAt = lines.map((l, i) => (/^\|\s*\d+\s*\|/.test(l) ? i : -1)).filter((i) => i >= 0);
+  const decidedLabel = parseTaskFile(fs.readFileSync(f, "utf8")).table[1].label;
+  lines.splice(rowAt[0], 1);
+  let n = 0;
+  const shifted = lines.map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/^\|\s*\d+\s*\|/, `| ${++n} |`) : l)).join("\n");
+  fs.writeFileSync(f, shifted.replace(/^decisions:.*$/m, "decisions: 1:D7"));
+  syncTaskDir(d, RUN, OPTS);
+  const back = parseTaskFile(fs.readFileSync(f, "utf8"));
+  return { decidedLabel, map: String(back.meta.decisions || ""), row2: back.table[1]?.label };
+};
+check("decisions: an entry recorded against a row is re-keyed to that row's CURRENT number when the plan inserts a row above it — copied verbatim it would mark the inserted row as decided",
+  () => { const r = shiftedDecision("decision-rekey"); return r.map.trim() === "2:D7" && r.row2 === r.decidedLabel; },
+  () => shiftedDecision("decision-rekey-d"));
+
 console.log("\n===== review round: the held-back boundary is reported, and the stamp fires only on an edit =====");
 // A row the ledger settled by decision is not routed. Everything that decides that must also SAY it, or the row
 // is dropped in silence.
@@ -4037,7 +4204,16 @@ const nextMin = () => { repairMin += 2; return repairMin; };
 const closeRepairs = (d) => repairIds(d).forEach((id) => runTask(d, id, RUN, OPTS, nextMin()));
 // Dispatched, signed, and closed THE WAY A BUILD TASK IS: every `Outcome` cell filled, no status word typed.
 // `mark` may be a function of the row number, for a round that fixed some of its rows and not others.
+// A task an earlier helper already closed is re-opened the documented way first (cells cleared, `status: todo`):
+// `--start` refuses a closed task whose cells are still filled.
+const reopenCells = (d, id) => {
+  const f = taskFilePath(d, id);
+  const text = fs.readFileSync(f, "utf8").split("\n")
+    .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+  fs.writeFileSync(f, text.replace(/^status: .*$/m, "status: todo"));
+};
 const runRepair = (d, id, mark = "built") => {
+  if (/^status: (done|partial)\s*$/m.test(fs.readFileSync(taskFilePath(d, id), "utf8"))) reopenCells(d, id);
   startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
   const f = taskFilePath(d, id);
   let text = fs.readFileSync(f, "utf8");
@@ -4790,6 +4966,13 @@ console.log("\n===== the migration result report — one artifact, computed from
     { id: "c-a", file: "c-a.md", group: "Form build", pageKey: "main", status: "done", notes: "", rows: [{ label: "Form page", outcomeKind: "built", outcome: "built" }] },
     { id: "c-b", file: "c-b.md", group: "Child build", pageKey: "child:C1", status: "done", notes: "", rows: [{ label: "Fields — 1 expected", outcomeKind: "built", outcome: "built" }] },
   ] };
+  // The banner names the input mode that ran: `--from` is the canonical close command, `--built` the replay.
+  const fromRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-from"), source: "--from <migration-folder>" }).markdown;
+  const builtRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-built"), source: "--built <file>" }).markdown;
+  check("result report: the banner names the input mode that ran — `--verify --from … --tasks …` on a composed run, `--built` only on a replay",
+    () => fromRep.includes("`migrate.mjs --verify --from <migration-folder> --tasks <dir>`") && !fromRep.includes("--built")
+      && builtRep.includes("`migrate.mjs --verify --built <file> --tasks <dir>`"),
+    () => ({ from: fromRep.split("\n").find((l) => l.includes("Written by")), built: builtRep.split("\n").find((l) => l.includes("Written by")) }));
   const passRep = renderFinalReport({ result: RUN, verifyRes: greenVerify, set: closedSet, dir: tmp("result-report-pass") });
   check("renderFinalReport (RC-9): a NON-empty ledger of closed tasks + a green machine table + a gate-clean run PASSES — complete:true, 🟢 COMPLETE, zero verdict reasons (the pass path the CLI goldens never exercised)",
     () => passRep.complete === true && /🟢 \*\*COMPLETE\*\*/.test(passRep.markdown) && passRep.reasons.length === 0,
@@ -5718,6 +5901,11 @@ const decideFixtureB = (label, md = null) => {
     if (t) {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         rowRef: { taskId: t.id, n: "1" }, decisions: decisionsMap() });
+      const frac = (() => { try { return applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: "2.5" }, decisions: decisionsMap() }); } catch (e) { return { threw: e.message }; } })();
+      check("-decide --row <task>:2.5 is refused as out of range, not a crash — a fractional row passes `Number.isFinite` and reached the cell writer",
+        () => frac.refused === true && frac.problems.some((x) => /row 2\.5 out of range/.test(x)),
+        () => frac);
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
       check("-decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
         () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"
