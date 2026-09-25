@@ -61,7 +61,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -3023,6 +3023,7 @@ const handedIn = (set) => set.splitSource === SPLIT_HANDED;
 function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
+  if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
@@ -3048,6 +3049,10 @@ function refusalRemedy(set) {
         : `drop ${SPLIT_FLAG} to fall back to the engine's own cut`;
     }
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
+  }
+  if (set.refusal === REFUSED_TIMINGS) {
+    return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
+      + " which sub-agent closed which task, so the engine will not replace it.";
   }
   // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
   if (set.refusal === REFUSED_UNRESOLVED) {

@@ -76,6 +76,9 @@ export const REFUSED_UNREADABLE = "split-unreadable";
 export const REFUSED_UNRESOLVED = "split-unresolved";
 export const REFUSED_COVERAGE = "split-coverage";
 export const REFUSED_CUT = "engine-cut";
+// `timings.json` is present but does not parse. It holds the dispatch evidence, so reading it as empty would
+// report every closed task as never dispatched and the next write would replace the samples for good.
+export const REFUSED_TIMINGS = "timings-unreadable";
 
 // WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
 // frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
@@ -2732,6 +2735,11 @@ export function cutProblems({ unplaced, surplus }) {
 // the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
 // fall does not matter.
 export function taskSetFor(dir, result, opts = {}, split = null) {
+  const timings = readTimingsFile(dir);
+  if (timings.malformed) {
+    return { refused: true, refusal: REFUSED_TIMINGS, planVersion: result.planVersion || null, tasks: [],
+      problems: [`${TIMINGS_FILE} ${timings.malformed}`] };
+  }
   const frozen = split ? null : readFrozenSplit(dir);
   if (frozen?.errors?.length) {
     return { refused: true, refusal: REFUSED_UNREADABLE, planVersion: result.planVersion || null, tasks: [],
@@ -2829,16 +2837,31 @@ function normalizeRunning(raw) {
 // dispatched task as one nobody was ever sent out for.
 const usableSamples = (samples) => samples.filter((x) => Number(x?.weight) > 0 && Number(x?.minutes) > 0);
 
+// ABSENT AND UNPARSEABLE ARE DIFFERENT ANSWERS. An absent file is a folder nobody dispatched from yet. A file
+// that does not parse still holds the dispatch evidence, so it carries `malformed` (the reason) and every writer
+// refuses rather than replace it with an empty state.
 export function readTimingsFile(dir) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"));
-    const samples = Array.isArray(raw?.samples) ? raw.samples.filter((x) => x?.id) : [];
-    return { samples, running: normalizeRunning(raw?.running) };
-  } catch { return { samples: [], running: {} }; }   // absent or malformed — a forecast is not worth an exception
+  let text;
+  try { text = fs.readFileSync(path.join(dir, TIMINGS_FILE), "utf8"); }
+  catch { return { samples: [], running: {} }; }
+  let raw;
+  try { raw = JSON.parse(text); }
+  catch (e) { return { samples: [], running: {}, malformed: `could not be parsed: ${e.message}` }; }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { samples: [], running: {}, malformed: "does not hold a JSON object" };
+  }
+  const samples = Array.isArray(raw.samples) ? raw.samples.filter((x) => x?.id) : [];
+  return { samples, running: normalizeRunning(raw.running) };
 }
 export const readTimings = (dir) => usableSamples(readTimingsFile(dir).samples);
-const writeTimings = (dir, state) =>
-  fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+// Written to a temporary file and renamed over the old one, so a killed write leaves the previous file whole.
+const writeTimings = (dir, state) => {
+  if (state.malformed) throw new Error(`${TIMINGS_FILE} could not be read, so it is not overwritten`);
+  const file = path.join(dir, TIMINGS_FILE);
+  const tmpFile = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify({ version: TIMINGS_VERSION, ...state }, null, 2) + "\n");
+  fs.renameSync(tmpFile, file);
+};
 
 // CLOSE the clocks of every task that finished since the last pass. A task closed with no open clock records
 // nothing — it was never dispatched through the engine, and a duration nobody measured would poison the forecast.

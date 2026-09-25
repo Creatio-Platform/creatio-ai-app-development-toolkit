@@ -163,6 +163,7 @@ const SET6 = buildTaskSet(runMigration(MANIFEST6), optsOf(MANIFEST6));
 // The reference cache is a RUN-level task, not a page's — it is excluded wherever the question is about pages.
 const pageTasks = (set) => set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS);
 const keysOf = (set) => [...new Set(pageTasks(set).map((t) => t.pageKey))];
+const cliTasksEarly = (args, manifest) => spawnSync(process.execPath, [MIGRATE, "-", ...args], { input: JSON.stringify(manifest), encoding: "utf8" });
 const taskAt = (set, pageKey, group) => set.tasks.find((t) => t.pageKey === pageKey && t.group === group);
 const orderOf = (set, pageKey, group) => taskAt(set, pageKey, group)?.order;
 const artifactsOf = (set) => [...new Set(set.tasks.map((t) => t.artifact))];
@@ -1791,6 +1792,31 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
     check("clock: an id the folder does not hold marks nothing and says so — a typo must not silently start the wrong task",
       () => { const r = startTask(d, "nosuchid", RUN, OPTS, null, at(0)); return r.started === null && r.unknownId === "nosuchid"; },
       () => startTask(d, "nosuchid", RUN, OPTS, null, at(0)).started);
+  }
+
+  // 1b — a truncated `timings.json` is refused, never read as empty and then overwritten.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    const f = path.join(d, "timings.json");
+    const truncated = fs.readFileSync(f, "utf8").slice(0, 40);
+    fs.writeFileSync(f, truncated);
+    const started = startTask(d, id, RUN, OPTS, null, at(1));
+    const synced = syncTaskDir(d, RUN, OPTS);
+    const cliRun = cliTasksEarly(["--tasks", d, "--start", id], MANIFEST);
+    check("clock: a truncated `timings.json` is REFUSED on `--start` and on a sync, and stays byte-identical — reading it as empty reported every closed task as never dispatched and the next write replaced the evidence",
+      () => started.refused === true && started.refusal === "timings-unreadable" && synced.refused === true
+        && started.problems.some((x) => /timings\.json/.test(x)) && fs.readFileSync(f, "utf8") === truncated,
+      () => ({ started: { refused: started.refused, refusal: started.refusal, problems: started.problems },
+        synced: synced.refusal, same: fs.readFileSync(f, "utf8") === truncated }));
+    check("clock: the CLI answers the same refusal with exit 2, names `timings.json`, and leaves the file as it was",
+      () => cliRun.status === 2 && /timings\.json/.test(cliRun.stdout + cliRun.stderr) && fs.readFileSync(f, "utf8") === truncated,
+      () => ({ status: cliRun.status, out: (cliRun.stdout + cliRun.stderr).slice(0, 600) }));
+    check("clock (control): an ABSENT `timings.json` is still an ordinary empty record — only a file that exists and does not parse is refused",
+      () => { fs.rmSync(f); return syncTaskDir(d, RUN, OPTS).refused !== true; },
+      () => syncTaskDir(d, RUN, OPTS).problems);
   }
 
   // 2 — the duration is recorded ONCE, by the first regeneration that sees the task closed.
