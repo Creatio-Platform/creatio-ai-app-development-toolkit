@@ -1,0 +1,1965 @@
+{
+ "viewConfig": [
+  {
+   "type": "crt.FlexContainer",
+   "direction": "column",
+   "stretch": true,
+   "fitContent": false,
+   "items": [
+    {
+     "type": "crt.FlexContainer",
+     "color": "primary",
+     "padding": {
+      "top": "large",
+      "right": "large",
+      "bottom": "medium",
+      "left": "large"
+     },
+     "fitContent": true,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "justifyContent": "space-between",
+       "wrap": "nowrap",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "items": [
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(BackButton)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "back-button-icon",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "name": "BackButton"
+          },
+          {
+           "type": "crt.Label",
+           "caption": "$HeaderCaption",
+           "labelType": "headline-1",
+           "labelThickness": "default",
+           "labelColor": "#0D2E4E",
+           "labelBackgroundColor": "transparent",
+           "labelTextAlign": "start",
+           "headingLevel": "h1",
+           "name": "PageTitle"
+          }
+         ],
+         "direction": "row",
+         "justifyContent": "start",
+         "alignItems": "flex-start",
+         "wrap": "nowrap",
+         "name": "TitleContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "direction": "row",
+         "wrap": "nowrap",
+         "items": [
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.SaveRecordRequest",
+            "params": {
+             "showSuccessMessage": true
+            }
+           },
+           "color": "primary",
+           "caption": "$Resources.Strings.SaveButton",
+           "visible": "$HasUnsavedData",
+           "name": "SaveButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(RunSecurityCheckButton_caption)#",
+           "color": "default",
+           "clicked": {
+            "request": "crt.RunBusinessProcessRequest",
+            "params": {
+             "processName": "RecruitingSecurityCheck",
+             "processRunType": "ForTheSelectedPage",
+             "saveAtProcessStart": true,
+             "showNotification": true,
+             "recordIdProcessParameterName": "Applicant1"
+            }
+           },
+           "name": "RunSecurityCheckButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.CancelRecordChangesRequest"
+           },
+           "caption": "$Resources.Strings.CancelButton",
+           "visible": "$HasUnsavedData",
+           "name": "CancelButton"
+          },
+          {
+           "type": "crt.Button",
+           "clicked": {
+            "request": "crt.ClosePageRequest"
+           },
+           "color": "default",
+           "caption": "$Resources.Strings.CloseButton",
+           "visible": "$HasUnsavedData | crt.InvertBooleanValue",
+           "name": "CloseButton"
+          },
+          {
+           "type": "crt.Button",
+           "caption": "#ResourceString(SetRecordRightsButtonCaption)#",
+           "color": "default",
+           "disabled": false,
+           "size": "large",
+           "iconPosition": "only-icon",
+           "visible": true,
+           "icon": "lock-button-icon",
+           "clicked": {
+            "request": "crt.SetRecordRightsRequest"
+           },
+           "clickMode": "default",
+           "name": "SetRecordRightsButton"
+          }
+         ],
+         "justifyContent": "end",
+         "name": "ActionButtonsContainer"
+        }
+       ],
+       "name": "MainHeaderTop"
+      },
+      {
+       "type": "crt.FlexContainer",
+       "direction": "row",
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "alignItems": "center",
+         "justifyContent": "start",
+         "items": [
+          {
+           "type": "crt.TagSelect",
+           "recordId": "$Id",
+           "name": "TagSelect"
+          }
+         ],
+         "padding": {
+          "top": "none",
+          "right": "small",
+          "bottom": "none",
+          "left": "small"
+         },
+         "name": "CardToolsContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "justifyContent": "end",
+         "items": [
+          {
+           "for": "CardToggleTabPanel",
+           "type": "crt.ButtonToggleGroup",
+           "name": "CardButtonToggleGroup"
+          }
+         ],
+         "name": "CardToggleContainer"
+        }
+       ],
+       "fitContent": true,
+       "visible": true,
+       "justifyContent": "space-between",
+       "gap": "medium",
+       "wrap": "nowrap",
+       "name": "MainHeaderBottom"
+      }
+     ],
+     "borderRadius": "medium",
+     "gap": "small",
+     "direction": "column",
+     "styles": {
+      "border": "none",
+      "border-bottom-left-radius": 0,
+      "border-bottom-right-radius": 0
+     },
+     "name": "MainHeader"
+    },
+    {
+     "type": "crt.FlexContainer",
+     "direction": "column",
+     "stretch": true,
+     "fitContent": false,
+     "items": [
+      {
+       "type": "crt.FlexContainer",
+       "direction": "column",
+       "items": [
+        {
+         "type": "crt.EntityStageProgressBar",
+         "saveOnChange": false,
+         "askUserToChangeSchema": true,
+         "entityName": "#DataSourceEntityName()#",
+         "layoutConfig": {},
+         "name": "ProgressBar"
+        }
+       ],
+       "fitContent": true,
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none",
+       "padding": {
+        "top": "none",
+        "right": "small",
+        "bottom": "none",
+        "left": "small"
+       },
+       "justifyContent": "start",
+       "alignItems": "stretch",
+       "gap": "none",
+       "wrap": "nowrap",
+       "name": "ProgressBarContainer"
+      },
+      {
+       "type": "crt.Approval",
+       "items": [],
+       "entityName": "Applicant",
+       "approvalEntityName": "ApplicantVisa",
+       "hiddenWhenNoData": true,
+       "layoutConfig": {},
+       "name": "ApplicantApprovalWidget"
+      },
+      {
+       "type": "crt.GridContainer",
+       "columns": [
+        "298px",
+        "minmax(64px, 1fr)"
+       ],
+       "rows": "1fr",
+       "gap": {
+        "columnGap": "small",
+        "rowGap": "small"
+       },
+       "padding": {
+        "left": "small",
+        "right": "small",
+        "top": "none",
+        "bottom": "none"
+       },
+       "stretch": true,
+       "fitContent": true,
+       "items": [
+        {
+         "type": "crt.FlexContainer",
+         "direction": "column",
+         "layoutConfig": {
+          "column": 1,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "stretch": true,
+         "items": [
+          {
+           "type": "crt.GridContainer",
+           "rows": "minmax(32px, max-content)",
+           "columns": "minmax(64px, 1fr)",
+           "gap": {
+            "columnGap": "large"
+           },
+           "padding": {
+            "top": "medium",
+            "right": "large",
+            "bottom": "medium",
+            "left": "large"
+           },
+           "color": "primary",
+           "borderRadius": "medium",
+           "layoutConfig": {
+            "basis": "fit-content"
+           },
+           "items": [
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Contact",
+             "control": "$PDS_Contact",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 1,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "ContactField"
+            },
+            {
+             "type": "crt.PhoneInput",
+             "label": "$Resources.Strings.MobilePhone",
+             "control": "$MobilePhone",
+             "labelPosition": "auto",
+             "layoutConfig": {
+              "column": 1,
+              "row": 2,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "readonly": true,
+             "tooltip": "#ResourceString(MobilePhone_tooltip)#",
+             "displayAsPhone": true,
+             "phoneAsLink": false,
+             "name": "MobilePhoneField"
+            },
+            {
+             "type": "crt.EmailInput",
+             "label": "$Resources.Strings.Email",
+             "control": "$Email",
+             "labelPosition": "auto",
+             "layoutConfig": {
+              "column": 1,
+              "row": 3,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "readonly": true,
+             "tooltip": "#ResourceString(Email_tooltip)#",
+             "isFormatValidated": true,
+             "name": "EmailField"
+            },
+            {
+             "type": "crt.Input",
+             "label": "$Resources.Strings.Skype",
+             "control": "$Skype",
+             "labelPosition": "auto",
+             "layoutConfig": {
+              "column": 1,
+              "row": 4,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "readonly": true,
+             "tooltip": "#ResourceString(Skype_tooltip)#",
+             "name": "SkypeField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Job",
+             "control": "$PDS_Job",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 5,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "RoleInCompanyField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Office",
+             "control": "$PDS_Office",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 6,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "OfficeField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_ExpertiseLevel",
+             "control": "$PDS_ExpertiseLevel",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 7,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "ExpertiseLevelField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Market",
+             "control": "$PDS_Market",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 8,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "ManagerMarketField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_Segment",
+             "control": "$PDS_Segment",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 9,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "ManagerSegmentField"
+            }
+           ],
+           "name": "ContactContainer"
+          },
+          {
+           "type": "crt.GridContainer",
+           "rows": "minmax(32px, max-content)",
+           "columns": "minmax(64px, 1fr)",
+           "gap": {
+            "columnGap": "large"
+           },
+           "padding": {
+            "top": "medium",
+            "right": "large",
+            "bottom": "medium",
+            "left": "large"
+           },
+           "color": "primary",
+           "borderRadius": "medium",
+           "layoutConfig": {
+            "basis": "fit-content"
+           },
+           "items": [
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.PDS_InternalRequest",
+             "control": "$PDS_InternalRequest",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 1,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "name": "RequestField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.Department",
+             "control": "$Department",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 2,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "disabled": true,
+             "tooltip": "#ResourceString(Department_tooltip)#",
+             "name": "DepartmentField"
+            },
+            {
+             "type": "crt.ComboBox",
+             "label": "$Resources.Strings.StaffUnit",
+             "control": "$StaffUnit",
+             "mode": "List",
+             "labelPosition": "auto",
+             "showValueAsLink": true,
+             "layoutConfig": {
+              "column": 1,
+              "row": 3,
+              "colSpan": 1,
+              "rowSpan": 1
+             },
+             "disabled": true,
+             "tooltip": "#ResourceString(StaffUnit_tooltip)#",
+             "name": "JobTitleField"
+            }
+           ],
+           "name": "InternalRequestContainer"
+          }
+         ],
+         "name": "SideContainer"
+        },
+        {
+         "type": "crt.FlexContainer",
+         "direction": "row",
+         "wrap": "nowrap",
+         "layoutConfig": {
+          "column": 2,
+          "row": 1,
+          "colSpan": 1,
+          "rowSpan": 1
+         },
+         "stretch": true,
+         "items": [
+          {
+           "type": "crt.FlexContainer",
+           "direction": "column",
+           "stretch": true,
+           "fitContent": false,
+           "items": [
+            {
+             "type": "crt.TabPanel",
+             "items": [
+              {
+               "caption": "#ResourceString(GeneralInfoTab_caption)#",
+               "type": "crt.TabContainer",
+               "items": [
+                {
+                 "type": "crt.GridContainer",
+                 "rows": "minmax(32px, max-content)",
+                 "columns": [
+                  "minmax(64px, 1fr)",
+                  "minmax(64px, 1fr)"
+                 ],
+                 "gap": {
+                  "columnGap": "large"
+                 },
+                 "items": [
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Owner",
+                   "control": "$PDS_Owner",
+                   "mode": "List",
+                   "labelPosition": "auto",
+                   "showValueAsLink": true,
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 1,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "ResponsibleField"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Source",
+                   "control": "$PDS_Source",
+                   "mode": "List",
+                   "labelPosition": "auto",
+                   "showValueAsLink": true,
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 1,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "SourceField"
+                  },
+                  {
+                   "type": "crt.Input",
+                   "label": "$Resources.Strings.PDS_CurrentWageLevel",
+                   "control": "$PDS_CurrentWageLevel",
+                   "labelPosition": "auto",
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 2,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "CurrentWageLevelField"
+                  },
+                  {
+                   "type": "crt.Input",
+                   "label": "$Resources.Strings.PDS_ExpectedWageLevel",
+                   "control": "$PDS_ExpectedWageLevel",
+                   "labelPosition": "auto",
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 2,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "ExpectedWageLevelField"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_CurrentAccount",
+                   "control": "$PDS_CurrentAccount",
+                   "mode": "List",
+                   "labelPosition": "auto",
+                   "showValueAsLink": true,
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 3,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "CurrentAccountField"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_Employee",
+                   "control": "$PDS_Employee",
+                   "mode": "List",
+                   "labelPosition": "auto",
+                   "showValueAsLink": true,
+                   "layoutConfig": {
+                    "column": 2,
+                    "row": 3,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "EmployeeField"
+                  },
+                  {
+                   "type": "crt.ComboBox",
+                   "label": "$Resources.Strings.PDS_RejectReason",
+                   "control": "$PDS_RejectReason",
+                   "mode": "List",
+                   "labelPosition": "auto",
+                   "showValueAsLink": true,
+                   "layoutConfig": {
+                    "column": 1,
+                    "row": 4,
+                    "colSpan": 1,
+                    "rowSpan": 1
+                   },
+                   "name": "RejectReasonField"
+                  }
+                 ],
+                 "name": "GeneralInfoTabContainer"
+                },
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(CommOptionsPanel_title)#",
+                 "expanded": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "items": [
+                    {
+                     "type": "crt.CommunicationOptions",
+                     "columnsCount": 2,
+                     "showNoDataPlaceholder": true,
+                     "labelPosition": "auto",
+                     "readonly": false,
+                     "items": "$CommunicationOptions_mainItems",
+                     "masterRecordColumnValue": "$PDS_Contact",
+                     "masterRecordColumnName": "Contact",
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 1
+                     },
+                     "name": "CommunicationOptions_main"
+                    }
+                   ],
+                   "name": "CommOptionsPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "icon": "add-button-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.AddCommunicationOptionsRequest",
+                        "params": {
+                         "viewElementName": "CommunicationOptions_main"
+                        }
+                       },
+                       "name": "CommunicationOptions_mainAddBtn"
+                      }
+                     ],
+                     "name": "CommOptionsPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "CommOptionsPanel_toolbar"
+                  }
+                 ],
+                 "name": "CommOptionsPanel"
+                }
+               ],
+               "name": "GeneralInfoTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(HistoryTab_caption)#",
+               "items": [
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(StageHistoryPanel_title)#",
+                 "expanded": true,
+                 "togglePosition": "before",
+                 "titleWidth": 20,
+                 "fullWidthHeader": true,
+                 "fitContent": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": 0
+                   },
+                   "styles": {
+                    "overflow-x": "hidden"
+                   },
+                   "items": [
+                    {
+                     "type": "crt.DataGrid",
+                     "items": "$StageHistoryGrid",
+                     "activeRow": "$StageHistoryGrid_ActiveRow",
+                     "primaryColumnName": "StageHistoryGridDS_Id",
+                     "columns": [
+                      {
+                       "id": "c6946ca5-e991-5c8b-a025-0bd390a41344",
+                       "code": "StageHistoryGridDS_Stage",
+                       "caption": "#ResourceString(StageHistoryGridDS_Stage)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "c496892e-ef00-50ea-9da8-8b288c888fb2",
+                       "code": "StageHistoryGridDS_StartDate",
+                       "caption": "#ResourceString(StageHistoryGridDS_StartDate)#",
+                       "dataValueType": 8,
+                       "width": 175
+                      },
+                      {
+                       "id": "642e489e-7972-53dc-8b0d-80dc70cb3b74",
+                       "code": "StageHistoryGridDS_DueDate",
+                       "caption": "#ResourceString(StageHistoryGridDS_DueDate)#",
+                       "dataValueType": 8,
+                       "width": 175
+                      }
+                     ],
+                     "features": {
+                      "rows": {
+                       "selection": {
+                        "enable": true,
+                        "multiple": true
+                       }
+                      }
+                     },
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 6
+                     },
+                     "name": "StageHistoryGrid"
+                    }
+                   ],
+                   "name": "StageHistoryPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "rows": "minmax(max-content, 24px)",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": "none"
+                   },
+                   "color": "transparent",
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "icon": "reload-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.LoadDataRequest",
+                        "params": {
+                         "config": {
+                          "loadType": "reload"
+                         },
+                         "dataSourceName": "StageHistoryGridDS"
+                        }
+                       },
+                       "name": "StageHistoryRefreshBtn"
+                      }
+                     ],
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 1,
+                      "rowSpan": 1
+                     },
+                     "name": "StageHistoryPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "StageHistoryPanel_toolbar"
+                  }
+                 ],
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 4,
+                  "rowSpan": 8
+                 },
+                 "name": "StageHistoryPanel"
+                },
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(EmailsPanel_title)#",
+                 "expanded": true,
+                 "togglePosition": "before",
+                 "titleWidth": 20,
+                 "fullWidthHeader": true,
+                 "fitContent": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": 0
+                   },
+                   "styles": {
+                    "overflow-x": "hidden"
+                   },
+                   "items": [
+                    {
+                     "type": "crt.DataGrid",
+                     "items": "$EmailsGrid",
+                     "activeRow": "$EmailsGrid_ActiveRow",
+                     "primaryColumnName": "EmailsGridDS_Id",
+                     "columns": [
+                      {
+                       "id": "6a86a0fa-962c-5599-8c83-aa1e0f387991",
+                       "code": "EmailsGridDS_Title",
+                       "caption": "#ResourceString(EmailsGridDS_Title)#",
+                       "dataValueType": 1,
+                       "width": 175
+                      },
+                      {
+                       "id": "5125793f-0b17-5406-b6d2-e6f7bcc0e416",
+                       "code": "EmailsGridDS_StartDate",
+                       "caption": "#ResourceString(EmailsGridDS_StartDate)#",
+                       "dataValueType": 7,
+                       "width": 175
+                      },
+                      {
+                       "id": "b5f61f4c-101e-5ecf-99be-370db4e53774",
+                       "code": "EmailsGridDS_Type",
+                       "caption": "#ResourceString(EmailsGridDS_Type)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "5d96e0d0-087f-5437-87ac-123c26c9707d",
+                       "code": "EmailsGridDS_Owner",
+                       "caption": "#ResourceString(EmailsGridDS_Owner)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      }
+                     ],
+                     "features": {
+                      "rows": {
+                       "selection": {
+                        "enable": true,
+                        "multiple": true
+                       }
+                      }
+                     },
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 6
+                     },
+                     "name": "EmailsGrid"
+                    }
+                   ],
+                   "name": "EmailsPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "rows": "minmax(max-content, 24px)",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": "none"
+                   },
+                   "color": "transparent",
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "icon": "add-button-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.CreateRecordRequest",
+                        "params": {
+                         "entityName": "Activity",
+                         "defaultValues": [
+                          {
+                           "attributeName": "Applicant",
+                           "value": "$Id"
+                          }
+                         ]
+                        }
+                       },
+                       "name": "EmailsAddBtn"
+                      },
+                      {
+                       "type": "crt.Button",
+                       "icon": "reload-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.LoadDataRequest",
+                        "params": {
+                         "config": {
+                          "loadType": "reload"
+                         },
+                         "dataSourceName": "EmailsGridDS"
+                        }
+                       },
+                       "name": "EmailsRefreshBtn"
+                      }
+                     ],
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 1,
+                      "rowSpan": 1
+                     },
+                     "name": "EmailsPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "EmailsPanel_toolbar"
+                  }
+                 ],
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 4,
+                  "rowSpan": 8
+                 },
+                 "name": "EmailsPanel"
+                },
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(ActivitiesPanel_title)#",
+                 "expanded": true,
+                 "togglePosition": "before",
+                 "titleWidth": 20,
+                 "fullWidthHeader": true,
+                 "fitContent": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": 0
+                   },
+                   "styles": {
+                    "overflow-x": "hidden"
+                   },
+                   "items": [
+                    {
+                     "type": "crt.DataGrid",
+                     "items": "$ActivitiesGrid",
+                     "activeRow": "$ActivitiesGrid_ActiveRow",
+                     "primaryColumnName": "ActivitiesGridDS_Id",
+                     "columns": [
+                      {
+                       "id": "83e20573-2ebd-5807-83d2-3a71e57d67db",
+                       "code": "ActivitiesGridDS_Title",
+                       "caption": "#ResourceString(ActivitiesGridDS_Title)#",
+                       "dataValueType": 1,
+                       "width": 175
+                      },
+                      {
+                       "id": "3397d394-b815-5b69-9568-ef5eb425d3c6",
+                       "code": "ActivitiesGridDS_StartDate",
+                       "caption": "#ResourceString(ActivitiesGridDS_StartDate)#",
+                       "dataValueType": 7,
+                       "width": 175
+                      },
+                      {
+                       "id": "f5ca3268-04a3-5fe0-a6fb-04b595a44802",
+                       "code": "ActivitiesGridDS_Status",
+                       "caption": "#ResourceString(ActivitiesGridDS_Status)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "8c8db7c4-83d5-53df-822a-04e155b4e4a0",
+                       "code": "ActivitiesGridDS_Owner",
+                       "caption": "#ResourceString(ActivitiesGridDS_Owner)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      }
+                     ],
+                     "features": {
+                      "rows": {
+                       "selection": {
+                        "enable": true,
+                        "multiple": true
+                       }
+                      }
+                     },
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 6
+                     },
+                     "name": "ActivitiesGrid"
+                    }
+                   ],
+                   "name": "ActivitiesPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "rows": "minmax(max-content, 24px)",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": "none"
+                   },
+                   "color": "transparent",
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "icon": "add-button-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.CreateRecordRequest",
+                        "params": {
+                         "entityName": "Activity",
+                         "defaultValues": [
+                          {
+                           "attributeName": "Applicant",
+                           "value": "$Id"
+                          }
+                         ]
+                        }
+                       },
+                       "name": "ActivitiesAddBtn"
+                      },
+                      {
+                       "type": "crt.Button",
+                       "icon": "reload-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.LoadDataRequest",
+                        "params": {
+                         "config": {
+                          "loadType": "reload"
+                         },
+                         "dataSourceName": "ActivitiesGridDS"
+                        }
+                       },
+                       "name": "ActivitiesRefreshBtn"
+                      }
+                     ],
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 1,
+                      "rowSpan": 1
+                     },
+                     "name": "ActivitiesPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "ActivitiesPanel_toolbar"
+                  }
+                 ],
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 4,
+                  "rowSpan": 8
+                 },
+                 "name": "ActivitiesPanel"
+                }
+               ],
+               "name": "HistoryTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(VacanciesTab_caption)#",
+               "items": [
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(VacanciesPanel_title)#",
+                 "expanded": true,
+                 "togglePosition": "before",
+                 "titleWidth": 20,
+                 "fullWidthHeader": true,
+                 "fitContent": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": 0
+                   },
+                   "styles": {
+                    "overflow-x": "hidden"
+                   },
+                   "items": [
+                    {
+                     "type": "crt.DataGrid",
+                     "items": "$VacanciesGrid",
+                     "activeRow": "$VacanciesGrid_ActiveRow",
+                     "primaryColumnName": "VacanciesGridDS_Id",
+                     "columns": [
+                      {
+                       "id": "3594b9fa-9299-568c-8b24-ab8370e61bbf",
+                       "code": "VacanciesGridDS_Number",
+                       "caption": "#ResourceString(VacanciesGridDS_Number)#",
+                       "dataValueType": 1,
+                       "width": 175
+                      },
+                      {
+                       "id": "b80ab1cb-715c-56a4-80d8-bfe5d642b7a3",
+                       "code": "VacanciesGridDS_Category",
+                       "caption": "#ResourceString(VacanciesGridDS_Category)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "bca86f09-550b-57a9-acac-2d45f17ea7f8",
+                       "code": "VacanciesGridDS_Type",
+                       "caption": "#ResourceString(VacanciesGridDS_Type)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "d2996424-6e39-5b4a-855e-6c2bd1a8665e",
+                       "code": "VacanciesGridDS_Status",
+                       "caption": "#ResourceString(VacanciesGridDS_Status)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      }
+                     ],
+                     "features": {
+                      "rows": {
+                       "selection": {
+                        "enable": true,
+                        "multiple": true
+                       }
+                      }
+                     },
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 6
+                     },
+                     "name": "VacanciesGrid"
+                    }
+                   ],
+                   "name": "VacanciesPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "rows": "minmax(max-content, 24px)",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "gap": {
+                    "columnGap": "large",
+                    "rowGap": "none"
+                   },
+                   "color": "transparent",
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "caption": "#ResourceString(AttachRequestButton_caption)#",
+                       "icon": "link-icon",
+                       "iconPosition": "before-text",
+                       "color": "default",
+                       "clicked": {
+                        "request": "usr.AttachRequestToApplicantRequest",
+                        "params": {}
+                       },
+                       "name": "VacanciesAttachBtn"
+                      },
+                      {
+                       "type": "crt.Button",
+                       "icon": "reload-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.LoadDataRequest",
+                        "params": {
+                         "config": {
+                          "loadType": "reload"
+                         },
+                         "dataSourceName": "VacanciesGridDS"
+                        }
+                       },
+                       "name": "VacanciesRefreshBtn"
+                      }
+                     ],
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 1,
+                      "rowSpan": 1
+                     },
+                     "name": "VacanciesPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "VacanciesPanel_toolbar"
+                  }
+                 ],
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 4,
+                  "rowSpan": 8
+                 },
+                 "name": "VacanciesPanel"
+                }
+               ],
+               "name": "VacanciesTab"
+              },
+              {
+               "type": "crt.TabContainer",
+               "caption": "#ResourceString(ApprovalsTab_caption)#",
+               "items": [
+                {
+                 "type": "crt.ExpansionPanel",
+                 "title": "#ResourceString(ApprovalsListPanel_title)#",
+                 "expanded": true,
+                 "items": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)",
+                    "minmax(32px, 1fr)"
+                   ],
+                   "items": [
+                    {
+                     "type": "crt.ApprovalList",
+                     "masterRecordColumnValue": "$Id",
+                     "recordColumnName": "Applicant",
+                     "recordId": "$Id",
+                     "features": {
+                      "editable": false
+                     },
+                     "entityName": "Applicant",
+                     "approvalEntityName": "ApplicantVisa",
+                     "items": "$ApprovalList_main",
+                     "primaryColumnName": "ApprovalList_mainDS_Id",
+                     "columns": [
+                      {
+                       "id": "72c545fc-bfac-52d4-b3d8-a02d7b005347",
+                       "code": "ApprovalList_mainDS_VisaOwner",
+                       "caption": "#ResourceString(ApprovalList_mainDS_VisaOwner)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "fa7741fe-dd31-5417-bbeb-ca410119dd45",
+                       "code": "ApprovalList_mainDS_Objective",
+                       "caption": "#ResourceString(ApprovalList_mainDS_Objective)#",
+                       "dataValueType": 1,
+                       "width": 175
+                      },
+                      {
+                       "id": "862037ca-d59f-512a-a347-7648ad90cf3d",
+                       "code": "ApprovalList_mainDS_Status",
+                       "caption": "#ResourceString(ApprovalList_mainDS_Status)#",
+                       "dataValueType": 10,
+                       "width": 175
+                      },
+                      {
+                       "id": "50b6e7bf-4b2a-52a5-8592-693d4f509d0c",
+                       "code": "ApprovalList_mainDS_SetDate",
+                       "caption": "#ResourceString(ApprovalList_mainDS_SetDate)#",
+                       "dataValueType": 7,
+                       "width": 175
+                      }
+                     ],
+                     "visible": true,
+                     "layoutConfig": {
+                      "column": 1,
+                      "row": 1,
+                      "colSpan": 2,
+                      "rowSpan": 10
+                     },
+                     "name": "ApprovalList_main"
+                    }
+                   ],
+                   "name": "ApprovalsListPanel_wrap"
+                  }
+                 ],
+                 "tools": [
+                  {
+                   "type": "crt.GridContainer",
+                   "columns": [
+                    "minmax(32px, 1fr)"
+                   ],
+                   "items": [
+                    {
+                     "type": "crt.FlexContainer",
+                     "direction": "row",
+                     "alignItems": "center",
+                     "gap": "none",
+                     "items": [
+                      {
+                       "type": "crt.Button",
+                       "icon": "reload-icon",
+                       "iconPosition": "only-icon",
+                       "color": "default",
+                       "clicked": {
+                        "request": "crt.LoadDataRequest",
+                        "params": {
+                         "config": {
+                          "loadType": "reload",
+                          "useLastLoadParameters": true
+                         },
+                         "dataSourceName": "ApprovalList_mainDS"
+                        }
+                       },
+                       "name": "ApprovalList_mainRefreshBtn"
+                      }
+                     ],
+                     "name": "ApprovalsListPanel_toolbarRow"
+                    }
+                   ],
+                   "name": "ApprovalsListPanel_toolbar"
+                  }
+                 ],
+                 "layoutConfig": {
+                  "column": 1,
+                  "row": 1,
+                  "colSpan": 4,
+                  "rowSpan": 10
+                 },
+                 "name": "ApprovalsListPanel"
+                }
+               ],
+               "name": "ApprovalsTab"
+              }
+             ],
+             "name": "Tabs",
+             "styleType": "default",
+             "mode": "tab",
+             "bodyBackgroundColor": "primary-contrast-500",
+             "selectedTabTitleColor": "auto",
+             "tabTitleColor": "auto",
+             "underlineSelectedTabColor": "auto",
+             "headerBackgroundColor": "auto"
+            }
+           ],
+           "name": "CardContentContainer"
+          },
+          {
+           "type": "crt.TabPanel",
+           "items": [
+            {
+             "type": "crt.TabContainer",
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "gap": "small",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#MacrosTemplateString(#ResourceString(NextStepsTabContainerHeaderLabel_caption)#)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "visible": true,
+                 "layoutConfig": {},
+                 "name": "NextStepsTabContainerHeaderLabel"
+                },
+                {
+                 "type": "crt.Button",
+                 "icon": "add-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "visible": "$CardState | crt.IsEqual : 'edit'",
+                 "clickMode": "menu",
+                 "menuItems": [
+                  {
+                   "type": "crt.MenuItem",
+                   "caption": "#ResourceString(CreateTaskBtn_caption)#",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.AddNextStepRequest",
+                    "params": {
+                     "entityName": "Activity"
+                    }
+                   },
+                   "name": "CreateTaskBtn"
+                  },
+                  {
+                   "type": "crt.MenuItem",
+                   "caption": "#ResourceString(CreateEmailBtn_caption)#",
+                   "color": "default",
+                   "size": "medium",
+                   "clicked": {
+                    "request": "crt.CreateEmailRequest"
+                   },
+                   "name": "CreateEmailBtn"
+                  }
+                 ],
+                 "layoutConfig": {},
+                 "name": "AddNextStepsButton"
+                }
+               ],
+               "layoutConfig": {
+                "colSpan": 1,
+                "column": 1,
+                "row": 1,
+                "rowSpan": 1
+               },
+               "visible": true,
+               "color": "transparent",
+               "borderRadius": "none",
+               "padding": {
+                "top": "none",
+                "right": "none",
+                "bottom": "none",
+                "left": "none"
+               },
+               "justifyContent": "start",
+               "wrap": "wrap",
+               "name": "NextStepsTabContainerHeaderContainer"
+              }
+             ],
+             "items": [
+              {
+               "type": "crt.NextSteps",
+               "masterSchemaId": "$Id",
+               "cardState": "$CardState",
+               "layoutConfig": {
+                "colSpan": 2,
+                "column": 1,
+                "row": 1,
+                "rowSpan": 1
+               },
+               "masterSchemaName": "#DataSourceEntityName()#",
+               "bindingColumns": [],
+               "name": "NextSteps"
+              }
+             ],
+             "caption": "#ResourceString(NextStepsTabContainer_caption)#",
+             "iconPosition": "left-icon",
+             "visible": true,
+             "icon": "task-tab-icon",
+             "name": "NextStepsTabContainer"
+            },
+            {
+             "type": "crt.TabContainer",
+             "items": [
+              {
+               "type": "crt.Feed",
+               "feedType": "Record",
+               "primaryColumnValue": "$Id",
+               "cardState": "$CardState",
+               "dataSourceName": null,
+               "entitySchemaName": "#DataSourceEntityName()#",
+               "name": "Feed"
+              }
+             ],
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#ResourceString(FeedTabContainerCaption)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "name": "FeedTabContainerHeaderLabel"
+                }
+               ],
+               "name": "FeedTabContainerHeaderContainer"
+              }
+             ],
+             "caption": "#ResourceString(FeedTabContainerCaption)#",
+             "iconPosition": "left-icon",
+             "icon": "feed-icon",
+             "name": "FeedTabContainer"
+            },
+            {
+             "type": "crt.TabContainer",
+             "items": [
+              {
+               "type": "crt.FileList",
+               "masterRecordColumnValue": "$Id",
+               "recordColumnName": "RecordId",
+               "layoutConfig": {
+                "colSpan": 2,
+                "column": 1,
+                "row": 1,
+                "rowSpan": 6
+               },
+               "items": "$AttachmentList",
+               "primaryColumnName": "AttachmentListDS_Id",
+               "columns": [
+                {
+                 "code": "AttachmentListDS_Name",
+                 "caption": "#ResourceString(AttachmentListDS_Name)#",
+                 "dataValueType": 28,
+                 "width": 200
+                }
+               ],
+               "viewType": "gallery",
+               "tileSize": "small",
+               "name": "AttachmentList"
+              }
+             ],
+             "caption": "#ResourceString(AttachmentsTabContainerCaption)#",
+             "iconPosition": "left-icon",
+             "icon": "attachments-icon",
+             "tools": [
+              {
+               "type": "crt.FlexContainer",
+               "direction": "row",
+               "alignItems": "center",
+               "items": [
+                {
+                 "type": "crt.Label",
+                 "caption": "#ResourceString(AttachmentsTabContainerCaption)#",
+                 "labelType": "headline-3",
+                 "labelThickness": "default",
+                 "labelEllipsis": false,
+                 "labelColor": "#0D2E4E",
+                 "labelBackgroundColor": "transparent",
+                 "labelTextAlign": "start",
+                 "name": "AttachmentsTabContainerHeaderLabel"
+                },
+                {
+                 "type": "crt.Button",
+                 "caption": "#ResourceString(AttachmentAddButtonCaption)#",
+                 "icon": "upload-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "clicked": {
+                  "request": "crt.UploadFileRequest",
+                  "params": {
+                   "viewElementName": "AttachmentList"
+                  }
+                 },
+                 "name": "AttachmentAddButton"
+                },
+                {
+                 "type": "crt.Button",
+                 "caption": "#ResourceString(AttachmentRefreshButtonCaption)#",
+                 "icon": "reload-button-icon",
+                 "iconPosition": "only-icon",
+                 "color": "default",
+                 "size": "medium",
+                 "clicked": {
+                  "request": "crt.LoadDataRequest",
+                  "params": {
+                   "config": {
+                    "loadType": "reload"
+                   },
+                   "dataSourceName": "AttachmentListDS"
+                  }
+                 },
+                 "name": "AttachmentRefreshButton"
+                }
+               ],
+               "name": "AttachmentsTabContainerHeaderContainer"
+              }
+             ],
+             "name": "AttachmentsTabContainer"
+            }
+           ],
+           "mode": "toggle",
+           "layoutConfig": {
+            "maxWidth": 368,
+            "minWidth": 368
+           },
+           "stretch": true,
+           "classes": [
+            "card-toggle-tab-panel",
+            "container-background-color-primary",
+            "container-border-area"
+           ],
+           "name": "CardToggleTabPanel",
+           "styleType": "default",
+           "bodyBackgroundColor": "primary-contrast-500",
+           "selectedTabTitleColor": "auto",
+           "tabTitleColor": "auto",
+           "underlineSelectedTabColor": "auto",
+           "headerBackgroundColor": "auto"
+          }
+         ],
+         "name": "CenterContainer"
+        }
+       ],
+       "name": "CardContentWrapper",
+       "visible": true,
+       "color": "transparent",
+       "borderRadius": "none"
+      }
+     ],
+     "name": "MainContainer"
+    }
+   ],
+   "name": "Main"
+  }
+ ],
+ "modelConfig": {
+  "primaryDataSourceName": "PDS",
+  "dataSources": {
+   "PDS": {
+    "type": "crt.EntityDataSource",
+    "scope": "page",
+    "config": {
+     "entitySchemaName": "Applicant"
+    }
+   }
+  }
+ },
+ "businessRules": [
+  {
+   "caption": "RejectReason required on rejection or refusal stage",
+   "name": "BusinessRule_d3f134b",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-required",
+     "items": [
+      "RejectReasonField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "RejectReason optional off rejection or refusal stage",
+   "name": "BusinessRule_69dac08",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-optional",
+     "items": [
+      "RejectReasonField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Request required on interview and offer stages",
+   "name": "BusinessRule_f46da8b",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-required",
+     "items": [
+      "RequestField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Request optional off interview and offer stages",
+   "name": "BusinessRule_59344b2",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-optional",
+     "items": [
+      "RequestField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Employee visible for internal recommendation source",
+   "name": "BusinessRule_7e72e78",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "show-element",
+     "items": [
+      "EmployeeField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Source"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Employee hidden for other sources",
+   "name": "BusinessRule_e3f7314",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "hide-element",
+     "items": [
+      "EmployeeField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Source"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Employee required for internal recommendation source",
+   "name": "BusinessRule_b219b5a",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-required",
+     "items": [
+      "EmployeeField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Source"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Employee optional for other sources",
+   "name": "BusinessRule_4924169",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-optional",
+     "items": [
+      "EmployeeField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Source"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Expertise level required on job offer stage",
+   "name": "BusinessRule_8941a4d",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-required",
+     "items": [
+      "ExpertiseLevelField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Expertise level optional off job offer stage",
+   "name": "BusinessRule_8c12310",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-optional",
+     "items": [
+      "ExpertiseLevelField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS_Stage"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Role in company required",
+   "name": "BusinessRule_3b45f9c",
+   "enabled": true,
+   "actions": [
+    {
+     "type": "make-required",
+     "items": [
+      "RoleInCompanyField"
+     ]
+    }
+   ],
+   "condition": {
+    "conditions": [
+     {
+      "leftExpression": {
+       "path": "PDS.Id"
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "entitySchemaName": "Applicant",
+ "packageName": "UsrApplicantsFreedom",
+ "parentSchemaName": "PageWithTabsAndProgressBarTemplate"
+}
