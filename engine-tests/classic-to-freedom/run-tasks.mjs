@@ -5894,6 +5894,11 @@ const decideFixtureB = (label, md = null) => {
     if (t) {
       const res = applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
         rowRef: { taskId: t.id, n: "1" }, decisions: decisionsMap() });
+      const frac = (() => { try { return applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+        rowRef: { taskId: t.id, n: "2.5" }, decisions: decisionsMap() }); } catch (e) { return { threw: e.message }; } })();
+      check("-decide --row <task>:2.5 is refused as out of range, not a crash — a fractional row passes `Number.isFinite` and reached the cell writer",
+        () => frac.refused === true && frac.problems.some((x) => /row 2\.5 out of range/.test(x)),
+        () => frac);
       const rr = readTaskDir(dir).find((x) => x.id === t.id);
       check("-decide --row <task>:<n> fills exactly ONE Outcome cell and leaves the other rows of that task untouched",
         () => !res.refused && res.touched?.length >= 1 && rr?.rows?.[0]?.outcomeKind === "wont-do"

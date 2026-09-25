@@ -3738,7 +3738,7 @@ function decideRowTarget(tasks, rowRef) {
   if (!t) return { problems: [`no task with id or file '${rowRef.taskId}' in the folder`], targets: [] };
   if (t.unread) return { problems: [`task '${rowRef.taskId}' could not be read — its body is malformed; --decide cannot address a row it cannot count`], targets: [] };
   const n = Number(rowRef.n);
-  if (!Number.isFinite(n) || n < 1 || n > (t.rows || []).length) {
+  if (!Number.isInteger(n) || n < 1 || n > (t.rows || []).length) {
     return { problems: [`row ${rowRef.n} out of range for task '${t.id}' (1..${(t.rows || []).length})`], targets: [] };
   }
   return { targets: [{ task: t, rowIndices: [n - 1] }] };
