@@ -6,7 +6,7 @@
 //   node scripts/build-workflows.mjs --check    # exit 1 if a shipped file drifted
 //
 // TWO OUTPUTS, one table. Each `TARGETS` entry produces its inlined `.workflow.js`
-// and one row of `skills/_workflow-core/workflows.json` — the structured
+// and one row of `plugins/creatio-migration/skills/_workflow-core/workflows.json` — the structured
 // `{name, script, phases}` a consumer reads instead of parsing the generated
 // JavaScript (see MANIFEST_OUT). `--check` covers both.
 //
@@ -27,7 +27,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const CORE = path.join(ROOT, 'skills', '_workflow-core')
+const CORE = path.join(ROOT, 'plugins', 'creatio-migration', 'skills', '_workflow-core')
 
 // The workflow IDENTITY manifest: the one structured place a consumer reads `{name, script, phases}` from.
 // PR #147 review (architecture) — the installer used to recover `meta.name` by lexing the generated JavaScript
@@ -37,7 +37,7 @@ const CORE = path.join(ROOT, 'skills', '_workflow-core')
 // rules from, and CLI/source text is not a substitute for a source that returns the same data as fields. The
 // manifest is generated from `TARGETS` by the same run that writes the scripts and is covered by the same
 // `--check` drift gate, so a mapping cannot go stale without failing CI.
-const MANIFEST_OUT = 'skills/_workflow-core/workflows.json'
+const MANIFEST_OUT = 'plugins/creatio-migration/skills/_workflow-core/workflows.json'
 
 const BEGIN = '// ---8<--- PURE DECISION HELPERS ---8<---'
 const END = '// ---8<--- END PURE DECISION HELPERS ---8<---'
@@ -51,7 +51,7 @@ const TARGETS = [
   {
     name: 'creatio-classic-behaviour-analysis',
     template: 'behaviour-analysis/claude-template.js',
-    out: 'skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js',
+    out: 'plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js',
     modules: [
       'work-item.mjs',
       'capabilities.mjs',
@@ -260,7 +260,7 @@ if (isMain) {
     if (check) {
       if (current !== next) {
         failed++
-        process.stderr.write(`❌ ${target.out} is out of sync with skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
+        process.stderr.write(`❌ ${target.out} is out of sync with plugins/creatio-migration/skills/_workflow-core/ — run \`node scripts/build-workflows.mjs\`\n`)
         process.stderr.write(`   ${firstDifference(current, next)}\n`)
       } else {
         process.stdout.write(`✅ ${target.out} matches the core\n`)

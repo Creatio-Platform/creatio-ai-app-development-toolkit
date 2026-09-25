@@ -4,18 +4,10 @@
     "LICENSE",
     "README.md",
     "SECURITY.md",
-    ".mcp.json",
     ".agents",
     ".claude-plugin",
-    ".codex-plugin",
-    ".cursor-plugin",
     ".github/plugin",
-    "context",
-    "hooks",
-    "rules",
-    "runbooks",
-    "runtime",
-    "skills"
+    "plugins"
   ],
   "release_extras": [
     "installer"

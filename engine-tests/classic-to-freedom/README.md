@@ -1,7 +1,7 @@
 # Classic→Freedom engine goldens
 
 Regression gate for the deterministic merge engine + mapper that ship in
-`skills/classic-to-freedom-migration/engine/`. Kept **outside** the skill so the
+`plugins/creatio-migration/skills/classic-to-freedom-migration/engine/`. Kept **outside** the skill so the
 shipped skill directory carries runtime code only (no test harness or fixtures).
 
 - `run.mjs` — merge-engine goldens (`mergeLayers`): layer order (F1), base-template seed (F2), tombstones, provenance.
@@ -9,14 +9,14 @@ shipped skill directory carries runtime code only (no test harness or fixtures).
 - `_testkit.mjs` — tiny layer/op builders shared by both runners.
 - `fixtures/` — synthetic Classic-schema layer bodies used as deterministic inputs.
 
-The runners import the engine from `../../skills/classic-to-freedom-migration/engine/` by relative path.
+The runners import the engine from `../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine/` by relative path.
 
 ## Run
 
 ONE command, and it is the module's own declaration of what verifying it means:
 
 ```
-cd ../../skills/classic-to-freedom-migration/engine && npm test
+cd ../../plugins/creatio-migration/skills/classic-to-freedom-migration/engine && npm test
 ```
 
 `scripts.test` in that `package.json` is the single source of truth for the sequence — the vendored-parser

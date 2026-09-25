@@ -25,7 +25,7 @@ Pull requests are welcome. Before opening one:
 1. Open an issue describing the change so it can be discussed before implementation.
 2. Keep changes focused — one logical change per pull request.
 3. Update or add tests under `tests/` for any behavior change. Run the existing test suite locally before pushing.
-4. Update relevant documentation (`README.md`, `docs/`, `AGENTS.md`, `runbooks/`, `context/`) when your change affects them.
+4. Update relevant documentation (`README.md`, `docs/`, `AGENTS.md`, the plugin `references/` and `context/` under `plugins/`) when your change affects them.
 5. Follow the repository's existing style and the agent-orchestration contract documented in `AGENTS.md`.
 
 By submitting a pull request you agree that your contribution is licensed under the same MIT License as the rest of the repository (see [LICENSE](LICENSE)).

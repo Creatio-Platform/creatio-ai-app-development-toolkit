@@ -34,7 +34,9 @@ MARKETPLACE_GIT_URL = "https://github.com/Creatio-Platform/creatio-ai-app-develo
 SKILL_NAME = "creatio-app-orchestrator"
 NAMED_WORKFLOW_DIR_NAME = "workflows"
 WORKFLOW_SCRIPT_SUFFIX = ".workflow.js"
-WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
+WORKFLOW_MANIFEST_RELATIVE = "plugins/creatio-migration/skills/_workflow-core/workflows.json"
+# A single-plugin tree (one cached plugin version, checkouts from before the plugin split) keeps the manifest here.
+LEGACY_WORKFLOW_MANIFEST_RELATIVE = "skills/_workflow-core/workflows.json"
 # A provisioned name becomes a FILENAME under ~/.claude/workflows/, so it is validated as one rather
 # than trusted. `pathlib` does not sanitise the right-hand side of `/`: "../../evil" traverses out of
 # the base and an absolute value discards the base entirely, which would turn the installer into an
@@ -56,18 +58,19 @@ SETUP_WIZARD_AGENT_DISPLAY_NAMES = {
 }
 REQUIRED_REFERENCE_PATHS = (
     "AGENTS.md",
-    "context/product-telemetry.md",
-    "context/INDEX.md",
-    "context/business-checklist.md",
-    "context/essentials.md",
-    "context/naming-conventions.md",
-    "context/clio-cli-reference.md",
-    "context/model-discovery-evidence.md",
-    "runbooks/01-environment-setup.md",
-    "runbooks/02-requirements-gathering.md",
-    "runbooks/03-app-implementation.md",
-    "runtime/scripts/mcp_client.py",
-    "runtime/scripts/workflow_validators.py",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md",
+    "plugins/creatio-core/context/product-telemetry.md",
+    "plugins/creatio-core/context/INDEX.md",
+    "plugins/creatio-core/context/essentials.md",
+    "plugins/creatio-core/context/naming-conventions.md",
+    "plugins/creatio-core/context/clio-cli-reference.md",
+    "plugins/creatio-core/context/model-discovery-evidence.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/business-checklist.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md",
+    "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md",
+    "plugins/creatio-app-builder/runtime/scripts/mcp_client.py",
+    "plugins/creatio-app-builder/runtime/scripts/workflow_validators.py",
 )
 
 
@@ -327,12 +330,35 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     return targets
 
 
+MCP_CONFIG_RELATIVE = "plugins/creatio-core/.mcp.json"
+PLUGINS_DIR_NAME = "plugins"
+# The telemetry floor hook ships inside the core plugin; the Cursor install registers this file
+# (copied under the local plugin dir by copy_plugin_runtime_surface) in hooks.json.
+TELEMETRY_HOOK_RELATIVE = "plugins/creatio-core/hooks/telemetry-routing.mjs"
+
+
+def mcp_config_path(repo_root: Path) -> Path:
+    """The clio MCP declaration, owned by the core plugin. A root `.mcp.json` is honoured only when
+    the core copy is absent (a tree from before the plugin split); when both exist the core copy
+    wins, the same precedence workflow_manifest_names applies to its manifest."""
+    core_level = repo_root / MCP_CONFIG_RELATIVE
+    root_level = repo_root / ".mcp.json"
+    return core_level if core_level.exists() or not root_level.exists() else root_level
+
+
 def is_plugin_checkout(path: Path) -> bool:
-    return (
-        (path / ".claude-plugin" / "plugin.json").exists()
-        and (path / ".mcp.json").exists()
-        and (path / "skills").is_dir()
-    )
+    """A checkout or extracted release of this toolkit: the root meta-plugin manifest plus the
+    `plugins/` tree with the core plugin's clio declaration.
+
+    Deliberately NOT a single-plugin tree: install.py installs from a checkout of this version,
+    whose required references (REQUIRED_REFERENCE_PATHS) all live under `plugins/`, so admitting a
+    pre-split tree here would only move the failure to ensure_required_references. The pre-split
+    layout is accepted where it genuinely occurs - a cached plugin version that update.py mirrors
+    workflows from - by discover_workflow_scripts and workflow_manifest_names.
+    """
+    if not (path / ".claude-plugin" / "plugin.json").exists():
+        return False
+    return (path / PLUGINS_DIR_NAME).is_dir() and (path / MCP_CONFIG_RELATIVE).exists()
 
 
 def current_checkout_root() -> Path | None:
@@ -364,7 +390,7 @@ def ensure_required_references(repo_root: Path) -> None:
 
 
 def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
-    source = repo_root / ".mcp.json"
+    source = mcp_config_path(repo_root)
     if not source.exists():
         raise RuntimeError(f"MCP config not found: {source}")
     config = json.loads(source.read_text(encoding="utf-8"))
@@ -374,29 +400,10 @@ def load_mcp_servers(repo_root: Path) -> dict[str, Any]:
     return servers
 
 
-def copy_skill_directories(repo_root: Path, target_skills_dir: Path) -> None:
-    source_skills_dir = repo_root / "skills"
-    if not source_skills_dir.exists():
-        raise RuntimeError(f"Skills directory not found: {source_skills_dir}")
-
-    target_skills_dir.mkdir(parents=True, exist_ok=True)
-    for source_skill_dir in source_skills_dir.iterdir():
-        if not source_skill_dir.is_dir() or not (source_skill_dir / "SKILL.md").exists():
-            continue
-        target_skill_dir = target_skills_dir / source_skill_dir.name
-        if target_skill_dir.exists():
-            shutil.rmtree(target_skill_dir)
-        shutil.copytree(
-            source_skill_dir,
-            target_skill_dir,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-
-
 def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     """Map each bundled workflow script (repo-relative POSIX path) to its declared name.
 
-    Read from the GENERATED manifest at ``skills/_workflow-core/workflows.json``, which
+    Read from the GENERATED manifest at ``plugins/creatio-migration/skills/_workflow-core/workflows.json`` (or the single-plugin ``skills/_workflow-core/workflows.json``), which
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
@@ -417,6 +424,8 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     the coupling this replaced and re-introduce the silent mis-parse.
     """
     manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
+    if not manifest_path.is_file() and (source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE).is_file():
+        manifest_path = source_root / LEGACY_WORKFLOW_MANIFEST_RELATIVE
     if not manifest_path.is_file():
         raise RuntimeError(
             f"This source tree carries no workflow manifest ({WORKFLOW_MANIFEST_RELATIVE}), so a "
@@ -461,11 +470,16 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
 
 
 def discover_workflow_scripts(source_root: Path) -> list[Path]:
-    """Bundled ``skills/*/**.workflow.js`` scripts, sorted for a stable order."""
+    """Bundled ``*.workflow.js`` scripts, sorted for a stable order.
+
+    Scanned under every plugin's ``skills/`` (``plugins/*/skills/*/``) and, for a
+    single-plugin tree such as one cached plugin version, under the root ``skills/*/``.
+    """
+    found = set(source_root.glob(f"{PLUGINS_DIR_NAME}/*/skills/*/*{WORKFLOW_SCRIPT_SUFFIX}"))
     skills_dir = source_root / "skills"
-    if not skills_dir.is_dir():
-        return []
-    return sorted(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+    if skills_dir.is_dir():
+        found.update(skills_dir.glob(f"*/*{WORKFLOW_SCRIPT_SUFFIX}"))
+    return sorted(found)
 
 
 def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]:
@@ -553,7 +567,7 @@ def copy_plugin_runtime_surface(repo_root: Path, target_dir: Path) -> None:
 
 def merge_mcp_config(repo_root: Path, target_path: Path) -> None:
     """Merge mcpServers from the plugin's .mcp.json into a shared MCP config file."""
-    source = repo_root / ".mcp.json"
+    source = mcp_config_path(repo_root)
     if not source.exists():
         raise RuntimeError(f"MCP config not found: {source}")
 
@@ -818,15 +832,15 @@ def render_analytics_context(repo_root: Path, coding_agent: str) -> str:
 
 def render_load_order(repo_root: Path) -> str:
     return (
-        f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` for the active orchestration contract.\n"
-        f"2. Read `{repo_file(repo_root, 'context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
-        f"3. Read `{repo_file(repo_root, 'context/INDEX.md')}` to choose the smallest relevant reference set.\n"
-        f"4. For environment setup, read `{repo_file(repo_root, 'runbooks/01-environment-setup.md')}`.\n"
-        f"5. For requirements gathering, read `{repo_file(repo_root, 'runbooks/02-requirements-gathering.md')}`.\n"
+        f"1. Read `{repo_file(repo_root, 'AGENTS.md')}` and `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md')}` for the active orchestration contract.\n"
+        f"2. Read `{repo_file(repo_root, 'plugins/creatio-core/context/product-telemetry.md')}` for telemetry consent, event checkpoints, and payload shape.\n"
+        f"3. Read `{repo_file(repo_root, 'plugins/creatio-core/context/INDEX.md')}` to choose the smallest relevant reference set.\n"
+        f"4. For environment setup, read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md')}`.\n"
+        f"5. For requirements gathering, read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md')}`.\n"
         f"6. For post-Gate-R implementation and scaffolding (including the transient section-creation "
-        f"failure playbook), read `{repo_file(repo_root, 'runbooks/03-app-implementation.md')}`.\n"
-        f"7. For executable helper behavior, use `{repo_file(repo_root, 'runtime/scripts/mcp_client.py')}` "
-        f"and `{repo_file(repo_root, 'runtime/scripts/workflow_validators.py')}`.\n"
+        f"failure playbook), read `{repo_file(repo_root, 'plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md')}`.\n"
+        f"7. For executable helper behavior, use `{repo_file(repo_root, 'plugins/creatio-app-builder/runtime/scripts/mcp_client.py')}` "
+        f"and `{repo_file(repo_root, 'plugins/creatio-app-builder/runtime/scripts/workflow_validators.py')}`.\n"
     )
 
 
@@ -852,9 +866,9 @@ def render_cursor_rule(repo_root: Path, mcp_config_path: Path) -> str:
         f"{render_analytics_context(repo_root, 'Cursor')}"
         "## Core Rules\n"
         "\n"
-        "- Pages are separate for web and mobile: before any page edit, read `context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
-        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `AGENTS.md`.\n"
-        "- Follow `context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
+        "- Pages are separate for web and mobile: before any page edit, read `plugins/creatio-core/context/essentials.md` (Freedom UI — Mobile Pages) and target web, mobile, or both as the requirement needs. Required even in autonomous/pre-approved runs.\n"
+        "- Keep the visible planning artifact in the BA-style Business Plan format defined by `plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/orchestration-policy.md`.\n"
+        "- Follow `plugins/creatio-core/context/product-telemetry.md` for CAADT product telemetry; use the Analytics Context values when calling clio telemetry tools.\n"
         "- Resolve executable clio MCP tool contracts through `get-tool-contract`; do not invent payload shapes.\n"
         f"- The `clio` MCP server is registered in `{mcp_config_path}`.\n"
     )
@@ -872,7 +886,7 @@ def render_cursor_telemetry_rule(repo_root: Path) -> str:
     unimportant). This rule stays deliberately small so it can be always-on without
     the cost of loading the whole orchestrator rule.
     """
-    contract = repo_file(repo_root, "context/product-telemetry.md")
+    contract = repo_file(repo_root, "plugins/creatio-core/context/product-telemetry.md")
     return f"""---
 description: Creatio product telemetry routing - which telemetry stages to emit for any Creatio workflow run through clio MCP.
 alwaysApply: true
@@ -928,36 +942,67 @@ def enable_codex_plugin(config_path: Path, plugin_name: str, marketplace_name: s
         handle.write(block)
 
 
+CODEX_CATALOG_RELATIVE = ".agents/plugins/marketplace.json"
+
+
+def codex_catalog_plugin_names(repo_root: Path) -> list[str]:
+    """Names of the plugins the Codex catalog lists, each a `plugins/<name>/` directory.
+
+    An entry whose local source path is not exactly `./plugins/<name>` is rejected:
+    the name becomes a cache path segment, so it must not be able to leave the tree.
+    """
+    catalog = read_json_file(repo_root / CODEX_CATALOG_RELATIVE)
+    names: list[str] = []
+    for entry in catalog.get("plugins") or []:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        source = entry.get("source") if isinstance(entry, dict) else None
+        path = source.get("path") if isinstance(source, dict) else None
+        if not (isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) and path == f"./plugins/{name}"):
+            raise RuntimeError(f"Unexpected Codex catalog entry in {CODEX_CATALOG_RELATIVE}: {entry!r}")
+        names.append(name)
+    if not names:
+        raise RuntimeError(f"No plugins listed in {CODEX_CATALOG_RELATIVE}")
+    return names
+
+
+def codex_plugin_version(plugin_dir: Path) -> str:
+    manifest_path = plugin_dir / ".codex-plugin" / "plugin.json"
+    version = read_json_file(manifest_path).get("version")
+    if not (isinstance(version, str) and SEMVER_PATTERN.match(version)):
+        raise RuntimeError(f"No valid semantic version in {manifest_path}")
+    return version
+
+
 def materialize_codex_plugin(
     repo_root: Path,
     codex_home: Path,
-    plugin_name: str = PLUGIN_NAME,
+    plugin_name: str,
     marketplace_name: str = MARKETPLACE_NAME,
 ) -> Path:
-    """Install the plugin the way Codex's interactive `/plugins` browser does.
+    """Install one plugin the way Codex's interactive `/plugins` browser does.
 
     Codex CLI has no non-interactive install command, and it loads plugin skills
     only from `<codex_home>/plugins/cache/<marketplace>/<plugin>/<version>/` —
     enabling the plugin in config.toml is not enough on its own. The
-    installer therefore copies the plugin runtime surface (the same
-    `.release-manifest.json` `plugin_runtime` list the Cursor install copies) into
-    that directory and enables the plugin. Older cached versions of this plugin
-    are removed so exactly one version remains. Returns the version directory.
+    installer therefore copies `plugins/<plugin>/` (the directory the Codex
+    catalog entry points at) into that directory and enables the plugin. Older
+    cached versions of this plugin are removed so exactly one version remains.
+    Returns the version directory.
 
-    One plugin per call so a multi-plugin installer can run it once
-    per catalog entry.
+    One plugin per call; install_codex runs it once per catalog entry.
     """
-    version = plugin_version(repo_root)
+    plugin_dir = repo_root / "plugins" / plugin_name
+    version = codex_plugin_version(plugin_dir)
     plugin_cache_root = codex_home / "plugins" / "cache" / marketplace_name / plugin_name
     remove_tree_if_exists(plugin_cache_root, "Codex")
     target = plugin_cache_root / version
-    copy_plugin_runtime_surface(repo_root, target)
+    shutil.copytree(plugin_dir, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     enable_codex_plugin(codex_home / "config.toml", plugin_name, marketplace_name)
     return target
 
 
 def install_codex(repo_root: Path, home: Path) -> None:
-    """Install Codex: register the remote marketplace, then materialize the plugin.
+    """Install Codex: register the remote marketplace, then materialize each catalog plugin.
 
     Codex CLI has no non-interactive `plugin install` / `plugin add` subcommand —
     the only documented install path is the interactive `/plugins` browser, which
@@ -998,9 +1043,13 @@ def install_codex(repo_root: Path, home: Path) -> None:
     # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
     # the run exits non-zero without leaving `enabled = true` pointing at a version
     # directory that no longer exists.
+    # The pre-split single plugin (PLUGIN_NAME) is not in the Codex catalog any more;
+    # its block is only ever removed.
     config_path = codex_home / "config.toml"
+    plugin_names = codex_catalog_plugin_names(repo_root)
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
-    remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
+    for name in (PLUGIN_NAME, *plugin_names):
+        remove_codex_plugin_section(config_path, name, MARKETPLACE_NAME)
     remove_codex_skill_config_override(config_path, f"{PLUGIN_NAME}:{SKILL_NAME}")
 
     register_remote_marketplace_and_install_plugin(
@@ -1010,7 +1059,8 @@ def install_codex(repo_root: Path, home: Path) -> None:
         install_plugin=False,
     )
 
-    materialize_codex_plugin(repo_root, codex_home)
+    for name in plugin_names:
+        materialize_codex_plugin(repo_root, codex_home, name)
     merge_codex_mcp_config(repo_root, config_path)
 
 
@@ -1048,12 +1098,12 @@ def install_cursor(repo_root: Path, home: Path) -> None:
     local_plugin_dir = cursor_home / "plugins" / "local" / PLUGIN_NAME
     remove_tree_if_exists(local_plugin_dir, "Cursor")
     copy_plugin_runtime_surface(repo_root, local_plugin_dir)
-    mcp_config_path = cursor_home / "mcp.json"
-    merge_mcp_config(repo_root, mcp_config_path)
+    cursor_mcp_config_path = cursor_home / "mcp.json"
+    merge_mcp_config(repo_root, cursor_mcp_config_path)
     rules_dir = cursor_home / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     rule_path = rules_dir / f"{SKILL_NAME}.mdc"
-    rule_path.write_text(render_cursor_rule(local_plugin_dir, mcp_config_path), encoding="utf-8")
+    rule_path.write_text(render_cursor_rule(local_plugin_dir, cursor_mcp_config_path), encoding="utf-8")
     # Always-applied companion rule: Cursor's MCP hook cannot talk back to the agent, so
     # this rule is what reaches a session that never loads a CAADT skill.
     telemetry_rule_path = rules_dir / f"{TELEMETRY_RULE_NAME}.mdc"
@@ -1073,7 +1123,7 @@ def merge_cursor_telemetry_hook(cursor_home: Path, local_plugin_dir: Path) -> No
     Merged rather than overwritten: a developer's other hooks must survive a reinstall.
     """
     hooks_path = cursor_home / "hooks.json"
-    command = f'node "{(local_plugin_dir / "hooks" / "telemetry-routing.mjs").as_posix()}"'
+    command = f'node "{(local_plugin_dir / TELEMETRY_HOOK_RELATIVE).as_posix()}"'
     entry = {"command": command, "env": {"CAADT_TELEMETRY_HOOK_HOST": "cursor"}}
 
     config: dict = {}

@@ -1,13 +1,13 @@
 # Decision: two clio transports, on purpose
 
-**Status:** accepted · **Scope:** `hooks/telemetry-routing.mjs`, `runtime/scripts/mcp_client.py` ·
+**Status:** accepted · **Scope:** `plugins/creatio-core/hooks/telemetry-routing.mjs`, `plugins/creatio-app-builder/runtime/scripts/mcp_client.py` ·
 **Raised in review of** ENG-92551 (PR #96)
 
 ## The observation
 
 The toolkit now talks to clio's MCP server from two places, in two languages:
 
-| | `runtime/scripts/mcp_client.py` | `hooks/telemetry-routing.mjs` |
+| | `plugins/creatio-app-builder/runtime/scripts/mcp_client.py` | `plugins/creatio-core/hooks/telemetry-routing.mjs` |
 | --- | --- | --- |
 | Language | Python | Node |
 | Lifetime | long-lived client, reused across calls | one detached call, never awaited |
@@ -45,7 +45,7 @@ implements the full command-plus-arguments split:
 The hook does **not** implement that split — `CAADT_TELEMETRY_CLIO` is always spawned as a single
 executable (`spawn(CLIO, ['mcp-server'])`), whether it is a bare name or a path with spaces in it, and
 there is no "command plus arguments" shape on that side at all. What the hook DOES share is only the
-existence check: a value that looks like a path (`CLIO_IS_SAFE` in `hooks/telemetry-routing.mjs`) must
+existence check: a value that looks like a path (`CLIO_IS_SAFE` in `plugins/creatio-core/hooks/telemetry-routing.mjs`) must
 resolve to a real file, the same as `is_file()` in `mcp_client.py`; a bare name is left to PATH
 resolution on both sides. That narrower half is covered by
 `tests/test_mcp_client.py::test_resolve_clio_cmd_*` on the Python side and
@@ -108,7 +108,7 @@ effort, since the child is never awaited — at least one for any session that t
    retry eligibility from the on-disk outcome file on every call, so deleting that file early (as the
    usage path safely does, because it has an independent durable record) forces the next call onto the
    slower grace-period path instead of failing outright. See the comment at the floor retry loop in
-   `hooks/telemetry-routing.mjs`.
+   `plugins/creatio-core/hooks/telemetry-routing.mjs`.
 
 ## Trust-boundary gaps accepted, not overlooked
 
@@ -116,14 +116,14 @@ Five narrower gaps raised in review of PR #96, each accepted for the same reason
 properly needs either information this hook does not have, or statefulness whose cost has not yet
 been justified by an observed failure.
 
-- **Consent staleness window.** `consentGranted()` (`hooks/telemetry/consent.mjs`) reads clio's
+- **Consent staleness window.** `consentGranted()` (`plugins/creatio-core/hooks/telemetry/consent.mjs`) reads clio's
   on-disk `consent.json` directly rather than asking clio to resolve consent live, so a revocation
   that has not yet been flushed to that file can still read as granted for one hook invocation. The
   file read already fails closed on any read/parse error; this is the narrower "the file said yes,
   but clio's live state just changed to no" case. Reading live would mean a second MCP round trip on
   a path that is currently one filesystem read, on every matching clio call — a real latency cost to
   close a window that requires an unlucky race with a revocation the user just performed.
-- **No Windows ownership check.** `assertStateDirIsOurs()` (`hooks/telemetry/state-dir.mjs`) is a
+- **No Windows ownership check.** `assertStateDirIsOurs()` (`plugins/creatio-core/hooks/telemetry/state-dir.mjs`) is a
   POSIX-only uid+mode check; the symlink rejection ahead of it runs on every OS, but on Windows
   (`process.getuid` unavailable) the per-user temp directory's ACL is the sole backstop against
   another local process planting or tampering with a marker file. A native ownership check (owning
@@ -135,7 +135,7 @@ been justified by an observed failure.
   `sweepStaleMarkers()` for the failure mode if that assumption is ever wrong.
 - **Identity, state directory and consent are re-derived on every matching call.** Each
   `PostToolUse` invocation is a fresh Node process, and it re-reads `plugin.json` for the plugin
-  version (`hooks/telemetry/identity.mjs`), re-runs `assertStateDirIsOurs()`'s lstat check, and
+  version (`plugins/creatio-core/hooks/telemetry/identity.mjs`), re-runs `assertStateDirIsOurs()`'s lstat check, and
   re-reads `consent.json`, before the tool result reaches the agent. Nothing is cached across
   invocations, deliberately: the two checks most worth caching are the two that must not be. An
   ownership guard answered from a decision made at session start would let a state directory
@@ -154,7 +154,7 @@ been justified by an observed failure.
 
 ## Cursor's funnel is floor-only from this file
 
-Raised in review of PR #96: `routeClioCall`'s routing reminder (`hooks/telemetry/reminder.mjs`) is
+Raised in review of PR #96: `routeClioCall`'s routing reminder (`plugins/creatio-core/hooks/telemetry/reminder.mjs`) is
 handed back to the agent through `hookSpecificOutput.additionalContext` (Claude Code) or
 `systemMessage` (Codex) — `routingOutput()` returns `null` for every other host, Cursor included, so
 Cursor never receives that per-call text. This is not an oversight this ADR forgot to close; it is a
@@ -195,7 +195,7 @@ runs the clio binary directly over stdio instead. So this gap cannot be closed b
 can validate against without a tool call, or a contract test run separately (e.g. in CI, gated on a
 real clio binary) that fails the build the day clio's answer shape changes.
 
-- **Owner:** whoever owns this hook file (`hooks/telemetry-routing.mjs`) at the time clio's telemetry
+- **Owner:** whoever owns this hook file (`plugins/creatio-core/hooks/telemetry-routing.mjs`) at the time clio's telemetry
   tool contract changes, or CI flags a mismatch.
 - **Trigger condition:** clio publishes a schema for `send-telemetry`'s response, OR a contract test
   against the real binary starts failing, OR the `OPAQUE_REPLY`-shaped `'unknown'` bucket in production

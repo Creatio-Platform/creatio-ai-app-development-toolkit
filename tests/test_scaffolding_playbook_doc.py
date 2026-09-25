@@ -4,7 +4,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-RUNBOOK = ROOT / "runbooks/03-app-implementation.md"
+
+# The orchestration contract is read as one union of its three files; see tests/_contract_docs.py.
+from _contract_docs import AGENTS_CONTRACT_FILES, agents_contract_text  # noqa: E402,F401
+
+RUNBOOK = ROOT / "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md"
 
 
 def _load_installer():
@@ -16,7 +20,9 @@ def _load_installer():
     return module
 
 
-def read_text(path):
+def read_text(path: Path) -> str:
+    if path.name == "AGENTS.md":
+        return agents_contract_text()
     return path.read_text(encoding="utf-8")
 
 
@@ -86,33 +92,33 @@ class ScaffoldingPlaybookDocTests(unittest.TestCase):
         # render_cursor_rule() embeds render_load_order(), so this covers both outputs.
         installer = _load_installer()
         load_order = installer.render_load_order(ROOT)
-        self.assertIn("runbooks/01-environment-setup.md", load_order)
-        self.assertIn("runbooks/02-requirements-gathering.md", load_order)
-        self.assertIn("runbooks/03-app-implementation.md", load_order)
-        cursor_rule = installer.render_cursor_rule(ROOT, ROOT / ".mcp.json")
-        self.assertIn("runbooks/03-app-implementation.md", cursor_rule)
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/01-environment-setup.md", load_order)
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/02-requirements-gathering.md", load_order)
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md", load_order)
+        cursor_rule = installer.render_cursor_rule(ROOT, ROOT / "plugins" / "creatio-core" / ".mcp.json")
+        self.assertIn("plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md", cursor_rule)
 
     def test_installer_copies_the_runbook_on_install(self):
         # REQUIRED_REFERENCE_PATHS drives the file copy into each installed target.
         installer = _load_installer()
         self.assertIn(
-            "runbooks/03-app-implementation.md", installer.REQUIRED_REFERENCE_PATHS
+            "plugins/creatio-app-builder/skills/creatio-app-orchestrator/references/03-app-implementation.md", installer.REQUIRED_REFERENCE_PATHS
         )
 
     def test_static_surfaces_register_the_runbook(self):
         # AC6: the runbook must stay wired into every toolkit surface, not only the
         # installer-rendered output. Dropping the reference from any of these must fail.
         path_referencing = [
-            "skills/creatio-app-orchestrator/SKILL.md",
-            "rules/creatio-app-orchestrator.mdc",
-            "context/INDEX.md",
-            "context/essentials.md",
+            "plugins/creatio-app-builder/skills/creatio-app-orchestrator/SKILL.md",
+            "plugins/creatio-app-builder/rules/creatio-app-orchestrator.mdc",
+            "plugins/creatio-core/context/INDEX.md",
+            "plugins/creatio-core/context/essentials.md",
             "AGENTS.md",
         ]
         for rel in path_referencing:
             content = read_text(ROOT / rel)
             self.assertIn(
-                "runbooks/03-app-implementation.md",
+                "references/03-app-implementation.md",
                 content,
                 f"{rel} must reference the implementation runbook",
             )

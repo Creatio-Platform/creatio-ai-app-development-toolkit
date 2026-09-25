@@ -20,18 +20,16 @@ class VersionBumpTests(unittest.TestCase):
         config = json.loads((ROOT / ".version-bump.json").read_text(encoding="utf-8"))
         configured = {(entry["path"], entry["field"]) for entry in config["files"]}
 
-        self.assertEqual(
-            configured,
-            {
-                (".claude-plugin/plugin.json", "version"),
-                (".codex-plugin/plugin.json", "version"),
-                (".cursor-plugin/plugin.json", "version"),
-                (".github/plugin/plugin.json", "version"),
-                (".agents/plugins/marketplace.json", "plugins.0.version"),
-                (".claude-plugin/marketplace.json", "plugins.0.version"),
-                (".github/plugin/marketplace.json", "plugins.0.version"),
-            },
-        )
+        plugins = ("creatio-core", "creatio-app-builder", "creatio-ui", "creatio-migration")
+        expected = {(".claude-plugin/plugin.json", "version")}
+        for plugin in plugins:
+            for host in (".claude-plugin", ".codex-plugin", ".cursor-plugin", ".github/plugin"):
+                expected.add((f"plugins/{plugin}/{host}/plugin.json", "version"))
+        # Claude catalog: meta-plugin + 4 plugins; Codex and Copilot catalogs: the 4 plugins.
+        expected |= {(".claude-plugin/marketplace.json", f"plugins.{i}.version") for i in range(5)}
+        expected |= {(".agents/plugins/marketplace.json", f"plugins.{i}.version") for i in range(4)}
+        expected |= {(".github/plugin/marketplace.json", f"plugins.{i}.version") for i in range(4)}
+        self.assertEqual(configured, expected)
 
     def test_repo_versions_are_in_sync(self):
         node = self.require_node()

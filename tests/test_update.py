@@ -7,7 +7,9 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -38,6 +40,33 @@ def _make_release_zip(path: Path, version: str) -> None:
 # update.py — detection
 # ---------------------------------------------------------------------------
 
+
+
+class UpdateStartsStandaloneTests(unittest.TestCase):
+    """`python installer/update.py` must import on its own.
+
+    The module-level `import version_check` depends on update.py putting the runtime directory on
+    sys.path itself. Inside one `pytest tests/` process that is masked: mcp_client.py (imported by
+    other test modules) inserts the very same directory. A subprocess is the only honest check.
+    """
+
+    def test_help_runs_in_a_fresh_interpreter(self):
+        result = subprocess.run(
+            [sys.executable, str(UPDATE_PATH), "--help"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONPATH": ""},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+
+    def test_runtime_dir_points_at_the_app_builder_plugin(self):
+        upd = load_update()
+        self.assertEqual(
+            upd._RUNTIME_DIR,
+            upd._REPO_ROOT / "plugins" / "creatio-app-builder" / "runtime",
+        )
+        self.assertTrue((upd._RUNTIME_DIR / "version_check.py").is_file())
 
 class DetectTargetsTests(unittest.TestCase):
     def setUp(self):

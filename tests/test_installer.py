@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,17 +29,10 @@ def write_required_references(installer, repo_root):
 def write_release_manifest(repo_root, plugin_runtime=None):
     paths = plugin_runtime if plugin_runtime is not None else [
         "AGENTS.md",
-        ".mcp.json",
         ".agents",
         ".claude-plugin",
-        ".codex-plugin",
-        ".cursor-plugin",
         ".github/plugin",
-        "context",
-        "rules",
-        "runbooks",
-        "runtime",
-        "skills",
+        "plugins",
     ]
     manifest_path = repo_root / ".release-manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,13 +42,22 @@ def write_release_manifest(repo_root, plugin_runtime=None):
     )
 
 
+# The plugin that ships `*.workflow.js` scripts and the generated manifest in the real tree.
+WORKFLOW_PLUGIN_SKILLS = Path("plugins") / "creatio-migration" / "skills"
+
+
+def bundled_skills_dir(source_root):
+    """`plugins/creatio-migration/skills/` - where workflow-carrying skills live after the plugin split."""
+    return source_root / WORKFLOW_PLUGIN_SKILLS
+
+
 def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, body=""):
-    """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
+    """Write a `plugins/creatio-migration/skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
 
     The manifest is what the installer reads: the script's own `meta.name` is still written so the
     fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
     """
-    skill_dir = source_root / "skills" / skill_dir_name
+    skill_dir = bundled_skills_dir(source_root) / skill_dir_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     script = skill_dir / f"{script_stem}.workflow.js"
     script.write_text(
@@ -65,10 +68,10 @@ def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, 
     return script
 
 
-def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describe",)):
-    """Append `{name, script, phases}` to `skills/_workflow-core/workflows.json`."""
+def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describe",), manifest_relative=None):
+    """Append `{name, script, phases}` to the generated manifest (the plugin-split path by default)."""
     installer = load_installer()
-    manifest_path = source_root / installer.WORKFLOW_MANIFEST_RELATIVE
+    manifest_path = source_root / (manifest_relative or installer.WORKFLOW_MANIFEST_RELATIVE)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = (
         json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -81,26 +84,292 @@ def add_workflow_manifest_entry(source_root, script, meta_name, phases=("Describ
         "phases": list(phases),
     })
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return manifest_path
 
 
 def write_minimal_plugin_checkout(repo_root):
-    """Lay out the files the install_* functions read from the local checkout."""
-    (repo_root / ".mcp.json").write_text(
+    """Lay out the files the install_* functions read from the local checkout: the plugin-split
+    tree (root meta-plugin manifest, `plugins/creatio-core/.mcp.json`, skills under `plugins/*/skills/`)."""
+    (repo_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (repo_root / ".claude-plugin" / "plugin.json").write_text(
+        '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0","dependencies":["creatio-core"]}\n',
+        encoding="utf-8",
+    )
+    core = repo_root / "plugins" / "creatio-core"
+    core.mkdir(parents=True, exist_ok=True)
+    (core / ".mcp.json").write_text(
         '{"mcpServers":{"clio":{"command":"clio","args":["mcp-server"]}}}\n',
         encoding="utf-8",
     )
+    (core / "hooks").mkdir(exist_ok=True)
+    (core / "hooks" / "telemetry-routing.mjs").write_text("// hook\n", encoding="utf-8")
     (repo_root / ".github" / "plugin").mkdir(parents=True, exist_ok=True)
     (repo_root / ".github" / "plugin" / "plugin.json").write_text(
         '{"name":"creatio-ai-app-development-toolkit","version":"0.1.0"}\n',
         encoding="utf-8",
     )
-    skill_dir = repo_root / "skills" / "creatio-app-orchestrator"
+    skill_dir = repo_root / "plugins" / "creatio-app-builder" / "skills" / "creatio-app-orchestrator"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: creatio-app-orchestrator\ndescription: test\n---\n",
         encoding="utf-8",
     )
+    catalog_entries = []
+    for name in CODEX_FIXTURE_PLUGINS:
+        manifest_dir = repo_root / "plugins" / name / ".codex-plugin"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        (manifest_dir / "plugin.json").write_text(json.dumps({"name": name, "version": "0.1.0"}) + "\n", encoding="utf-8")
+        catalog_entries.append({"name": name, "source": {"source": "local", "path": f"./plugins/{name}"}})
+    (repo_root / ".agents" / "plugins").mkdir(parents=True, exist_ok=True)
+    (repo_root / ".agents" / "plugins" / "marketplace.json").write_text(
+        json.dumps({"name": "creatio", "plugins": catalog_entries}) + "\n", encoding="utf-8"
+    )
+
+
+# The plugins write_minimal_plugin_checkout lists in its Codex catalog, in catalog order.
+CODEX_FIXTURE_PLUGINS = ("creatio-core", "creatio-app-builder")
+
+
+def write_legacy_single_plugin_tree(root):
+    """A tree from BEFORE the plugin split - what a cached plugin version installed by 1.x looks
+    like: root `.mcp.json`, root `skills/` with the manifest under `skills/_workflow-core/`."""
+    (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(
+        '{"name":"creatio-ai-app-development-toolkit","version":"0.0.9"}\n', encoding="utf-8"
+    )
+    (root / ".mcp.json").write_text(
+        '{"mcpServers":{"clio":{"command":"clio-legacy","args":["mcp-server"]}}}\n', encoding="utf-8"
+    )
+    skill_dir = root / "skills" / "legacy-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    script = skill_dir / "legacy.workflow.js"
+    script.write_text("export const meta = {\n  name: 'creatio-legacy',\n}\n", encoding="utf-8")
+    installer = load_installer()
+    add_workflow_manifest_entry(
+        root, script, "creatio-legacy", manifest_relative=installer.LEGACY_WORKFLOW_MANIFEST_RELATIVE
+    )
+    return script
+
+
+class PluginLayoutDetectionTests(unittest.TestCase):
+    """The install-gating branches the plugin split added, each exercised on a tmp tree."""
+
+    def test_is_plugin_checkout_accepts_the_plugin_split_tree_only(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            multi = Path(temp) / "multi"
+            multi.mkdir()
+            write_minimal_plugin_checkout(multi)
+            self.assertTrue(installer.is_plugin_checkout(multi))
+
+            # A pre-split tree is not installable by this version: every required reference lives
+            # under plugins/, so admitting it here would only move the failure downstream.
+            legacy = Path(temp) / "legacy"
+            legacy.mkdir()
+            write_legacy_single_plugin_tree(legacy)
+            self.assertFalse(installer.is_plugin_checkout(legacy))
+
+            # The root meta-plugin manifest is required...
+            no_manifest = Path(temp) / "no-manifest"
+            no_manifest.mkdir()
+            write_minimal_plugin_checkout(no_manifest)
+            (no_manifest / ".claude-plugin" / "plugin.json").unlink()
+            self.assertFalse(installer.is_plugin_checkout(no_manifest))
+
+            # ...and so is the core plugin's clio declaration.
+            no_core_mcp = Path(temp) / "no-core-mcp"
+            no_core_mcp.mkdir()
+            write_minimal_plugin_checkout(no_core_mcp)
+            (no_core_mcp / "plugins" / "creatio-core" / ".mcp.json").unlink()
+            self.assertFalse(installer.is_plugin_checkout(no_core_mcp))
+
+            self.assertFalse(installer.is_plugin_checkout(Path(temp) / "absent"))
+
+    def test_mcp_config_path_prefers_the_core_plugin_copy(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_minimal_plugin_checkout(root)
+            core_copy = root / installer.MCP_CONFIG_RELATIVE
+            self.assertEqual(installer.mcp_config_path(root), core_copy)
+
+            # A leftover root .mcp.json is superseded-layout debris: the core copy still wins.
+            (root / ".mcp.json").write_text('{"mcpServers":{"clio":{"command":"stale"}}}\n', encoding="utf-8")
+            self.assertEqual(installer.mcp_config_path(root), core_copy)
+            self.assertEqual(installer.load_mcp_servers(root)["clio"]["command"], "clio")
+
+            # Only a tree with no core copy at all falls back to the root file.
+            core_copy.unlink()
+            self.assertEqual(installer.mcp_config_path(root), root / ".mcp.json")
+            self.assertEqual(installer.load_mcp_servers(root)["clio"]["command"], "stale")
+
+            # Neither present: the path names the core location, and loading fails loudly.
+            (root / ".mcp.json").unlink()
+            self.assertEqual(installer.mcp_config_path(root), core_copy)
+            with self.assertRaisesRegex(RuntimeError, "MCP config not found"):
+                installer.load_mcp_servers(root)
+
+    def test_workflow_manifest_names_falls_back_to_the_legacy_manifest_only_when_the_new_one_is_absent(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            write_legacy_single_plugin_tree(root)
+            self.assertEqual(
+                installer.workflow_manifest_names(root),
+                {"skills/legacy-skill/legacy.workflow.js": "creatio-legacy"},
+            )
+
+            # Both present (a hybrid tree): the plugin-split manifest is authoritative.
+            write_bundled_workflow(root, "new-skill", "new", "creatio-new")
+            self.assertEqual(
+                installer.workflow_manifest_names(root),
+                {"plugins/creatio-migration/skills/new-skill/new.workflow.js": "creatio-new"},
+            )
+
+    def test_discover_workflow_scripts_unions_both_layouts_deduplicated_and_sorted(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            legacy_script = write_legacy_single_plugin_tree(root)
+            new_b = write_bundled_workflow(root, "skill-b", "two", "creatio-two")
+            new_a = write_bundled_workflow(root, "skill-a", "one", "creatio-one")
+            # A second plugin shipping a script is discovered too (the glob is plugins/*/skills/*/).
+            other = root / "plugins" / "creatio-other" / "skills" / "x"
+            other.mkdir(parents=True)
+            other_script = other / "z.workflow.js"
+            other_script.write_text("export const meta = { name: 'creatio-z' }\n", encoding="utf-8")
+            # Non-workflow files and nested files are not scripts.
+            (other / "notes.js").write_text("", encoding="utf-8")
+            (other / "deep").mkdir()
+            (other / "deep" / "hidden.workflow.js").write_text("", encoding="utf-8")
+
+            found = installer.discover_workflow_scripts(root)
+
+            self.assertEqual(found, sorted({legacy_script, new_a, new_b, other_script}))
+            self.assertEqual(len(found), len(set(found)))
+
+    def test_discover_workflow_scripts_on_each_layout_alone(self):
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            legacy = Path(temp) / "legacy"
+            legacy.mkdir()
+            legacy_script = write_legacy_single_plugin_tree(legacy)
+            self.assertEqual(installer.discover_workflow_scripts(legacy), [legacy_script])
+
+            multi = Path(temp) / "multi"
+            multi.mkdir()
+            script = write_bundled_workflow(multi, "skill-a", "one", "creatio-one")
+            self.assertEqual(installer.discover_workflow_scripts(multi), [script])
+
+            self.assertEqual(installer.discover_workflow_scripts(Path(temp) / "absent"), [])
+
+    def test_a_legacy_cached_tree_still_provisions_its_workflows(self):
+        # update.py mirrors workflows from a cached plugin version, which may predate the split.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "cache"
+            root.mkdir()
+            write_legacy_single_plugin_tree(root)
+            claude_home = Path(temp) / ".claude"
+            self.assertEqual(installer.provision_named_workflows(root, claude_home), ["creatio-legacy"])
+            self.assertTrue((claude_home / "workflows" / "creatio-legacy.js").exists())
+
+    def test_required_references_gate_fails_on_the_pre_split_tree(self):
+        # The asymmetry is intentional and visible: a legacy tree is rejected before this gate by
+        # is_plugin_checkout; if it ever reached the gate, it would still fail loudly, not pass.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            legacy = Path(temp)
+            write_legacy_single_plugin_tree(legacy)
+            with self.assertRaisesRegex(RuntimeError, "missing required reference files"):
+                installer.ensure_required_references(legacy)
+
+
+class RepoTruthTests(unittest.TestCase):
+    """The installer's path constants against the real checkout - a typo in any of them would
+    otherwise ship green (the fixtures write whatever the constants say) and fail for every user."""
+
+    def test_required_references_exist_in_the_repository(self):
+        installer = load_installer()
+        installer.ensure_required_references(ROOT)
+        for relative in installer.REQUIRED_REFERENCE_PATHS:
+            self.assertTrue((ROOT / relative).is_file(), relative)
+
+    def test_load_order_and_rule_paths_exist_in_the_repository(self):
+        installer = load_installer()
+        rendered = installer.render_load_order(ROOT) + installer.render_cursor_rule(
+            ROOT, ROOT / installer.MCP_CONFIG_RELATIVE
+        )
+        for prefix in (str(ROOT) + "\\", str(ROOT) + "/", ROOT.as_posix() + "/"):
+            rendered = rendered.replace(prefix, "")
+        referenced = [
+            ref for ref in re.findall(r"`([^`]+)`", rendered)
+            if ("/" in ref or "\\" in ref) and "." in ref.replace("\\", "/").rsplit("/", 1)[-1]
+        ]
+        self.assertTrue(referenced)
+        for ref in referenced:
+            self.assertTrue((ROOT / ref.replace("\\", "/")).is_file(), ref)
+
+    def test_layout_constants_resolve_in_the_repository(self):
+        installer = load_installer()
+        self.assertTrue(installer.is_plugin_checkout(ROOT))
+        self.assertEqual(installer.mcp_config_path(ROOT), ROOT / installer.MCP_CONFIG_RELATIVE)
+        self.assertTrue((ROOT / installer.MCP_CONFIG_RELATIVE).is_file())
+        self.assertTrue((ROOT / installer.WORKFLOW_MANIFEST_RELATIVE).is_file())
+        self.assertTrue((ROOT / installer.TELEMETRY_HOOK_RELATIVE).is_file())
+        # The shipped release manifest carries the tree the constants point into.
+        runtime_paths = installer.load_plugin_runtime_paths(ROOT)
+        self.assertIn("plugins", runtime_paths)
+        self.assertTrue(all((ROOT / p).exists() for p in runtime_paths), runtime_paths)
+        # Every shipped workflow script is discovered and named by the shipped manifest.
+        scripts = installer.discover_workflow_scripts(ROOT)
+        self.assertTrue(scripts)
+        names = installer.workflow_manifest_names(ROOT)
+        for script in scripts:
+            self.assertIn(script.relative_to(ROOT).as_posix(), names)
+
+
+class CursorTelemetryHookPathTests(unittest.TestCase):
+    def test_registered_hook_command_points_at_the_copied_file(self):
+        # The plugin runtime surface is copied with its repo-relative paths, so the hook lands under
+        # <local_plugin_dir>/plugins/creatio-core/hooks/. hooks.json must name that file, not a
+        # <local_plugin_dir>/hooks/ path from before the split - a dangling command fails silently
+        # on every clio call and the telemetry floor simply stops firing.
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as temp:
+            repo_root = Path(temp) / "repo"
+            repo_root.mkdir()
+            write_minimal_plugin_checkout(repo_root)
+            write_required_references(installer, repo_root)
+            write_release_manifest(repo_root)
+            home = Path(temp) / "home"
+            cursor_home = home / ".cursor"
+            cursor_home.mkdir(parents=True)
+
+            with patch("builtins.print"):
+                installer.install_cursor(repo_root, home)
+
+            config = json.loads((cursor_home / "hooks.json").read_text(encoding="utf-8"))
+            commands = [item["command"] for item in config["hooks"]["afterMCPExecution"]]
+            self.assertEqual(len(commands), 1)
+            match = re.fullmatch(r'node "(.+)"', commands[0])
+            self.assertIsNotNone(match, commands[0])
+            hook_path = Path(match.group(1))
+            self.assertTrue(hook_path.is_file(), f"hooks.json names a file that was not installed: {hook_path}")
+            local_plugin_dir = cursor_home / "plugins" / "local" / installer.PLUGIN_NAME
+            self.assertEqual(hook_path, local_plugin_dir / installer.TELEMETRY_HOOK_RELATIVE)
+
+    def test_hook_constant_and_core_manifest_name_the_same_file(self):
+        # The Claude manifest registers ${CLAUDE_PLUGIN_ROOT}/hooks/telemetry-routing.mjs inside the
+        # core plugin; the Cursor command must not drift from it.
+        installer = load_installer()
+        manifest = json.loads(
+            (ROOT / "plugins" / "creatio-core" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        claude_commands = {
+            hook["command"] for entries in manifest["hooks"].values() for entry in entries for hook in entry["hooks"]
+        }
+        inside_core = installer.TELEMETRY_HOOK_RELATIVE.split("plugins/creatio-core/", 1)[1]
+        self.assertEqual(claude_commands, {'node "${CLAUDE_PLUGIN_ROOT}/' + inside_core + '"'})
 
 
 class ConstantsTests(unittest.TestCase):
@@ -136,6 +405,8 @@ class ConstantsTests(unittest.TestCase):
             "merge_codex_marketplace_config",
             "merge_personal_marketplace_catalog",
             "render_codex_skill",
+            # Dead since the file-copy skill install went, and it read the pre-split root `skills/`.
+            "copy_skill_directories",
         ):
             self.assertFalse(
                 hasattr(installer, removed_name),
@@ -626,7 +897,7 @@ class InstallClaudeTests(unittest.TestCase):
             # Byte-identical: the mirror is a copy, never a rewritten variant.
             self.assertEqual(
                 mirrored.read_text(encoding="utf-8"),
-                (repo_root / "skills" / "demo-skill" / "demo.workflow.js").read_text(
+                (bundled_skills_dir(repo_root) / "demo-skill" / "demo.workflow.js").read_text(
                     encoding="utf-8"
                 ),
             )
@@ -669,7 +940,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     written,
-                    ["src/skills/a-skill/build.workflow.js"],
+                    ["src/plugins/creatio-migration/skills/a-skill/build.workflow.js"],
                     "nothing may be written outside the source tree for a rejected name",
                 )
 
@@ -694,7 +965,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
-            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir = bundled_skills_dir(source_root) / "a-skill"
             skill_dir.mkdir(parents=True)
             script = skill_dir / "build.workflow.js"
             script.write_text(
@@ -721,7 +992,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
-            skill_dir = source_root / "skills" / "a-skill"
+            skill_dir = bundled_skills_dir(source_root) / "a-skill"
             skill_dir.mkdir(parents=True)
             (skill_dir / "build.workflow.js").write_text(
                 "export const meta = {\n  name: 'creatio-real',\n}\n", encoding="utf-8"
@@ -738,7 +1009,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
             write_bundled_workflow(source_root, "skill-a", "one", "creatio-one")
-            unlisted = source_root / "skills" / "skill-b"
+            unlisted = bundled_skills_dir(source_root) / "skill-b"
             unlisted.mkdir(parents=True)
             (unlisted / "two.workflow.js").write_text(
                 "export const meta = {\n  name: 'creatio-two',\n}\n", encoding="utf-8"
@@ -821,7 +1092,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
-            (source_root / "skills" / "plain-skill").mkdir(parents=True)
+            (bundled_skills_dir(source_root) / "plain-skill").mkdir(parents=True)
             claude_home = Path(temp) / "home" / ".claude"
 
             self.assertEqual(installer.provision_named_workflows(source_root, claude_home), [])
@@ -841,7 +1112,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
             source_root = Path(temp) / "src"
-            skill_dir = source_root / "skills" / "skill-a"
+            skill_dir = bundled_skills_dir(source_root) / "skill-a"
             skill_dir.mkdir(parents=True)
             (skill_dir / "broken.workflow.js").write_text(
                 "export const meta = { description: 'no name' }\n", encoding="utf-8"
@@ -1106,7 +1377,7 @@ class InstallCodexTests(unittest.TestCase):
 
             with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked", side_effect=fake_run
-            ), patch.object(installer, "copy_plugin_runtime_surface") as copy_runtime:
+            ):
                 installer.install_codex(repo_root, home)
 
             # No `codex plugin add`: the subcommand does not exist in Codex CLI.
@@ -1117,12 +1388,16 @@ class InstallCodexTests(unittest.TestCase):
                     ["codex", "plugin", "marketplace", "add", installer.MARKETPLACE_GIT_URL],
                 ],
             )
-            copy_runtime.assert_called_once_with(
-                repo_root,
-                home / ".codex" / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0",
-            )
+            # One cache dir per Codex catalog entry, holding that plugin's own tree.
+            cache = home / ".codex" / "plugins" / "cache" / "creatio"
+            self.assertEqual(sorted(p.name for p in cache.iterdir()), sorted(CODEX_FIXTURE_PLUGINS))
+            for name in CODEX_FIXTURE_PLUGINS:
+                self.assertTrue((cache / name / "0.1.0" / ".codex-plugin" / "plugin.json").exists())
             config_body = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+            for name in CODEX_FIXTURE_PLUGINS:
+                self.assertIn(f'[plugins."{name}@creatio"]\nenabled = true\n', config_body)
+            # The pre-split single plugin is no longer in the catalog and is never enabled.
+            self.assertNotIn(installer.PLUGIN_NAME, config_body)
 
     def test_materializes_plugin_cache_and_enables_plugin_idempotently(self):
         installer = load_installer()
@@ -1136,7 +1411,7 @@ class InstallCodexTests(unittest.TestCase):
             codex_home = home / ".codex"
             codex_home.mkdir(parents=True)
             # A stale version left by an earlier install must not survive.
-            stale = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            stale = codex_home / "plugins" / "cache" / "creatio" / "creatio-app-builder" / "0.0.9"
             stale.mkdir(parents=True)
             (stale / "marker").write_text("old\n", encoding="utf-8")
 
@@ -1146,12 +1421,13 @@ class InstallCodexTests(unittest.TestCase):
                 installer.install_codex(repo_root, home)
                 installer.install_codex(repo_root, home)  # re-run: idempotent
 
-            version_dir = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.1.0"
+            version_dir = codex_home / "plugins" / "cache" / "creatio" / "creatio-app-builder" / "0.1.0"
             self.assertTrue((version_dir / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
-            self.assertTrue((version_dir / ".github" / "plugin" / "plugin.json").exists())
+            self.assertTrue((version_dir / ".codex-plugin" / "plugin.json").exists())
             self.assertFalse(stale.exists())
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
+            for name in CODEX_FIXTURE_PLUGINS:
+                self.assertEqual(config_body.count(f'[plugins."{name}@creatio"]'), 1)
             self.assertEqual(config_body.count("[mcp_servers.clio]"), 1)
 
     def test_materialize_removes_stale_versions_on_its_own(self):
@@ -1165,7 +1441,7 @@ class InstallCodexTests(unittest.TestCase):
             write_minimal_plugin_checkout(repo_root)
             write_release_manifest(repo_root)
             codex_home = Path(temp) / "home" / ".codex"
-            plugin_cache = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME
+            plugin_cache = codex_home / "plugins" / "cache" / "creatio" / "creatio-app-builder"
             stale = plugin_cache / "0.0.9"
             stale.mkdir(parents=True)
             (stale / "marker").write_text("old\n", encoding="utf-8")
@@ -1173,7 +1449,7 @@ class InstallCodexTests(unittest.TestCase):
             sibling.mkdir(parents=True)
 
             with patch("builtins.print"):
-                target = installer.materialize_codex_plugin(repo_root, codex_home)
+                target = installer.materialize_codex_plugin(repo_root, codex_home, "creatio-app-builder")
 
             self.assertEqual(target, plugin_cache / "0.1.0")
             self.assertTrue((target / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists())
@@ -1181,7 +1457,7 @@ class InstallCodexTests(unittest.TestCase):
             # Only this plugin's cache root is replaced; a sibling plugin's cache is untouched.
             self.assertTrue(sibling.exists())
             config_body = (codex_home / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+            self.assertIn('[plugins."creatio-app-builder@creatio"]\nenabled = true\n', config_body)
 
     def test_failed_marketplace_registration_propagates_and_writes_nothing(self):
         # Loud failure: when Codex's marketplace registration fails, install_codex raises
@@ -1236,11 +1512,13 @@ class InstallCodexTests(unittest.TestCase):
             write_release_manifest(repo_root)
             home = Path(temp) / "home"
             codex_home = home / ".codex"
-            previous = codex_home / "plugins" / "cache" / "creatio" / installer.PLUGIN_NAME / "0.0.9"
+            previous = codex_home / "plugins" / "cache" / "creatio" / "creatio-core" / "0.0.9"
             previous.mkdir(parents=True)
             (codex_home / "config.toml").write_text(
                 'model = "gpt-5.4"\n\n'
                 '[plugins."creatio-ai-app-development-toolkit@creatio"]\n'
+                "enabled = true\n\n"
+                '[plugins."creatio-core@creatio"]\n'
                 "enabled = true\n",
                 encoding="utf-8",
             )
@@ -1248,7 +1526,7 @@ class InstallCodexTests(unittest.TestCase):
             with patch.object(installer.agent_cli, "preflight_codex", return_value="codex"), patch.object(
                 installer, "run_checked"
             ), patch.object(
-                installer, "copy_plugin_runtime_surface", side_effect=OSError("disk full mid-copy")
+                installer.shutil, "copytree", side_effect=OSError("disk full mid-copy")
             ), patch("builtins.print"), self.assertRaisesRegex(OSError, "disk full"):
                 installer.install_codex(repo_root, home)
 
@@ -1318,7 +1596,7 @@ class InstallCodexTests(unittest.TestCase):
             # is gone and the current version directory is in place.
             self.assertFalse((legacy_cache_dir / "marker").exists())
             self.assertTrue(
-                (legacy_cache_dir / installer.PLUGIN_NAME / "0.1.0" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
+                (legacy_cache_dir / "creatio-app-builder" / "0.1.0" / "skills" / "creatio-app-orchestrator" / "SKILL.md").exists()
             )
             self.assertFalse(legacy_personal_plugin_dir.exists())
             self.assertFalse(legacy_skill_dir.exists())
@@ -1364,9 +1642,10 @@ class InstallCodexTests(unittest.TestCase):
             self.assertIn('model = "gpt-5.4"', config_body)
             self.assertNotIn("[marketplaces.creatio]", config_body)
             self.assertIn("[marketplaces.other]", config_body)
-            # The legacy plugin block is replaced by exactly one installer-owned block.
-            self.assertEqual(config_body.count('[plugins."creatio-ai-app-development-toolkit@creatio"]'), 1)
-            self.assertIn('[plugins."creatio-ai-app-development-toolkit@creatio"]\nenabled = true\n', config_body)
+            # The pre-split plugin block is dropped; each catalog plugin gets exactly one block.
+            self.assertNotIn('[plugins."creatio-ai-app-development-toolkit@creatio"]', config_body)
+            for name in CODEX_FIXTURE_PLUGINS:
+                self.assertEqual(config_body.count(f'[plugins."{name}@creatio"]'), 1)
             self.assertIn('[plugins."other@other"]', config_body)
             self.assertNotIn("[[skills.config]]", config_body)
             self.assertIn("[mcp_servers.clio]", config_body)
@@ -1662,7 +1941,7 @@ class InstallCursorTests(unittest.TestCase):
             self.assertIn("## Analytics Context", rule_body)
             self.assertIn("`coding_agent`: Cursor", rule_body)
             self.assertIn("`plugin_version`:", rule_body)
-            self.assertIn("Follow `context/product-telemetry.md`", rule_body)
+            self.assertIn("Follow `plugins/creatio-core/context/product-telemetry.md`", rule_body)
 
             local_plugin_manifest = local_plugin_dir / ".cursor-plugin" / "plugin.json"
             self.assertTrue(local_plugin_manifest.exists())

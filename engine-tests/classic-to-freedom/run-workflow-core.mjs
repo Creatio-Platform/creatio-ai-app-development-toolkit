@@ -1,4 +1,4 @@
-// Offline goldens for the HOST-NEUTRAL workflow core (skills/_workflow-core/).
+// Offline goldens for the HOST-NEUTRAL workflow core (plugins/creatio-migration/skills/_workflow-core/).
 //
 // What this suite exists to prove, and why each leg is here rather than left to a
 // live run:
@@ -29,17 +29,17 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CORE = path.join(ROOT, "skills", "_workflow-core");
+const CORE = path.join(ROOT, "plugins", "creatio-migration", "skills", "_workflow-core");
 
-import { OUTCOME, ACCESS, step, workItem, record, errorShape, reviveError } from "../../skills/_workflow-core/work-item.mjs";
-import { declareHost, negotiateStep, negotiateRun, CapabilityError } from "../../skills/_workflow-core/capabilities.mjs";
-import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } from "../../skills/_workflow-core/run-state.mjs";
-import { drive, advance } from "../../skills/_workflow-core/driver.mjs";
-import * as cba from "../../skills/_workflow-core/behaviour-analysis/core.mjs";
-import * as helpers from "../../skills/_workflow-core/behaviour-analysis/helpers.mjs";
-import { CLAUDE_HOST, makeExecute, makeRunBatch, agentOptionsFor, driveOnClaude } from "../../skills/_workflow-core/adapters/claude-workflow.mjs";
-import { codexHost, codexSingleAgentHost } from "../../skills/_workflow-core/adapters/codex.mjs";
-import { genericHost, explainMissing } from "../../skills/_workflow-core/adapters/generic-cli.mjs";
+import { OUTCOME, ACCESS, step, workItem, record, errorShape, reviveError } from "../../plugins/creatio-migration/skills/_workflow-core/work-item.mjs";
+import { declareHost, negotiateStep, negotiateRun, CapabilityError } from "../../plugins/creatio-migration/skills/_workflow-core/capabilities.mjs";
+import { newRun, append, entriesFor, pendingIds, driftAt, noteHost, summary } from "../../plugins/creatio-migration/skills/_workflow-core/run-state.mjs";
+import { drive, advance } from "../../plugins/creatio-migration/skills/_workflow-core/driver.mjs";
+import * as cba from "../../plugins/creatio-migration/skills/_workflow-core/behaviour-analysis/core.mjs";
+import * as helpers from "../../plugins/creatio-migration/skills/_workflow-core/behaviour-analysis/helpers.mjs";
+import { CLAUDE_HOST, makeExecute, makeRunBatch, agentOptionsFor, driveOnClaude } from "../../plugins/creatio-migration/skills/_workflow-core/adapters/claude-workflow.mjs";
+import { codexHost, codexSingleAgentHost } from "../../plugins/creatio-migration/skills/_workflow-core/adapters/codex.mjs";
+import { genericHost, explainMissing } from "../../plugins/creatio-migration/skills/_workflow-core/adapters/generic-cli.mjs";
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
@@ -1023,7 +1023,7 @@ const mentionsArgs = (line) => {
   return false;
 };
 
-const GENERATED = path.join(ROOT, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
+const GENERATED = path.join(ROOT, "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
 const genSrc = readFileSync(GENERATED, "utf8");
 {
   const res = spawnSync(process.execPath, [path.join(ROOT, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
@@ -1041,8 +1041,8 @@ const genSrc = readFileSync(GENERATED, "utf8");
   {
     const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "wf-drift-"));
     cpSync(path.join(ROOT, "scripts"), path.join(tmpRoot, "scripts"), { recursive: true });
-    cpSync(path.join(ROOT, "skills"), path.join(tmpRoot, "skills"), { recursive: true });
-    const shipped = path.join(tmpRoot, "skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
+    cpSync(path.join(ROOT, "plugins", "creatio-migration", "skills"), path.join(tmpRoot, "plugins", "creatio-migration", "skills"), { recursive: true });
+    const shipped = path.join(tmpRoot, "plugins/creatio-migration/skills/classic-to-freedom-migration/classic-behaviour-analysis.workflow.js");
     writeFileSync(shipped, `${readFileSync(shipped, "utf8")}\n// drift introduced by the test\n`);
     const drifted = spawnSync(process.execPath, [path.join(tmpRoot, "scripts/build-workflows.mjs"), "--check"], { encoding: "utf8" });
     check("generator: `--check` really FAILS on a drifted artifact — the green result above is a measurement, not a constant",
