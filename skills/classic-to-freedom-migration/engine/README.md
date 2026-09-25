@@ -23,8 +23,8 @@ node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse on
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
-node migrate.mjs <manifest.json> --verify --built b.json # the VERIFIED done-gate: expected vs actually built (Markdown)
-node migrate.mjs <manifest.json> --verify --built b.json --tasks <dir>  # the MIGRATION RESULT REPORT: ledger + built pages, one verdict (plus the dispatch gate over <dir>, and this run's OPEN rows written there as repair tasks)
+node migrate.mjs <manifest.json> --verify --from <dir> --tasks <dir>/build-tasks  # the MIGRATION RESULT REPORT: ledger + built pages, one verdict (plus the dispatch gate over the task folder, and this run's OPEN rows written there as repair tasks)
+node migrate.mjs <manifest.json> --verify --built b.json # REPLAY: the same gate against a payload already composed (a recorded built.json or fixture); add --tasks <dir> to replay the result report
 node migrate.mjs <manifest.json> --plan --out plan.md   # WRITE the artifact to a file (present that file, not stdout)
 ```
 
@@ -403,7 +403,7 @@ repairable on-stand (build the missing pieces, file the evidence, re-verify); `�
 INCOMPLETE` / `COVERAGE INCOMPLETE` / `LIST GATE BLOCKED` describe the PLAN and fire in every mode — no build
 round closes one.
 
-**The migration result report (`--verify --built <f> --tasks <dir>`, `report.mjs`).** With a task folder the
+**The migration result report (`--verify --from <folder> --tasks <dir>`, or `--built <f>` to replay; `report.mjs`).** With a task folder the
 verify run prints ONE artifact computed from the task LEDGER and the BUILT PAGES, and its verdict is their
 conjunction — `✅ COMPLETE` only when every task is closed and dispatched, no deliverable stands recorded
 `not-built`, and every machine-checked row is present; otherwise `⛔ NOT COMPLETE — <every reason>`, exit 2 with a

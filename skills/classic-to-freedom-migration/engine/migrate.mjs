@@ -61,7 +61,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -2839,7 +2839,8 @@ function signedWith(s) {
 function dispatchFailureSections(audit, dir) {
   return [
     [audit.never, (n) => `⛔ ${n} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
-      + " measured them and nothing says who built them. For each: re-open it (`status: todo`), run"
+      + " measured them and nothing says who built them. For each: re-open it (clear its `Outcome` cells, then"
+      + " `status: todo`), run"
       + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:",
       (t) => `   · ${t.file}  (--start ${t.id})`],
     [audit.openClock, (n) => `⛔ ${n} task(s) closed while their clock is still open — the folder's books are`
@@ -2851,7 +2852,8 @@ function dispatchFailureSections(audit, dir) {
       + " or re-open and build it:",
       (t) => `   · ${t.file}  (${t.id})`],
     [audit.signature, (n) => `⛔ ${n} task(s) closed carrying a signature dispatch did not issue for them —`
-      + " the context that closed each was not the one it was handed to. Re-open, `--start`, re-dispatch:",
+      + " the context that closed each was not the one it was handed to. Re-open (clear the `Outcome` cells, then"
+      + " `status: todo`), `--start`, re-dispatch:",
       (s) => `   · ${s.task.file}  (${signedWith(s)})`],
   ];
 }
@@ -2955,6 +2957,13 @@ function startRefusalText(set, startId, dir) {
       + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
       + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
   }
+  if (set.filledCells) {
+    const { file, status, rows } = set.filledCells;
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${file}\` still reads \`${status}\` because its \`Outcome\` cells`
+      + ` are filled (row(s) ${rows.join(", ")}), and the cells outrank the \`status:\` line. Clear those cells, set`
+      + " `status: todo`, then run `--start` again. No clock was opened.\n";
+  }
   // A DECISION THE ENGINE CANNOT MAKE. Refused in the same words the query withholds it in, so the two surfaces
   // send the reader to the same place: the file's own `## Notes`.
   if (set.blockedByStatus) {
@@ -3023,6 +3032,7 @@ const handedIn = (set) => set.splitSource === SPLIT_HANDED;
 function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
+  if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_COVERAGE) {
     return handedIn(set)
@@ -3048,6 +3058,10 @@ function refusalRemedy(set) {
         : `drop ${SPLIT_FLAG} to fall back to the engine's own cut`;
     }
     return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
+  }
+  if (set.refusal === REFUSED_TIMINGS) {
+    return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
+      + " which sub-agent closed which task, so the engine will not replace it.";
   }
   // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
   if (set.refusal === REFUSED_UNRESOLVED) {
@@ -3913,7 +3927,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       if (!rep.set && !planGaps(result).length) refreshTaskIndex(tasksDir, set);
       // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
       // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
-      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure } });
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure },
+        source: fromDir ? "--from <migration-folder>" : "--built <file>" });
       // The report REPLACES the table as the artifact, so the unread-file banner has to be carried onto it too —
       // prepending it to the table alone loses it on exactly the command an orchestrated run is told to use.
       output = [...problemBanner(readProblems), finalReport.markdown].join("\n") + "\n";
