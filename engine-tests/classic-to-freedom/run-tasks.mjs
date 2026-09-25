@@ -7572,6 +7572,145 @@ console.log("\n===== build order: virtual attributes are declared before the han
 }
 
 /* ================================================================================================
+   A SPLIT MAY NOT PUT A VIRTUAL ATTRIBUTE AFTER A HANDLER THAT WRITES IT.
+   A split file decides the seams itself, so the engine's own phase order does not reach it. A handler row
+   records the attributes its method sets (`writesAttrs`), and `resolveSplit` refuses a split that places a
+   page's `[attribute-virtual] X` row in a LATER item than a handler row on that page writing X. The rule is
+   matched on recorded writes, never on "every handler of the page": an earlier item holding a handler that
+   writes no virtual attribute is a correct split and resolves.
+   ================================================================================================ */
+console.log("\n===== split: a virtual attribute is never placed after a handler that writes it =====");
+{
+  const WRITE_GROUPS = [
+    { pageKey: "main", baseTitle: "Form — Custom methods", rows: [
+      { label: "Handler — `setLegalEntity`", vk: { type: "handler", method: "setLegalEntity" }, writesAttrs: ["LegalEntity"] },
+      { label: "Handler — `getEmailFilter`", vk: { type: "handler", method: "getEmailFilter" } },
+    ] },
+    { pageKey: "main", baseTitle: "⚠ Other declared logic worklist", rows: [
+      { label: "[attribute-virtual] LegalEntity", vk: { type: "vmattr", name: "LegalEntity" } },
+    ] },
+    // A second page writing an attribute of the SAME name: the rule is scoped to one page's view model.
+    { pageKey: "list", baseTitle: "List — Custom methods", rows: [
+      { label: "Handler — `setListEntity`", vk: { type: "handler", method: "setListEntity" }, writesAttrs: ["LegalEntity"] },
+    ] },
+  ];
+  const writeSplit = (items) => resolveSplit({ items }, WRITE_GROUPS, new Map());
+  const item = (id, pageKey, rows) => ({ id, title: id, pageKey, writesTo: pageKey, rows });
+  const WRITER = "Handler — `setLegalEntity`";
+  const OTHER = "Handler — `getEmailFilter`";
+  const ATTR = "[attribute-virtual] LegalEntity";
+  const LIST_WRITER = item("list-logic", "list", ["Handler — `setListEntity`"]);
+  const refused = [item("handlers", "main", [WRITER, OTHER]), item("attrs", "main", [ATTR]), LIST_WRITER];
+  check("split: an `[attribute-virtual]` row in a LATER item than a handler that writes it is REFUSED, and the message names the attribute, the handler and both items",
+    () => {
+      const r = writeSplit(refused);
+      return r.errors.length === 1 && r.errors[0].includes("LegalEntity") && r.errors[0].includes("setLegalEntity")
+        && r.errors[0].includes("`handlers`") && r.errors[0].includes("`attrs`") && /Move the attribute row/.test(r.errors[0]);
+    }, () => writeSplit(refused).errors);
+  const sameItem = [item("together", "main", [WRITER, OTHER, ATTR]), LIST_WRITER];
+  check("split: the attribute and the handler writing it in ONE item resolve — the sub-agent declares and writes it in the same task",
+    () => writeSplit(sameItem).errors.length === 0, () => writeSplit(sameItem).errors);
+  const attrFirst = [item("attrs", "main", [ATTR]), item("handlers", "main", [WRITER, OTHER]), LIST_WRITER];
+  check("split: the attribute in an EARLIER item than the handler writing it resolves",
+    () => writeSplit(attrFirst).errors.length === 0, () => writeSplit(attrFirst).errors);
+  const unrelatedFirst = [item("main-layout", "main", [OTHER]), item("main-logic", "main", [ATTR, WRITER]), LIST_WRITER];
+  check("split: an earlier item holding a handler that writes NO virtual attribute resolves — the rule follows recorded writes, not every handler of the page",
+    () => writeSplit(unrelatedFirst).errors.length === 0, () => writeSplit(unrelatedFirst).errors);
+  const otherPageFirst = [LIST_WRITER, item("attrs", "main", [ATTR]), item("handlers", "main", [WRITER, OTHER])];
+  check("split: a handler on ANOTHER page writing an attribute of the same name does not refuse — each page declares its own view-model attributes",
+    () => writeSplit(otherPageFirst).errors.length === 0, () => writeSplit(otherPageFirst).errors);
+
+  // TWO writers of one attribute. The attribute has to precede the EARLIEST of them: a later writer sitting after
+  // the attribute is fine, an earlier one is not, whatever else writes it further down.
+  const SECOND_WRITER = "Handler — `setLegalEntityAgain`";
+  const TWO_WRITER_GROUPS = WRITE_GROUPS.map((g) => (g.pageKey === "main" && g.baseTitle === "Form — Custom methods"
+    ? { ...g, rows: [...g.rows, { label: SECOND_WRITER, vk: { type: "handler", method: "setLegalEntityAgain" }, writesAttrs: ["LegalEntity"] }] }
+    : g));
+  const twoWriterSplit = (items) => resolveSplit({ items }, TWO_WRITER_GROUPS, new Map());
+  const writerBetween = [item("writer-a", "main", [WRITER, OTHER]), item("attrs", "main", [ATTR]),
+    item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, an attribute placed after the FIRST writer is refused once, naming that writer and its item — a later writer does not hide it",
+    () => {
+      const r = twoWriterSplit(writerBetween);
+      return r.errors.length === 1 && r.errors[0].includes("`setLegalEntity`") && r.errors[0].includes("`writer-a`")
+        && !r.errors[0].includes("setLegalEntityAgain") && !r.errors[0].includes("`writer-b`");
+    }, () => twoWriterSplit(writerBetween).errors);
+  const attrWithFirstWriter = [item("writer-a", "main", [WRITER, OTHER, ATTR]), item("writer-b", "main", [SECOND_WRITER]), LIST_WRITER];
+  check("split: with two writers of one attribute, the attribute in the FIRST writer's item resolves even though a second writer comes later",
+    () => twoWriterSplit(attrWithFirstWriter).errors.length === 0, () => twoWriterSplit(attrWithFirstWriter).errors);
+
+  // The same rule through the real engine: the handler row gets its write targets from the method's own body.
+  const wBody = 'define("MPage",[],function(){return{entitySchemaName:"M",'
+    + 'attributes:{"LegalEntity":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN},'
+    + '"IsSignVisible":{dataValueType:Terrasoft.DataValueType.BOOLEAN,value:false}},'
+    + 'diff:[{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}}],'
+    + 'methods:{setLegalEntity:function(){this.set("LegalEntity",null);},getEmailFilter:function(){return this.get("Id");}}};});';
+  const wManifest = {
+    entity: "M", seed: SEED, schemas: [{ pkg: "P", body: wBody }], addRecordMiniPage: false,
+    section: { schemas: [], listColumns: { success: true, sectionSchema: "MSection", entity: "M", source: "schema-default", columns: [{ name: "Name" }] } },
+    planMeta: PLAN_META,
+    signals: { dcm: RESOLVED, processes: RESOLVED, printables: RESOLVED, deduplication: RESOLVED },
+  };
+  const wRun = runMigration(wManifest);
+  const wOpts = checklistOpts(wManifest);
+  const wRows = checklistGroups(wRun, wOpts).flatMap((g) => g.rows);
+  const rowNamed = (label) => wRows.find((r) => r.label === label);
+  check("handler rows: a handler row carries the attributes its method sets, and a handler setting none carries no write list",
+    () => JSON.stringify(rowNamed(WRITER)?.writesAttrs) === JSON.stringify(["LegalEntity"])
+      && rowNamed(OTHER) && rowNamed(OTHER).writesAttrs === undefined && rowNamed(ATTR)?.vk?.type === "vmattr",
+    () => ({ writer: rowNamed(WRITER), other: rowNamed(OTHER), attr: rowNamed(ATTR) }));
+  check("handler rows: the write list sits BESIDE the verifier payload, not inside it — the handler `vk` is exactly what the row digest reads, so every recorded digest stays valid",
+    () => {
+      const w = rowNamed(WRITER);
+      return !!w && !("writesAttrs" in w.vk)
+        && TASKS_MODULE.rowsDigest([w]) === TASKS_MODULE.rowsDigest([{ ...w, writesAttrs: undefined }]);
+    }, () => rowNamed(WRITER));
+  // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
+  // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
+  const PINNED_HANDLER_DIGESTS = { "14759d13": "042a43b1", "3ea0cd8a": "271f6b9d" };
+  const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
+  check("row digest: the handler tasks of an existing plan keep their recorded digest",
+    () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
+    () => chunked.tasks.filter((t) => t.rows.some((r) => r.vk === "handler")).map((t) => `${t.id}:${t.rowsDigest}`));
+
+  // A split of the real plan: every row placed, the review last, the list page in its own item.
+  const planSplit = (mainItems) => ({ planVersion: wRun.planVersion, items: [
+    ...mainItems,
+    { id: "list-page", title: "list", pageKey: "list", writesTo: "list", rows: ["@List page", "@⚠ Confirm worklist"] },
+    { id: "review", title: "review", pageKey: "main", writesTo: "", rows: ["@Quality gates", "list::@Quality gates"] },
+  ] });
+  const MAIN_BASE = ["@Pages", "@Form — Layout (by tab/region)", "@Form — Coverage (verified)", "@⚠ Confirm worklist"];
+  const badSplit = planSplit([
+    { id: "main-build", title: "b", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, WRITER, OTHER] },
+    { id: "main-attrs", title: "a", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist"] },
+  ]);
+  const goodSplit = planSplit([
+    { id: "main-layout", title: "l", pageKey: "main", writesTo: "main", rows: [...MAIN_BASE, OTHER] },
+    { id: "main-logic", title: "g", pageKey: "main", writesTo: "main", rows: ["@⚠ Other declared logic worklist", WRITER] },
+  ]);
+  check("split (real plan): the attribute placed after the handler that sets it is refused; the same plan split with only an unrelated handler earlier is cut",
+    () => {
+      const bad = buildTaskSetFromSplit(wRun, badSplit, wOpts);
+      const good = buildTaskSetFromSplit(wRun, goodSplit, wOpts);
+      return bad.refused && bad.problems.length === 1 && bad.problems[0].includes("setLegalEntity")
+        && !good.refused && good.tasks.some((t) => t.id === "main-logic");
+    }, () => ({ bad: buildTaskSetFromSplit(wRun, badSplit, wOpts).problems, good: buildTaskSetFromSplit(wRun, goodSplit, wOpts).problems }));
+  {
+    const base = tmp("split-attr-after-writer");
+    const dir = path.join(base, "build-tasks");
+    const splitPath = path.join(base, "split.json");
+    fs.writeFileSync(splitPath, JSON.stringify(badSplit, null, 2));
+    const run = cliTasks(["--tasks", dir, "--split", splitPath], wManifest);
+    check("migrate.mjs --tasks --split: that split exits 2, names the attribute and the handler, and writes NOTHING",
+      () => run.status === 2 && /⛔ NOTHING WRITTEN/.test(run.stdout || "")
+        && (run.stdout || "").includes("LegalEntity") && (run.stdout || "").includes("setLegalEntity")
+        && !fs.existsSync(dir),
+      () => ({ status: run.status, stdout: (run.stdout || "").slice(0, 1600), stderr: (run.stderr || "").slice(0, 600) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+/* ================================================================================================
    THE INDEX AND THE MIGRATION RESULT REPORT READ ONE TASK SET.
    A row one task recorded `not-built — blocked` can be recorded `built` later, on the same row, by the task
    that built it. The final `--verify --tasks` renders the report from the folder as it stands; when its repair

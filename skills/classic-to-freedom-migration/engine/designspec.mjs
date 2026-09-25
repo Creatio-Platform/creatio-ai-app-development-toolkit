@@ -2577,9 +2577,17 @@ function handlerStubRows(cs) {
     const note = (parent ? ` (ported with \`${esc(parent)}\`)` : "") + unfolded;
     const own = (h.triggers || []).map(rootTrigger).filter(Boolean);
     const viaParent = parent ? (stubByName.get(parent)?.triggers || []).map(rootTrigger).filter(Boolean) : [];
-    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note, ...cardField(h),
+    return { label: `Handler — \`${esc(h.sourceMethod)}\`` + note, ...cardField(h), ...writesField(h),
       vk: { type: "handler", method: h.sourceMethod, parent: parent || null, triggers: [...own, ...viaParent], category: h.category || null } };
   });
+}
+// The attributes a handler's own body sets (`this.set("X", …)`), as a raw list on the row: a split is refused
+// when it places a page's `[attribute-virtual] X` after a handler writing X. It sits BESIDE `vk`, never in it —
+// the row digest reads `vk`, and a write list inside it would mark every recorded handler task as changed.
+// Absent when the method sets nothing, so such a row is exactly what it was.
+function writesField(h) {
+  const writes = h.evidence?.writesAttrs || [];
+  return writes.length ? { writesAttrs: [...writes] } : {};
 }
 // The primary behaviour card a row's `Described in` cites, as a raw id on the row: the task cut keeps rows citing
 // one card in one task. Absent when the row cites no primary card; a body card alone joins no rows.
