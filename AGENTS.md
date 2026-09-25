@@ -24,13 +24,20 @@ The required top-level sections of every BA-style Business Plan are, in order:
 7. Analytics
 8. Edge Cases and Exceptions
 
+There is ONE conditional top-level section: **`## 8. Portal section`**, added ONLY when the app exposes
+sections to external / portal users (customers/partners/self-service — the concept, not the word
+"portal"; per `context/business-checklist.md`). When present it sits BEFORE Edge Cases and renumbers it
+to `## 9. Edge Cases and Exceptions`; when the app has no external audience it is OMITTED and Edge Cases
+stays `## 8`. This is the only permitted variation in the top-level set — it is not format drift.
+
 Full checklist rules are in `context/business-checklist.md`. This section provides the structural contract so it is available before that file is loaded.
 
 `Business Outcome` must also carry the problem framing, success signal, and explicit assumptions that materially shape the draft.
 `Roles and Permissions` must carry both actor responsibilities and any access/persona constraints.
 `Analytics` is mandatory and must be populated: the agent always proposes analytics as a domain expert (the dashboards, KPIs, and widgets an experienced practitioner in the app's domain would expect for each role and section), never generic filler. It carries section-level dashboards (`### 7.1 Section analytics`) and the app's single home page (`### 7.2 Workplace analytics` — one `home page:` with widgets, not dashboards, and with no per-page access rights).
+`Portal section` (when present) is structured EXACTLY like `## 6. UX Expectations` — no prose, just the section name and the structure: a `portal sections:` count line and, per exposed section, the external surface with §6 labels plus an `external access:` level and an `external record scope:` (`own contact` / `own account` / `all`, decided with the developer — no default). Its external field set is DELIBERATELY SMALL — significantly fewer fields than the internal page, never surfacing internal-only information to external users.
 
-Required BA-style Business Plan template:
+Required BA-style Business Plan template (internal-only app):
 
 ```md
 ## 1. Business Outcome
@@ -43,12 +50,26 @@ Required BA-style Business Plan template:
 ## 8. Edge Cases and Exceptions
 ```
 
+When the app exposes sections to external / portal users, insert the conditional Portal section, which
+renumbers Edge Cases:
+
+```md
+## 7. Analytics
+## 8. Portal section
+## 9. Edge Cases and Exceptions
+```
+
 ## Format Compliance Rule
 
 If the requested artifact has a prescribed format, the assistant MUST reproduce that format exactly.
 A structurally similar format is considered incorrect.
 
 If any required section is missing, renamed, reordered, merged, or replaced with a synonym, the assistant MUST treat the artifact as invalid and regenerate it before responding.
+
+The ONE permitted variation is the conditional `## 8. Portal section` (see above): when the app exposes
+sections to external / portal users it is added before Edge Cases, renumbering Edge Cases to `## 9`. That
+is not an "extra section" and not drift; when there is no external audience it is omitted and Edge Cases
+stays `## 8`.
 
 The assistant MUST NOT:
 
@@ -67,7 +88,7 @@ Before returning any Business Plan, the assistant MUST run an internal checklist
 
 1. Does the output use the exact required template?
 2. Are all required sections present in the exact order?
-3. Are there any extra top-level sections?
+3. Are there any extra top-level sections (other than the permitted conditional `## 8. Portal section`)?
 4. Is any section replaced by a synonym or merged with another section?
 5. Is the output a BA-style Business Plan as expected?
 
@@ -265,12 +286,12 @@ Gate R:
 - **Does not apply to the `classic-to-freedom-migration` skill** (see the Plan Mode Override exception): that skill uses its own engine-written migration plan and natural-language approval, not a BA-style Business Plan / Gate R.
 - Before presenting the Business Plan, read `runbooks/02-requirements-gathering.md` together with `context/business-checklist.md`. The document format — object metadata syntax, field table structure, and UX marker lines — is defined there and must be in context before drafting. It cannot be recalled from memory.
 - Requires the full business checklist to be complete or explicitly assumed.
-- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`).
+- Requires the developer to see the full Business Plan **and Technical Implementation Handoff** before approval. The Handoff is presented in the same message as the Business Plan, after the last BA section (`## 8. Edge Cases and Exceptions`, or `## 9. Edge Cases and Exceptions` when a `## 8. Portal section` is present).
 - The approved Business Plan and Technical Implementation Handoff together are the final deliverable.
-- The visible draft must use the 8-section BA-style structure exactly, with no extra top-level sections.
+- The visible draft must use the 8-section BA-style structure exactly, with no extra top-level sections — the ONE permitted exception being the conditional `## 8. Portal section` (present only when the app exposes sections to external / portal users), which renumbers Edge Cases to `## 9`. A plan with that Portal section and Edge Cases at `## 9` is compliant, not drift.
 - If the host environment requires a wrapper such as `<proposed_plan>`, the wrapper may be used, but the body shown for approval must still follow the exact BA-style Business Plan structure. The wrapper does not justify a summary version, shortened plan, or generic sections like `Summary`, `Key Changes`, or `Test Plan` instead of the requirements body.
 - Approval is the developer's natural-language confirmation in the conversation. Gate R is satisfied when the developer explicitly confirms the presented Business Plan.
-- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 8-section BA-style Business Plan must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
+- Host-mode plan hooks (e.g., `exit_plan_mode`, IDE plan-approval dialogs, system-injected approval popups) do not satisfy Gate R on their own. The full 8-section BA-style Business Plan (plus the conditional `## 8. Portal section` when external access is in scope) must appear in the visible conversation body before the developer approves. A summary block inside a host approval dialog is not the Business Plan; clicking "approve" on such a summary does not record Gate R approval.
 - A file written to disk does not satisfy Gate R either. Pointing the developer to a saved copy of the plan in lieu of presenting the full Business Plan inline is not approval; the visible conversation is the carrier.
 
 Gate bypass rule:
