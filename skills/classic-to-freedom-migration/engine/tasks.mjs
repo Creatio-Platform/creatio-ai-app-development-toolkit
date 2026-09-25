@@ -1512,7 +1512,7 @@ function attnFolderProblems(set) {
   return out;
 }
 // THE NUMBERS THE `--tasks` STDOUT NOTE PRINTS, owned here beside the rules that fill `## Attention`, so the note
-// cannot count by a rule the index no longer uses. `tasks` is the tasks whose own status or drift needs a person;
+// cannot count by a rule the index does not use. `tasks` is the tasks whose own status or drift needs a person;
 // `lines` is everything the section lists, which also covers folder-level findings that name no single task.
 export function attentionSummary(set) {
   const tasks = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length

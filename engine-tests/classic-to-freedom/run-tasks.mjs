@@ -7629,7 +7629,7 @@ console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drif
   const fmLines = file.split("\n").slice(0, file.split("\n").indexOf("---", 1) + 1);
   const idxRow = idx.split("\n").find((l) => l.includes(`](${t.file})`)) || "";
   check("cells: a line break in a plan-derived value is folded to a space in the front matter — one key, one line",
-    () => fmLines.some((l) => l === "group: Contacts | Accounts line two") && parseTaskFile(file).meta.group === "Contacts | Accounts line two",
+    () => fmLines.includes("group: Contacts | Accounts line two") && parseTaskFile(file).meta.group === "Contacts | Accounts line two",
     () => fmLines);
   check("cells: a `|` in the group name is escaped on the index row, so the row keeps its column count",
     () => idxRow.includes(String.raw`Contacts \| Accounts line two`) && !idxRow.includes("Contacts | Accounts"),
