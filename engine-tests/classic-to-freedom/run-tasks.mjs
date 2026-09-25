@@ -3421,6 +3421,27 @@ check("minted: on a plan with NO sub-pages a declaration on `main` is still acce
     return { subPages: subPageNodes(RUN_NO_SUB).length, main: main?.writesTo,
       problems: addTasks(d, RUN_NO_SUB, { ...DECL, pageKey: "main", writesTo: main?.writesTo }, OPTS_NO_SUB).problems }; });
 
+// THE `decisions:` MAP FOLLOWS ITS ROW, NOT ITS NUMBER. The file below was written when the plan had one row
+// fewer above the decided one; the current plan puts that row back, so the decided deliverable moves from 1 to 2.
+const shiftedDecision = (name) => {
+  const d = tmp(name);
+  const t = taskAt(syncTaskDir(d, RUN, OPTS), "main", "Page build");
+  const f = taskFilePath(d, t.id);
+  const lines = fs.readFileSync(f, "utf8").split("\n");
+  const rowAt = lines.map((l, i) => (/^\|\s*\d+\s*\|/.test(l) ? i : -1)).filter((i) => i >= 0);
+  const decidedLabel = parseTaskFile(fs.readFileSync(f, "utf8")).table[1].label;
+  lines.splice(rowAt[0], 1);
+  let n = 0;
+  const shifted = lines.map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/^\|\s*\d+\s*\|/, `| ${++n} |`) : l)).join("\n");
+  fs.writeFileSync(f, shifted.replace(/^decisions:.*$/m, "decisions: 1:D7"));
+  syncTaskDir(d, RUN, OPTS);
+  const back = parseTaskFile(fs.readFileSync(f, "utf8"));
+  return { decidedLabel, map: String(back.meta.decisions || ""), row2: back.table[1]?.label };
+};
+check("decisions: an entry recorded against a row is re-keyed to that row's CURRENT number when the plan inserts a row above it — copied verbatim it would mark the inserted row as decided",
+  () => { const r = shiftedDecision("decision-rekey"); return r.map.trim() === "2:D7" && r.row2 === r.decidedLabel; },
+  () => shiftedDecision("decision-rekey-d"));
+
 console.log("\n===== review round: the held-back boundary is reported, and the stamp fires only on an edit =====");
 // A row the ledger settled by decision is not routed. Everything that decides that must also SAY it, or the row
 // is dropped in silence.

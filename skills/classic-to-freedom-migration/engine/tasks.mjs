@@ -2142,6 +2142,20 @@ function computeStatus(task, declared, outcomes, carried, edited = false) {
   return S_DONE;
 }
 
+// Old row number → old label key (off the file's own table) → current row number. An entry whose row is gone
+// from the current plan is dropped rather than left on whatever deliverable now holds that number.
+function rekeyDecisions(map, oldTable, newKeys) {
+  if (!map.size) return map;
+  const oldKeys = rowKeys((oldTable || []).map((r) => r.label));
+  const at = new Map(newKeys.map((k, i) => [k, i + 1]));
+  const out = new Map();
+  for (const [n, d] of map) {
+    const k = oldKeys[n - 1];
+    if (k !== undefined && at.has(k)) out.set(at.get(k), d);
+  }
+  return out;
+}
+
 function carryOver(task, prev) {
   if (!prev) return task;
   const outcomes = prev.outcomes instanceof Map ? prev.outcomes : new Map();
@@ -2173,10 +2187,10 @@ function carryOver(task, prev) {
     // The sub-agent's own mark. Carried like `status` and `## Notes` — it is the caller's record, not the
     // engine's, and rewriting it away would erase the one fact that shows a task was closed by a shared session.
     agentNonce: prev.meta.agentNonce || "",
-    // Cell-level provenance, carried like the nonce: `--decide` wrote it and `--revoke` reads it. A re-slice
-    // that keeps a row keeps its decision entry; a re-slice that drops a row drops its entry too (the entry
-    // is invisible to renderFrontMatter once the row is gone from the body).
-    decisions: parseDecisionsMap(prev.meta.decisions),
+    // Cell-level provenance, carried like the nonce: `--decide` wrote it and `--revoke` reads it. The map is
+    // keyed by row number, so it is re-keyed through the same label keys the cells were re-attached by: a kept
+    // row keeps its entry at its new number, and a dropped row drops its entry.
+    decisions: rekeyDecisions(parseDecisionsMap(prev.meta.decisions), prev.table, keys),
     recordedDigest: held,
     drifted: held !== task.rowsDigest,
   };
@@ -3930,12 +3944,11 @@ export function applyDecision(dir, result, opts = {}) {
 // A repair task closed by CASCADE keeps its closure (the next `--verify` round measures the page as it then
 // stands and re-opens what still needs work). This mirrors the ticket's note: "repair tasks closed by the
 // cascade are NOT revived, because the next --verify round measures the page as it then stands."
-// CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER, and `carryOver` copies the map
-// verbatim onto rows re-sliced from the CURRENT plan while re-attaching every other mark by LABEL. So the
-// moment the plan inserts or drops a row above this one, `n` addresses a different deliverable — and blanking
-// it unconditionally destroys whatever now sits there, including an agent's own `built` record, the one mark
-// this codebase cannot recover. Position keying is the scheme `rowKeys` exists to avoid; until the map itself
-// is label-keyed, the cell must prove it is the one this decision wrote before it is touched.
+// CLEAR BY IDENTITY, NOT BY POSITION. `decisions:` is keyed by row NUMBER. `carryOver` re-keys it by label on
+// every re-slice, but an adopted file or a hand edit can still leave an entry on a row it was not written for,
+// and blanking that row unconditionally destroys whatever sits there, including an agent's own `built` record,
+// the one mark this codebase cannot recover. So the cell must prove it is the one this decision wrote before it
+// is touched.
 function revokeSkipReason(row, decision) {
   if (!row) return "that row no longer exists in this task";
   const decided = row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED;
