@@ -205,6 +205,21 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => variants.every((v) => st(resolveVk(custom, builtWith(v))) === "✅ Done")
         && st(resolveVk(custom, builtWith({ name: "MenuItem_other", caption: "Recalculate totals" }))) === "⚠ verify",
       () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    // The name must sit on word boundaries: a verb-prefixed neighbour ("Recalculate SaaS metrics") is another action.
+    const lookalikes = [{ name: "RecalculateSaaSMetricsMenuItem" }, { name: "MenuItem_other", caption: "Recalculate SaaS Metrics" },
+      { name: "MenuItem_other", clicked: { request: "usr.RecalculateSaaSMetricsRequest" } }, { name: "CalculateSaaSMetricsDailyMenuItem" }];
+    check("card: an element whose name, caption or request only contains the action name inside a longer word does not close it",
+      () => st(resolveVk(custom, builtWith(lookalikes[0]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[1]))) === "⚠ verify"
+        && st(resolveVk(custom, builtWith(lookalikes[2]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[3]))) === "✅ Done",
+      () => lookalikes.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    const short = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
+      .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
+    check("card: a short action name (`post`) closes on a whole word (`PostMenuItem`, caption \"Post\") but not inside another (`RepostMenuItem`, `PostponeMenuItem`)",
+      () => st(resolveVk(short, builtWith({ name: "PostMenuItem" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "MenuItem_x", caption: "Post" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "RepostMenuItem" }))) === "⚠ verify"
+        && st(resolveVk(short, builtWith({ name: "PostponeMenuItem" }))) === "⚠ verify",
+      () => [short, ...["PostMenuItem", "RepostMenuItem", "PostponeMenuItem"].map((n) => resolveVk(short, builtWith({ name: n })))]);
     const hinted = checklistGroups({ entity: "X", changeSet: { cardActions: ["printContract", "runApprovalProcess"] } }, {})
       .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
     check("checklist: a custom hint containing `print` / `process` still needs an element named for it — the template's Actions button alone reads ⚠ verify",

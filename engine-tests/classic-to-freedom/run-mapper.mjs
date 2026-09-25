@@ -1115,6 +1115,14 @@ const visaChecklist = renderChecklist({ entity: "X", changeSet: visacs }, {});
 check("*Visa-entity detail: the checklist expects 1 related list and gates the approval list on its own Approvals row",
   /Related lists — 1 expected/.test(visaChecklist) && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
   () => visaChecklist.split("\n").filter(l => /Related lists|Approvals/.test(l)));
+const visaRows = checklistGroups({ entity: "X", changeSet: visacs }, {}).flatMap(g => g.rows).filter(r => r.vk && /^(Approvals|Related lists)/.test(r.label));
+const visaPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items } } } }, "main");
+const visaBuilt = visaPage([{ type: "crt.Approval", name: "AW" }, { type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+const visaAsGrid = visaPage([{ type: "crt.DataGrid", name: "VisasGrid" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+check("*Visa-entity detail: every Approvals / Related-lists row closes ✅ on a page with crt.Approval + crt.ApprovalList + one grid; the Approvals rows read ❌ when the visas ship as a crt.DataGrid",
+  visaRows.length === 3 && visaRows.every(r => resolveVk(r.vk, visaBuilt)[0] === "✅ Done")
+  && visaRows.filter(r => r.label.startsWith("Approvals")).every(r => resolveVk(r.vk, visaAsGrid)[0] === "❌ MISSING"),
+  () => visaRows.map(r => [r.label, resolveVk(r.vk, visaBuilt), resolveVk(r.vk, visaAsGrid)]));
 
 /* ---- an entity that only ends in `Visa` (a business list of travel visas keyed by another column) stays a related list ---- */
 const bizVisaClient = L("Client", { entity: "X", details: {

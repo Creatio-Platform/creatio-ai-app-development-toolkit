@@ -3397,21 +3397,48 @@ export function resolveComponentVk(vk, ctx) {
 // A custom `getActions` item is Done only when a built element identifies the action: its name, its caption (the
 // raw binding or the resolved text) or its `clicked.request` contains the action name, compared as lowercase letters
 // and digits (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics", `usr.CalculateSaaSMetricsRequest`
-// all match `calculateSaaSMetrics`). A name shorter than CUSTOM_ACTION_SUBSTRING_MIN is matched by whole camelCase
-// tokens instead, so a short name cannot close on an unrelated element that merely contains it. Any crt.Button is
-// not evidence — the template's Actions button is one — so no match reads ⚠ verify, never ✅.
-const CUSTOM_ACTION_SUBSTRING_MIN = 6;
+// all match `calculateSaaSMetrics`). The match must start AND end on a word boundary of the built text, so an
+// element that only contains the name inside a longer word does not close it: "Recalculate SaaS metrics" is not
+// `calculateSaaSMetrics`, `PostData` is `post` but `RepostData` is not. Any crt.Button is not evidence — the
+// template's Actions button is one — so no match reads ⚠ verify, never ✅.
 function customActionTexts(o, resources) {
   const texts = [o.name, o.caption, o.request];
   if (o.caption != null) texts.push(builtCaption(o.caption, resources));
   return texts.filter((t) => typeof t === "string" && t !== "");
 }
+// The text as `normId` sees it, plus the offsets in it where a word starts or ends: after a separator, at a
+// lower→Upper step (`calculate|Saa|S`), and before the last capital of an acronym followed by lowercase
+// (`SAAS|Metrics`, `SaaS|Metrics`). An all-caps run with no separator stays one word.
+const isUpper = (c) => c >= "A" && c <= "Z";
+const isLowerOrDigit = (c) => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
+function wordBounds(text) {
+  const str = String(text || "");
+  let norm = "";
+  let sep = false;
+  const bounds = new Set([0]);
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (!isUpper(c) && !isLowerOrDigit(c)) { sep = true; continue; }
+    const prev = str[i - 1] || "";
+    const next = str[i + 1] || "";
+    const camel = isUpper(c) && (isLowerOrDigit(prev) || (isUpper(prev) && next >= "a" && next <= "z"));
+    if (sep || camel) bounds.add(norm.length);
+    sep = false;
+    norm += c.toLowerCase();
+  }
+  bounds.add(norm.length);
+  return { norm, bounds };
+}
+function containsAsWords(text, key) {
+  const { norm, bounds } = wordBounds(text);
+  for (let i = norm.indexOf(key); i !== -1; i = norm.indexOf(key, i + 1)) {
+    if (bounds.has(i) && bounds.has(i + key.length)) return true;
+  }
+  return false;
+}
 function builtElementNamesAction(texts, name) {
   const key = normId(name);
-  if (!key) return false;
-  if (key.length >= CUSTOM_ACTION_SUBSTRING_MIN) return texts.some((t) => normId(t).includes(key));
-  const seq = tokensOf(name);
-  return texts.some((t) => tokenSeqIn(tokensOf(t), seq));
+  return key !== "" && texts.some((t) => containsAsWords(t, key));
 }
 function resolveCustomCardActionVk(vk, ctx) {
   const resources = entryObject(ctx.page)?.resources;
