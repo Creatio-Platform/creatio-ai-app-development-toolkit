@@ -2839,7 +2839,8 @@ function signedWith(s) {
 function dispatchFailureSections(audit, dir) {
   return [
     [audit.never, (n) => `⛔ ${n} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
-      + " measured them and nothing says who built them. For each: re-open it (`status: todo`), run"
+      + " measured them and nothing says who built them. For each: re-open it (clear its `Outcome` cells, then"
+      + " `status: todo`), run"
       + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:",
       (t) => `   · ${t.file}  (--start ${t.id})`],
     [audit.openClock, (n) => `⛔ ${n} task(s) closed while their clock is still open — the folder's books are`
@@ -2851,7 +2852,8 @@ function dispatchFailureSections(audit, dir) {
       + " or re-open and build it:",
       (t) => `   · ${t.file}  (${t.id})`],
     [audit.signature, (n) => `⛔ ${n} task(s) closed carrying a signature dispatch did not issue for them —`
-      + " the context that closed each was not the one it was handed to. Re-open, `--start`, re-dispatch:",
+      + " the context that closed each was not the one it was handed to. Re-open (clear the `Outcome` cells, then"
+      + " `status: todo`), `--start`, re-dispatch:",
       (s) => `   · ${s.task.file}  (${signedWith(s)})`],
   ];
 }
@@ -2954,6 +2956,13 @@ function startRefusalText(set, startId, dir) {
     return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
       + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
       + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
+  }
+  if (set.filledCells) {
+    const { file, status, rows } = set.filledCells;
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${file}\` still reads \`${status}\` because its \`Outcome\` cells`
+      + ` are filled (row(s) ${rows.join(", ")}), and the cells outrank the \`status:\` line. Clear those cells, set`
+      + " `status: todo`, then run `--start` again. No clock was opened.\n";
   }
   // A DECISION THE ENGINE CANNOT MAKE. Refused in the same words the query withholds it in, so the two surfaces
   // send the reader to the same place: the file's own `## Notes`.

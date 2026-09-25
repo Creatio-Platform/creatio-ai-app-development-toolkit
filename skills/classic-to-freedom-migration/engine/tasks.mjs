@@ -1413,7 +1413,8 @@ function dispatchAttention(dispatch) {
     out.push(`- \`${t.file}\` — recorded \`${t.status}\` but never STARTED through \`--tasks --start ${t.id}\`, so no`
       + " sub-agent was dispatched for it through the engine and its duration was never measured. For a review task"
       + " this is the thing the task exists to prevent: a verdict filed by the context that did the work is not a"
-      + " verdict. Re-open it (`status: todo`), start it, and hand it to its own sub-agent.");
+      + " verdict. Re-open it (clear its `Outcome` cells, then `status: todo`), start it, and hand it to its own"
+      + " sub-agent.");
   }
   for (const t of dispatch?.naUndispatched || []) {
     out.push(`- \`${t.file}\` — recorded \`not-applicable\` with no dispatch record. That does NOT fail the`
@@ -1435,8 +1436,8 @@ function dispatchAttention(dispatch) {
       ? " This is a review task signed by a builder of the very work it judges — a verdict filed by the context"
         + " that did the work is not a verdict, and that is the whole reason this task is separate."
       : "";
-    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (\`status: todo\`), \`--start\` it,`
-      + " and hand the token that prints to a sub-agent of its own.");
+    out.push(`- \`${s.task.file}\` — closed carrying ${signatureCarried(s)}.${review} Re-open it (clear its \`Outcome\``
+      + " cells, then `status: todo`), `--start` it, and hand the token that prints to a sub-agent of its own.");
   }
   return out;
 }
@@ -3066,6 +3067,13 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   // `writeTimings` would leave a running clock behind the refusal.
   const adopted = t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR;
   if (adopted && !statusLineWritable(dir, t.file)) return { ...merged, started: null, statusUnwritable: t.file };
+  // A SETTLED TASK WITH FILLED CELLS CANNOT BE RE-OPENED BY ITS STATUS LINE. The cells outrank the carried word,
+  // so the next sync would derive the closed status again while the new sub-agent is still working, close its
+  // clock early and fail the ledger. Refused before any clock opens, naming the cells to clear.
+  if (SETTLED.has(t.status)) {
+    const filled = (t.rows || []).map((r, i) => (r.outcome ? i + 1 : 0)).filter(Boolean);
+    if (filled.length) return { ...merged, started: null, filledCells: { file: t.file, status: t.status, rows: filled } };
+  }
   // A DECISION, NOT A SCHEDULE — refused in the same shape the query withholds it in, so "which task may I
   // start?" and "may I start this task?" cannot answer differently for the same file.
   if (blocker?.cause === HOLD_STATUS) {

@@ -1819,6 +1819,32 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       () => syncTaskDir(d, RUN, OPTS).problems);
   }
 
+  // 1c — re-opening a closed task by its `status:` line alone cannot hold: the cells outrank it.
+  {
+    const d = fresh();
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    clearDepsOf(d, id, RUN, OPTS);
+    startTask(d, id, RUN, OPTS, null, at(0));
+    closeCells(d, id);
+    syncTaskDir(d, RUN, { ...OPTS, now: at(10) });
+    const f = taskFilePath(d, id);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace(/^status: .*$/m, "status: todo"));
+    const refused = startTask(d, id, RUN, OPTS, null, at(20));
+    const clockAfterRefusal = readTimingsFile(d).running[id];
+    const cleared = fs.readFileSync(f, "utf8").split("\n")
+      .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+    fs.writeFileSync(f, cleared.replace(/^status: .*$/m, "status: todo"));
+    const restarted = startTask(d, id, RUN, OPTS, null, at(30));
+    const after = syncTaskDir(d, RUN, { ...OPTS, now: at(31) });
+    const t = after.tasks.find((x) => x.id === id);
+    check("clock: `--start` on a closed task whose `Outcome` cells are still filled is REFUSED and names the cells — otherwise the next sync re-derives the closed status under a running sub-agent and fails the ledger",
+      () => refused.started === null && refused.filledCells?.rows.length > 0 && !clockAfterRefusal,
+      () => ({ filledCells: refused.filledCells, started: refused.started?.id, clock: clockAfterRefusal }));
+    check("clock: once the cells are cleared the same task starts, and the next sync keeps it `in-progress` with a passing ledger",
+      () => restarted.started?.id === id && t.status === "in-progress" && after.dispatch.failing.length === 0,
+      () => ({ started: restarted.started?.id, status: t.status, failing: after.dispatch.failing.map((x) => x.id) }));
+  }
+
   // 2 — the duration is recorded ONCE, by the first regeneration that sees the task closed.
   {
     const d = fresh();
@@ -4100,7 +4126,16 @@ const nextMin = () => { repairMin += 2; return repairMin; };
 const closeRepairs = (d) => repairIds(d).forEach((id) => runTask(d, id, RUN, OPTS, nextMin()));
 // Dispatched, signed, and closed THE WAY A BUILD TASK IS: every `Outcome` cell filled, no status word typed.
 // `mark` may be a function of the row number, for a round that fixed some of its rows and not others.
+// A task an earlier helper already closed is re-opened the documented way first (cells cleared, `status: todo`):
+// `--start` refuses a closed task whose cells are still filled.
+const reopenCells = (d, id) => {
+  const f = taskFilePath(d, id);
+  const text = fs.readFileSync(f, "utf8").split("\n")
+    .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+  fs.writeFileSync(f, text.replace(/^status: .*$/m, "status: todo"));
+};
 const runRepair = (d, id, mark = "built") => {
+  if (/^status: (done|partial)\s*$/m.test(fs.readFileSync(taskFilePath(d, id), "utf8"))) reopenCells(d, id);
   startTask(d, id, RUN, { ...OPTS, dispatchToken: `tok-${id}` }, null, AT(nextMin()));
   const f = taskFilePath(d, id);
   let text = fs.readFileSync(f, "utf8");
