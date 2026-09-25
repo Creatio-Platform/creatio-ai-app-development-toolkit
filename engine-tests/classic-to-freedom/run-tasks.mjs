@@ -3485,9 +3485,9 @@ const shiftedDecision = (name) => {
   const t = taskAt(syncTaskDir(d, RUN, OPTS), "main", "Page build");
   const f = taskFilePath(d, t.id);
   const lines = fs.readFileSync(f, "utf8").split("\n");
-  const rowAt = lines.map((l, i) => (/^\|\s*\d+\s*\|/.test(l) ? i : -1)).filter((i) => i >= 0);
+  const firstRow = lines.findIndex((l) => /^\|\s*\d+\s*\|/.test(l));
   const decidedLabel = parseTaskFile(fs.readFileSync(f, "utf8")).table[1].label;
-  lines.splice(rowAt[0], 1);
+  lines.splice(firstRow, 1);
   let n = 0;
   const shifted = lines.map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/^\|\s*\d+\s*\|/, `| ${++n} |`) : l)).join("\n");
   fs.writeFileSync(f, shifted.replace(/^decisions:.*$/m, "decisions: 1:D7"));
