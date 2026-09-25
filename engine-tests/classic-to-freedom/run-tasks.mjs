@@ -7602,5 +7602,109 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
   }
 }
 
+console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drift, adopted-file writes, mode exclusion =====");
+{
+  // `stopGate` travels from the split into the task file and the index — the orchestrator reads it before it
+  // dispatches, so a flag that stops at the split is a flag nothing acts on.
+  const d = tmp("stopgate");
+  const set = syncTaskDir(d, RUN, OPTS, mapMain((i) => ({ ...i, stopGate: true })));
+  const main = set.tasks.find((t) => t.pageKey === "main" && t.origin !== "orchestrator");
+  const others = set.tasks.filter((t) => t.pageKey !== "main");
+  const fm = (t) => parseTaskFile(fs.readFileSync(path.join(d, t.file), "utf8")).meta.stopGate;
+  const row = (t) => readIndex(d).split("\n").find((l) => l.includes(`](${t.file})`)) || "";
+  check("stopGate: a split item marked `stopGate: true` writes `stopGate: true` into its task file and shows `⏸ stop-gate` on its index row",
+    () => !set.refused && fm(main) === "true" && row(main).includes("⏸ stop-gate"),
+    () => ({ refused: set.refused, fm: main && fm(main), row: main && row(main) }));
+  check("stopGate: an item without the flag writes `stopGate: false` and carries no badge — the badge is the flag, not decoration",
+    () => others.length > 0 && others.every((t) => fm(t) === "false" && !row(t).includes("stop-gate")),
+    () => others.map((t) => ({ file: t.file, fm: fm(t), row: row(t) })));
+  fs.rmSync(d, { recursive: true, force: true });
+}
+{
+  // A Classic caption is plan-derived text: a `|` or a line break in it must not change the table a sub-agent reads.
+  const t = SET.tasks[0];
+  const odd = { ...t, group: "Contacts | Accounts\nline two", pageKey: t.pageKey };
+  const file = renderTaskFile(odd, SET);
+  const idx = renderTaskIndex({ ...SET, tasks: [odd, ...SET.tasks.slice(1)] });
+  const fmLines = file.split("\n").slice(0, file.split("\n").indexOf("---", 1) + 1);
+  const idxRow = idx.split("\n").find((l) => l.includes(`](${t.file})`)) || "";
+  check("cells: a line break in a plan-derived value is folded to a space in the front matter — one key, one line",
+    () => fmLines.some((l) => l === "group: Contacts | Accounts line two") && parseTaskFile(file).meta.group === "Contacts | Accounts line two",
+    () => fmLines);
+  check("cells: a `|` in the group name is escaped on the index row, so the row keeps its column count",
+    () => idxRow.includes(String.raw`Contacts \| Accounts line two`) && !idxRow.includes("Contacts | Accounts"),
+    () => idxRow);
+}
+{
+  // A row flipping between "build it" and "plan boundary" changes how it is closed while its label stays put.
+  const t = SET.tasks.find((x) => (x.rows || []).some((r) => !r.na));
+  const at = t.rows.findIndex((r) => !r.na);
+  const flipped = t.rows.map((r, j) => (j === at ? { ...r, na: "the plan drops it" } : r));
+  check("rowsDigest: flipping one row to a plan boundary with its label unchanged moves the digest — otherwise a `done` task is never flagged as drifted when how that row is closed changed",
+    () => TASKS_MODULE.rowsDigest(flipped) !== TASKS_MODULE.rowsDigest(t.rows),
+    () => ({ label: t.rows[at].label, before: TASKS_MODULE.rowsDigest(t.rows), after: TASKS_MODULE.rowsDigest(flipped) }));
+  check("rowsDigest: the boundary marker is appended only when set, so a boundary's reason wording is not drift and a row that never was one digests as before",
+    () => TASKS_MODULE.rowsDigest(flipped) === TASKS_MODULE.rowsDigest(flipped.map((r, j) => (j === at ? { ...r, na: "reworded" } : r))));
+}
+{
+  // Order-less orchestrator tasks all sort at the same slot; the file name breaks the tie, not `readdir` order.
+  const orchAt = (file, id) => ({ file, notes: "", malformed: null,
+    meta: { id, status: "todo", origin: "orchestrator", pageKey: "main", group: `Orchestrator ${id}` } });
+  const a = orchAt("task-orch-a.md", "orcha001"), b = orchAt("task-orch-b.md", "orchb001");
+  const steps = (xs) => mergeTaskSet(SET, xs).tasks.filter((t) => t.origin === "orchestrator").map((t) => `${t.step}:${t.file}`);
+  check("origin: orchestrator: two tasks with no `order` get the same steps whichever order the folder lists them in — the file name breaks the tie",
+    () => JSON.stringify(steps([a, b])) === JSON.stringify(steps([b, a])) && steps([b, a])[0].endsWith("task-orch-a.md"),
+    () => ({ ab: steps([a, b]), ba: steps([b, a]) }));
+}
+{
+  // An adopted file is updated one line at a time; `--start` must not open a clock over a file it cannot update.
+  const orchFile = (fm) => ["---", "id: orchs001", "origin: orchestrator", "pageKey: main", "group: Deploy the package",
+    "order: 99", ...fm, "---", "", "## Notes", "", "package pushed to the stand", ""].join("\n");
+  {
+    const d = tmp("start-no-status");
+    syncTaskDir(d, RUN, OPTS);
+    fs.writeFileSync(path.join(d, "task-orch-deploy.md"), orchFile([]));
+    const res = startTask(d, "orchs001", RUN, OPTS, null, "2026-01-01T00:00:00.000Z");
+    const raw = fs.readFileSync(path.join(d, "task-orch-deploy.md"), "utf8");
+    const row = readIndex(d).split("\n").find((l) => l.includes("task-orch-deploy.md")) || "";
+    check("start: an orchestrator-authored file with no `status:` line is REFUSED — no clock opens and the index does not read `in-progress` while the file records nothing",
+      () => res.started === null && res.statusUnwritable === "task-orch-deploy.md"
+        && !readTimingsFile(d).running.orchs001 && !/in-progress/.test(row) && !/status:/.test(raw),
+      () => ({ started: res.started?.id, statusUnwritable: res.statusUnwritable, running: readTimingsFile(d).running, row }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+  {
+    const d = tmp("start-indented-status");
+    syncTaskDir(d, RUN, OPTS);
+    fs.writeFileSync(path.join(d, "task-orch-deploy.md"), orchFile(["  status: todo"]));
+    clearDepsOf(d, "orchs001", RUN, OPTS);
+    const res = startTask(d, "orchs001", RUN, OPTS, null, "2026-01-01T00:00:00.000Z");
+    const raw = fs.readFileSync(path.join(d, "task-orch-deploy.md"), "utf8");
+    check("start: an INDENTED `status:` key — which the parser reads — is the line the write updates, indentation kept, so the file and the index agree",
+      () => res.started?.id === "orchs001" && raw.includes("\n  status: in-progress\n") && !raw.includes("status: todo"),
+      () => ({ started: res.started?.id, statusUnwritable: res.statusUnwritable, fm: raw.split("---")[1] }));
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+}
+{
+  // The stdout note counts by the rules that fill `## Attention`, owned by `tasks.mjs`.
+  const t = taskAt(SET, "main", DRIFT_GROUP);
+  const merged = mergeTaskSet(SET, [withNonce(t, "")]);
+  const sum = TASKS_MODULE.attentionSummary(merged);
+  check("attention: a folder finding that names no drifted or unrecognised task still counts — the stdout note cannot read clean while `## Attention` lists something",
+    () => sum.tasks === 0 && sum.lines > 0 && /## Attention/.test(renderTaskIndex(merged)),
+    () => sum);
+}
+for (const flag of ["--plan", "--spec", "--checklist", "--stubs"]) {
+  // `--tasks` WRITES a folder; every other mode prints. Both at once would silently skip one of them.
+  const d = tmp(`cli-tasks-mutex${flag.replaceAll("-", "_")}`);
+  const r = cliTasks(["--tasks", d, flag], MANIFEST);
+  check(`cli: \`--tasks\` with \`${flag}\` exits 1 and names the flag — one of the two would otherwise silently not happen`,
+    () => r.status === 1 && (r.stderr || "").includes(`\`--tasks\` cannot be combined with ${flag}`)
+      && !fs.existsSync(path.join(d, TASK_INDEX_FILE)),
+    () => ({ status: r.status, stderr: r.stderr }));
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

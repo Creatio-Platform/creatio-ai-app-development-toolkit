@@ -57,7 +57,7 @@ import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormF
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
   boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
-  REPAIR_ROUND_CAP, TASK_INDEX_FILE, TASK_STATUSES, dispatchAudit, readTaskDir, notBuiltOpenItems,
+  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys,
@@ -2944,6 +2944,9 @@ function startRefusalText(set, startId, dir) {
   if (set.unread) {
     return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
   }
+  if (set.statusUnwritable) {
+    return `migrate.mjs: ⛔ \`${set.statusUnwritable}\` has no \`status:\` line in its front matter, and the engine updates an orchestrator-authored file one line at a time — starting it would show \`in-progress\` in the index while the file itself recorded nothing. Add a \`status: todo\` line to its front matter, then re-run. Nothing was marked started.\n`;
+  }
   // NO NEW CLOCK OVER A BROKEN LEDGER. `--start` is the one command the orchestrator runs before every dispatch,
   // so refusing here stops the run at the next dispatch instead of at the final gate.
   if (set.blockedByDispatch) {
@@ -3081,8 +3084,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
     if (refusal) { startRefusalFailure = true; return refusal; }
   }
   const done = set.tasks.filter((t) => t.status === "done").length;
-  const attention = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
-    + (set.stale?.length || 0);
+  const attention = attentionSummary(set);
   // FROZEN ONLY ONCE IT RESOLVED. Copying the file in before validation would leave a folder whose frozen cut is
   // one the engine already refused, and every later run would read it back and refuse again.
   if (splitText) freezeSplit(dir, splitText);
@@ -3099,7 +3101,8 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   if (refused) {
     lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
   }
-  if (attention) lines.push(`⚠ ${attention} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  if (attention.tasks) lines.push(`⚠ ${attention.tasks} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  else if (attention.lines) lines.push(`⚠ The "Attention" section of ${TASK_INDEX_FILE} lists folder findings to review before the next dispatch.`);
   // THE PROGRESS BLOCK, for the chat. Engine-rendered so what the user reads and what the folder holds cannot
   // drift apart, and printed on every run of the mode so the picture is current whenever the orchestrator speaks.
   // THE TOKEN IS HANDED TO THE SUB-AGENT, not left in the folder. It prints here and nowhere else, because a

@@ -449,7 +449,14 @@ const taskId = (identityKey, artifact, anchor) => shortHash(identityKey + " " + 
 // A layout row's field `names` are left out, so moving fields between tabs while every tab keeps its field count
 // does not mark the task changed; adding, removing or renaming a field still does, through the Fields row.
 const digestVk = (vk) => (vk?.type === "layout" && vk.names ? { ...vk, names: undefined } : vk);
-const rowsDigest = (rows) => shortHash(rows.map((r) => `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}`).join(" "));
+// A PLAN BOUNDARY is digested as a marker, not by its reason text: a row flipping between "build it" and "the plan
+// says there is nothing to build" changes how the row is closed while its label stays put, and that is drift. The
+// marker is appended only when set, so a row that never was a boundary digests exactly as it did before.
+const rowDigestInput = (r) => {
+  const boundary = r.na ? "|na" : "";
+  return `${r.label}|${JSON.stringify(digestVk(r.vk) ?? null)}${boundary}`;
+};
+export const rowsDigest = (rows) => shortHash(rows.map(rowDigestInput).join(" "));
 
 // A filename is for a human opening the folder; the `id` is the identity. Non-Latin captions all strip to the same
 // characters, so a slug ALONE would be many-to-one — the id is appended for exactly that reason.
@@ -842,7 +849,9 @@ function renderFrontMatter(task, set) {
       covers: (task.covers || []).join(" ") });
     keys.push(...REPAIR_KEYS);
   }
-  return ["---", ...keys.map((k) => `${k}: ${v[k]}`), "---"];
+  // ONE VALUE, ONE LINE. A Classic caption carrying a line break would otherwise start a new front-matter line
+  // that the parser reads as a key of its own, or as nothing at all.
+  return ["---", ...keys.map((k) => `${k}: ${oneLine(v[k])}`), "---"];
 }
 
 function closedByOf(row) {
@@ -890,7 +899,9 @@ function renderRowTable(rows, repair = false) {
 // A DELIVERABLE LABEL IS A CUSTOMER'S CLASSIC CAPTION and may contain a `|`. The Outcome column is read back by
 // cell POSITION, so an unescaped pipe shifts every index after it: the label truncates, the outcome is read out
 // of the wrong cell, and the row's mark can never be matched to it again. Escaped on write, undone on read.
-const cell = (s) => String(s ?? "").replaceAll("|", String.raw`\|`);
+// A line break inside a caption ends the table row it sits in, so it is folded to a space on the same write.
+const oneLine = (s) => String(s).replaceAll(/[\r\n]+/g, " ");
+const cell = (s) => oneLine(s ?? "").replaceAll("|", String.raw`\|`);
 const uncell = (s) => String(s ?? "").replaceAll(String.raw`\|`, "|");
 
 // An empty `## Notes` would otherwise end the file in three newlines. Scanned rather than matched with a
@@ -1287,7 +1298,7 @@ function indexRows(tasks) {
     const writes = t.writesTo ? `\`${t.writesTo}\`` : "— read-only";
     const gate = t.stopGate ? " ⏸ stop-gate" : "";
     const disp = DISPATCH_MARK.get(t.dispatched) || "—";
-    L.push(`| ${t.step ?? t.order} | ${t.group}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${disp} | ${rows} | [${t.file}](${t.file}) |`);
+    L.push(`| ${t.step ?? t.order} | ${cell(t.group)}${gate} | \`${t.pageKey}\` | ${writes} | ${mark} | ${disp} | ${rows} | [${t.file}](${t.file}) |`);
   }
   return L;
 }
@@ -1499,6 +1510,14 @@ function attnFolderProblems(set) {
     out.push(`- \`${s.file}\` — no longer in the plan (kept, not deleted: it may record work already done on the stand)`);
   }
   return out;
+}
+// THE NUMBERS THE `--tasks` STDOUT NOTE PRINTS, owned here beside the rules that fill `## Attention`, so the note
+// cannot count by a rule the index no longer uses. `tasks` is the tasks whose own status or drift needs a person;
+// `lines` is everything the section lists, which also covers folder-level findings that name no single task.
+export function attentionSummary(set) {
+  const tasks = set.tasks.filter((t) => !TASK_STATUSES.includes(t.status) || t.drifted).length
+    + (set.stale?.length || 0);
+  return { tasks, lines: attentionLines(set).length };
 }
 function attentionLines(set) {
   return [
@@ -1982,7 +2001,12 @@ export function mergeTaskSet(fresh, existing = []) {
   const isAdopted = (e) => e.meta.origin === TASK_ORIGIN_ORCHESTRATOR || e.meta.kind === REPAIR_KIND;
   const orchestrated = extra.filter(isAdopted).map(adoptOrchestrated);
   const stale = extra.filter((e) => !isAdopted(e)).map((e) => ({ file: e.file, id: e.meta.id }));
-  const ordered = [...tasks, ...orchestrated].sort((a, b) => a.order - b.order);
+  // Orchestrator tasks with an absent or unparseable `order` all sort at the same slot; their file name breaks
+  // the tie, so the step each one is numbered with does not depend on the order the directory was listed in.
+  // Engine tasks keep the order they were sliced in.
+  const adoptedTie = (a, b) => (a.origin === TASK_ORIGIN_ORCHESTRATOR && b.origin === TASK_ORIGIN_ORCHESTRATOR
+    ? String(a.file).localeCompare(String(b.file)) : 0);
+  const ordered = [...tasks, ...orchestrated].sort((a, b) => (a.order - b.order) || adoptedTie(a, b));
   // A task whose file was refused must not appear in the queue as `todo`. It got the fresh task's default status
   // because nothing readable could be carried over — and that file may record `done`. Reading `todo` there is how
   // a sub-agent gets dispatched onto a page that is already built, which is the whole reason the status vocabulary
@@ -3011,6 +3035,11 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   if (blocker?.cause === HOLD_UNREAD) {
     return { ...merged, started: null, unread: blocker.file };
   }
+  // An ADOPTED file is updated one line at a time, so it has to carry that line. A file problem like the one above,
+  // so it is answered before any scheduling reason — and before the clock opens, since refusing after
+  // `writeTimings` would leave a running clock behind the refusal.
+  const adopted = t.kind === REPAIR_KIND || t.origin === TASK_ORIGIN_ORCHESTRATOR;
+  if (adopted && !statusLineWritable(dir, t.file)) return { ...merged, started: null, statusUnwritable: t.file };
   // A DECISION, NOT A SCHEDULE — refused in the same shape the query withholds it in, so "which task may I
   // start?" and "may I start this task?" cannot answer differently for the same file.
   if (blocker?.cause === HOLD_STATUS) {
@@ -3042,6 +3071,20 @@ export function startTask(dir, id, result, opts = {}, split = null, now = new Da
   return { ...merged, started: t, dispatchToken: token };
 }
 
+// WHETHER `setFrontMatterStatus` COULD WRITE THIS FILE, asked without writing it. `--start` asks first: it opens a
+// clock and reports the task started, and doing either over a file whose `status:` line cannot be replaced is how
+// the index came to read `in-progress` while the task's own file — the record — said nothing.
+function statusLineWritable(dir, file) {
+  const full = path.join(dir, file);
+  if (!fs.existsSync(full)) return false;
+  const lines = fs.readFileSync(full, "utf8").split("\n");
+  if (lines[0]?.trim() !== "---") return false;
+  for (let i = 1; i < lines.length && lines[i].trim() !== "---"; i++) {
+    if (lines[i].trimStart().startsWith("status:")) return true;
+  }
+  return false;
+}
+
 // REWRITES ONE LINE OF AN EXISTING FILE. The whole point is that everything else in the file — an authored body,
 // a Deliverables table the engine never parsed, the `## Notes` — is byte-identical afterwards. Only the first
 // `status:` line inside the opening front-matter block is replaced; a `status:` in prose further down is not
@@ -3070,23 +3113,27 @@ function setFrontMatterStatus(dir, file, status, declared = null, decisions = nu
 
 // Rewrite the four fields this write owns, in place, and report where each was found. An index of -1 means the
 // file does not carry that line at all.
+// A key is matched after its leading whitespace, as `parseTaskFile` reads it, and the indentation is kept on the
+// rewritten line: a file the parser reads a `status:` out of is a file this write can update.
 function rewriteFrontMatter(lines, status, declared, decisions = null) {
   const at = { status: -1, stamp: -1, declared: -1, decisions: -1 };
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") break;
-    if (lines[i].startsWith("statusFrom:")) {
-      lines[i] = `statusFrom: ${statusStamp(status)}`;
+    const key = lines[i].trimStart();
+    const pad = lines[i].slice(0, lines[i].length - key.length);
+    if (key.startsWith("statusFrom:")) {
+      lines[i] = `${pad}statusFrom: ${statusStamp(status)}`;
       at.stamp = i;
-    } else if (lines[i].startsWith("declared:")) {
+    } else if (key.startsWith("declared:")) {
       // `null` leaves the line alone; the EMPTY STRING clears it. A retired declaration has to reach the file, or
       // the re-open lasts until the next read and the word snaps back.
-      if (declared !== null) lines[i] = `declared: ${declared}`;
+      if (declared !== null) lines[i] = `${pad}declared: ${declared}`;
       at.declared = i;
-    } else if (lines[i].startsWith("decisions:")) {
-      if (decisions !== null) lines[i] = `decisions: ${decisions}`;
+    } else if (key.startsWith("decisions:")) {
+      if (decisions !== null) lines[i] = `${pad}decisions: ${decisions}`;
       at.decisions = i;
-    } else if (lines[i].startsWith("status:")) {
-      lines[i] = `status: ${status}`;
+    } else if (key.startsWith("status:")) {
+      lines[i] = `${pad}status: ${status}`;
       at.status = i;
     }
   }
