@@ -3134,7 +3134,9 @@ function unappliedDecisionLines(set, dir, startedId = null) {
   if (!open.length) return [];
   return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,
     ...open.map((d) => `  · ${d.id} — ${d.title}`),
-    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>\` before dispatch.`];
+    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>`
+      + ` ${WONT_DO_FLAG} | ${POSTPONED_FLAG} ${TO_FLAG} <destination>\`, addressed by \`${PAGES_FLAG} <keys>\`,`
+      + ` \`${TASK_FLAG} <task-id>\` or \`${ROW_FLAG} <task-id>:<n>\`, before dispatch.`];
 }
 
 // `--tasks <dir> --next` — WHICH TASKS ARE STARTABLE RIGHT NOW, answered by the engine.

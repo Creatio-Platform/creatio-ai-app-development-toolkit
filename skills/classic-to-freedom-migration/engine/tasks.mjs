@@ -3803,17 +3803,16 @@ function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, 
   }
 }
 // The OPEN rows, in any task including the decided row's own, that share a decision subject with a row this
-// decision addressed: not written in this run, not built, not decided, not a plan boundary. Listed for the
-// person, never written.
-function openSubjectSiblings(tasks, placedRows, writtenRows) {
+// decision addressed: not built, not decided, not a plan boundary. A row this run wrote carries its new outcome,
+// so it is not open. Listed for the person, never written.
+function openSubjectSiblings(tasks, placedRows) {
   const subjects = new Set(placedRows.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
-  const written = (t, n) => writtenRows.some((x) => x.task === t && x.n === n);
   const out = [];
   if (!subjects.size) return out;
   for (const t of tasks) {
     if (t.unread) continue;
     (t.rows || []).forEach((r, i) => {
-      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1) || written(t, i + 1)) return;
+      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1)) return;
       out.push({ task: t, n: i + 1, subject: r.subject });
     });
   }
@@ -3832,7 +3831,12 @@ export function unappliedDecisions(tasks, decisions) {
     .map(([id, title]) => ({ id, title }));
 }
 // Whether the folder has had no dispatch yet: no closed timing sample, and no open clock except `startedId`'s.
+// A timings file that exists but does not parse counts as a dispatch: the file is written only when a clock starts.
 export function firstDispatchPending(dir, startedId = null) {
+  const file = path.join(dir, TIMINGS_FILE);
+  if (fs.existsSync(file)) {
+    try { JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
+  }
   const { running, samples } = readTimingsFile(dir);
   return !samples.length && Object.keys(running).every((id) => id === startedId);
 }
@@ -3904,7 +3908,7 @@ export function applyDecision(dir, result, opts = {}) {
   const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode, destination: destination || null,
     touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged,
-    siblings: openSubjectSiblings(merged.tasks, placed(touched), [...touched, ...cascaded]) };
+    siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
