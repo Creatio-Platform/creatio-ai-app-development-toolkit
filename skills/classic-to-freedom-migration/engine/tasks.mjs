@@ -863,8 +863,25 @@ function renderFrontMatter(task, set) {
   return ["---", ...keys.map((k) => `${k}: ${oneLine(v[k])}`), "---"];
 }
 
+// The vk types whose verifier matches a built element against a COLUMN, so what the builder NAMES and
+// BINDS decides whether the row closes. The convention belongs on the row because the task file IS the prompt the
+// building sub-agent reads, and a rule that lives only in the engine reaches the builder never: two runs of the
+// same section named every element `<Something>Field`, built the page correctly, and each
+// burned a repair round renaming elements that had never been wrong.
+const IDENTITY_VK = new Set(["fields", "rule", "listcolumns"]);
+// GENERIC on purpose — one worked example, never this row's own column list. Two reasons, and both matter:
+//   · the plan's column names are already in the `Deliverable` column, and a second copy in the same table is a
+//     second thing to keep in step;
+//   · `closedByOf` reads the RENDERED row, which carries the vk TYPE and nothing else. Keeping it that way is what
+//     keeps this change clear of `rowsDigest` — the digest hashes the SOURCE rows, and a `done` task must never
+//     read as drifted (and be re-dispatched into a live migration) because the wording of a cell improved.
+const IDENTITY_RULE = "bind each element to the COLUMN it shows, and name it for that column — element `Contact`"
+  + " or `ContactField`, bound `$PDS_Contact`; a business rule targets that same element. The BINDING is what the"
+  + " gate resolves, so an element whose name drops the column (`RoleInCompanyField` for `Job`) closes on its"
+  + " binding alone — name it for the column and both agree";
+
 function closedByOf(row) {
-  if (row.vk) return "`--verify` (`" + row.vk + "`)";
+  if (row.vk) return "`--verify` (`" + row.vk + "`)" + (IDENTITY_VK.has(row.vk) ? " — " + IDENTITY_RULE : "");
   // A plan boundary is the plan's fact, not the agent's decision. The engine pre-fills the Outcome cell for
   // it with `not-applicable — <reason>`, so this column names WHY there is nothing to build; the outcome cell
   // is not the agent's to write.

@@ -8362,5 +8362,50 @@ for (const flag of ["--plan", "--spec", "--checklist", "--stubs"]) {
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+/* ---- The identity convention, stated on the row that depends on it ----------------------------
+   `fields` / `rule` / `listcolumns` are the vk types whose verifier matches a built element against a COLUMN, so
+   what the builder names and binds decides whether the row closes. The task file IS the prompt the building
+   sub-agent reads; a convention that lives only in the engine reaches the builder never. */
+const IDENTITY_CELL = /bind each element to the COLUMN it shows/;
+
+check("identity: a `fields` row states the naming/binding condition IN its `Closed by` cell — both forms of the"
+  + " identity (`Contact` or `ContactField`, bound `$PDS_Contact`) and the fact that the BINDING is what resolves",
+  () => {
+    const row = SAMPLE.rows.find((r) => r.vk === "fields");
+    if (!row) return false;
+    const line = SAMPLE_TEXT.split("\n").find((l) => l.includes("| " + row.label + " |"));
+    return IDENTITY_CELL.test(line) && /`\$PDS_Contact`/.test(line) && /`ContactField`/.test(line);
+  },
+  () => ({ row: SAMPLE.rows.find((r) => r.vk === "fields")?.label,
+    line: SAMPLE_TEXT.split("\n").find((l) => l.includes("| " + (SAMPLE.rows.find((r) => r.vk === "fields")?.label || "\u0000") + " |")) }));
+
+check("identity: the condition is on EVERY identity-matched vk (`fields`, `rule`, `listcolumns`) and on NO other"
+  + " row — a `template` or evidence row carries the plain `--verify` cell it always did",
+  () => {
+    const IDENT = new Set(["fields", "rule", "listcolumns"]);
+    const lineOf = (r) => SAMPLE_TEXT.split("\n").find((l) => l.includes("| " + r.label + " |")) || "";
+    const ident = SAMPLE.rows.filter((r) => r.vk && IDENT.has(r.vk));
+    const other = SAMPLE.rows.filter((r) => r.vk && !IDENT.has(r.vk));
+    return ident.length > 0
+      && ident.every((r) => IDENTITY_CELL.test(lineOf(r)))
+      && other.every((r) => !IDENTITY_CELL.test(lineOf(r)));
+  },
+  () => ({ identity: SAMPLE.rows.filter((r) => r.vk).map((r) => [r.vk, IDENTITY_CELL.test(SAMPLE_TEXT.split("\n").find((l) => l.includes("| " + r.label + " |")) || "")]) }));
+
+// RISK1 — the digest guard. `closedByOf` renders the cell; `rowsDigest` hashes the SOURCE rows. A `done` task
+// that reads as drifted is RE-DISPATCHED into a live migration, so improving a cell's wording must never move it.
+// The values are PINNED, captured from the base branch before this change. Recomputing the set twice inside one
+// run would be trivially equal and prove nothing; a literal is what actually catches a future edit that lets the
+// rendered cell leak into the digest.
+const ROWS_DIGESTS_BASE = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "applicants-recorded", "rows-digests.base.json"), "utf8"));
+check("identity digest guard: rendering the identity condition does NOT move any task's `rowsDigest` — the digest reads"
+  + " the SOURCE rows, so a `done` task cannot read as drifted (and be re-dispatched into a live migration)"
+  + " because a cell's wording improved. Pinned to the values the base branch produced.",
+  () => {
+    const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
+    return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
+  },
+  () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
