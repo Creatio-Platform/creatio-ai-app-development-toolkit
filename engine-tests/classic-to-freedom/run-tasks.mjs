@@ -7790,6 +7790,335 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
   }
 }
 
+// `--decide` also names the open rows of the SAME task that share a subject with a row it decided.
+{
+  const SAME_SRC = "same-source";
+  const split = cardSplit("same", "same-unused", { waiting: null });
+  const opts = optsOf(CARD_MANIFEST);
+  const decisions = new Map([["D4", "handled elsewhere"]]);
+  const fixture = (label) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    freezeSplit(dir, JSON.stringify(split));
+    const set = syncTaskDir(dir, CARD_RUN, opts);
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
+    const src = set.tasks.find((t) => t.id === SAME_SRC);
+    const rowOf = (m) => (src?.rows || []).findIndex((r) => r.label === cardLabel(m)) + 1;
+    return { base, dir, n0: rowOf("onBulk0"), n5: rowOf("onBulk5") };
+  };
+  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
+  const rawOf = (dir) => fs.readFileSync(taskFilePath(dir, SAME_SRC), "utf8");
+
+  {
+    const { base, dir, n0, n5 } = fixture("siblings-same-task");
+    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
+      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
+    const row5 = readTaskDir(dir).find((t) => t.id === SAME_SRC)?.rows?.[n5 - 1];
+    check("--decide: an open row of the SAME task sharing the decided row's subject is listed",
+      () => n0 > 0 && n5 > 0 && !res.refused && named(res).join(",") === `${SAME_SRC}:${n5}`,
+      () => ({ n0, n5, refused: res.problems, named: named(res) }));
+    check("--decide: the decided row itself is never listed as its own sibling",
+      () => !res.refused && !named(res).includes(`${SAME_SRC}:${n0}`) && named(res).includes(`${SAME_SRC}:${n5}`),
+      () => ({ n0, named: named(res) }));
+    check("--decide: a listed same-task row keeps its cell blank and gets no `decisions:` entry",
+      () => !row5?.outcomeKind && new RegExp(`^decisions: ${n0}:D4$`, "m").test(rawOf(dir)),
+      () => ({ row5, decisions: /^decisions:.*$/m.exec(rawOf(dir))?.[0] }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, n0, n5 } = fixture("siblings-same-task-cli");
+    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
+      "--wont-do", "--row", `${SAME_SRC}:${n0}`], { encoding: "utf8" });
+    const stdout = out.stdout || "";
+    const cmds = stdout.split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
+    check("--decide (CLI): a same-task sibling gets a ready-to-run command, and the heading does not say `other tasks`",
+      () => out.status === 0 && cmds.length === 1 && cmds[0].includes(`${SAME_SRC}:${n5}`) && !/on other tasks/.test(stdout),
+      () => ({ status: out.status, stdout, stderr: out.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir } = fixture("siblings-same-run");
+    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do", taskId: SAME_SRC, decisions });
+    check("--decide: rows decided in the same run are not listed as siblings of each other",
+      () => !res.refused && res.touched.length > 1 && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, n0, n5 } = fixture("siblings-same-built");
+    const f = taskFilePath(dir, SAME_SRC);
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n5, "built"));
+    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
+      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
+    check("--decide: a built same-task row is not listed",
+      () => !res.refused && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+// Before the first dispatch, `--tasks`, `--next` and `--start` list every decision no task's `decisions:` line cites.
+{
+  const UNDEC_SRC = "undec-source";
+  const split = cardSplit("undec", "undec-other");
+  const opts = optsOf(CARD_MANIFEST);
+  const DECISIONS_MD = "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n";
+  const PLAN_MD = "# Plan\n\n### Adjustments\n\n1. **Print is not migrated**\n";
+  const BLOCK = /decision\(s\) in decisions\.md are applied to no row/;
+  const listed = (out) => [...String(out || "").matchAll(/^ {2}· (D\d+) — /gm)].map((m) => m[1]);
+  const fixture = (label, { md = DECISIONS_MD } = {}) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    freezeSplit(dir, JSON.stringify(split));
+    if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
+    fs.writeFileSync(path.join(base, "plan.md"), PLAN_MD);
+    const manifestPath = path.join(base, "manifest.json");
+    fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
+    const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, ...args], { encoding: "utf8" });
+    return { base, dir, cli };
+  };
+  const startableIds = (dir) => startableTasks(syncTaskDir(dir, CARD_RUN, opts), dir).startable.map((t) => t.id);
+
+  {
+    const { base, cli } = fixture("undecided-cut");
+    const cut = cli();
+    check("first dispatch: the cut lists every decision no row cites, with the `--decide` before dispatch line",
+      () => BLOCK.test(cut.stdout) && listed(cut.stdout).join(",") === "D4,D5" && /--decide.*before dispatch/.test(cut.stdout),
+      () => ({ status: cut.status, stdout: cut.stdout, stderr: cut.stderr }));
+    check("first dispatch: the `--decide` line names the outcome flags and the row addressing `--decide` requires",
+      () => /--decide D<N> --wont-do \| --postponed --to <destination>`, addressed by `--pages <keys>`, `--task <task-id>` or `--row <task-id>:<n>`, before dispatch/.test(cut.stdout || ""),
+      () => cut.stdout);
+    check("first dispatch: a plan `Adjustment N` is never listed",
+      () => !/Adjustment/.test(cut.stdout || ""), () => cut.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-next");
+    cli();
+    const before = cli("--next");
+    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
+      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
+    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
+    const after = cli("--next");
+    check("first dispatch: `--next` lists an uncited decision",
+      () => before.status === 0 && listed(before.stdout).join(",") === "D4,D5",
+      () => ({ status: before.status, stdout: before.stdout }));
+    check("first dispatch: a decision `--decide` applied to a row is left out of `--next`",
+      () => n > 0 && decided.status === 0 && after.status === 0 && listed(after.stdout).join(",") === "D5",
+      () => ({ n, decided: decided.stderr, stdout: after.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-dispatched");
+    cli();
+    const [first] = startableIds(dir);
+    const started = cli("--start", first);
+    const inFlight = cli("--next");
+    check("first dispatch: `--start` of the first task lists the uncited decisions",
+      () => started.status === 0 && listed(started.stdout).join(",") === "D4,D5",
+      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
+    check("first dispatch: while the first task is in flight, `--next` prints no block",
+      () => inFlight.status === 0 && !BLOCK.test(inFlight.stdout), () => inFlight.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-closed");
+    cli();
+    clearDepsOf(dir, UNDEC_SRC, CARD_RUN, opts);
+    const next = cli("--next");
+    const later = cli("--start", UNDEC_SRC);
+    check("first dispatch: once a dispatched task has closed, `--next` and a later `--start` print no block",
+      () => next.status === 0 && !BLOCK.test(next.stdout) && later.status === 0 && !BLOCK.test(later.stdout),
+      () => ({ next: next.stdout, later: later.stdout, stderr: later.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const withMd = fixture("undecided-with");
+    const without = fixture("undecided-without", { md: null });
+    const runs = (f) => [f.cli(), f.cli("--next"), f.cli()];
+    const a = runs(withMd);
+    const b = runs(without);
+    const snapshot = (dir) => fs.readdirSync(dir).sort((x, y) => x.localeCompare(y))
+      .map((f) => `${f}\n${fs.readFileSync(path.join(dir, f), "utf8").replaceAll(withMd.dir, "<dir>").replaceAll(without.dir, "<dir>")}`);
+    check("first dispatch: exit codes are identical with and without uncited decisions",
+      () => a.map((r) => r.status).join(",") === b.map((r) => r.status).join(","),
+      () => ({ with: a.map((r) => r.status), without: b.map((r) => r.status) }));
+    check("first dispatch: no decisions.md prints no block",
+      () => b.every((r) => !BLOCK.test(r.stdout)) && a.every((r) => BLOCK.test(r.stdout)),
+      () => ({ with: a.map((r) => r.stdout), without: b.map((r) => r.stdout) }));
+    check("first dispatch: the listing writes nothing into the task folder",
+      () => JSON.stringify(snapshot(withMd.dir)) === JSON.stringify(snapshot(without.dir)),
+      () => ({ with: snapshot(withMd.dir).map((s) => s.split("\n")[0]), without: snapshot(without.dir).map((s) => s.split("\n")[0]) }));
+    fs.rmSync(withMd.base, { recursive: true, force: true });
+    fs.rmSync(without.base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-all-cited", { md: "## D4 — handled elsewhere\n" });
+    cli();
+    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
+      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
+    cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
+    const next = cli("--next");
+    check("first dispatch: when every decision is cited, nothing is printed",
+      () => n > 0 && next.status === 0 && !BLOCK.test(next.stdout), () => next.stdout);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-table-row", { md: "| D4 | **handled elsewhere** | 2026-09-25 |\n" });
+    const cut = cli();
+    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
+      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
+    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
+    check("first dispatch: a table-row `D<N>` is listed, and `--decide` accepts that id",
+      () => listed(cut.stdout).join(",") === "D4" && n > 0 && decided.status === 0,
+      () => ({ cut: cut.stdout, status: decided.status, stderr: decided.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  check("first dispatch: a cascade citation `D4+` counts as citing D4",
+    () => TASKS_MODULE.unappliedDecisions([{ decisions: new Map([[1, "D4+"]]) }],
+      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D5");
+
+  {
+    const base = tmp("first-dispatch-timings");
+    const pending = (state, startedId) => {
+      const file = path.join(base, TIMINGS_FILE);
+      if (state === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, typeof state === "string" ? state : JSON.stringify(state));
+      return TASKS_MODULE.firstDispatchPending(base, startedId);
+    };
+    const running = { running: { mine: "2026-09-25T10:00:00Z" }, samples: [] };
+    check("firstDispatchPending: no timings file is pending", () => pending(null) === true);
+    check("firstDispatchPending: a zero-minute sample is a dispatch",
+      () => pending({ running: {}, samples: [{ id: "mine", weight: 1, minutes: 0 }] }) === false);
+    check("firstDispatchPending: another task's open clock is a dispatch; the started task's own clock is not",
+      () => pending(running, "other") === false && pending(running, "mine") === true && pending(running) === false);
+    check("firstDispatchPending: a timings file that does not parse is a dispatch", () => pending("{ not json") === false);
+    const mark = (state) => {
+      const file = path.join(base, TIMINGS_FILE);
+      if (state === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, state);
+      return readTimingsFile(base).malformed;
+    };
+    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
+      () => typeof mark("{ not json") === "string" && !!mark("{ not json") && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
+      () => ({ bad: mark("{ not json"), absent: mark(null) }));
+    fs.rmSync(path.join(base, TIMINGS_FILE), { force: true });
+    const pendingWith = (tasks) => TASKS_MODULE.firstDispatchPending(base, null, tasks);
+    check("firstDispatchPending: a task with a `built` row is a dispatch, with no timings file",
+      () => pendingWith([{ rows: [{ outcomeKind: "built" }] }]) === false);
+    check("firstDispatchPending: a task with an `agentNonce` is a dispatch, with no timings file",
+      () => pendingWith([{ rows: [], agentNonce: "tok-1" }]) === false && pendingWith([{ rows: [], agentNonce: "  " }]) === true);
+    check("firstDispatchPending: rows closed only by `--decide` are not a dispatch",
+      () => pendingWith([{ rows: [{ outcomeKind: "wont-do" }, { outcomeKind: "postponed" }], decisions: new Map([[1, "D4"], [2, "D5"]]) }]) === true);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const base = tmp("timings-malformed-start");
+    const d = path.join(base, "build-tasks");
+    freezeSplit(d, JSON.stringify(split));
+    syncTaskDir(d, CARD_RUN, opts);
+    const [first] = startableIds(d);
+    fs.writeFileSync(path.join(d, TIMINGS_FILE), "{ not json");
+    try { startTask(d, first, CARD_RUN, { ...opts, dispatchToken: "tok-m" }); } catch { /* a refusal is the expected answer */ }
+    const written = fs.readFileSync(path.join(d, TIMINGS_FILE), "utf8");
+    check("readTimingsFile: `--start` over a malformed timings file leaves it byte-identical",
+      () => !!first && written === "{ not json", () => written);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  check("unappliedDecisions: a citation on an unread task is not counted",
+    () => TASKS_MODULE.unappliedDecisions([{ unread: true, decisions: new Map([[1, "D4"]]) }],
+      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D4,D5");
+
+  {
+    const { base, dir, cli } = fixture("undecided-built-row");
+    cli();
+    const before = cli("--next");
+    const f = taskFilePath(dir, UNDEC_SRC);
+    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
+      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
+    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n, "built"));
+    const after = cli("--next");
+    check("first dispatch: a row recorded `built` with no timings file ends the listing",
+      () => BLOCK.test(before.stdout) && n > 0 && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
+      () => ({ n, before: before.stdout, after: after.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-nonce");
+    cli();
+    const before = cli("--next");
+    editFrontMatter(dir, UNDEC_SRC, "agentNonce", "tok-agent");
+    const after = cli("--next");
+    check("first dispatch: a task carrying an `agentNonce` with no timings file ends the listing",
+      () => BLOCK.test(before.stdout) && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
+      () => ({ before: before.stdout, after: after.stdout }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+
+  {
+    const STUCK = /NOTHING STARTABLE AND NOTHING IN FLIGHT/;
+    const stuckNext = (label, md) => {
+      const f = fixture(label, { md });
+      f.cli();
+      for (const id of startableIds(f.dir)) editFrontMatter(f.dir, id, "status", "blocked");
+      const r = f.cli("--next");
+      const scrub = (s) => String(s || "").replaceAll(f.base, "<base>");
+      fs.rmSync(f.base, { recursive: true, force: true });
+      return { status: r.status, stdout: scrub(r.stdout), stderr: scrub(r.stderr) };
+    };
+    const a = stuckNext("undecided-stuck-with", DECISIONS_MD);
+    const b = stuckNext("undecided-stuck-without", null);
+    const verdictOf = (s) => {
+      const at = s.search(/\n\n\d+ decision\(s\) in decisions\.md/);
+      return (at < 0 ? s : s.slice(0, at)).trimEnd();
+    };
+    check("first dispatch (anti-vacuity): both folders answer `stuck`, and only the one with decisions.md prints the block",
+      () => a.status === 2 && STUCK.test(a.stdout) && STUCK.test(b.stdout) && BLOCK.test(a.stdout) && !BLOCK.test(b.stdout),
+      () => ({ a, b }));
+    check("first dispatch: a `stuck` `--next` has the same exit code, verdict and stderr with and without uncited decisions",
+      () => a.status === b.status && verdictOf(a.stdout) === b.stdout.trimEnd() && a.stderr === b.stderr,
+      () => ({ status: [a.status, b.status], with: verdictOf(a.stdout), without: b.stdout, stderr: [a.stderr, b.stderr] }));
+    check("first dispatch: on a `stuck` `--next` the block follows the verdict text",
+      () => a.stdout.search(BLOCK) > a.stdout.search(STUCK), () => a.stdout);
+  }
+
+  {
+    const { base, dir, cli } = fixture("undecided-second-start");
+    cli();
+    const [first] = startableIds(dir);
+    fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ running: { "another-task": "2026-09-25T10:00:00Z" }, samples: [] }));
+    const started = cli("--start", first);
+    check("first dispatch: `--start` while another task's clock is open prints no block",
+      () => !!first && started.status === 0 && !BLOCK.test(started.stdout),
+      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+{
+  const { base, dir, decisions, src, rep } = repairMirrorFixture("siblings-cascaded", "D13", "descope", 2);
+  const res = src && rep ? applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
+    rowRef: { taskId: src.id, n: 1 }, decisions }) : null;
+  const key = (x) => `${x.task.id}:${x.n}`;
+  const siblings = new Set((res?.siblings || []).map(key));
+  check("--decide: a row the decision cascaded into is reported on `cascaded` and not listed as a sibling",
+    () => !!res && !res.refused && res.cascaded.length > 0 && res.cascaded.every((x) => !siblings.has(key(x))),
+    () => ({ refused: res?.problems, cascaded: (res?.cascaded || []).map(key), siblings: [...siblings] }));
+  fs.rmSync(base, { recursive: true, force: true });
+}
+
 console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drift, adopted-file writes, mode exclusion =====");
 {
   // `stopGate` travels from the split into the task file and the index — the orchestrator reads it before it
