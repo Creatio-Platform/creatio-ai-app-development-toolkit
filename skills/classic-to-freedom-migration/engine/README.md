@@ -117,7 +117,7 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   49 characters, or a plan row left in no item, is refused with nothing written — and an unclaimed row is named by
   page, with no owner picked for it. The mechanical cut answers to the same rule against its own output, where a
   dropped row is a defect in the slicer rather than a file anybody can correct. Items sharing a `writesTo` are
-  chained automatically. Three seams are checked rather than
+  chained automatically. Four seams are checked rather than
   trusted. The plan writes `(ported with <caller>)` into a folded helper's own row, so a split that separates a helper
   from its caller is refused — that is machine-readable, and it is the seam the budget slicer actually got wrong
   (9 of 12 chains on one real plan). And an item carrying the per-type ROUTING row may not sit before the items
@@ -126,6 +126,11 @@ context. The properties that decide its behaviour are stated in full in `tasks.m
   `Quality gates` rows may not precede an item that still writes that page: a verdict filed on a page that is
   still being built is not a verdict. That review also WAITS on every writer of its page, which matters precisely
   because a review is correctly read-only — with no `writesTo` it joins no chain, so nothing else would hold it.
+  And a page's `[attribute-virtual] X` row may not sit in a later item than a handler row on that page whose method
+  sets X: each handler row carries the attributes its own body sets (`writesAttrs`, beside the `vk`, so the row
+  digest is untouched), and a handler built before the attribute it writes is inert. The rule follows those
+  recorded writes, not every handler of the page, so an earlier item holding an unrelated handler resolves; a
+  write made any other way than `this.set("X", …)` in the handler's own body is not recorded and not checked.
   An item may claim a whole group (`@Form — Custom methods`) or the next N rows of one
   (`@Form — Custom methods[50]`), taken in plan order — one real plan carries 282 custom methods on one typed form and 188 on another, and a file naming several
   hundred rows verbatim is one nobody authors; naming a row explicitly still wins over a later group claim. Row
