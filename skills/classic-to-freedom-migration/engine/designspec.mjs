@@ -633,8 +633,8 @@ function listRowActionsTable(rowActions) {
   L.push("", "> ⚠ **A row action carries no op in this ChangeSet.** Every other op here reproduces a shape measured on a built Freedom page; no such measurement exists for a row action, so the control and its placement are read off a built page rather than guessed. The name, the condition and the grid it belongs to are the resolved facts.");
   return L;
 }
-// The command bar states its SOURCE, because that source is known to be incomplete until the section view `diff` is
-// folded — the ⚠ Confirm item carries the question.
+// The command bar states its SOURCE per row — `getSectionActions` or `sectionDiff` — so a reader can tell a menu
+// action from a button the section's own view `diff` inserted.
 // The condition cell of the command-bar table. Own fn so `listCommandBarTable` stays under Sonar CC 15: a bound
 // condition, several bound conditions, and a STATIC `visible: false` / `enabled: false` are three separate readings
 // of the same cell, and a button may carry both kinds at once.
@@ -751,10 +751,7 @@ function renderListPageBlock(result, section, opts = {}) {
     // table below lists them WHEN there are any; when there are NONE the table does not render, so this line is the
     // only place the "none found" fact is stated (a `list-command-bar` ⚠ Confirm does not carry it, so
     // dropped from the human plan as noise). Always shown, so the approver sees found-or-not at a glance.
-    const cbaCount = (result.listChangeSet?.commandBarActions || []).length;
-    L.push(cbaCount
-      ? `- **Command-bar actions:** ${cbaCount} found via \`getSectionActions()\` — see the table below; a button the section adds through its view \`diff\` is not captured here, so verify the full set on-stand`
-      : "- **Command-bar actions:** ⚠ **none found** via `getSectionActions()` — a button the section adds through its view `diff` (or a `DataGridActiveRow…` row action) is not captured here, so verify the full set on-stand");
+    L.push(commandBarCountLine(result.listChangeSet?.commandBarActions || [], !!result.listGate?.blocked));
   }
   // The tables replace the former `Quick filters:` / `Section actions:` bullets — same facts, but positioned and
   // traceable to the ops a builder applies. The bullets stated them as prose no build step could consume.
@@ -767,6 +764,19 @@ function renderListPageBlock(result, section, opts = {}) {
     ...renderImperativeLogic(lcs), ...renderImperativeMembers(lcs));
   L.push("");
   return L;
+}
+
+// The found-or-not line for the command bar, split by SOURCE. Both sources are read since the section view `diff` is
+// folded, so the line must not claim a `diff` button is "not captured": on the real Opportunity section 3 of the 4
+// actions come from the `diff`, and a sentence saying otherwise contradicted the table right under it.
+// `readIncomplete` is the blocked list gate: an empty set read off a section the gate calls incomplete is not
+// evidence that the section declares no button, so the line must not say it does.
+function commandBarCountLine(actions, readIncomplete) {
+  if (!actions.length && readIncomplete) return "- **Command-bar actions:** ⚠ **none found in what could be read** — the list gate above reports the section reading as incomplete, so a button in the unread part is not counted here";
+  if (!actions.length) return "- **Command-bar actions:** ⚠ **none found** — neither `getSectionActions()` nor the section's view `diff` declares one; confirm on-stand that the Classic list shows none";
+  const fromDiff = actions.filter((a) => a.source === "sectionDiff").length;
+  const fromMenu = actions.length - fromDiff;
+  return `- **Command-bar actions:** ${actions.length} found — ${fromMenu} via \`getSectionActions()\`, ${fromDiff} declared in the section's view \`diff\`; see the table below`;
 }
 
 // Standalone (non-embedded) spec header: title + Entity/Size preamble, plus the ⛔ HARD-GATE / STRUCTURE banners

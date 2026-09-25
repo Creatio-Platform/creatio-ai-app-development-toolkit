@@ -119,7 +119,10 @@ because it asks about an EMPTY set and about a FALLBACK one, and the two are ans
   case is the section's `merge DataGrid` setting `controlColumnName` / `applyControlConfig` / `controlCellClass`,
   which renders a control inside a grid cell and has no obvious Freedom analog. ONE item per element, listing its
   keys — the real `OpportunitySectionV2` grid declares twenty of them, and twenty separate rows would bury the two
-  that carry a real question …
+  that carry a real question. Presentation-only keys (`className`, `classes`, `style`, `tag`) and
+  `activeRowActions` (the slot the grid's row actions sit in, already read as `list-row-action` items) are never
+  listed. The package shown is the first client layer that declared or reconfigured the element, not the last
+  layer to touch it …
 - **[list-section-element]** section element: `<Element>` — the section declares this element in its own view
   `diff` and the list vocabulary has no reading for it, or its ancestry reaches no recognised list container
   (usually because `section.seed` was not supplied). Published so it is not silently dropped, which is what

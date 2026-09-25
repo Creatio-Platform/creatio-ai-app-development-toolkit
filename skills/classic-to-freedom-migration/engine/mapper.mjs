@@ -2781,8 +2781,11 @@ function listConditionsOf(item) {
 }
 
 // The keys this element declares that the engine models nowhere and that are worth a question — see
-// `LIST_PRESENTATION_PROPS` for the family that is not. Sorted by the projection already, so the order is stable.
-const listOpenProps = (item) => (item.unmodelledProps || []).filter((k) => !LIST_PRESENTATION_PROPS.has(k));
+// `LIST_PRESENTATION_PROPS` for the family that is not. `activeRowActions` is excluded too: it is the slot the
+// grid's row actions are inserted under, and this surface already reads those as `rowActions`, so listing it
+// beside `controlColumnName` asked about something the plan had answered. Sorted by the projection already.
+const listOpenProps = (item) => (item.unmodelledProps || [])
+  .filter((k) => !LIST_PRESENTATION_PROPS.has(k) && k !== LIST_ROW_ACTIONS_PROPERTY);
 
 // Which list surface an element sits on. The item's OWN identity is checked BEFORE its ancestry, because the two
 // elements that matter most answer for themselves: the grid IS an anchor (climbing from it would reach
@@ -2836,7 +2839,7 @@ function sectionDiffAction(item, menuItems = []) {
     conditions: listConditionsOf(item),
     parent: item.parent || null,
     order: item.order ?? null,
-    package: item.provenance?.[item.provenance.length - 1] || null,
+    package: declaringPackageOf(item),
     openProps: listOpenProps(item),
     // A STATIC literal, not a bound condition. `handlerBindings` only sees methods and `unmodelledValueKeys`
     // excludes these two, so a `visible: false` button reached the ChangeSet indistinguishable from an
@@ -2873,7 +2876,7 @@ function listMenuEntriesOf(owner, childrenByParent, claimed) {
       classicHandler: child.handlers?.click || null,
       conditions: listConditionsOf(child),
       order: child.order ?? null,
-      package: child.provenance?.[child.provenance.length - 1] || null,
+      package: declaringPackageOf(child),
     });
   }
   return out;
@@ -2893,7 +2896,7 @@ function sectionDiffRowAction(item) {
     condition: conditions[0]?.method || null,
     conditionProperty: conditions[0]?.property || null,
     conditions,
-    package: item.provenance?.[item.provenance.length - 1] || null,
+    package: declaringPackageOf(item),
     source: "sectionDiff",
   };
 }
@@ -2915,9 +2918,12 @@ function indexChildrenByParent(items) {
   }
   return childrenByParent;
 }
-// The package that last touched an element — the tail of its provenance chain, or null when it carries none.
-function lastProvenancePackage(item) {
-  return item.provenance?.[item.provenance.length - 1] || null;
+// The package that DECLARES a section element: the first client layer that defined or touched it (the fold's
+// `declaringPackage`). Not the tail of `provenance` — on the real Opportunity section that named `WorkSalesBase`,
+// the layer that only hides `CreateOrderFromOpportunityButton`, instead of `OrderInSales`, which inserts it and
+// owns its click handler. The full chain stays on the item's `provenance` for a reader who needs every layer.
+function declaringPackageOf(item) {
+  return item.declaringPackage || null;
 }
 // A standalone LABEL is author-written copy; the LIST_ROWS row says it is carried WITH its caption, so it is
 // carried, not disclosed as "the list vocabulary has no reading for it" — which was false while the row existed.
@@ -2925,7 +2931,7 @@ function sectionViewLabel(item, region) {
   return { name: item.name, region,
     caption: item.caption ? resourceKey(item.caption) : null,
     conditions: listConditionsOf(item),
-    package: lastProvenancePackage(item) };
+    package: declaringPackageOf(item) };
 }
 // The grid itself and the containers are already owned by the list surface or are layout, so they are accounted for
 // and silent. `OWNER.FOLDED` is deliberately NOT in this list: including it is what drops a
@@ -2941,7 +2947,7 @@ function sectionViewOpenItem(item, region, caption = null) {
     kind: itemKindName(item) || (item.itemType == null ? "no itemType declared" : `itemType ${item.itemType}`),
     caption,
     conditions: listConditionsOf(item),
-    package: lastProvenancePackage(item) };
+    package: declaringPackageOf(item) };
 }
 export function mapSectionView(sectionEff) {
   if (!sectionEff) return null;
@@ -2974,7 +2980,7 @@ export function mapSectionView(sectionEff) {
 // case there is. Called from each routing arm rather than before them, so an arm can drop a key it just MODELLED.
 function pushGridConfig(out, item, region, props) {
   if (!props.length) return;
-  out.gridConfig.push({ name: item.name, region, props, package: lastProvenancePackage(item) });
+  out.gridConfig.push({ name: item.name, region, props, package: declaringPackageOf(item) });
 }
 // One section-declared element, routed to the surface that can read it. Extracted from `mapSectionView`'s loop so
 // each arm stands on its own: the loop was over the cognitive-complexity bound with the label arm added, and the
