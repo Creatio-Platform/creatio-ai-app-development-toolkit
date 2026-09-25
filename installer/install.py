@@ -238,7 +238,7 @@ def register_remote_marketplace_and_install_plugin(
       Claude CLI's `plugin marketplace add` silently "updates in place" on a
       re-add instead of raising "already registered", so the conflict-driven
       retry branch below never fires for Claude — an unconditional remove is the
-      only way to rebuild the entry cleanly (ENG-90475).
+      only way to rebuild the entry cleanly.
     - Copilot rejects re-add with "already registered" and keeps the old source;
       we remove first (with --force to detach installed plugins) on retry.
     - Codex rejects re-add with "already added from a different source"; we
@@ -300,7 +300,7 @@ def detect_targets(home: Path | None = None) -> list[dict[str, Any]]:
     For CLI-driven agents (Codex, Claude Code, GitHub Copilot CLI) the install
     works by driving the agent's own CLI. A home directory alone is not
     sufficient — the CLI binary must also be on PATH. A leftover ``~/.copilot``
-    (or ``~/.codex`` / ``~/.claude``) whose binary is no longer on PATH is
+    (or ``~/.codex`` / ``~/.claude``) whose binary is absent from PATH is
     ignored: we have no mechanism to install into an agent we can't invoke.
 
     Cursor uses a file-copy install and requires no CLI binary.
@@ -400,12 +400,12 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     ``scripts/build-workflows.mjs`` emits from the same ``TARGETS`` table it generates the scripts
     from, under the same ``--check`` drift gate.
 
-    This used to be recovered by lexing the generated JavaScript: a hand-written JS sub-lexer in
-    Python whose only job was to pull ``name`` out of an ``export const meta = {...}`` literal the
-    generator already held in structured form. It needed comment, string, unterminated-literal and
-    decoy-name hardening across four review rounds, and the constructs it still could not handle are
+    Recovering this by lexing the generated JavaScript instead needs a hand-written JS sub-lexer in
+    Python whose only job is to pull ``name`` out of an ``export const meta = {...}`` literal the
+    generator already holds in structured form. Such a lexer needs comment, string,
+    unterminated-literal and decoy-name hardening, and still cannot handle constructs that are
     ordinary in generated JS - a template literal with ``${...}``, a regex literal carrying a brace
-    or a quote, the regex-versus-division ambiguity. Its failures were quiet: a wrong name written
+    or a quote, the regex-versus-division ambiguity. Its failures are quiet: a wrong name written
     to ``~/.claude/workflows/`` so ``Workflow({ name })`` resolves to nothing while the install
     reports success, or a hard abort on a language path the generator's own goldens never exercise.
     It is also what AGENTS.md forbids twice over - a generated artifact is a verification tool, not
@@ -413,8 +413,8 @@ def workflow_manifest_names(source_root: Path) -> dict[str, str]:
     that returns the same data as fields.
 
     Fails CLOSED: a tree with no manifest, or an unreadable one, raises rather than falling back to
-    a parser. There is deliberately no fallback - one that no test exercises would preserve exactly
-    the coupling this replaced and re-introduce the silent mis-parse.
+    a parser. There is deliberately no fallback - one that no test exercises would carry exactly
+    that coupling and its silent mis-parse.
     """
     manifest_path = source_root / WORKFLOW_MANIFEST_RELATIVE
     if not manifest_path.is_file():
@@ -509,7 +509,7 @@ def provision_named_workflows(source_root: Path, claude_home: Path) -> list[str]
                 f"`node scripts/build-workflows.mjs` in a checkout, or re-run the installer from a "
                 f"current release."
             )
-        # Two scripts claiming one name used to overwrite each other silently while BOTH were
+        # Two scripts claiming one name would overwrite each other silently while BOTH were
         # reported as provisioned, so one skill would run the other's orchestration.
         if name in sources:
             raise RuntimeError(
@@ -624,7 +624,7 @@ def remove_personal_marketplace_creatio_entry(catalog_path: Path, marketplace_na
     `creatio` catalog (`name == marketplace_name`), the whole file is deleted —
     any top-level keys the user customized on the installer-managed catalog
     (e.g. `interface.displayName`) go with it. In practice this file was
-    installer-managed end-to-end before ENG-90514, so that loss is acceptable;
+    installer-managed end-to-end, so that loss is acceptable;
     a user-curated catalog with a different `name` field always keeps its
     other plugins and metadata intact.
     """
@@ -997,7 +997,7 @@ def install_codex(repo_root: Path, home: Path) -> None:
     # enable_codex_plugin once the cache exists again: if anything between the two
     # fails (marketplace registration, a malformed manifest, an I/O error mid-copy)
     # the run exits non-zero without leaving `enabled = true` pointing at a version
-    # directory that no longer exists.
+    # directory that does not exist.
     config_path = codex_home / "config.toml"
     remove_codex_marketplace_section(config_path, MARKETPLACE_NAME)
     remove_codex_plugin_section(config_path, PLUGIN_NAME, MARKETPLACE_NAME)
@@ -1025,7 +1025,7 @@ def install_claude(repo_root: Path, home: Path) -> None:
     in `known_marketplaces.json`, and a later `plugin install` joins the
     staging `temp_<ts>` dir with that absolute path, producing the
     `Marketplace file not found at .../temp_<ts>/<abs-legacy-path>` error
-    surfaced in `/plugins → Errors` (ENG-90475 comments 448799, 449177;
+    surfaced in `/plugins → Errors` (see
     upstream anthropics/claude-code#36245). An unconditional remove-then-add
     rebuilds the entry cleanly on every run and makes migration idempotent.
     """
@@ -1296,7 +1296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Installed {PLUGIN_NAME} for: {', '.join(installed)}")
     elif failed:
         # Every detected target failed (e.g. leftover agent home directories
-        # whose CLIs are no longer on PATH). Report non-zero so the wizard
+        # whose CLIs are absent from PATH). Report non-zero so the wizard
         # surfaces the failure instead of a misleading "nothing to do" success.
         print("No coding agents were installed; all detected targets failed.", file=sys.stderr)
     else:

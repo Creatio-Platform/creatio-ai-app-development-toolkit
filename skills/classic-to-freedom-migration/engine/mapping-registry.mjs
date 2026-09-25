@@ -1,6 +1,6 @@
 // REGISTRY VALIDATION of the shared mapping table.
 //
-// Every `crt.*` type the engine emits used to be confirmed by hand on a stand ("read get-component-info for its
+// Every `crt.*` type the engine emits would otherwise be confirmed by hand on a stand ("read get-component-info for its
 // contract"), which is a per-run human step that a mapping row cannot carry. This module turns most of it into a
 // machine check: a row's `componentType` must exist, its `propMap` keys must be real `inputs`, and its `events`
 // must be real `outputs` — of the platform version the migration actually targets.
@@ -10,7 +10,8 @@
 // target" and "replace the hardcoded package knowledge" cannot be driven from it as the proposal assumed.
 // What IS there, and is checked here: existence per version, input and output names, per-INPUT and per-OUTPUT
 // deprecation (`deprecated` + `deprecationReason`), `compositeOnly`, and the selection taxonomy — on 8 of 205
-// components, which is why a taxonomy-based ranking is an aid, never a claim of coverage.
+// components, which is too thin a base for any selection decision and is therefore carried in the index as data
+// only, with no consumer here.
 //
 // SCOPE. Only keys the TABLE declares are validated. The engine also emits framework-level props no component
 // declares (`type`, `layoutConfig`, `visible`) — validating emitted `values` instead of declared keys would report
@@ -46,8 +47,8 @@ function versionBit(version, index) {
 // A row is worth validating when it names a `crt.*` type at all — as the thing the engine EMITS (`target`) or as
 // the thing the `--verify` gate looks for on the built page (`verify`). The second half matters as much as the
 // first: a standard-feature row emits nothing itself, but a wrong gate type there is how a page gets judged
-// against a component that does not exist (`crt.ContactCommunication` — the defect ENG-95555 catalogues by hand).
-// Reuses the table's own `rowComponentType` resolver (ENG-95683 RC-7) so the emit-over-verify precedence is
+// against a component that does not exist (`crt.ContactCommunication` is the case a hand-kept catalogue records).
+// Reuses the table's own `rowComponentType` resolver (RC-7) so the emit-over-verify precedence is
 // single-sourced with the gate lookup — a local copy here was free to drift from the one the gate resolves through.
 const namedType = rowComponentType;
 const isEmitter = (row) => !!namedType(row) || !!row?.target?.foldInto;
@@ -132,7 +133,7 @@ export const isAdvisory = (f) => ADVISORY.has(f.kind);
 // Validate the whole table. `errors` are the findings that must fail a build; `advisories` are recorded and do not.
 export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), version = null } = {}) {
   const findings = rows.flatMap((r) => validateRow(r, { index, version }));
-  // Table-wide invariant (ENG-95683): no component type may carry two divergent gates. This is a whole-table check,
+  // Table-wide invariant: no component type may carry two divergent gates. This is a whole-table check,
   // not a per-row one, so it is folded in here after the per-row findings. `gate-conflict` is a hard error.
   // ...and the sibling invariant: a gate must have the SHAPE the guidance reads. A malformed gate is silent-wrong
   // the same way a divergent one is (it degrades to the re-plan dead end), so `gate-shape` is a hard error too.
@@ -145,55 +146,10 @@ export function validateTable({ rows = MAPPING_ROWS, index = vendoredIndex(), ve
   };
 }
 
-// Ranked alternatives for a decision that has no derivable target. The registry's selection taxonomy
-// (`synonyms` / `useCases` / `whenToUse`) exists on 8 of 205 components, so a taxonomy-only ranking would answer
-// for 4% of the catalog and stay silent for the rest. Components WITHOUT taxonomy are therefore ranked by their
-// componentType text, and every candidate says which evidence put it there — a name match is a weaker reason than
-// a published `whenToUse`, and a reader must be able to tell them apart rather than see one undifferentiated list.
-// A candidate also carries `appliesToCustomEntities` / `entityCouplingNote` when the component publishes them —
-// evidence for the reader, never a filter: `appliesToCustomEntities` is `true` on every real component that has
-// it, so gating on `false` would be unreachable on real data and is not done here.
-// One component scored against the search terms — the candidate, or `null` when nothing matched. Own fn so
-// `rankCandidates` stays under Sonar's cognitive-complexity budget.
-function scoreCandidate(ctype, c, needles) {
-  const tax = c.taxonomy || {};
-  const taxText = [tax.synonyms, tax.useCases, tax.whenToUse].flat().filter((x) => typeof x === "string").join(" ").toLowerCase();
-  const nameText = ctype.toLowerCase();
-  let score = 0; const why = [];
-  for (const n of needles) {
-    if (taxText.includes(n)) { score += 3; why.push(`taxonomy mentions "${n}"`); }
-    else if (nameText.includes(n)) { score += 1; why.push(`type name contains "${n}"`); }
-  }
-  if (score === 0) return null;
-  const candidate = { componentType: ctype, score, evidence: why, hasTaxonomy: Object.keys(tax).length > 0 };
-  // Entity coupling is evidence for the reader deciding among candidates, never a gate: `appliesToCustomEntities`
-  // is `true` on every one of the 8/205 components that publish it (zero `false` in real data), so a branch
-  // keyed on `=== false` would be unreachable here and is deliberately not written. The two fields do not
-  // always co-occur (only 1 of the 8 also publishes `entityCouplingNote`), so each is read independently.
-  if (tax.appliesToCustomEntities !== undefined) candidate.appliesToCustomEntities = tax.appliesToCustomEntities;
-  if (tax.entityCouplingNote !== undefined) candidate.entityCouplingNote = tax.entityCouplingNote;
-  return candidate;
-}
-
-export function rankCandidates(terms, { index = vendoredIndex(), version = null, limit = 5 } = {}) {
-  const bit = version ? versionBit(version, index) : null;
-  const needles = (Array.isArray(terms) ? terms : [terms]).filter(Boolean).map((t) => String(t).toLowerCase());
-  const out = [];
-  for (const [ctype, c] of Object.entries(index.components || {})) {
-    if (bit !== null && (c.v & bit) === 0) continue;              // not on the target version — not a candidate
-    const candidate = scoreCandidate(ctype, c, needles);
-    if (candidate) out.push(candidate);
-  }
-  // Sorted in its own statement (not chained onto the return): highest score first, ties by type name so the
-  // ranking is stable rather than dependent on the index's key order.
-  out.sort((a, b) => b.score - a.score || a.componentType.localeCompare(b.componentType));
-  return out.slice(0, limit);
-}
-
 // ---- THE RUN-TIME REGISTRY: the stand's own answer, when there is one --------------------------------------
 // The vendored index is the offline fallback and the CI check's subject. A real migration can do better: the target
 // stand's registry, exported for ITS platform version. This is the half that makes the feature reachable on a real
-// run instead of waiting on a clio-side change — the failure mode ENG-95412's change 7 shipped with.
+// run instead of waiting on a clio-side change — the failure mode a stand-gated guard ships with.
 //
 // The channel is the MANIFEST, like `enumVocabulary`: manifests are how stand-derived facts already reach the
 // engine, and `get-classic-page-sources` is what writes them. `manifest.componentRegistry` is either the export
@@ -232,7 +188,7 @@ const pickMeta = (m) => {
 // cognitive-complexity ceiling (S3776, 22 against 15) — a fair signal, since the caller only has to decide WHICH of
 // its three source kinds it is looking at, and this is the whole of one of them.
 function indexFromRegistryFileRef(src, manifest, readFile) {
-  // ENG-96483 review (Blocker) — PARSE, then apply the SAME shape guard `resolveRunIndex`'s inline `components`
+  // PARSE, then apply the SAME shape guard `resolveRunIndex`'s inline `components`
   // branch applies, then convert. Accepting anything that merely parses as JSON made this the fail-open path inside fail-closed code:
   // `indexFromRegistryExport` defaults `components` to `[]`, so a manifest.json, a package.json, a truncated or
   // simply wrong download yielded an index with `componentCount: 0` reported as `source: "stand-export"` — the
@@ -319,7 +275,7 @@ export function validateRun(changeSet, { index = vendoredIndex(), version = null
   const findings = [];
   const bitCount = (index?.meta?.versions || []).length;
   for (const [ctype, why] of runTypes(changeSet)) {
-    // The structured gate intent for this type, resolved BY KIND from the shared rows (ENG-95683). Carried on the
+    // The structured gate intent for this type, resolved BY KIND from the shared rows. Carried on the
     // finding so the run-time guidance can branch by CAUSE — a gated composite (install/enable + re-run the build)
     // vs. a type no row gates (fix the mapping/plan and re-run `--plan --out`) — instead of one blanket "settle the
     // target" for both. It is attached to the resolution findings (absent / unknown), not to the compositeOnly

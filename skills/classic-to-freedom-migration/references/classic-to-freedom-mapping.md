@@ -52,6 +52,16 @@ package. Everything below follows from that one fact.
 Record the answers in `manifest.placement` (see SKILL.md step 3.1); `migrate.mjs --plan` refuses to
 present a plan until they are resolved.
 
+**`new-app` is ONE `create-app` call, never `create-app` followed by `create-app-section`.** Pass
+`optional-template-data-json` with BOTH `useExistingEntitySchema: true` and `entitySchemaName: "<Entity>"`
+(the entity must already exist), and the app's own section lands on your object. Omit them and Creatio
+mints a new canonical entity named after the app and a starter section on it — three pages that migrate
+nothing — and a following `create-app-section` then adds a second section beside that one. The two
+tools are not the same mechanism: `create-app` calls `AppInstallerService.svc/CreateApp`, the platform's
+app generator; `create-app-section` writes the section through `DataService/json/SyncReply/InsertQuery`,
+which is why it takes ~90 s, contends with itself, and has no template argument. Use it for a SECOND
+section in an app that already exists — the `existing-app` row above.
+
 **Never repair an app's package composition unasked.** Linking a package to an application or
 flipping its primary flag changes which package owns the app's identity and where the Section Wizard
 writes every future schema. Surface it as a decision; the user picks the host mode.
@@ -103,7 +113,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 
 > **Keep this in sync with the engine.** These rows encode the same standard-feature / widget knowledge as the
 > shared mapping table `../engine/mapping-table.mjs` (the FEATURE, WIDGET, PROFILE_CARD and CARD_ACTION rows —
-> the four hand catalogs that used to live in `mapper.mjs` were absorbed into it). The engine is what actually
+> the four hand catalogs that would otherwise live in `mapper.mjs` are absorbed into it). The engine is what actually
 > emits `standardFeatures` / `widgets` / `cardActions` at runtime; this table is the human-readable guidance and
 > the hand-mapping fallback when Node is unavailable. When you add, rename, or reclassify a feature/widget,
 > change **both in the same commit** — they must not drift.
@@ -115,7 +125,7 @@ right shape. Honor that shape; do not invent a generic Expanded-list.
 
 | Classic thing | Engine signal | Freedom target | Do NOT |
 | --- | --- | --- | --- |
-| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components — add BOTH, and `--verify` now gates BOTH (ENG-95859):** the approval **module/widget** (`crt.Approval`) as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). Before ENG-95859 only `crt.ApprovalList` was machine-checked, so a build that added just the list read the same as one that added both — see the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing — this now reads ❌ MISSING under `--verify`, not a proposal to raise). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
+| Approvals / Visa | `standardFeatures` `uiShape: "component"` | **TWO components — add BOTH, and `--verify` gates BOTH:** the approval **module/widget** (`crt.Approval`) as a **separate container ABOVE the profile island**, and the approval **list** (`crt.ApprovalList`, native — brings its own approve/reject actions, needs no child edit page). Gating only `crt.ApprovalList` would leave the other half unmachine-checked, so a build that added just the list read the same as one that added both — see the build recipe below. | rebuild as a plain list/DataGrid; **add only the list and stop** (the module above the island is missing — this now reads ❌ MISSING under `--verify`, not a proposal to raise). A Visa's records live in a `*Visa` entity (e.g. `ApplicantVisa`) with an FK to the master — that is *how Creatio stores Approvals*, NOT a reason to reclassify it as "a related list over ApplicantVisa". |
 | Attachments / Feed | `standardFeatures` `uiShape: "component"` | the native Attachments / Feed component | rebuild as a generic list. |
 | Activities / Emails | `standardFeatures` `uiShape: "list"` | a **filtered related list** — a DataGrid of the child records (Activity/Task, Email) filtered to the master. This IS their native form, not a downgrade. | turn them into a `crt.Timeline` or an email-client component. |
 | Means of communication (`ContactCommunication` — "Средства связи контакта") | `standardFeatures` `uiShape: "component"` (inferred by the `ContactCommunication` entity) | the native **Communication-options component** (`crt.CommunicationOptions`, the compositeOnly component the "Communication options" composite assembles — NOT `crt.ContactCommunication`, which is the ENTITY name; `get-component-info` for its contract — it requires the `CrtCustomer360App` package AND the `CommonCommunicationsBehavior` feature). | rebuild it as a plain Expanded-list / DataGrid over `ContactCommunication` (loses the typed add-communication UI, type icons). If the component/package is unavailable on the stand, RAISE it as a decision (add the dependency / confirm) — do NOT silently fall back to a grid. |
@@ -149,7 +159,7 @@ plan. The accepted pairs are a small **curated hand table** (`COMPONENT_ANALOGS`
 | `crt.ContactCommunication` (the `ContactCommunication` entity name with a `crt.` prefix — never a real component) | `crt.CommunicationOptions` (the native Communication-options component) | *Means of communication*, above |
 
 > **Interim, and deliberately so.** This table is the **hand-maintained** role/analog source until the
-> ENG-95543 component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
+> component registry lands; at that point `resolveComponentVk` / `componentTypesOf` repoint to the
 > registry (same expected set, one call site) and this table is retired. Until then, keep it in sync with the
 > rows above **in the same commit** — the engine constant and this table must not drift. Match STRICTLY against
 > a curated pair; a Freedom analog is never inferred from a name family, so a wrong component cannot falsely
@@ -170,7 +180,7 @@ alone doesn't say. Run each query at plan time and act on the result; never buil
 body" while a `⚠` on-stand check is still pending — the classic body having no dashboard/button does NOT mean
 the section has no case/process.
 
-**On-save duplicate check → does this entity have one, and will it survive?** (ENG-94274) Two separate facts,
+**On-save duplicate check → does this entity have one, and will it survive?** Two separate facts,
 because they fail differently.
 
 1. **Is there a rule?** `odata-read DuplicatesRule` (a `BaseLookup` in `CrtDeduplication`); select
@@ -493,9 +503,9 @@ above) — it is a different store, and only these `SysWidgetDashboard` card wid
 recognises each one and emits `changeSet.cardWidgets[]` plus a `card-widget` ⚠ item; this section is the build
 recipe.
 
-> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app, ENG-95805) and the clio
+> The migrator process `ConvertCardWidgetsProcess` (crt-dashboards-migrator-app) and the clio
 > `run-process` MCP tool are separate, sibling subtasks. The contract below is **verified against the released
-> migrator (ENG-95805)** — re-confirm the field names on each migrator release. If either dependency is not yet
+> migrator** — re-confirm the field names on each migrator release. If either dependency is not yet
 > available on the stand, the whole `card-widget` set stays `TODO`/`BLOCKED` — do NOT hand-build a substitute.
 
 **Recognise it — the Classic side.** In the page's `modules` block, a `CardWidgetModule` whose
@@ -524,7 +534,7 @@ reason; grepping the engine for `CardWidgetModule` will not explain it. An **inh
 from a base/seed layer, `fromTemplate`) is base-template chrome and is **not** emitted — only a card widget the
 page's own layer declares becomes a decision.
 
-**Ordered steps (contract verified against the released migrator, ENG-95805).**
+**Ordered steps (contract verified against the released migrator).**
 
 1. **Take the engine's output.** Work `changeSet.cardWidgets[]` (each `{ key, widgetKey, recordId, region }`)
    / the `card-widget` ⚠ items. Do not re-derive the coordinates by hand.

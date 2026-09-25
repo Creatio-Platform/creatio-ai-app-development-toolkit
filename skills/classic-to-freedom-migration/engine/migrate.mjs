@@ -2,9 +2,9 @@
 //
 // Turns the raw Classic schema bodies (assembled by clio get-classic-page-sources, or the
 // manual fallback) into one effective Classic page and a Freedom ChangeSet + needsDecision[]. This is the
-// deterministic 80% the skill used to ask the agent to do by hand (enumerate chain → merge diff/details/
+// deterministic 80% of the work the skill would otherwise ask the agent to do by hand (enumerate chain → merge diff/details/
 // businessRules by eye). A thin I/O wrapper over engine.mjs (mergeHierarchy) + mapper.mjs (mapToFreedom); the
-// golden runners (repo-root engine-tests/classic-to-freedom/run.mjs + run-mapper.mjs) remain the regression gate for the logic itself.
+// golden runners (repo-root engine-tests/classic-to-freedom/run.mjs + run-mapper.mjs) are the gate for the logic itself.
 //
 // Manifest shape (JSON):
 //   {
@@ -17,9 +17,9 @@
 //     "detailSchemas": { "Schema1Detail": "<define(...) body>" | { "body"|"file", "title", "entity" }, … }, // optional; detail body → entity + list columns; title → detail display name (#11ii)
 //        // per-detail CHILD-PAGE resolution (the structure gate accepts exactly these): `"editPage": false` (no Classic *Page exists) ·
 //        // `"reuseFreedomPage": "<Freedom form page>"` (the child already ships one) · `"opensClassicPage": "<Classic page>" | true`
-//        // + optional `"ownSection": "<Section>"` (ENG-95861 — the child entity owns ANOTHER SECTION: its Classic card stays
+//        // + optional `"ownSection": "<Section>"` (the child entity owns ANOTHER SECTION: its Classic card stays
 //        // Classic, this related list keeps opening it, the page is NEVER folded and publishes no deliverable)
-//     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed (ENG-93928). Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
+//     "profileSchemas": { "AccountProfileSchema": "<define(...) body>" | { "body"|"file", "entity" }, … }, // REQUIRED once the page embeds a profile card: the embedded profile schema → profiled entity + the columns the card displayed. Fetch with `get-client-unit-schema --schema-name <SchemaName>`; the structure gate blocks until each recognised card's schema is supplied.
 //     "section": [ { "pkg": "HRApplicant/…", "body"|"file": … }, … ], // optional; the *Section chain → add-record mini page, section actions (#8b), list columns (#2)
 //     "childPageSchemas": { "<editPage or child entity>": { …a NESTED manifest (schemas/seed/…)… }, … }, // optional; each related list's child EDIT PAGE → the engine recursively maps it and nests its design spec in the plan
 //     "planMeta": { scope, environment, package, approach, whatItDoes, sectionSchema, formTemplate }, // optional; fills the plan's Overview/Main-scope so `--plan --out plan.md` writes a COMPLETE plan (no hand-paste). `listTemplate` is NOT supplied — the engine fixes it to ListPageV3Template (see checklistOpts); pass one only to override.
@@ -48,13 +48,24 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseSchema, mergeHierarchy, enumDriftIssues } from "./engine.mjs";
-import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView } from "./mapper.mjs";
+import { mapToFreedom, isScaffoldingMethod, buildListChangeSet, isDecorationItem, mapSectionView,
+  SECTION_VIEW_METHODS } from "./mapper.mjs";
 import { resolveRunIndex, validateRun } from "./mapping-registry.mjs";
 import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
+import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
+  REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
+  readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
+  NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
+  applyDecision, revokeDecision, decidedRowKeys, unappliedDecisions, firstDispatchPending,
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
+import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
+import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
+import { renderFinalReport, readDecisions } from "./report.mjs";
 
 // The structure issue (if any) a single child page contributes to the STRUCTURE VALIDATOR: a real Classic
 // edit page that was not mapped, or a not-yet-verified child, is a gap; a mapped / verified-none / reuse
@@ -74,19 +85,19 @@ function childPageIssue(c) {
   // Positive evidence required: the agent supplies the Freedom page NAME, verified with list-entity-client-schemas
   // (a `kind: "freedom"` section/edit page for the CHILD entity) — the absence of a working fold is NOT a reason.
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return null;
-  // THE SECTION BOUNDARY (ENG-95861). The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
+  // THE SECTION BOUNDARY. The child entity owns ANOTHER SECTION, and the user drew that line: on Freedom
   // this related list keeps opening the child's CLASSIC card, which the platform handles, so the child is RESOLVED —
   // not a gap, and not the self-declared skip the rule above forbids (that rule stops an AGENT dropping a child
   // because it looks big or shared; a boundary is the USER's scope decision, recorded in the manifest).
   // This is the resolution that keeps the fold from happening at all (`foldOneChildPage` returns early), so a warning
-  // inside a page NOBODY IS MIGRATING can no longer block the parent's gate — the whole cost of the run this fixes.
+  // inside a page NOBODY IS MIGRATING must not block the parent's gate — the whole cost of the run this prevents.
   if (boundaryChild(c)) return null;
   if (c.spec) return c.childStructIncomplete
     ? `child page '${c.resolvedFrom || c.editPage}' (${c.entity}) was mapped but its OWN structure is incomplete — supply its nested detail/child-page schemas; there is no "out of scope"`
     : null;
   // A REAL Classic edit page must be mapped REGARDLESS of the add-record button — hiding Add stops NEW records,
   // not editing EXISTING ones, so the edit page still governs the record UI. Checked FIRST, so a hidden-Add
-  // heuristic can never waive a real child page (Major).
+  // heuristic can never waive a real child page.
   if (typeof c.editPage === "string" && c.editPage)
     return `child page '${c.editPage}' (${c.entity}, opened by detail "${c.via}"): a REAL Classic edit page is NOT mapped — add its schema to manifest.childPageSchemas. There is no "out of scope".`;
   if (c.editPage === false) return null;                       // agent verified: no Classic *Page exists
@@ -97,7 +108,7 @@ function childPageIssue(c) {
 }
 
 // ONE resolve → cycle-check → memo → recurse → cache sequence for folding a nested sub-page (child / typed /
-// mini), so the three call sites can no longer drift on cycle or memo semantics (a fix to one used to be easy to
+// mini), so the three call sites cannot drift on cycle or memo semantics (a change to one is easy to
 // miss in the other two). Callers pass the resolved `key` + its schema map + the shared fold context, and only
 // differ in how they map the returned `res` (a runMigration result) onto their OWN record shape. Returns:
 //   { status: "cycle" }        — key is an ancestor on THIS branch → resolved-elsewhere; do not recurse.
@@ -132,8 +143,8 @@ function foldSubPage(key, schemasMap, ctx, extra = {}) {
     // `targetPackage: null` for every grandchild. Deliberately NOT part of `extra` (it must not enter the memo key:
     // one run has exactly one target package, so it cannot vary between two folds of the same key).
     // `inheritedSignals` rides along for the same reason and with the same memo rule: the on-stand answers are
-    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) used to see `{}` and every
-    // signal-driven row — the DCM widget gate, and the ENG-94274 on-save duplicate check — silently vanished
+    // recorded ONCE on the ROOT manifest, so a child bundle (which has none) would see `{}` and every
+    // signal-driven row — the DCM widget gate, and the on-save duplicate check — would silently vanish
     // below the root. Deliberately NOT part of `extra`: a run has exactly ONE signals object, so it cannot vary
     // between two folds of the same key and must not enter the memo key.
     const res = runMigration(schemasMap[key], { baseDir: ctx.baseDir, visited: new Set([...ctx.visited, key]), memo: ctx.memo, memoStats: ctx.memoStats, inheritedBehaviourIndex: ctx.behaviourIndexInput, scopeSchema: key, runTargetPackage: ctx.targetPackage, inheritedSignals: ctx.signals, ...extra });
@@ -166,7 +177,7 @@ function isStructuralDiag(d) {
   return IDENTITY_FIELDS.has(seg[2]);
 }
 
-// ENG-95862 — the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
+// the SEVERITY axis on `eff.warnings`, and the operator's escape hatch for the advisory half.
 //
 // `engine.mjs` now tags every warning `correctness` (the op targeted an item no lower schema defined, or the seed is
 // not a real body) or `fidelity` (the mapping is RIGHT; an effect of the op is not represented in the item model).
@@ -208,8 +219,8 @@ function applyWarningDispositions(warnings, manifest) {
 }
 
 // The gate's warning reason, or null. Quotes each blocking warning's OWN hint: the single summary string this line
-// used to append to all eight producers ("op hit a missing item / skeletal seed") described a condition that was
-// provably absent on the run it blocked, and sent the remedy search to the wrong file for 12 hours.
+// would otherwise append to all eight producers ("op hit a missing item / skeletal seed") describes a condition that can be
+// provably absent on the run it blocks, and sends the remedy search to the wrong file.
 function warningsReason(warnings) {
   const blocking = (warnings || []).filter(isCorrectnessWarning);
   if (!blocking.length) return null;
@@ -253,10 +264,10 @@ function computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages,
   return { blocked: reasons.length > 0, reasons };
 }
 
-// THE LIST GATE (ENG-94714). `computeGate` above answers for the RECORD page and deliberately excludes everything
-// tagged `role: "section"` — a filter added because a section body that would not parse used to block a form-page
+// THE LIST GATE. `computeGate` above answers for the RECORD page and deliberately excludes everything
+// tagged `role: "section"` — a filter that exists because a section body that will not parse must not block a form-page
 // plan that never consumed its `diff` (the spurious block recorded further down at the `sectionParseErrors` note).
-// That exclusion was right then and is wrong now for HALF its scope: since the section `diff` IS folded and mapped,
+// That exclusion is right for HALF its scope: since the section `diff` IS folded and mapped,
 // a structural gap in it means the LIST page is built from an incomplete reading — while the form page is still
 // perfectly fine.
 //
@@ -301,7 +312,7 @@ function typedPageIssue(t) {
   return `typed page '${t.schema}'${typeNote}: NOT resolved — assemble its bundle (\`get-classic-page-sources --schema-name ${t.schema}\`) into manifest.typedPageSchemas so the engine folds its full per-type form, OR mark { "bindOnly": true } if its layout is identical to the base. "Map at build" is not a valid resolution.`;
 }
 
-// ENG-93928 — parse each supplied EMBEDDED PROFILE schema (the little declarative page a profile card renders,
+// parse each supplied EMBEDDED PROFILE schema (the little declarative page a profile card renders,
 // e.g. `AccountProfileSchema`) so the mapper knows the PROFILED entity and which columns the classic card
 // displayed. Same shape as a detail record, minus the detail-only concerns (no child edit page / FK).
 function parseProfileSchemas(manifest, bodyOf) {
@@ -438,7 +449,7 @@ function enumerateChildPages(changeSet, detailSchemas) {
       editable: ds ? ds.editable : null,
       // agent-verified: the child entity already has a shipped Freedom form page → Reuse, nothing to rebuild
       reuseFreedomPage: ds ? (ds.reuseFreedomPage ?? null) : null,
-      // USER-approved section boundary (ENG-95861): the child entity owns another section, so its Classic card stays
+      // USER-approved section boundary: the child entity owns another section, so its Classic card stays
       // Classic and this list keeps opening it. Carried here as well as parsed on the detail record — a key present
       // in only one of the two places reaches no gate and no renderer, and fails silently.
       opensClassicPage: ds ? (ds.opensClassicPage ?? null) : null,
@@ -491,23 +502,45 @@ function memberDigestOf(changeSet, scopeSchema) {
 // Schema label NEVER null: the main-page scope already owns the null-schema key form (bare `method` / `kind:item`),
 // so a second null-schema scope would collapse both scopes' digest keys into one coverage row. When
 // `planMeta.sectionSchema` is absent the deterministic literal `Section` keeps the keys distinct.
-function sectionStubScopes(manifest, opts, sectionEff) {
-  if (opts.scopeSchema || !sectionEff) return [];
-  const changeSet = mapToFreedom(sectionEff, {
+// The section scope's label, used by the step-5.1 digest AND by the fold that applies the answers back. One
+// source: two fallbacks that disagree make the handoff ask for `<label>::<method>` and the apply pass resolve a
+// different spelling, so the answer comes back matched and lands on nothing.
+const sectionScopeLabel = (manifest) => manifest.planMeta?.sectionSchema || "Section";
+// What the list page takes from the section body: its imperative MEMBERS only, and its methods marked where the
+// list analyzer already read them. `mapToFreedom` maps a RECORD page, so its view-shaped decisions (containers,
+// field controls, field labels) describe regions a list page does not have — `mapSectionView` owns those facts.
+function sectionCodeForList(sectionChangeSet) {
+  if (!sectionChangeSet) return null;
+  return {
+    // COPY every stub, not only the marked ones: the list fold applies cards onto what it is handed, and a
+    // half-copied array leaves the digest's own objects carrying some of them and not others.
+    handlerStubs: (sectionChangeSet.handlerStubs || []).map((h) =>
+      (SECTION_VIEW_METHODS.has(h.sourceMethod) ? { ...h, listMapped: true } : { ...h })),
+    needsDecision: (sectionChangeSet.needsDecision || []).filter((d) => MEMBER_WORKLIST_KINDS.has(d.kind)),
+  };
+}
+function sectionChangeSetOf(manifest, opts, sectionEff) {
+  if (opts.scopeSchema || !sectionEff) return null;
+  return mapToFreedom(sectionEff, {
     entityColumns: manifest.entityColumns || {},
     resources: manifest.resources || {},
   });
-  const schema = manifest.planMeta?.sectionSchema || "Section";
-  return [stubScope("section", schema, changeSet, changeSet.standardMethodsFiltered)];
+}
+// ONE section ChangeSet, TWO consumers, for the reason `foldSectionView` states above: this digest, and the list
+// page's own method / imperative-member rows. Discarding it leaves a section's methods in the handoff and in no row.
+function sectionStubScopes(manifest, opts, sectionChangeSet) {
+  if (!sectionChangeSet) return [];
+  const schema = sectionScopeLabel(manifest);
+  return [stubScope("section", schema, sectionChangeSet, sectionChangeSet.standardMethodsFiltered)];
 }
 
-// THE SECTION VIEW (ENG-94714). The *Section chain folded over its OWN parent-template seed — the same
+// THE SECTION VIEW. The *Section chain folded over its OWN parent-template seed — the same
 // `mergeHierarchy` the record page uses, given the section's own `BaseDataView` chain instead of the page's
 // `BaseModulePageV2` one. `null` when no section chain was supplied, so every consumer has one thing to test.
 //
-// ONE fold, TWO consumers, on purpose. It used to be computed inside `sectionStubScopes` and thrown away with
-// that function's ChangeSet; the list page could not see it, which is why every element a section declared in its
-// `diff` was dropped. Folding it twice would be the other way to share it, and would let the two readings of the
+// ONE fold, TWO consumers, on purpose. Computing it inside `sectionStubScopes` throws it away with
+// that function's ChangeSet, leaving the list page unable to see it, which drops every element a section declares in its
+// `diff`. Folding it twice would be the other way to share it, and would let the two readings of the
 // same chain drift apart — the exact failure `mapping-table.mjs` was created to end.
 //
 // SEEDED, unlike the call this replaces. Without `seedTemplate` the fold has no `DataGrid`, no
@@ -523,7 +556,7 @@ function foldSectionView(sectionSchemas, sectionSeed) {
 
 // One handoff scope = one schema whose imperative rows are worked as a unit. Kept as a FLAT list of scopes rather
 // than one merged array so a caller can hand over (or stage) a single page — the staged-processing direction of
-// ENG-94859 — without re-deriving which method belongs to which schema.
+// without re-deriving which method belongs to which schema.
 function stubScope(role, schema, changeSet, standardMethodsFiltered) {
   const stubs = stubDigestOf(changeSet);
   const members = memberDigestOf(changeSet, schema);
@@ -604,14 +637,14 @@ function describedInOf(entry) {
   const ac = Array.isArray(entry.ac) ? entry.ac.filter((a) => typeof a === "string") : [];
   const bodyCard = cardRef(entry.bodyCard);
   const bodyAc = Array.isArray(entry.bodyAc) ? entry.bodyAc.filter((a) => typeof a === "string") : [];
-  // ENG-96534 — the plain-language plan columns (What the item does / Use case). Free prose the step-5.1 analyst
+  // the plain-language plan columns (What the item does / Use case). Free prose the step-5.1 analyst
   // authored on the behaviour card (`whatItDoes` from the card's "What it is"; `useCase` a non-technical step-by-step
   // it writes). Sanitized to a trimmed non-empty string; the renderer escapes it into the cell. Either alone counts
   // as a description, so a row carrying only these still sets `describedIn`.
   const prose = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const whatItDoes = prose(entry.whatItDoes);
   const useCase = prose(entry.useCase);
-  // PR #147 review — a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
+  // a CARD is what makes a row described; bare acceptance criteria are not. `INDEX_ENTRY` sets
   // no `minLength`, so `{ key, card: "", ac: ["AC-1"] }` is schema-valid and is exactly what a merge agent emits
   // for "nowhere to put one". Accepting it on `ac.length` made the two legs disagree about the same entry: the
   // engine counted the row as carrying a behaviour card while the workflow's `hasCard` (helpers.mjs) counted it
@@ -727,7 +760,7 @@ function scopeDigestKeys(scopes) {
     // Both spellings, mirroring the stub leg above: `applyBehaviourIndex` resolves a member through
     // `behaviourEntry` with a scoped-first-then-bare fallback, so a bare `<kind>:<item>` index key is
     // genuinely applied to a scoped row. Indexing only `m.key` (the scoped form in any scoped scope)
-    // would make `unmatchedIndexKeys` / `sectionOnlyIndexKeys` report such a key as matching nothing
+    // would make `unmatchedIndexKeys` report such a key as matching nothing
     // while the row itself shows the card applied.
     for (const m of s.members) { seen.add(m.key); seen.add(`${m.kind}:${m.item}`); }
   }
@@ -739,17 +772,6 @@ function unmatchedIndexKeys(index, stubIndex) {
   const seen = scopeDigestKeys(stubIndex);
   return keys.filter((k) => !seen.has(k));
 }
-// Index keys addressing ONLY the section scope. They are matched (not `unmatched`) — but applyBehaviourIndex
-// folds cards into PAGE rows only, so a section-only answer produces no plan artifact: no worklist row cites
-// its card. Surfaced as a separate advisory list so "matched" cannot read as "rendered in the plan".
-function sectionOnlyIndexKeys(index, stubIndex) {
-  const keys = Object.keys(plainObject(index));
-  if (!keys.length) return [];
-  const pageKeys = scopeDigestKeys(stubIndex.filter((s) => s.role !== "section"));
-  const sectionKeys = scopeDigestKeys(stubIndex.filter((s) => s.role === "section"));
-  return keys.filter((k) => sectionKeys.has(k) && !pageKeys.has(k));
-}
-
 // Rows whose body PROVABLY lives in another schema, described by a wiring card alone (`card`, no `bodyCard`).
 // Only the mechanically provable kinds are flagged: a `mixin:` member (one row, one external body, and the
 // analysis contract cards every mixin body) and an `externalRef` method (assigned from exactly one other module).
@@ -790,7 +812,7 @@ function wiringOnlyKeys(index, stubIndex) {
 // still a `<FILL: …>` placeholder. planMeta is declared optional (so `--spec`/default runs don't need it), so
 // its absence was never gated: an unfilled plan passed exit 0 with "present verbatim". Surface the missing
 // keys so the CLI turns an unfilled `--plan` into a non-zero exit, like the other incompleteness gates.
-// ENG-96327 — Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
+// Freedom has ONE list-page template, so `listTemplate` is NOT a required `<FILL:>` planMeta value: it
 // DEFAULTS to this (see `checklistOpts`), an explicit `planMeta.listTemplate` still overrides. `formTemplate` stays
 // required — a genuine multi-way choice (top-area / progress-bar / mini / …).
 const DEFAULT_LIST_TEMPLATE = "ListPageV3Template";
@@ -801,7 +823,7 @@ const REQUIRED_PLANMETA = ["scope", "environment", "package", "approach", "whatI
 // answers in `manifest.signals`, each key `{ resolved:true, present:<bool>, cases|items|names?:[…] }`. An
 // absent/unresolved key makes --plan INCOMPLETE (like planMeta). `present:false` (checked, none) is a VALID
 // resolved state — the distinction is "verified none" vs "never checked", exactly like child-page editPage.
-// `deduplication` (ENG-94274) joins them for exactly the same reason: the on-save duplicate check is an
+// `deduplication` joins them for exactly the same reason: the on-save duplicate check is an
 // `asyncValidate` override on `CrtDeduplication.BaseEntityPage`, so it arrives via the base seed chain, counts as
 // `fromTemplate`, and is classified as ledger `context` — the page body NEVER shows it, and a migration therefore
 // dropped it in total silence. Its answer carries one extra field beyond present/absent:
@@ -902,13 +924,13 @@ function existingAppIssues(p, target) {
   return issues;
 }
 // ONE opts object for every row-rendering entry point (`--checklist`, `--verify`, the plan/spec renderers) and
-// for the sub-page folds. `--checklist` and `--verify` used to build their own, and the verify one was thinner
-// (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agreed only for as long
-// as no row helper read the gap, and the first helper that did would silently render two different row sets.
+// for the sub-page folds. `--checklist` and `--verify` building their own risks a thinner verify one
+// (no targetPackage / planMetaMissing / signalsMissing / isMiniPage / isChildPage): they agree only for as long
+// as no row helper reads the gap, and the first helper that did would silently render two different row sets.
 // Pure in `manifest` + the run flags, so it can be built BEFORE the fold and shared with every sub-page.
 export function checklistOpts(manifest, opts = {}) {
   const blank = (v) => v == null || String(v).trim() === "";
-  // ENG-96327 — default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
+  // default the single-valued `listTemplate` (see DEFAULT_LIST_TEMPLATE) so the plan never shows a
   // `<FILL: list template>` for it; an explicit `planMeta.listTemplate` still wins. Both `planMetaMissing` and the
   // renderers read this normalized `pm`, so the Main-scope/Overview row and the missing-key gate see the default.
   const pm0 = manifest.planMeta || {};
@@ -991,7 +1013,7 @@ function foldChildPages(childPages, childSchemas, foldCtx) {
 }
 // A child that is NOT rebuilt here still publishes its page key when it owes a deliverable — with a GATED row.
 // A reuse child owes the RelatedPage binding; a child whose Classic page exists (or was never verified) owes the
-// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (ENG-95861 — its
+// whole page. A child verified to have NO separate page, one behind an approved SECTION BOUNDARY (its
 // Classic card stays Classic, so this plan builds nothing for it), one already mapped higher on this branch (cycle)
 // and one whose bundle failed to parse owe nothing that a built-page check could close, so they publish no key at
 // all and keep only the parent's identity row — a gated row there would be a permanent false red, and the last two
@@ -1007,7 +1029,7 @@ function publishUnfoldedChild(c, pageKey) {
   publishPage(c, pageKey, c.via, `unresolved::${pageKey}`, (k) => unresolvedChildGroups(k, c));
 }
 // The needsDecision kinds that represent REAL ported logic (as opposed to widget / registry / cosmetic / placement
-// advisories) — used to tell a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
+// advisories) — tells a formless INLINE-GRID child (0 fields but real logic to port) from an EMPTY one.
 const LOGIC_BEARING_KINDS = new Set([...IMPERATIVE_MEMBER_KINDS, "attribute-dependency", "rule", "entity-filter", "method"]);
 function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // Reuse of an existing Freedom form page: there is no rebuild, so do NOT fold the Classic child tree even if a
@@ -1015,7 +1037,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage) return publishUnfoldedChild(c, pageKey);
   // THE SECTION BOUNDARY, and the reason this ticket exists: the child's page is NOT FOLDED. No recursive
   // sub-migration, so no sub-run gate, so no `c.childBlocked` — and `migrate.mjs`'s `filter(c => c.childBlocked)`
-  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card used to be mandatory, and
+  // cannot see a page this plan is not migrating. A 3.3 MB fold of another section's card would otherwise be mandatory, and
   // ONE of that card's own merge warnings was enough to ⛔ the parent plan for work nobody had asked for.
   // Checked AFTER `reuseFreedomPage` on purpose: if the child already ships a Freedom form, reuse is the better
   // answer (the related list opens Freedom rather than staying on Classic), and it owes a binding row this does not.
@@ -1040,7 +1062,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   // mini template while its OWN design spec recommended the grid one.
   c.hasTabs = (res.changeSet?.viewConfigDiff || []).some(isTabOp);
   c.nDetails = (res.changeSet?.details || []).length + (res.changeSet?.standardFeatures || []).filter((s) => s.uiShape === "list").length;
-  // ENG-96327 — a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
+  // a cleanly-folded child with NO form fields, tabs or sub-details is NOT a form page: it is an
   // inline-editable grid / logic-only schema (a ConfigurationGrid detail — editing is inline in the related-list
   // rows; the body is only an attribute lookup-filter + column-render methods). Distinguished from a skeletal / bad
   // bundle by whether it carries behaviour. Marked so the plan does not mislabel it `Rebuild (child) → form page`
@@ -1058,7 +1080,7 @@ function foldOneChildPage(c, pageKey, childSchemas, foldCtx) {
   }
   c.childPages = res.childPages || [];     // carry resolved grandchildren up for recursive embedding
   c.grandChildren = c.childPages.length;
-  c.childBlocked = !!res.gate?.blocked;    // Major 3: a nested child's spec is valid only if it cleared its OWN gates
+  c.childBlocked = !!res.gate?.blocked;    // a nested child's spec is valid only if it cleared its OWN gates
   c.childReasons = res.gate?.reasons || [];
   c.childStructIncomplete = !!(res.structure && !res.structure.complete);
   c.childCoverage = res.coverage || null;   // the child's own member ledger — aggregated into the parent's gate
@@ -1084,7 +1106,7 @@ function foldTypedPages(typedPages, typedSchemas, foldCtx) {
     if (t.bindOnly === true) { t.resolved = "bind"; continue; }
     const tkey = [t.schema, t.schema && t.schema + "Page"].find((k) => k && typedSchemas[k]);
     if (!tkey) { t.resolved = false; continue; }
-    // ENG-96327 (e5350b5) — `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
+    // `formOnly` so the per-type spec renders EMBEDDED (no header/Size/Member-ledger) and skips
     // the List-page block: a typed page is NOT its own section; the ONE list page is rendered once by the base fold.
     const f = foldSubPage(tkey, typedSchemas, foldCtx, { formOnly: true });
     if (f.status === "cycle") { t.cyclic = true; t.resolved = "cycle"; continue; }
@@ -1182,7 +1204,7 @@ function addModeGuidance(am) {
   else if (openCardIsTheWholeStory(am)) g.push("Reproduce the overridden add-card flow with a CUSTOM add request-handler that performs the same open-card logic; do not fall back to the default related-list add.");
   else if (am.addDisabled && !am.customAction) g.push("There is no add flow to reproduce: build it as a read-only / attach-only related list, with no add button.");
   if (am.service) g.push("VERIFY that service is deployed on-stand (else port its logic to a process/service).");
-  // ENG-96327 (81305bd) — no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
+  // no crt.DataGrid inline-edit build recipe here: HOW to enable inline edit (the component
   // property, resolved via get-component-info) is builder mechanics, not plan content. The human fact (this detail
   // is inline-editable, and WHICH columns) is already stated by `describeAddMode`.
   return g;
@@ -1208,7 +1230,7 @@ export function attachDetailAddModes(changeSet, detailSchemas) {
     const parts = describeAddMode(am);
     const guidance = addModeGuidance(am);
     const label = detailLabel(d);
-    // ENG-96327 — an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
+    // an INLINE-EDITABLE grid is ALL this detail is (no lookup/service/custom-action/add-disabled/
     // fixed-filters/open-card override) → the row only restates the Layout table's `⚠ INLINE-EDITABLE` note (which
     // even lists the editable columns), with no extra guidance. Flag it so the ⚠ Confirm renderer can drop it as
     // shown-in-table noise, while a detail with a real add mechanism (its guidance has no other home) stays.
@@ -1269,7 +1291,7 @@ function diagnosticOwner(p, schema) {
 const TEMPLATE_OWNED_LIST_KEY = { attribute: "attributes", message: "messages", mixin: "mixins" };
 // The set of member NAMES, per ownerKind, that no CLIENT schema touched (`fromTemplate`) — built once per run
 // from `eff`, the same source `buildCoverage` reads. A name in this set already gets ledger disposition `context`
-// (ENG-95412 follow-up: `disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
+// (`disposition()` ranks `decision` above `context`, so escalating a parse gap on one of
 // these to `needsDecision` would silently promote it out of `context` — asking a human to resolve a value that
 // belongs to the platform's own template, not to anything the client wrote).
 function templateOwnedNames(eff) {
@@ -1297,8 +1319,8 @@ function diagnosticGapText(d, p) {
 // section schema and a main schema can legitimately carry the same `pkg`, and they are different bodies to open.
 const diagTag = (pkg, role) => (role === "section" ? `section::${pkg}` : String(pkg ?? ""));
 // Routes the pkg-tagged diagnostic POOL (not just the main-page chain): main + seed, `detail:<name>`,
-// `profile:<name>` and section layers all reach the plan. Previously this took `schemas` alone, so four of the five
-// layer kinds stayed console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
+// `profile:<name>` and section layers all reach the plan. Taking `schemas` alone would leave four of the five
+// layer kinds console-only — the exact failure the block above exists to fix. `schemaByTag` resolves a
 // `diff.<n>` path back to its element name; a layer that is not in the map still routes by `diff[<n>]`.
 // AC22: the owning member's OWN row must say the value could not be read. The `⚠ Imperative members` table prints
 // `needsDecision[].detail` (designspec `imperativeMemberRows` filters `needsDecision`, so the ledger's `SOURCES`
@@ -1344,7 +1366,7 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, te
     // A member no CLIENT schema touched is inherited base-template content — the coverage ledger already counts
     // it `context` (excluded by design, never a gap). Escalating its parse ambiguity to `needsDecision` would rank
     // it `decision` instead (disposition() ranks decision above context) and hand a human a platform-owned value
-    // that isn't theirs to resolve and carries no new information — the exact defect ENG-95412's reopening found.
+    // that isn't theirs to resolve and carries no new information.
     // `templateOwned` is built from `eff` (main + seed chain ONLY, see call site) and keyed by NAME alone — a
     // detail/profile/section schema can declare its own member under a name that collides with an unrelated
     // template-owned main-page member. `templateOwnedTags` gates the lookup to diagnostics that actually came
@@ -1370,7 +1392,7 @@ function reportRemainingDiagnostics(parseDiagnostics, schemaByTag, changeSet, te
 // `char.IsLetter`/`char.IsLetterOrDigit`, which are Unicode-aware — an ASCII-only `[A-Za-z][\w.]*` rejects output
 // clio legitimately returns, so the class is spelled with Unicode properties to match the producing contract.
 const RESOLVED_COLUMN_PATH = /^\p{L}[\p{L}\p{N}_.]*$/u;
-// ENG-95850 (D) — `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
+// `profile` BELONGS HERE. `get-classic-list-columns` returns `source: "profile"` for the saved grid
 // profile the section ACTUALLY renders, and its own contract says a product section usually resolves to exactly that
 // ("A product section usually resolves to profile: its code declares far fewer columns than the list shows").
 // Leaving it out of this list rejected the tool's most common and most accurate answer as MALFORMED, and the run then
@@ -1468,14 +1490,14 @@ function normalizeResolvedListColumns(value, expectedEntity, expectedSectionSche
 // instead, because "no section chain" is already a first-class STRUCTURE issue that designspec renders with its
 // own cause + remedy — a gate reason, not an abort.
 // `rowActions` — one entry per `DataGridActiveRow…` item the section declares, `{ name, caption?, condition?, package? }`.
-// Still accepted after ENG-94714 taught the fold to produce these itself: a run that collected no section bundle
+// Accepted alongside the fold's own production of these: a run that collected no section bundle
 // (no `section.schemas`/`section.seed`) has no fold to read them from, and a row action read by hand off a stand must
 // still reach the plan. Unioned with the fold's own entries, and the FOLD wins — see `mergeRowActions`.
 function suppliedRowActions(section) {
   const list = Array.isArray(section?.rowActions) ? section.rowActions : [];
   return list.filter((ra) => ra && typeof ra === "object" && typeof ra.name === "string" && ra.name.trim());
 }
-// `seed` — the section's OWN parent-template chain (ENG-94714), the same shape as the top-level `manifest.seed`
+// `seed` — the section's OWN parent-template chain, the same shape as the top-level `manifest.seed`
 // and collected the same way: a SECOND `get-classic-page-sources` call rooted at the *Section schema, whose
 // `seed` block is copied here. It is what defines `CombinedModeActionButtonsCardLeftContainer`, `DataGrid` and
 // `activeRowActions` (`BaseDataView` [`CrtUIPlatform7x`]), so without it every section element merges onto
@@ -1607,7 +1629,7 @@ export function mergeSectionActions(fromLayers = []) {
 
 // Row actions from BOTH sources, deduped by name, the LAYER entry winning: the automated fold is derived from the
 // section itself, so a manifest entry supplied while that fold does not exist yet must never mask it once it does.
-// EXPORTED as the seam this precedence rule is asserted through. Since ENG-94714 the fold arm is live (it carries
+// EXPORTED as the seam this precedence rule is asserted through. The fold arm is live (it carries
 // the `activeRowActions` items `mapSectionView` read), so the rule now decides a real collision rather than a
 // hypothetical one.
 export function mergeRowActions(fromLayers = [], fromManifest = []) {
@@ -1643,7 +1665,7 @@ function diffActionAsSectionAction(a) {
     source: a.source || "sectionDiff",
   };
 }
-// `sectionView` (ENG-94714) — what the section declares in its OWN `diff`, read off the folded section view by
+// `sectionView` — what the section declares in its OWN `diff`, read off the folded section view by
 // `mapSectionView`. Unioned with the method-body signals below rather than replacing them: the two sources see
 // different halves of the same list. `getSectionActions` reads the menu the section builds imperatively; the
 // `diff` declares the buttons it inserts into the command bar, and until now only the first half reached the plan.
@@ -1730,10 +1752,10 @@ function resolveDetailBody(name, e, bodyOf) {
 // eval'd); returns the mechanism descriptor or null for a plain list. Extracted for Sonar CC 15.
 // Exported for a direct perf/ReDoS golden: every text-scan below uses BOUNDED quantifiers ([\s\S]{0,80}? etc.) or a
 // linear global match — no nested/ambiguous quantifier — so a large adversarial body stays linear (no catastrophic
-// backtracking). engine.mjs documents a prior ~32s/700KB regression fixed exactly this way. GUARDED by two goldens in
+// backtracking). engine.mjs documents why the quantifiers are bounded: an unbounded one costs ~32s on 700KB. GUARDED by two goldens in
 // engine-tests/classic-to-freedom/run-mapper.mjs — a wall-clock timing bound on a ~700KB adversarial body
-// ("Minor4 ReDoS: detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
-// ({0,N}) ("Minor4 structural …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
+// ("ReDoS (timing): detectAddMode …") and a timing-independent structural assert that every `[\s\S]` run stays bounded
+// ({0,N}) ("ReDoS (structural) …") — so a future edit reintroducing exponential backtracking fails a test, not prose.
 export function detectAddMode(body) {
   const svcM = /["']serviceName["']\s*:\s*["']([A-Za-z][\w.]*)["']/.exec(body);
   const methM = /["']methodName["']\s*:\s*["']([A-Za-z]\w+)["']/.exec(body);
@@ -1806,7 +1828,7 @@ function detailSchemaRecord(e, scanText, p) {
     // agent-verified Reuse: the child entity already has a shipped Freedom form page (name supplied here), so
     // the Freedom related list opens that page and the Classic child page is superseded, not rebuilt.
     reuseFreedomPage: (typeof eObj.reuseFreedomPage === "string" && eObj.reuseFreedomPage) ? eObj.reuseFreedomPage : null,
-    // USER-approved SECTION BOUNDARY (ENG-95861): this child entity owns another section, so its Classic edit page
+    // USER-approved SECTION BOUNDARY: this child entity owns another section, so its Classic edit page
     // stays Classic and the Freedom related list keeps opening it. A STRING names that page (the honest form — the
     // plan can then print it); `true` declares the boundary and leaves the name to the body's own `editPage` read.
     // Normalized to `string | true | null` here so every reader tests one shape. NOT body-derivable: no detail body
@@ -2138,7 +2160,7 @@ function feedPlanObject(h, value, readBody, state, depth) {
   // only inside a `schemas`/`seed` array. Before this, `section` entries and file-backed `detailSchemas` /
   // `profileSchemas` were walked generically, which hashed the PATH STRING: editing one of those files changed
   // the rendered plan and left `planVersion` identical, so an old approval authorised a plan the user never saw.
-  // Reproduced on a two-file manifest before the fix — same version before and after rewriting the detail body.
+  // Reproduced on a two-file manifest: same version before and after rewriting the detail body.
   // The remaining keys (`title`, `entity`, …) are still hashed below; only `body`/`file` are replaced by content.
   if (typeof value.file === "string" || typeof value.body === "string") {
     h.update("\u0001B");
@@ -2174,9 +2196,9 @@ function computePlanVersion(manifest, readBody) {
   return "plan-" + h.digest("hex").slice(0, 12);
 }
 
-// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE (ENG-95683). A missing component used to get one
+// The SETTLE clause of a `registry-target` ⚠, branched BY CAUSE. A missing component must not get one
 // blanket "settle the target before building" whether it was a real component an install could recover or a name no
-// action short of a re-plan can fix. The finding now carries the row's structured `{kind,id}` gate, so the guidance
+// action short of a re-plan can fix. The finding carries the row's structured `{kind,id}` gate, so the guidance
 // can say the actionable thing:
 //   • a VERSION-scoped miss (`component-absent-in-version`) — the component IS registered, just not carried by the
 //     target platform version, so no package install can add it; target a version that carries it (or re-plan). This
@@ -2202,7 +2224,7 @@ export function registrySettleGuidance(finding) {
   }
   return "this is not a package-install away — fix the mapping or the plan and re-run `--plan --out` before building.";
 }
-// ENG-95683 (item 2) — the compositeOnly ADVISORY, computed by `validateRun` and (until this feature) discarded. A
+// The compositeOnly ADVISORY, computed by `validateRun` and otherwise discarded. A
 // compositeOnly type deliberately carries NO gate: the platform assembles it as part of a composite and it has no
 // Designer toolbar entry, so it cannot be inserted directly. Surface each as a `registry-composite-only`
 // needsDecision item with GENERIC guidance — reach it through its composite host/recipe — NOT install/enable text:
@@ -2220,7 +2242,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
   const enginePositioned = new Set();
   for (const op of changeSet.viewConfigDiff || []) if (op?.values?.type) enginePositioned.add(op.values.type);
   for (const el of changeSet.tableElements || []) if (el?.componentType) enginePositioned.add(el.componentType);
-  // ENG-96327 — a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
+  // a STANDARD FEATURE's gate type (crt.FileList = Attachments, crt.ApprovalList = Approvals, …) is
   // ALREADY a row in the Layout table ("template-provided" / "native"), and that these features are composite
   // (built via their recipe, not dragged from a toolbar) is general Creatio knowledge the skill already carries.
   // Re-stating it as a per-plan ⚠ Confirm just duplicates the Layout, so skip a composite-only advisory whose type
@@ -2240,7 +2262,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 //
 // TEST-ONLY EXPORT — no production caller outside this module. `runMigration` is the public surface; this is
 // exported (like `buildCoverage` / `registrySettleGuidance`, the same convention) so a test can drive it against a
-// hand-built changeSet. ENG-95683 review: the decision to KEEP it was taken explicitly rather than left implicit.
+// hand-built changeSet. The decision to KEEP it is taken explicitly rather than left implicit.
 // The reason it cannot be replaced by an end-to-end fixture is a property of the mapper, not a gap in the tests:
 // `resolveProps` ALWAYS also writes `values.type` for a table element, so in any changeSet a real run can produce,
 // the `viewConfigDiff` source of `enginePositioned` already covers every type the `tableElements` source would —
@@ -2248,7 +2270,7 @@ export function buildCompositeOnlyDecisions(changeSet, regRun, sourceNote) {
 // because the other branch would satisfy the assertion first. Deleting that line would leave the e2e test green.
 // The branch's OUTCOME is covered end-to-end regardless (`run-mapper.mjs` asserts the `registry-composite-only`
 // items `runMigration` does and does not push); this export exists solely so the tableElements SOURCE has a
-// non-vacuous regression test of its own. Do not call it from production code.
+// non-vacuous test of its own. Do not call it from production code.
 export function reportRegistryFindings(changeSet, manifest, baseDir) {
   // REGISTRY CHECK, at RUN time. The CI check proves the TABLE is sound; this one judges what THIS run emits
   // against the registry it could resolve — the stand's own export when the manifest carries one, else the
@@ -2291,7 +2313,7 @@ export function reportRegistryFindings(changeSet, manifest, baseDir) {
     const verdict = f.kind === "unknown-component"
       ? "the component registry carries NO component of that name"
       : `it is ABSENT in ${f.version}`;
-    // ENG-95683 — carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
+    // carry the row's structured gate on the item (so a consumer branches by kind, not by string), and
     // let the SETTLE clause say the actionable fix for THIS cause instead of one blanket sentence for every miss.
     changeSet.needsDecision.push({ kind: "registry-target", item: f.componentType, gate: f.gate || null,
       reason: `this run emits \`${f.componentType}\` — ${f.why} — and ${verdict}${where}. ${REG_SOURCE_NOTE[reg.source]}. A page built on a type the stand cannot resolve does not render, so ${registrySettleGuidance(f)}` });
@@ -2309,7 +2331,7 @@ function readSchemaBody(e, baseDir) {
     throw new Error(`schema entry for pkg '${e?.pkg ?? "?"}' has neither an inline 'body' nor a string 'file'`);
   const base = path.resolve(baseDir);
   const resolved = path.resolve(base, e.file);
-  // Containment applies to EVERY `file`, relative OR absolute (review — arbitrary-file-read Blocker): the manifest is
+  // Containment applies to EVERY `file`, relative OR absolute — otherwise an arbitrary file can be read: the manifest is
   // stand-derived / untrusted, so a `file` that resolves outside the manifest base dir — a `../…` escape OR an
   // absolute path like `/etc/passwd` — is refused, never read into the plan. A caller that legitimately needs files
   // from a directory sets `baseDir` to contain them (the golden fixtures pass `baseDir: FIX` with relative `file`s);
@@ -2325,7 +2347,6 @@ function readSchemaBody(e, baseDir) {
 function assignRootIndexKeys(behaviourIndex, scopeSchema, behaviourIndexInput, stubIndex) {
   const root = !scopeSchema;
   behaviourIndex.unmatched = root ? unmatchedIndexKeys(behaviourIndexInput, stubIndex) : [];
-  behaviourIndex.sectionOnly = root ? sectionOnlyIndexKeys(behaviourIndexInput, stubIndex) : [];
   behaviourIndex.wiringOnly = root ? wiringOnlyKeys(behaviourIndexInput, stubIndex) : [];
 }
 // THE run's entity: the manifest's own value when it named a real one, else the entity the merged schema chain
@@ -2371,17 +2392,18 @@ export function runMigration(manifest, opts = {}) {
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
   const sectionData = sectionInput(manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
-  // ENG-94714 — the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
+  // the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
   // digest below and the list-page mapping further down. See `foldSectionView`.
   const sectionSeed = parse(sectionData.seed);
   const sectionEff = foldSectionView(sectionSchemas, sectionSeed);
   // The section chain digested as its own step-5.1 scope (0 or 1) — see `sectionStubScopes` for the root-only
   // guard, the never-null schema label, and why it is a function rather than inline here.
-  const sectionScopes = sectionStubScopes(manifest, opts, sectionEff);
+  const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
+  const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
   const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
-  // ENG-93928 — the embedded profile schemas a profile card renders (profiled entity + displayed columns).
+  // the embedded profile schemas a profile card renders (profiled entity + displayed columns).
   const profileSchemas = parseProfileSchemas(manifest, bodyOf);
   // RUN-level on-stand signals (see checklistOpts, which performs the same merge for the row renderers): the
   // answers live on the ROOT manifest, so a fold inherits them and a sub-bundle's own key still wins.
@@ -2391,7 +2413,7 @@ export function runMigration(manifest, opts = {}) {
     resources: manifest.resources || {},     // #5/#13 — localizable strings for tab/group/detail captions
     columnTitles: manifest.columnTitles || {}, // #5/#13 — entity column titles for field LABELS
     detailSchemas,                            // #11(ii)/B2 — parsed detail bodies (entity + columns + title)
-    profileSchemas,                           // ENG-93928 — parsed embedded-profile bodies (entity + displayed columns)
+    profileSchemas,                           // parsed embedded-profile bodies (entity + displayed columns)
     isMiniPage: !!opts.isMiniPage,            // mini-page fold → suppress add-mode visibility-rule noise
     isChildPage: !!opts.isChildPage,          // child edit page → build its base-page (entity-bound) fields too, don't suppress as template context
     signals: runSignals,                      // on-stand signals (dcm/…) — run-level answers, inherited by every fold
@@ -2406,10 +2428,10 @@ export function runMigration(manifest, opts = {}) {
   const behaviourIndex = applyBehaviourIndex(changeSet, behaviourIndexInput, opts.scopeSchema);
   const parseErrors = [
     ...[...schemas, ...seedTemplate].filter((l) => l.error).map((l) => ({ pkg: l.pkg, error: l.error })),
-    // Major 3: a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
+    // a detail-schema body that FAILED to parse must reach the gate too — otherwise its columns/child
     // page silently resolve to null while the plan stays green. Its error was captured per-detail above.
     ...Object.entries(detailSchemas).filter(([, d]) => d.error).map(([name, d]) => ({ pkg: `detail:${name}`, error: d.error })),
-    // ENG-93928 — same rule for a profile-schema body: if it failed to parse, the card's entity/columns are
+    // same rule for a profile-schema body: if it failed to parse, the card's entity/columns are
     // silently null while the plan stays green. Gate it.
     ...Object.entries(profileSchemas).filter(([, p]) => p.error).map(([name, p]) => ({ pkg: `profile:${name}`, error: p.error })),
   ];
@@ -2424,7 +2446,7 @@ export function runMigration(manifest, opts = {}) {
   // conditional / spread / unresolved identifier). Advisory, NOT blocking — surfaced so battle-testing can
   // spot bodies the static evaluator does not yet cover. Tagged with the owning schema pkg.
   const parseDiagnostics = collectParseDiagnostics(schemas, seedTemplate, detailSchemas, profileSchemas, sectionSchemas, sectionParseErrors);
-  // Major 3 — a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
+  // a dynamic MAPPING-AFFECTING property (`visible: computeVisibility()`, a bound layout/hint/…) is
   // NOT structural, so it doesn't block the gate — but it silently collapsed to a DEFAULT in the ChangeSet
   // (e.g. visible:true) with no trace in the plan. Surface each as an explicit needsDecision so it lands in
   // the plan's ⚠ Confirm: the agent must wire the real dynamic behavior, not ship the static default.
@@ -2462,7 +2484,11 @@ export function runMigration(manifest, opts = {}) {
   // the result's `entity` must name the SAME object — a ChangeSet that binds PDS to a different schema than the plan
   // states is a page built on the wrong table.
   const resolvedEntity = resolveRunEntity(manifest, eff);
-  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section, entityColumns: manifest.entityColumns });
+  const listChangeSet = buildListChangeSet({ entity: resolvedEntity, section,
+    entityColumns: manifest.entityColumns, sectionCode: sectionCodeForList(sectionChangeSet) });
+  // The same fold for the list page's rows, scoped to the section schema so a `<Section>::<method>` key resolves
+  // against them. The return is dropped: the run's coverage accounting stays the page's.
+  if (listChangeSet) applyBehaviourIndex(listChangeSet, behaviourIndexInput, sectionScopeLabel(manifest));
   // typed-entity page family — a TYPED entity opens a DIFFERENT Classic edit page per record Type
   // (e.g. Document → DocumentICPage / DocumentOCPage / DocumentRegistryPage / ActPageV2). These come from
   // `list-entity-client-schemas` (the page-role graph), NOT the folded page bundle, so the agent supplies them
@@ -2546,10 +2572,10 @@ export function runMigration(manifest, opts = {}) {
   // does NOT throw — runMigration stays pure so the golden runner can assert blocked/clean states; the CLI
   // turns `blocked` into a loud banner + non-zero exit, and the renderer prints the banner into the artifact.
   // The operator's recorded answers on FIDELITY warnings, folded in BEFORE the gate and the renderer read them, so
-  // one annotated array is what every surface reports (ENG-95862 item 5).
+  // one annotated array is what every surface reports.
   eff.warnings = applyWarningDispositions(eff.warnings, manifest);
   const gate = computeGate({ parseErrors, eff, manifest, parseDiagnostics, childPages, typedPages, miniPage });
-  // …and the LIST page's own verdict, on the section's evidence alone (ENG-94714). Separate from `gate` on purpose:
+  // …and the LIST page's own verdict, on the section's evidence alone. Separate from `gate` on purpose:
   // see `computeListGate` for why a section-side gap must stop the list deliverable without stopping the form one.
   const listGate = computeListGate({ sectionParseErrors, parseDiagnostics, sectionEff });
   // ⛔ STRUCTURE VALIDATOR — a systemic completeness check on the MANIFEST INPUTS, so the plan cannot be
@@ -2610,7 +2636,7 @@ export function runMigration(manifest, opts = {}) {
       // advisory, and clearable via `manifest.warningDispositions`).
       warnings: eff.warnings,
       unresolvedParents: eff.unresolvedParents, // non-empty ⇒ base template not fully seeded (F2)
-      seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton (#19)
+      seedQuality: eff.seedQuality,           // whether the seed looks like a real fetched body vs a skeleton
       features: eff.features,                 // feature toggles gating runtime visibility (union, not one state)
       referencedModules: eff.referencedModules, // UI-rendering deps outside the page-schema migration unit
     },
@@ -2643,7 +2669,7 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  // ENG-96327 (e5350b5) — a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
+  // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
@@ -2661,7 +2687,7 @@ export function runMigration(manifest, opts = {}) {
 // shape is REJECTED at exit 1, not silently degraded, and the message points at the checklist's page keys because that is where
 // the exact page keys come from. `false` = genuinely absent (a hard MISSING); an OMITTED key = not checked
 // (unverified) — so this only checks the entries that ARE present.
-const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
+const BUILT_SHAPE = '{ "pages": { "main": { "viewConfig": <get-page bundle.viewConfig>, "packageName": "…", "parentSchemaName": "…", "modelConfig": <get-page bundle.modelConfig — OPTIONAL, and the only way the gate can see a page that has no primary data source and therefore hangs the browser>, "businessRules": <read-page-business-rules result: { count, rules } — the page\'s persisted BusinessRule_* schemas, NOT a page-body grep>, "schemaName": "<page.name — the result report names the page by it>", "handlers": <get-page bundle.handlers — OPTIONAL; handler rows are matched against it>, "viewModelConfig": <get-page bundle.viewModelConfig — OPTIONAL; virtual-attribute rows are matched against its attributes>, "resources": <get-page bundle.resources — OPTIONAL; a built tab caption `#ResourceString(K)#` resolves through it> }, "list": { "viewConfig": <the LIST page, same shape>, "schemaUId": "…" }, "child:<Entity>": false }, "reachability": { "sectionRegistered": { "workplaces": <n counted on the stand>, "names": [...] } — a COUNT, not a flag: a workplace registration only ADDS, so the row closes at exactly 1, "miniPageWired": true, … }, "evidence": { "<id>": {…} }, "judge": { "<id>": { "convincing": true } } }';
 function validBuiltPageEntry(e) {
   if (e === false) return true; // genuinely absent — a hard MISSING, not a malformed entry
   return !!e && typeof e === "object" && !Array.isArray(e) && e.viewConfig != null;
@@ -2678,7 +2704,7 @@ function builtPayloadIssue(built) {
 }
 
 // PROVENANCE. The shape check above proves the payload is well-formed; it does not prove it came from the stand.
-// A payload synthesised from the plan alone used to reach exit 0 with no Creatio contact at all, because
+// A payload synthesised from the plan alone would otherwise reach exit 0 with no Creatio contact at all, because
 // everything it needed was published in the plan. These identifiers are NOT: the plan publishes no GUID of any
 // kind, so `schemaUId` / `packageUId` can only come from a real `get-page` — and they have to agree with each
 // other across the whole payload, which a fabricated set will not do by accident:
@@ -2689,7 +2715,7 @@ function builtPayloadIssue(built) {
 // ask Creatio whether a GUID exists. It raises the cost of a fabricated report from "copy the numbers the plan
 // already told you" to "invent a coherent identity graph", and it makes a careless copy-paste fail outright.
 // It is not a defence against a determined author, and nothing here should be described as one.
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// `GUID_RE` is imported from assemble.mjs — the drop-sweep there has to apply exactly this test.
 function missingUidIssue(entries) {
   const noUid = entries.filter(([, e]) => !GUID_RE.test(String(e.schemaUId ?? "")));
   if (!noUid.length) return null;
@@ -2723,14 +2749,59 @@ function provenanceIssue(pages) {
 // The flags that TAKE A VALUE: their value must be excluded from the positional-manifest search (else
 // `--out plan.md` would read `plan.md` as the manifest). Mode flags (`--plan`, `--verify`, …) take no value and
 // belong in NEITHER list.
-const VALUE_FLAGS = new Set(["--out", "--built"]);
+const TASKS_FLAG = "--tasks";
+const SPLIT_FLAG = "--split";
+const START_FLAG = "--start";
+// Takes no value: it says WHAT `--tasks <dir>` does with that folder, not where anything is.
+const ADD_FLAG = "--add";
+const ROUTE_FLAG = "--route";
+// `--next`: ANSWER which tasks are startable right now. Takes no value, and writes nothing beyond the
+// folder refresh a plain `--tasks` run already performs.
+const NEXT_FLAG = "--next";
+// `--decide D<N>` / `--revoke D<N>`: the ONE path a PERSON's scope decision reaches the ledger.
+// See tasks.mjs for the semantics; the CLI's job is to parse flags, resolve `D<N>` to a heading in
+// `<migration-folder>/decisions.md`, and refuse when it does not.
+const DECIDE_FLAG = "--decide";
+const REVOKE_FLAG = "--revoke";
+const WONT_DO_FLAG = "--wont-do";
+const POSTPONED_FLAG = "--postponed";
+const TO_FLAG = "--to";
+const PAGES_FLAG = "--pages";
+const TASK_FLAG = "--task";
+const ROW_FLAG = "--row";
+// QUOTING IS PER SHELL, and the printed `--start` command is meant to be pasted into the shell the reader is
+// actually running. `cmd.exe` does not quote with `'` at all and POSIX `sh` keeps `$`, a backtick and `\` alive
+// inside `"`, so one encoder cannot serve both. BOTH branches quote UNCONDITIONALLY: a value with no space can
+// still carry `;`, `&`, `|` or `$`, and a wrapper that only fires on whitespace hands those straight to the shell.
+// POSIX has no escape for `'` INSIDE single quotes: the only way is to close the quote, emit an escaped `'`,
+// and reopen — `'\''`. Written with `String.raw` and kept in a named constant so the sequence is readable.
+const POSIX_QUOTED_QUOTE = String.raw`'\''`;
+const shellArg = process.platform === "win32"
+  ? (s) => `"${String(s).replaceAll('"', '""')}"`
+  : (s) => `'${String(s).replaceAll("'", POSIX_QUOTED_QUOTE)}'`;
+// `--reads <dir>`: WRITE the read plan for the verify gate into that MIGRATION FOLDER (the one holding
+// `build-tasks/`). The folder, not the task dir: the raw responses and the `built.json` composed from them
+// belong beside the run.
+const READS_FLAG = "--reads";
+// `--from <dir>`: COMPOSE the `--verify` payload out of the files `--reads` named, instead of being handed one.
+// The two flags are one contract — `--reads` writes `reads/index.json`, this reads it back — so they take the
+// same folder.
+const FROM_FLAG = "--from";
+const VALUE_FLAGS = new Set(["--out", "--built", TASKS_FLAG, SPLIT_FLAG, START_FLAG, READS_FLAG, FROM_FLAG, ADD_FLAG,
+  DECIDE_FLAG, REVOKE_FLAG, TO_FLAG, PAGES_FLAG, TASK_FLAG, ROW_FLAG]);
+// EVERY flag this CLI accepts. An unknown one is refused rather than ignored: a run that caches a per-page design
+// spec issued `--spec --page main` and `--spec --page list`, got the SAME whole spec twice because `--page` does
+// not exist here, and reported success both times. Two byte-identical "slices" is the kind of failure nobody looks
+// for, so the flag that produced them has to be the thing that fails.
+const KNOWN_FLAGS = new Set(["--plan", "--spec", "--checklist", "--stubs", "--verify", ROUTE_FLAG, NEXT_FLAG,
+  WONT_DO_FLAG, POSTPONED_FLAG, ...VALUE_FLAGS]);
 function valueFlagArg(argv, flag, example, onBad) {
   const i = argv.indexOf(flag);
   if (i < 0) return null;
   const next = argv[i + 1];
   if (next === undefined || next.startsWith("--")) {
     const got = next === undefined ? "no argument" : `the flag '${next}'`;
-    onBad(`\`${flag}\` needs a file path (e.g. \`${example}\`) — got ${got}; nothing was written`);
+    onBad(`\`${flag}\` needs a path (e.g. \`${example}\`) — got ${got}; nothing was written`);
   }
   return next;
 }
@@ -2746,8 +2817,715 @@ function valueFlagArg(argv, flag, example, onBad) {
 // the run is incomplete. Telling the agent not to present it left the CLI and the skill contradicting each
 // other on the same file, with the agent free to pick either. Own fn (not another inline branch) for the same
 // reason `valueFlagArg` is one: the CLI block does not grow a branch every time a case is added.
+// `--tasks <dir>` — the approved plan as a FOLDER of one-task files plus a derived `index.md`, for a caller that
+// dispatches one sub-agent per task instead of holding every deliverable in one context. Same rows as
+// `--checklist`; see tasks.mjs for what the engine rewrites and what the caller keeps.
+//
+// A PLAN-LEVEL GAP WRITES NOTHING. `gate` / `structure` / `coverage` describe the PLAN, and no build round closes
+// one — slicing a broken plan into tasks would hand sub-agents write access to a stand against deliverables the
+// plan cannot state. So this mode refuses BEFORE it creates the folder, rather than after a builder has run.
+// ⛔ THE DISPATCH GATE, in the words of the remedy rather than of the violation. Each finding names its files and
+// what to do with them; a generic "process violation" line leaves the caller to invent a repair, and the repair
+// differs per finding — a never-dispatched task must be rebuilt, a stale clock only needs the mode re-run.
+// The whole set is stated at once because `--start` refuses while ANY of it stands: fixing one file and
+// dispatching again would meet the same refusal.
+function signedWith(s) {
+  if (s.owner) return `signed with the token issued for ${s.owner}`;
+  return s.got ? "signed with an unissued value" : "carries no signature";
+}
+
+// One section per finding: the headline, then the files it names. Written as data so the function that renders
+// them carries no branch per finding — their remedies differ, their shape does not.
+function dispatchFailureSections(audit, dir) {
+  return [
+    [audit.never, (n) => `⛔ ${n} task(s) recorded CLOSED that no sub-agent was ever dispatched for. Nothing`
+      + " measured them and nothing says who built them. For each: re-open it (clear its `Outcome` cells, then"
+      + " `status: todo`), run"
+      + " `--tasks <dir> --start <id>`, and hand THAT task — with the token it prints — to its own sub-agent:",
+      (t) => `   · ${t.file}  (--start ${t.id})`],
+    [audit.openClock, (n) => `⛔ ${n} task(s) closed while their clock is still open — the folder's books are`
+      + ` behind, not wrong. Re-run \`--tasks ${dir}\` to close them and record their samples:`,
+      (t) => `   · ${t.file}  (${t.id})`],
+    [audit.naNoReason, (n) => `⛔ ${n} task(s) recorded \`not-applicable\` with no dispatch record and no reason`
+      + " under `## Notes`. The reason is what exempts a `not-applicable` from the dispatch gate. Write why each"
+      + " does not apply,"
+      + " or re-open and build it:",
+      (t) => `   · ${t.file}  (${t.id})`],
+    [audit.signature, (n) => `⛔ ${n} task(s) closed carrying a signature dispatch did not issue for them —`
+      + " the context that closed each was not the one it was handed to. Re-open (clear the `Outcome` cells, then"
+      + " `status: todo`), `--start`, re-dispatch:",
+      (s) => `   · ${s.task.file}  (${signedWith(s)})`],
+  ];
+}
+
+function dispatchFailureText(audit, dir) {
+  const L = [];
+  for (const [rows, head, line] of dispatchFailureSections(audit, dir)) {
+    if (!rows?.length) continue;
+    L.push(head(rows.length), ...rows.map(line));
+  }
+  return L.join("\n");
+}
+
+// The unbuilt-deliverable list, generated from the outcome cells so it is passed on verbatim rather than
+// summarised: every unbuilt deliverable, its task, and what it is waiting on. Only rows with NO repair task
+// reach here — a row already routed to one is somebody's work, not a gate failure.
+// The gate's own list: rows nothing is scheduled to close. `resolvePartials` has already stamped `residual` on
+// every row it could match to a repair task, so this is a filter and not a second opinion.
+// OFF THE SHARED LIST, so the gate's failure list names the same deliverables the progress block does, once
+// each. `!it.residual` narrows it further to rows nothing is scheduled against at all — a row with an open
+// round is somebody's work and is reported, not failed on.
+const unroutedNotBuilt = (tasks) => notBuiltOpenItems(tasks).filter((it) => !it.residual);
+
+const REMEDY = {
+  "blocked": "the stand or a service was unreachable — a repair round may clear it",
+  "needs-decision": "a scope question — a repair round gives it to a fresh agent holding the evidence",
+};
+function notBuiltFailureText(items) {
+  const L = [];
+  const byTask = new Map();
+  for (const it of items) {
+    if (!byTask.has(it.task.file)) byTask.set(it.task.file, []);
+    byTask.get(it.task.file).push(it);
+  }
+  for (const [file, rows] of byTask) {
+    L.push(`  ${file} (${rows[0].task.pageKey}) — read its \`## Notes\` for the detail:`);
+    for (const it of rows) {
+      const why = it.cause
+        ? `${it.cause}: ${REMEDY[it.cause] || "a person decides"}`
+        : "NOT ACCOUNTED FOR — the task closed without marking this row either way, so nobody stated what happened to it";
+      L.push(`    · row ${it.n} — ${it.row.label}`, `      ${why}`);
+    }
+  }
+  // THE REMEDY NAMED HERE MUST BE RUNNABLE MID-RUN: `--verify` needs a `--built` payload for every page, which a
+  // folder with pages still unbuilt cannot supply. `--route` opens the same round without one.
+  L.push(`  None of the above is routed to a repair task. Run \`${TASKS_FLAG} <dir> ${ROUTE_FLAG}\` to open a repair`
+    + " round over them (`--verify` routes them too, as part of its own round — but only once you have a `--built`"
+    + " payload for every page). Do NOT hand-write a repair file: a repair task is recognised by front matter the"
+    + ` engine writes, so one you author settles no row. A cause that has already had ${REPAIR_ROUND_CAP} rounds is`
+    + " PARKED and will not get another, and is yours to decide: rebuild it, defer it, or accept it — and say so.");
+  return L.join("\n");
+}
+
+// Set by `runTaskMode` / the verify leg when the folder fails the dispatch gate, and read once at the exit-code
+// decision below. The mode has several early returns, so the verdict travels beside the text rather than in it.
+let dispatchGateFailure = null;
+// Separate from the dispatch gate: that one refuses to schedule more work, this one only withholds "finished"
+// from the run. Rebuild, defer or accept is the user's decision.
+let partialGateFailure = null;
+// ⛔ THE RUN CANNOT MOVE ITSELF — set by `--next` when nothing is startable AND nothing is in flight. Its own
+// variable, because it is neither a plan gap, nor a short build, nor a broken ledger: it is a decision somebody
+// has to make, and an orchestrator that read a passing exit code here would poll a halted run forever.
+let startableGateFailure = null;
+// ⛔ `--next` REFUSED TO ANSWER — a plan with gaps, or a frozen cut that does not resolve. Its own variable
+// rather than a reuse of the one above: that one carries the halted-run ANSWER its stderr banner renders, and a
+// refusal has no answer to render. It only has to make the exit code agree with the banner already on stdout.
+let nextRefusalFailure = false;
+// ⛔ `--tasks` REFUSED TO CUT — the split does not resolve against the plan, so the folder is left exactly as it
+// was. A refusal writes nothing and names no task, and the exit code is the only part of it a caller PARSES: a
+// mode that printed the banner and exited like an answer would have an orchestrator dispatch sub-agents against a
+// folder that was never cut. Its own variable, per the one-flag-per-mode shape beside it, so a run can still say
+// WHICH mode declined.
+let taskRefusalFailure = false;
+// ⛔ A REPAIR ROUND OPENED NOTHING — the frozen cut the folder's task ids derive from does not resolve, or the
+// round could not be written, so no repair task exists and no row is scheduled to close. One flag for one repair
+// code path reached by two entry commands (`--tasks --route` and `--verify --tasks`), so the exit code follows the
+// banner whichever of them asked. Same rule as the two above, on the other modes that print the banner.
+let routeRefusalFailure = false;
+// ⛔ `--START` MARKED NOTHING — every reason it refuses ends the same way: no clock was opened and the folder
+// records nothing started. It is the command an orchestrator runs before EVERY dispatch, so a refusal it exits 0
+// on is the one that costs most: the caller hands the named task to a sub-agent that has no token for it. Raised
+// for the WHOLE refusal set rather than per reason — some of the reasons (an unreadable file, an id the folder
+// does not hold) carry no dispatch verdict of their own, so only a set-wide flag makes every one of them non-zero.
+let startRefusalFailure = false;
+
+// EVERY REASON `--start` MARKS NOTHING, in one place. Each returns the text to print; `null` means the task was
+// started. They are separate because their remedies are: repair a file by hand, clear the ledger, build the
+// dependency, wait for the other writer, or fix a typo in the id.
+function startRefusalText(set, startId, dir) {
+  if (set.unread) {
+    return `migrate.mjs: ⛔ \`${set.unread}\` could not be read — its front matter is unterminated or malformed, and the engine will not rewrite a file it cannot parse (the \`## Notes\` in it record work already done on the stand). Repair that file by hand, then re-run. Nothing was marked started.\n`;
+  }
+  if (set.statusUnwritable) {
+    return `migrate.mjs: ⛔ \`${set.statusUnwritable}\` has no \`status:\` line in its front matter, and the engine updates an orchestrator-authored file one line at a time — starting it would show \`in-progress\` in the index while the file itself recorded nothing. Add a \`status: todo\` line to its front matter, then re-run. Nothing was marked started.\n`;
+  }
+  // NO NEW CLOCK OVER A BROKEN LEDGER. `--start` is the one command the orchestrator runs before every dispatch,
+  // so refusing here stops the run at the next dispatch instead of at the final gate.
+  if (set.blockedByDispatch) {
+    dispatchGateFailure = { audit: set.blockedByDispatch, dir, started: false };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` was not marked in-progress and no clock was opened.\n`
+      + dispatchFailureText(set.blockedByDispatch, dir) + "\n"
+      + `The folder and ${TASK_INDEX_FILE} were refreshed, so the rows above are current. Clear ALL of them before dispatching again.\n`;
+  }
+  if (set.filledCells) {
+    const { file, status, rows } = set.filledCells;
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${file}\` still reads \`${status}\` because its \`Outcome\` cells`
+      + ` are filled (row(s) ${rows.join(", ")}), and the cells outrank the \`status:\` line. Clear those cells, set`
+      + " `status: todo`, then run `--start` again. No clock was opened.\n";
+  }
+  // A DECISION THE ENGINE CANNOT MAKE. Refused in the same words the query withholds it in, so the two surfaces
+  // send the reader to the same place: the file's own `## Notes`.
+  if (set.blockedByStatus) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` has status \`${set.blockedByStatus}\`, which is a`
+      + " decision rather than a schedule: it is neither `todo` nor in flight, and no re-dispatch resolves it."
+      + " Read its `## Notes`, fix what they name, set it back to `todo`, then start it.\n";
+  }
+  // THE QUEUE ORDER AND THE ONE-WRITER RULE, refused at the moment a token would be issued. Both are field
+  // comparisons the engine can make, so neither depends on the caller remembering them.
+  if (set.blockedByDeps) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` waits on ${set.blockedByDeps.length} task(s) that have not closed:\n`
+      + set.blockedByDeps.map((d) => `   · ${d.file}  (${d.id}, status \`${d.status}\`)`).join("\n")
+      + `\nBuild them first, in the \`Step\` order ${TASK_INDEX_FILE} lists. What this task needs from them is in their \`## Notes\`.\n`;
+  }
+  if (set.blockedByDecision) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — every open row of \`${startId}\` waits on an open decision on a subject another task shares:\n`
+      + decisionSourceLines(set.blockedByDecision.rows).join("\n")
+      + "\nRecord the decision with `--decide D<N> --row <task>:<n>` on the row named above, or, if the answer is to"
+      + " build that row, re-open it: clear its `Outcome` cell and set its task back to `status: todo`. Then start"
+      + " this task.\n";
+  }
+  if (set.blockedByOverlap) {
+    dispatchGateFailure = { startRefusal: true, dir };
+    return `migrate.mjs: ⛔ NOTHING WAS STARTED — \`${startId}\` writes \`${set.blockedByOverlap[0].writesTo}\`, and a task already dispatched is still writing it:\n`
+      + set.blockedByOverlap.map((c) => `   · ${c.file}  (${c.id})`).join("\n")
+      + "\nOne writer per artifact: let that task close, re-run `--tasks`, then start this one. Two open tokens on"
+      + " one artifact is how a single sub-agent ends up holding both.\n";
+  }
+  if (!set.started) {
+    return `migrate.mjs: ⛔ no task \`${startId}\` in ${dir} — read the \`Step\` table in ${TASK_INDEX_FILE} for the ids this folder holds. Nothing was marked started.\n`;
+  }
+  return null;
+}
+
+// A frozen split met by a plan that moved. An item whose rows all left the plan is not fatal — its file may hold
+// the only record of work already done — so the folder is written and the drift is said on stdout, not only on
+// the index. A plan row no item claims is refused before this point.
+function splitDriftLines(set) {
+  const L = [];
+  if (set.emptied?.length) {
+    L.push(`⚠ ${set.emptied.length} split item(s) have no rows left in the current plan: ${set.emptied.map((e) => "`" + e.id + "`").join(", ")}. Their files are kept.`);
+  }
+  return L;
+}
+
+// A PLAN-LEVEL GAP TOUCHES NOTHING. `gate` / `structure` / `coverage` describe the PLAN and no build round closes
+// one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
+// refusal are two chances for one of them to soften.
+function planGapRefusal(result) {
+  const gaps = planGaps(result);
+  if (!gaps.length) return null;
+  return "migrate.mjs: ⛔ NOTHING WRITTEN — no task folder for a plan with gaps: " + gaps.join(" · ")
+    + ". None of the three is buildable-out-of: fix the manifest / the stand, re-run `--plan`, re-approve if the plan changed, and slice tasks only then.\n";
+}
+
+// WHAT WAS REFUSED, AND WHAT CLEARS IT — one pair of writers, because the build leg, `--route` and `--verify`
+// all refuse on the same three causes and an operator acts on the remedy, not on the banner.
+const handedIn = (set) => set.splitSource === SPLIT_HANDED;
+
+// Each reason is matched by NAME, and the fallback is the one sentence true of every refusal. Defaulting to a
+// specific claim would hand a new reason the most misleading wording in the set — telling an operator to fix the
+// syntax of a file whose syntax is fine.
+function refusalCause(set, dir) {
+  if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
+  if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
+  if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
+  if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
+  if (set.refusal === REFUSED_COVERAGE) {
+    return handedIn(set)
+      ? `the split passed with ${SPLIT_FLAG} does not cover this plan`
+      : `the frozen split in ${dir} no longer covers this plan`;
+  }
+  return "the cut does not resolve against this plan";
+}
+
+function refusalRemedy(set) {
+  if (set.refusal === REFUSED_CUT) {
+    return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
+      + " produced it.";
+  }
+  if (set.refusal === REFUSED_COVERAGE) {
+    // The engine picks no owner: which item a row belongs to is the judgement the split records. What FALLING
+    // BACK reaches depends on what is still in play — dropping a handed-in flag reads the folder's own frozen
+    // cut when it has one, which is a different cut, not the mechanical one.
+    let fallback = `delete ${SPLIT_FILE} to fall back to the engine's own cut`;
+    if (handedIn(set)) {
+      fallback = set.frozenPresent
+        ? `drop ${SPLIT_FLAG} to fall back to the split already frozen in that folder, or delete it too to reach the engine's own cut`
+        : `drop ${SPLIT_FLAG} to fall back to the engine's own cut`;
+    }
+    return ` Place the named rows in ${handedIn(set) ? "that file" : SPLIT_FILE}, or ${fallback}.`;
+  }
+  if (set.refusal === REFUSED_TIMINGS) {
+    return ` Repair ${TIMINGS_FILE} by hand (restore it from a copy, or fix the JSON). It is the only record of`
+      + " which sub-agent closed which task, so the engine will not replace it.";
+  }
+  // The cause line for this one is deliberately generic and names no file, so the remedy has to name it itself.
+  if (set.refusal === REFUSED_UNRESOLVED) {
+    const which = handedIn(set) ? `the file you passed with ${SPLIT_FLAG}` : SPLIT_FILE;
+    return ` Fix ${which} and re-run.`;
+  }
+  return ` Fix or remove ${SPLIT_FILE}.`;
+}
+
+// A cut that does not resolve against the plan writes NOTHING — the folder is left exactly as it was, so a
+// half-applied cut can never schedule part of a plan and drop the rest.
+function splitRefusalText(set, dir) {
+  // The shape belongs to a refusal the shape could explain. A file that parsed and resolved is not malformed —
+  // its coverage is short — so several hundred characters of JSON shape only bury the rows to place.
+  const malformed = set.refusal === REFUSED_UNREADABLE || set.refusal === REFUSED_UNRESOLVED;
+  const shape = malformed ? ` Expected shape: ${SPLIT_SHAPE}` : "";
+  return `migrate.mjs: ⛔ NOTHING WRITTEN — ${refusalCause(set, dir)}:\n`
+    + set.problems.map((p) => "  · " + p).join("\n")
+    + `\n${refusalRemedy(set).trim()}${shape}\n`;
+}
+
+function runTaskMode(result, dir, opts, split = null, splitText = null, startId = null) {
+  dispatchGateFailure = null;
+  partialGateFailure = null;
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) return gapRefusal;
+  // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
+  // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
+  // indistinguishable from a run that has not begun.
+  const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
+  if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
+  if (startId) {
+    const refusal = startRefusalText(set, startId, dir);
+    if (refusal) { startRefusalFailure = true; return refusal; }
+  }
+  const done = set.tasks.filter((t) => t.status === "done").length;
+  const attention = attentionSummary(set);
+  // FROZEN ONLY ONCE IT RESOLVED. Copying the file in before validation would leave a folder whose frozen cut is
+  // one the engine already refused, and every later run would read it back and refuse again.
+  if (splitText) freezeSplit(dir, splitText);
+  const cut = set.split ? `a frozen split of ${set.split.items} item(s)` : "the built-in budget slicer";
+  const lines = [
+    `migrate.mjs: wrote ${set.tasks.length} build task(s) + ${TASK_INDEX_FILE} to ${dir} — ${done} done, ${set.tasks.length - done} not. Cut by ${cut}.`,
+    // ⚠ DO NOT PUT THE PICKING INSTRUCTION BACK. A line saying "hand ONE task file at a time, in the
+    // `Step` order that index lists" tells the caller to schedule off a DERIVED report — the very thing
+    // `--next` exists to replace, and a contradiction the engine would be printing against itself. The index
+    // is what a human reads; it is not what anyone picks from.
+    `Present ${path.join(dir, TASK_INDEX_FILE)} (it is DERIVED — a task's own file records its status). Do NOT pick the next task off that index: ask the engine with \`${TASKS_FLAG} ${dir} ${NEXT_FLAG}\`, which answers with every task startable right now and the exact \`${START_FLAG}\` command for each. Hand each named task to its OWN sub-agent, and re-run this mode after every status change.`,
+  ];
+  const refused = set.blocked?.length || 0;
+  if (refused) {
+    lines.push(`⚠ ${refused} file(s) in that folder were NOT READ and NOT WRITTEN — the engine could not tell whose record they hold, so it left them untouched rather than overwrite a record of work already done on the stand. Their tasks got no file this run. See the "Attention" section of ${TASK_INDEX_FILE}.`);
+  }
+  if (attention.tasks) lines.push(`⚠ ${attention.tasks} task(s) need a human eye — see the "Attention" section of ${TASK_INDEX_FILE}.`);
+  else if (attention.lines) lines.push(`⚠ The "Attention" section of ${TASK_INDEX_FILE} lists folder findings to review before the next dispatch.`);
+  // THE PROGRESS BLOCK, for the chat. Engine-rendered so what the user reads and what the folder holds cannot
+  // drift apart, and printed on every run of the mode so the picture is current whenever the orchestrator speaks.
+  // THE TOKEN IS HANDED TO THE SUB-AGENT, not left in the folder. It prints here and nowhere else, because a
+  // token the sub-agent could read for itself would prove nothing about who dispatched it.
+  if (set.started && set.dispatchToken) {
+    lines.push("", `DISPATCH TOKEN for \`${set.started.id}\`: ${set.dispatchToken}`,
+      "Put this in the prompt of the ONE sub-agent you hand this task to. It copies the token into `agentNonce:`"
+      + " in its own task file before it finishes. Do not paste it into any other task, and do not write it"
+      + " into the file yourself.");
+  }
+  // THE FOLDER IS WRITTEN AND THE RUN STILL FAILS. The task files and the index are correct — what is wrong is
+  // that work was closed with nobody dispatched for it, which no re-slice can repair.
+  if (set.dispatch?.failing.length) dispatchGateFailure = { audit: set.dispatch, dir, started: true };
+  // Off the folder this run just wrote. The folder and its files are still written; only the run fails.
+  // A row with a RESIDUAL is already routed to a repair task and is somebody's open work, so it is not a gate
+  // failure. What fails is a row nothing is scheduled to close: not yet routed here (this mode opens no repair
+  // round), or parked after its rounds. The gate reads the same folder state in either mode.
+  const notBuilt = unroutedNotBuilt(set.tasks);
+  if (notBuilt.length) partialGateFailure = { items: notBuilt, dir };
+  lines.push("", "--- progress ---", renderProgress(set, dir).trimEnd(), ...splitDriftLines(set),
+    ...unappliedDecisionLines(set, dir, startId));
+  return lines.join("\n") + "\n";
+}
+
+// Before the first dispatch only: the decisions.md entries no row cites. Printed, never written, and no gate.
+function unappliedDecisionLines(set, dir, startedId = null) {
+  if (!firstDispatchPending(dir, startedId, set.tasks)) return [];
+  const open = unappliedDecisions(set.tasks, readDecisions(path.join(dir, "..")));
+  if (!open.length) return [];
+  return ["", `${open.length} decision(s) in decisions.md are applied to no row — no task's \`decisions:\` line cites them:`,
+    ...open.map((d) => `  · ${d.id} — ${d.title}`),
+    `If one drops or postpones a deliverable, record it with \`${TASKS_FLAG} ${shellArg(dir)} ${DECIDE_FLAG} D<N>`
+      + ` ${WONT_DO_FLAG} | ${POSTPONED_FLAG} ${TO_FLAG} <destination>\`, addressed by \`${PAGES_FLAG} <keys>\`,`
+      + ` \`${TASK_FLAG} <task-id>\` or \`${ROW_FLAG} <task-id>:<n>\`, before dispatch.`];
+}
+
+// `--tasks <dir> --next` — WHICH TASKS ARE STARTABLE RIGHT NOW, answered by the engine.
+//
+// WHY IT EXISTS. The folder already published everything needed to answer this (`status`, `dependsOn`,
+// `writesTo`, the clocks), and `--start` already enforced it — but only by refusing. So every orchestrator that
+// wanted the answer BEFORE dispatching re-derived it in shell over `index.md`, which is a DERIVED report whose
+// columns moved under them the moment the report was reshaped. This mode is the same computation `--start`
+// refuses through, printed instead of enforced: nothing here is a second scheduler, and nothing in the answer has
+// to be parsed positionally — each named task carries the exact command that starts it.
+//
+// IT DOES NOT DISPATCH. It names tasks and prints commands; issuing a token stays with `--start`, which is the
+// one place a clock is opened. That is why it combines with nothing that moves the folder.
+const taskLine = (t) => `step ${Number(t.order)} · ${t.pageKey} · ${t.group}  [${t.id}]`;
+const withheldLine = (w) => {
+  const on = (w.tasks || []).map((d) => `${d.id} (\`${d.status}\`)`).join(", ");
+  if (w.cause === HOLD_DEPS) return `   · ${taskLine(w.task)} — waits on ${w.tasks.length} task(s): ${on}`;
+  if (w.cause === HOLD_OVERLAP) return `   · ${taskLine(w.task)} — \`${w.task.writesTo}\` is being written by ${on}`;
+  if (w.cause === HOLD_DECISION) {
+    return [`   · ${taskLine(w.task)} — every open row waits on a decision; \`--decide\` on the source row, or re-opening it to build it, releases it:`,
+      ...decisionSourceLines(w.rows).map((l) => `  ${l}`)].join("\n");
+  }
+  if (w.cause === HOLD_SEQUENCED) return `   · ${taskLine(w.task)} — another task in THIS answer writes \`${w.task.writesTo}\` first: ${on}`;
+  // The ledger refusal is what the GATE would answer for this id, so it is what this line says. `underlying` is
+  // what will hold the task once the books are repaired — worth printing, but never in place of the real refusal.
+  if (w.cause === HOLD_LEDGER) {
+    return `   · ${taskLine(w.task)} — refused while the dispatch ledger is broken`
+      + (w.underlying ? ` (and then: \`${w.underlying}\`)` : "");
+  }
+  return `   · ${taskLine(w.task)} — its file could not be read (${w.file}); repair it by hand`;
+};
+// One line per source row of a decision hold: the task and row whose `needs-decision` mark the hold waits on.
+const decisionSourceLines = (rows) => (rows || [])
+  .map((r) => `   · ${r.task.id} row ${r.n}: ${r.label}  (\`${r.task.file}\`)`);
+const heldLine = (h) => `   · ${taskLine(h.task)} — status \`${h.task.status}\`: a decision, not a schedule. Read its \`## Notes\`, fix what they name, set it back to \`todo\`.`;
+
+// One block of stdout per verdict; the caller decides the exit code from the verdict itself. They are separate
+// because their REMEDIES are: dispatch, wait, close the run, repair the ledger, or make a decision no re-run can
+// make for the caller.
+function nextAnswerLines(a, dir, cmdFor) {
+  if (a.verdict === NEXT_LEDGER) {
+    // The failing rows themselves go to STDERR, once, through the same dispatch-gate writer every other mode
+    // uses — printing them here as well would state one finding twice in one run and invite the reader to treat
+    // the copies as two.
+    return [`migrate.mjs: ⛔ NOTHING STARTABLE in ${dir} — ${a.dispatch.failing.length} closed task(s) have no`
+      + " valid dispatch record, and `--start` refuses EVERY id while that stands, so nothing here would be"
+      + " accepted. This is ONE finding about the folder, not one per task: the failing files and their remedies"
+      + " are on stderr. Clear all of them, then ask again."];
+  }
+  if (a.verdict === NEXT_FINISHED) {
+    return [`migrate.mjs: NOTHING STARTABLE in ${dir} — all ${a.total} task(s) have settled. The build is finished:`
+      + ` close the run on the migration result report (\`--verify --tasks ${shellArg(dir)}\`), which is the only sanctioned`
+      + " close artifact — do not hand-write a status summary of your own."];
+  }
+  if (a.verdict === NEXT_WAITING) {
+    // HELD IS RENDERED HERE TOO. A task needing a decision does not stop needing one because something else is in
+    // flight, and leaving it out of both the list and the count made it invisible on exactly the verdict an
+    // orchestrator polls — while the printed figures failed to add up to `total`.
+    return [`migrate.mjs: NOTHING STARTABLE YET in ${dir} — ${a.inFlight.length} task(s) in flight and`
+      + ` ${a.withheld.length + a.held.length} behind them (${a.settled} of ${a.total} settled). This is NOT a`
+      + " failure: let the running task(s) close, then ask again.",
+    "IN FLIGHT:", ...a.inFlight.map((t) => `   · ${taskLine(t)}`),
+    ...(a.held.length ? ["HELD — somebody has to decide:", ...a.held.map(heldLine)] : [])];
+  }
+  if (a.verdict === NEXT_STUCK) {
+    return [`migrate.mjs: ⛔ NOTHING STARTABLE AND NOTHING IN FLIGHT in ${dir} — ${a.held.length + a.withheld.length}`
+      + " task(s) are still open and the run cannot move on its own. Re-running this mode changes nothing.",
+    ...(a.held.length ? ["HELD — somebody has to decide:", ...a.held.map(heldLine)] : []),
+    ...(a.withheld.length ? ["WITHHELD — waiting on the above:", ...a.withheld.map(withheldLine)] : []),
+    "A task recorded `blocked` KEEPS its clock — only a settled task's clock is closed — so a folder in this state"
+      + " can look busy in `timings.json` while nothing is running. That is exactly why this is a failing verdict"
+      + " and not `waiting`: an orchestrator that polled it would poll forever."];
+  }
+  return [`migrate.mjs: ${a.startable.length} task(s) STARTABLE NOW in ${dir} — computed by the same predicate`
+    + " `--start` enforces, so each one is a dispatch that gate will accept. Hand each to its OWN sub-agent, in a"
+    + " fresh context; no two of them write the same artifact, so they may run at once.",
+  ...a.startable.flatMap((t) => {
+    const writes = t.writesTo ? ` — writes \`${t.writesTo}\`` : " — read-only";
+    return [`   · ${taskLine(t)}${writes}`, `     ${cmdFor(t.id)}`];
+  }),
+  ...(a.withheld.length ? [`WITHHELD — ${a.withheld.length} task(s) are NOT yours to pick yet:`,
+    ...a.withheld.map(withheldLine)] : []),
+  ...(a.held.length ? [`HELD — ${a.held.length} task(s) need a decision:`, ...a.held.map(heldLine)] : [])];
+}
+
+// THIS MODE ASKS; IT DOES NOT CUT. The refresh below creates the folder it is pointed at, so a mistyped or
+// cwd-relative path would be cut fresh and then answered with a confident step-1 dispatch over a ledger nobody
+// built — the caller could not tell "the run has not started" from "you gave me the wrong path". Returns the
+// refusal text, or null for a folder that really holds a cut (which is refreshed exactly as before).
+function nextFolderRefusal(dir) {
+  if (fs.existsSync(dir) && fs.existsSync(path.join(dir, TASK_INDEX_FILE))) return null;
+  return `migrate.mjs: ⛔ NOTHING WRITTEN — no task folder at ${dir}: this mode reports which tasks are startable`
+    + ` and never cuts one, so nothing was created there. The path is resolved against the current directory — check`
+    + ` it, and if the run has not started yet cut the folder first with \`${TASKS_FLAG} ${dir}\`.\n`;
+}
+
+// The same folder refresh a plain `--tasks` run performs — REPLACING that call, not adding one. A strictly
+// read-only answer would be wrong at the commonest moment of all: right after a sub-agent closes a task, whose
+// clock is closed by the refresh. Without it that closure reads as a dispatch-ledger failure and the mode would
+// answer `ledger` for a folder that is simply one task further along.
+function runNextMode(result, dir, opts, cmdFor) {
+  dispatchGateFailure = null;
+  startableGateFailure = null;
+  // A REFUSAL IS NOT AN ANSWER, so it must not exit like one. The early returns below print NOTHING WRITTEN and
+  // name no task; leaving the gates unset made them exit 0 — the same code a `waiting` or `finished` answer
+  // carries — while every other `--next` non-answer (`stuck`, `ledger`) exits 2.
+  const gapRefusal = planGapRefusal(result);
+  if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
+  const noFolder = nextFolderRefusal(dir);
+  if (noFolder) { nextRefusalFailure = true; return noFolder; }
+  const set = syncTaskDir(dir, result, opts);
+  if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
+  const answer = startableTasks(set, dir);
+  if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
+  if (answer.verdict === NEXT_STUCK) startableGateFailure = { dir, answer };
+  return [...nextAnswerLines(answer, dir, cmdFor), ...unappliedDecisionLines(set, dir)].join("\n") + "\n";
+}
+
+// `--verify --tasks <dir>` — the open rows of THIS verify run, written into the task folder as repair tasks.
+// Merged by (page, cause) on purpose: nineteen fields with the wrong names are one defect with nineteen symptoms,
+// and nineteen tasks is nineteen sub-agent startups to make one edit each. A cause that has already had
+// REPAIR_ROUND_CAP rounds is PARKED rather than re-emitted — three sub-agents have failed at it, and a fourth is
+// not the answer; it is a decision for the user.
+// The two refusals a repair round makes BEFORE it writes anything, shared by `--verify --tasks` and `--route`:
+// both schedule sub-agents, so both answer the same two questions first. Returns the refusal text, or null.
+function repairPreflight(result, dir) {
+  // THE LEDGER IS CHECKED BEFORE MORE WORK IS SCHEDULED AGAINST IT. Read-only: the folder is not re-sliced here,
+  // so this sees the recorded front matter and the clocks exactly as they stand. No repair task is written while
+  // it fails — a repair round adds sub-agents on top of closures nobody was dispatched for, and the rows it would
+  // open cannot be trusted to describe what was actually built.
+  const folder = readTaskDir(dir);
+  // NOT-BUILT IS NOT JUDGED HERE. `readTaskDir` computes a status off the cells alone and never resolves a
+  // residual, so a row whose repair task has closed still reads unrouted on this path — and the refusals below
+  // return before `syncRepairDir` can correct it. The verdict is set once, after that call, off the folder it
+  // wrote; a refusal reports the gate that actually fired and nothing else.
+  const audit = dispatchAudit(folder, dir);
+  if (audit.failing.length) {
+    dispatchGateFailure = { audit, dir, started: true };
+    // The files and their remedies go out ONCE, on stderr with the other ⛔ banners. Stdout carries the verify
+    // table the caller presents verbatim, so the same list on both streams is the caller's report read twice.
+    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this folder fails the dispatch gate (${audit.failing.length} task(s)),`
+      + " and a repair round would schedule more sub-agents against work nobody was dispatched for."
+      + " The failing tasks and their remedies are on stderr.\n";
+  }
+  if (planGaps(result).length) {
+    return "migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — this run has PLAN-level gaps, which no build round can close."
+      + " Fix the plan first; repairing against it would spend sub-agents on rows the plan itself cannot state.\n";
+  }
+  return null;
+}
+
+// WHERE THE ROUND'S ROWS CAME FROM. "A verifier could not find it" and "the agent that built the page wrote down
+// that they did not build it" call for different first moves, so the round says which (`renderTaskFile` too).
+const ROUND_SOURCE = {
+  verify: "the open rows of THIS verify run",
+  route: "the rows a BUILD agent recorded as NOT BUILT",
+};
+const ROUND_EMPTY = {
+  verify: (dir) => `no repair task written to ${dir} — this verify run left no row open on any page.`,
+  route: (dir) => `no repair task written to ${dir} — nothing there is waiting to be routed: every row a build agent`
+    + " recorded as NOT BUILT already has a repair task (or its cause is parked).",
+};
+
+// `deliverable` (page) on file, per held-back row.
+const heldRows = (held) => held.map((h) => `\`${h.row.deliverable}\` (${h.pageKey}) on ${h.task.file}`).join(" | ");
+
+// The round's report, identical for both entry points except for where its rows came from.
+export function repairRoundLines(res, dir, kind) {
+  const lines = [];
+  // A row held back because the ledger settled it by decision is NOT written as a round, so this is the only
+  // place the caller hears about it.
+  for (const b of res.boundaries || []) {
+    lines.push(`migrate.mjs: NOT routed — \`${b.row.deliverable}\` (${b.pageKey}) was closed \`not-applicable\` with a reason`
+      + ` on ${b.task.file}, and a verify run re-opened it. The decision stands: confirm the boundary, or record`
+      + ` the row \`not-built\` to schedule the work.`);
+  }
+  // A row whose check inputs match the round that closed it is not handed out again: a sub-agent could only
+  // re-derive the same answer. Neither kind counts as verified — the page stays open and so does the gate.
+  if (res.disputed?.length) {
+    lines.push(`migrate.mjs: DISPUTED check — ${res.disputed.length} row(s) a repair round closed \`built\` read open again`
+      + ` on the SAME recorded status and evidence: ${heldRows(res.disputed)}. No round was opened for them: the`
+      + ` verifier is in question, not the page. Check the rows on the stand and fix the check, or record why it`
+      + ` cannot see them; they stay open until the verifier confirms them.`);
+  }
+  if (res.stalled?.length) {
+    lines.push(`migrate.mjs: STALLED — ${res.stalled.length} row(s) a repair round closed \`not-built\` read open again`
+      + ` on the SAME recorded status and evidence: ${heldRows(res.stalled)}. No round was opened for them: nothing`
+      + ` changed for another sub-agent to act on. Take them to the user — the plan, the stand or the expectation`
+      + ` has to move first.`);
+  }
+  if (res.written.length) {
+    const byRound = [...new Set(res.written.map((t) => t.repairRound))].sort((a, b) => a - b);
+    lines.push(`migrate.mjs: wrote ${res.written.length} repair task(s) (round ${byRound.join(", ")}) to ${dir}`
+      + ` — ${ROUND_SOURCE[kind]}, merged by (page, cause). Hand ONE to a sub-agent, same contract as a`
+      + ` build task, then re-verify. Re-verifying opens a NEW round; it does not rewrite these files.`);
+    const residual = res.written.filter((t) => String(t.cause).startsWith("not-built:")).length;
+    if (residual) {
+      lines.push(`migrate.mjs: ${residual} of them cover rows a BUILD agent recorded as NOT BUILT rather than rows`
+        + ` \`--verify\` found open. The \`partial\` task each row came from stays \`partial\` until its repair task`
+        + ` closes, and closes to \`done\` when it does.`);
+    }
+  }
+  if (res.pending.length) {
+    const what = res.pending.map((p) => `${p.pageKey}: ${p.cause} (round ${p.round}, ${p.status})`).join(" | ");
+    lines.push(`migrate.mjs: ${res.pending.length} cause(s) already have an OPEN repair task — ${what}. No new round`
+      + ` was opened for them: a round is an ATTEMPT, not a verify run, so re-verifying an unchanged page does not`
+      + ` manufacture one (and would otherwise burn the ${REPAIR_ROUND_CAP}-round cap with nobody having run).`);
+  }
+  if (!res.written.length && !res.parked.length && !res.pending.length
+    && !res.disputed?.length && !res.stalled?.length) lines.push(`migrate.mjs: ${ROUND_EMPTY[kind](dir)}`);
+  if (res.parked.length) {
+    const what = res.parked.map((p) => `${p.pageKey}: ${p.cause} (${p.rows} row(s))`).join(" | ");
+    lines.push(`migrate.mjs: ⛔ ${res.parked.length} cause(s) PARKED after ${REPAIR_ROUND_CAP} rounds — ${what}.`
+      + ` No further repair task is written for them: three sub-agents have already failed at each, so a fourth is`
+      + ` not the answer. Take these to the user — the plan, the stand or the expectation is wrong, not the build.`);
+  }
+  return lines;
+}
+
+// `--tasks <dir> --route` — open a repair round over the rows a build agent recorded as NOT BUILT, with no verify
+// run behind it. `--verify --tasks` routes the same rows, but only with a `--built` payload for every page, which
+// a run still building them cannot supply. A repair task is recognised by front matter the ENGINE writes, so
+// routing is a mode and never a file a caller authors.
+function runRouteMode(result, dir, opts) {
+  const refused = repairPreflight(result, dir);
+  if (refused) return refused;
+  let res;
+  // A round that could not be written opened nothing, exactly like the refusal below, so it raises the same flag:
+  // the banner on stdout and the exit code are one verdict.
+  try { res = syncRepairDir(dir, result, {}, opts); }
+  catch (e) {
+    routeRefusalFailure = true;
+    return `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`;
+  }
+  // A refused set writes nothing: the folder's task ids cannot be derived from it.
+  if (res.refused) {
+    routeRefusalFailure = true;
+    return `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
+      + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then route again.\n`;
+  }
+  // Off the folder this call just wrote, as the verify leg does: a routed row is open work, not a gate failure.
+  const stillOpen = unroutedNotBuilt(res.set.tasks);
+  partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
+  // This mode's whole stdout, so it carries the block the orchestrator pastes — `--verify`'s repair note is
+  // appended to a table that already has one.
+  const lines = [...repairRoundLines(res, dir, "route"), "", "--- progress ---", renderProgress(res.set, dir).trimEnd()];
+  return lines.join("\n") + "\n";
+}
+
+// Returns `{ note, set, repair }`: the stdout note, the MERGED task set the final report reads (null when the
+// round was refused before it merged anything — the caller then reads the folder read-only), and what the round
+// wrote (null when refused).
+function runRepairMode(result, dir, verifyRes, opts) {
+  const refused = repairPreflight(result, dir);
+  if (refused) return { note: refused, set: null, repair: null };
+  let res;
+  // Same verdict as the routed round, raised on the same flag: one repair code path reached by two entry commands,
+  // and the exit code follows the banner whichever of them asked.
+  try { res = syncRepairDir(dir, result, verifyRes.pages, opts); }
+  catch (e) {
+    routeRefusalFailure = true;
+    return { note: `migrate.mjs: ⛔ could not write repair tasks to ${dir}: ${e.message}\n`, set: null, repair: null };
+  }
+  // The folder's task ids cannot be derived from a refused set — nothing was written, the same refusal a build
+  // run makes. Repairing against a cut that does not resolve would renumber the whole folder.
+  if (res.refused) {
+    routeRefusalFailure = true;
+    return { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${refusalCause(res, dir)}:`
+      + ` ${(res.problems || []).join("; ")}.${refusalRemedy(res)} Then re-verify.\n`, set: null, repair: null };
+  }
+  // Re-read off the folder this call just wrote: a row that now has a repair round is somebody's open work, not
+  // a gate failure. What survives is the residual nothing can be scheduled for — a parked cause.
+  const stillOpen = unroutedNotBuilt(res.set.tasks);
+  partialGateFailure = stillOpen.length ? { items: stillOpen, dir } : null;
+  return { note: repairRoundLines(res, dir, "verify").join("\n") + "\n", set: res.set,
+    repair: { written: res.written, pending: res.pending, parked: res.parked, disputed: res.disputed, stalled: res.stalled } };
+}
+
+// `--decide D<N> --wont-do|--postponed [--to <dest>] --pages <keys>|--task <id>|--row <task>:<n>`
+// — the one path a person's scope decision reaches the ledger. It refuses unless `D<N>` already resolves to
+// a heading in `<migration-folder>/decisions.md`; that refusal IS the safeguard (an agent cannot mint the
+// ground it stands on), and the message prints exactly what to add.
+function decidePrintProblems(prefix, problems, addHelp) {
+  const lines = [`migrate.mjs: ⛔ ${prefix}:`];
+  for (const p of problems) lines.push(`  — ${p}`);
+  if (addHelp) lines.push(...addHelp);
+  return lines.join("\n") + "\n";
+}
+// The one refusal that can be acted on without reading the code: the decision does not resolve yet, so the
+// message has to name the file to add it to and the heading shape that counts there.
+function decideRefusalHelp(res, opts, migrationDir) {
+  if (!res.problems.some((p) => /does not resolve to a heading in decisions\.md/.test(p))) return [];
+  return ["", "  add it to `" + path.join(migrationDir, "decisions.md") + "` as a heading (`## " + opts.decision
+    + " — <title>`), then re-run."];
+}
+// Each branch is evaluated ONLY when it is the one taken: `opts.pages` is null whenever the decision was
+// addressed by task or by row, so reading its length up front throws on the two commonest forms.
+function decideTargetLabel(opts) {
+  if (opts.rowRef) return `row ${opts.rowRef.n} of ${opts.rowRef.taskId}`;
+  if (opts.taskId) return `task ${opts.taskId}`;
+  return `${opts.pages.length} page(s): ${opts.pages.join(", ")}`;
+}
+const decidedRowLine = (x) => `  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`;
+function decideTouchedLines(res, opts) {
+  const lines = [`migrate.mjs: ${opts.mode === "postponed" ? "postponed" : "wont-do"} ${res.touched.length} row(s) under ${opts.decision} — ${decideTargetLabel(opts)}.`];
+  if (opts.mode === "postponed") lines.push(`  destination: ${opts.destination}`);
+  lines.push(...res.touched.map(decidedRowLine));
+  if (res.cascaded?.length) {
+    lines.push("", `Cascaded into ${res.cascaded.length} matching row(s) across other tasks (repair tasks whose deliverable was the same row):`,
+      ...res.cascaded.map(decidedRowLine));
+  }
+  lines.push(...res.skipped.map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`));
+  return lines;
+}
+// The open rows, in any task, that share a subject with a decided row, each with the command that applies the
+// same answer to it. Listed only: each row is closed by the person running its command.
+function decideSiblingLines(res, cmdFor) {
+  if (!res.siblings?.length) return [];
+  return ["", `${res.siblings.length} open row(s) share a subject with the decided row(s) and were NOT`
+    + " touched. To apply the same answer to them, run:",
+    ...res.siblings.flatMap((x) => [`  · ${x.task.file} row ${x.n} — ${x.task.rows[x.n - 1].label}`, `    ${cmdFor(x)}`])];
+}
+function runDecideMode(result, dir, opts, cmdFor = () => "") {
+  // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
+  // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
+  // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
+  const migrationDir = path.join(dir, "..");
+  const decisions = readDecisions(migrationDir);
+  const res = applyDecision(dir, result, { ...opts, decisions });
+  if (res.refused) {
+    return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
+      decideRefusalHelp(res, opts, migrationDir)), ok: false };
+  }
+  const lines = decideTouchedLines(res, opts);
+  // A cell the in-place writer could not place is reported as a FAILURE, not folded into the success line. Its
+  // `decisions:` entry was dropped with it, so the folder is consistent — but the decision did not fully land
+  // and the person has to look at the body before re-running.
+  if (res.unplaced?.length) {
+    lines.push("", `⛔ ${res.unplaced.length} row(s) could NOT be written — their \`## Deliverables\` row was not found`
+      + " or the rewritten cell did not read back. Nothing was recorded for them; fix the body and re-run:",
+      ...res.unplaced.map((u) => `  · ${u.task.file} row ${u.n}`));
+    return { note: lines.join("\n") + "\n", ok: false };
+  }
+  lines.push(...decideSiblingLines(res, cmdFor),
+    "", "Re-run `--verify` next: the report's carry-over section renders every postponed row with its destination.");
+  return { note: lines.join("\n") + "\n", ok: true };
+}
+function runRevokeMode(result, dir, opts) {
+  const res = revokeDecision(dir, result, opts);
+  if (res.refused) return { note: decidePrintProblems(`--revoke ${opts.decision} was refused`, res.problems || []), ok: false };
+  // A map entry whose cell does not match is NOT cleared (see revokeDecision) — say so either way, because
+  // a silent skip reads exactly like a successful revoke to the person who ran the command.
+  const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
+  if (!res.cleared.length) {
+    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
+    return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
+  }
+  const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
+  for (const c of res.cleared) lines.push(`  · ${c.task.file} row ${c.n} — ${c.task.rows[c.n - 1].label}`);
+  lines.push(...skipLines, "", "Cascade-closed repair tasks are NOT revived by --revoke: the next `--verify` measures the page as it then stands and re-opens what still needs work (per ENG-99749 point 3).");
+  return { note: lines.join("\n") + "\n", ok: true };
+}
+
+// The artifact a `--from` run writes when `--out` names nothing: the migration result report under `--tasks`,
+// the bare plan-vs-built table otherwise. Its own function so the two conditions are not one nested ternary.
+function defaultOutFile(fromDir, tasksMode) {
+  if (!fromDir) return null;
+  return path.join(fromDir, tasksMode ? REPORT_FILE : VERIFY_FILE);
+}
+
 function outFileNote(label, outFile, notReady, verifyMode) {
   if (!notReady) return `migrate.mjs: wrote ${label} to ${outFile} — present that file verbatim.\n`;
+  if (label === "migration result report") {
+    return `migrate.mjs: wrote ${label} to ${outFile} — its verdict is NOT COMPLETE, and the reasons are its first line: PRESENT IT VERBATIM (sections 1-3 name what needs a decision, what the agent closed as a boundary, and what the machine could not confirm). Do not hand-write a status summary of your own, and do not present \`build-tasks/index.md\` — the report carries the OPEN machine rows and the confirmed counts; a plain --verify with no --tasks prints the full row-level table.\n`;
+  }
   if (verifyMode) {
     return `migrate.mjs: wrote ${label} to ${outFile} — this run is INCOMPLETE, and that is what the table reports: PRESENT IT VERBATIM (it names every ❌ MISSING and ⚠ unverified row). Do not hand-write a status summary of your own, and do not treat the file as an approvable plan — read the ⛔ stderr line(s) below to tell a repairable build gap from a PLAN-level one.\n`;
   }
@@ -2757,21 +3535,141 @@ function outFileNote(label, outFile, notReady, verifyMode) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const argv = process.argv.slice(2);
+  const unknown = argv.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a));
+  if (unknown.length) fail(`unknown flag ${unknown.join(" / ")} — this CLI accepts ${[...KNOWN_FLAGS].sort((a, b) => a.localeCompare(b)).join(" ")}. Nothing was written: an ignored flag makes a wrong invocation report success (\`--spec --page main\` and \`--spec --page list\` returned the same whole spec twice).`);
   const planMode = argv.includes("--plan");   // print the WHOLE plan skeleton (fill placeholders, paste verbatim)
   const specMode = argv.includes("--spec");   // print ONLY the design-spec Markdown
   const checklistMode = argv.includes("--checklist"); // print ONLY the Plan-vs-Done control table (AFTER implementation)
   const stubsMode = argv.includes("--stubs"); // print ONLY the step-5.1 handoff digest (imperative rows per scope)
+  const tasksMode = argv.includes(TASKS_FLAG); // WRITE the build-task folder (one file per task + a derived index)
+  let repairNote = "";                        // set when `--verify --tasks` wrote a repair round into that folder
+  let readProblems = [];                      // `--verify --from`: the reads that could not be opened
+  let builtWritten = null;                    // …and where the composed payload was written
+  let finalReport = null;                     // `--verify --tasks`: the migration result report
+  let ledgerIncomplete = false;               // …and whether its verdict is NOT COMPLETE (exit 2 like the other gates)
+  let splitText = null;                       // the `--split` file's bytes, frozen into the folder once it resolves
   const verifyMode = argv.includes("--verify"); // VERIFY the built page against expected deliverables (needs --built)
   // `--built <file>`: the per-page map of clio `get-page`'s `bundle.viewConfig` (the MERGED page). NOT
   // `ownBodySummary` — an element the TEMPLATE provides carries no `type` there, so that source reads ❌ MISSING
-  // on a correctly built page. The fail string three lines below says the same thing; this comment used to say
-  // the opposite, which is exactly the kind of drift that gets a payload hand-built from the wrong source.
+  // on a correctly built page. The fail string three lines below says the same thing; a comment saying
+  // the opposite is exactly the kind of drift that gets a payload hand-built from the wrong source.
+  // A second mode flag alongside `--tasks` is a LOUD stop, not a silent precedence win. Every other mode is a
+  // print; this one WRITES a folder, so "the first flag matched wins" would answer `--plan --tasks ./d` with a plan
+  // on stdout and no folder — and a caller reading the exit code would believe the tasks were sliced.
+  // `--verify --tasks <dir>` is the ONE legal pairing, and it is not two modes running at once: `--verify` is
+  // still the mode, and the folder is where its OPEN ROWS are written as repair tasks. Everything else still
+  // writes a folder while the other flag prints an artifact, so one of the two would silently not happen.
+  if (tasksMode) {
+    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode], ["--stubs", stubsMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (alsoAsked.length) fail(`\`--tasks\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES a folder while those print an artifact, so one of the two would silently not happen. Run them as separate commands.`);
+  }
+  // `--from <dir>`: the engine COMPOSES the payload from the files `--reads <dir>` named and writes it to
+  // `<dir>/built.json`. `--built <file>` stays — offline replay and every engine test hand the gate a recorded
+  // payload, and a mode that only works against a live folder could not be tested from a fixture.
+  const fromDir = valueFlagArg(argv, FROM_FLAG, `${FROM_FLAG} ./migration-folder`, fail);
+  if (fromDir && !verifyMode) fail(`\`${FROM_FLAG}\` only means something with \`--verify\` — it composes the payload that gate reads.`);
   const builtIdx = argv.indexOf("--built");
-  if (verifyMode && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
+  if (fromDir && builtIdx >= 0) fail(`\`${FROM_FLAG}\` and \`--built\` are two sources for ONE payload — pass the folder to compose from, or the file to replay, never both. Nothing was read.`);
+  if (verifyMode && !fromDir && (builtIdx < 0 || argv[builtIdx + 1] === undefined || argv[builtIdx + 1].startsWith("--")))
     fail("`--verify` needs `--built <file>` — a JSON KEYED BY PAGE: " + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by (`main`, `list`, `child:<Entity>`, `typed:<Schema>`, `mini:<Schema>`), and give each one clio `get-page`'s `bundle.viewConfig` VERBATIM (the merged page — not the page's own body, which cannot show template-provided components).");
   const builtFile = builtIdx >= 0 ? argv[builtIdx + 1] : null;
+  // `--tasks <dir>`: the DIRECTORY the task files and the index are written into. It is created if missing, and
+  // nothing already in it is deleted — see tasks.mjs.
+  const tasksDir = valueFlagArg(argv, TASKS_FLAG, `${TASKS_FLAG} ./build-tasks`, fail);
+  // `--split <file>`: WHERE the seams are, decided once and frozen into the folder. Without it the engine falls
+  // back to its own budget slicer — which is fine for a plan small enough that the seams do not matter, and was
+  // measured putting a related list and its filter in different tasks on one that was not.
+  const splitFile = valueFlagArg(argv, SPLIT_FLAG, `${SPLIT_FLAG} ./split.json`, fail);
   // `--out <file>`: WRITE the output to a file so the agent presents the file, not a hand-paste.
-  const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail);
+  // On a `--from` run it DEFAULTS into the migration folder: the payload lands there and the table that judges it
+  // has to land beside it, or the run is re-checkable only in halves. An explicit `--out` still wins.
+  const outFile = valueFlagArg(argv, "--out", "--out plan.md", fail)
+    || defaultOutFile(fromDir, tasksMode);
+  // `--tasks` already WRITES a folder, so `--out` has nothing to name here. Silently ignoring it would leave a
+  // caller believing the artifact went where it asked (and `--out` is how every other mode's artifact is named).
+  if (splitFile && !tasksMode) fail(`\`${SPLIT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it says where that folder's seams are.`);
+  // `--start <id>`: mark that task in-progress and stamp its clock, THEN regenerate. Only with `--tasks <dir>`,
+  // and never with `--verify`, whose folder writes are repair rounds rather than a dispatch.
+  const startId = valueFlagArg(argv, START_FLAG, `${START_FLAG} <task-id>`, fail);
+  if (startId && (!tasksMode || verifyMode)) fail(`\`${START_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` on its own — it marks the task you are about to dispatch.`);
+  // `--reads <dir>`: WRITE the read plan the verify gate needs — which pages, which rule reads, which on-stand
+  // checks, and the exact file each response goes into. Its own mode: it WRITES a folder, so pairing it with a
+  // print mode would make one of the two silently not happen (the rule `--tasks` carries).
+  const readsDir = valueFlagArg(argv, READS_FLAG, `${READS_FLAG} ./migration-folder`, fail);
+  if (readsDir) {
+    const alsoAsked = [["--plan", planMode], ["--spec", specMode], ["--checklist", checklistMode],
+      ["--stubs", stubsMode], ["--verify", verifyMode], [TASKS_FLAG, tasksMode]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (alsoAsked.length) fail(`\`${READS_FLAG}\` cannot be combined with ${alsoAsked.join(" / ")} — it WRITES the read plan for a gate that has not run yet, and those either print an artifact or verify one. Run them as separate commands.`);
+  }
+  // `--route`: open a repair round over the rows a build agent recorded as NOT BUILT, without a verify run.
+  // `--add <file.json>`: the orchestrator DECLARES a task the plan does not model and the engine writes the
+  // file. The declaration is the contract; the file shape is the engine's.
+  const addIdx = argv.indexOf(ADD_FLAG);
+  const addFile = addIdx >= 0 ? argv[addIdx + 1] : null;
+  if (addIdx >= 0 && (!addFile || addFile.startsWith("--")))
+    fail(`\`${ADD_FLAG}\` needs a path to the declaration file`);
+  if (addFile && !tasksMode) fail(`\`${ADD_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it adds a task to that folder.`);
+  if (addFile && verifyMode) fail(`\`${ADD_FLAG}\` writes a task; \`--verify\` reads the folder. Run them as separate commands.`);
+  if (addFile && startId) fail(`\`${ADD_FLAG}\` and \`${START_FLAG}\` are separate calls — one FILES the task, the other marks the one you are about to dispatch.`);
+  const routeMode = argv.includes(ROUTE_FLAG);
+  if (routeMode && !tasksMode) fail(`\`${ROUTE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it opens a repair round in that folder.`);
+  if (routeMode && verifyMode) fail(`\`${ROUTE_FLAG}\` and \`--verify\` do the same routing — \`--verify ${TASKS_FLAG} <dir>\` already writes a round over every open row, its own and the not-built ones. Drop \`${ROUTE_FLAG}\`; it is for a run in flight, which has no \`--built\` payload to verify with.`);
+  // Both write the folder, and running them in one call would name a repair task and mark it started in the same
+  // breath — so a caller reading the output could not tell which task the token belongs to.
+  if (routeMode && startId) fail(`\`${ROUTE_FLAG}\` and \`${START_FLAG}\` are separate calls — one SCHEDULES the repair work, the other marks the task you are about to dispatch. Route first, then \`${START_FLAG}\` the repair task this mode names.`);
+  // The seams are already frozen in the folder a round is opened over, and `--route` does not re-cut it.
+  if (routeMode && splitFile) fail(`\`${SPLIT_FLAG}\` says how to CUT a folder; \`${ROUTE_FLAG}\` opens a repair round in one already cut, reading the split frozen inside it. Run them as separate commands.`);
+  // `--next`: ANSWER which tasks are startable right now — it dispatches nothing and issues no token.
+  const nextMode = argv.includes(NEXT_FLAG);
+  if (nextMode && !tasksMode) fail(`\`${NEXT_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it answers which task in THAT folder you may start.`);
+  // ⛔ IT REFUSES TO COMBINE WITH ANYTHING THAT MOVES THE FOLDER. Each of `--start`, `--route`, `--verify` and
+  // `--split` writes to the folder before this answer would be printed, so one call would describe a state the
+  // reader cannot identify — before or after that write. Ask first, then act on what it named.
+  {
+    const moves = [[START_FLAG, !!startId], [ROUTE_FLAG, routeMode], ["--verify", verifyMode], [SPLIT_FLAG, !!splitFile]]
+      .filter(([, on]) => on).map(([name]) => name);
+    if (nextMode && moves.length) fail(`\`${NEXT_FLAG}\` cannot be combined with ${moves.join(" / ")} — each of those WRITES the folder before the answer would be printed, so a single call would describe a state you could not identify. Ask \`${NEXT_FLAG}\` first, then run the command it prints.`);
+  }
+  // `--decide D<N>` / `--revoke D<N>` — scope-decision mode. Requires `--tasks <dir>` (the folder
+  // whose cells it fills or clears). Refuses to combine with other write modes for the same reason `--next`
+  // does: a single call would describe or dispatch state the reader cannot identify. Argument shape and
+  // resolution live in tasks.mjs / report.mjs (readDecisions).
+  const decideArg = valueFlagArg(argv, DECIDE_FLAG, `${DECIDE_FLAG} D13`, fail);
+  const revokeArg = valueFlagArg(argv, REVOKE_FLAG, `${REVOKE_FLAG} D13`, fail);
+  const wontDoFlag = argv.includes(WONT_DO_FLAG);
+  const postponedFlag = argv.includes(POSTPONED_FLAG);
+  const toArg = valueFlagArg(argv, TO_FLAG, `${TO_FLAG} ENG-12345`, fail);
+  const pagesArg = valueFlagArg(argv, PAGES_FLAG, `${PAGES_FLAG} typed:Service,typed:Product`, fail);
+  const taskArg = valueFlagArg(argv, TASK_FLAG, `${TASK_FLAG} <task-id>`, fail);
+  const rowArg = valueFlagArg(argv, ROW_FLAG, `${ROW_FLAG} <task-id>:<n>`, fail);
+  const decideMode = !!decideArg, revokeMode = !!revokeArg;
+  if ((decideMode || revokeMode) && !tasksMode) fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` only means something with \`${TASKS_FLAG} <dir>\` — it writes into that folder.`);
+  if (decideMode && revokeMode) fail(`\`${DECIDE_FLAG}\` and \`${REVOKE_FLAG}\` are opposite operations — run them as separate commands.`);
+  if ((decideMode || revokeMode) && (verifyMode || routeMode || nextMode || !!startId || !!addFile || !!splitFile)) {
+    fail(`\`${decideMode ? DECIDE_FLAG : REVOKE_FLAG}\` writes into the folder; every other write / query mode does the same or moves it first, so a single call would describe a state the reader cannot identify. Run them as separate commands.`);
+  }
+  if (decideMode) {
+    if (!/^D\d+$/.test(decideArg)) fail(`\`${DECIDE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${DECIDE_FLAG} D13\`) — got \`${decideArg}\`.`);
+    if (!wontDoFlag && !postponedFlag) fail(`\`${DECIDE_FLAG}\` needs \`${WONT_DO_FLAG}\` or \`${POSTPONED_FLAG}\`. The two words differ in what they say about the debt: \`${WONT_DO_FLAG}\` closes it, \`${POSTPONED_FLAG}\` records it with a destination.`);
+    if (wontDoFlag && postponedFlag) fail(`\`${WONT_DO_FLAG}\` and \`${POSTPONED_FLAG}\` are two answers to one question — pick one.`);
+    if (postponedFlag && !toArg) fail(`\`${POSTPONED_FLAG}\` needs \`${TO_FLAG} <destination>\` — an issue key or free text (a key renders as a link in the carry-over section). Demanding a real key would stop a person mid-migration to file a ticket; demanding nothing lets "later" pass for an answer.`);
+    if (wontDoFlag && toArg) fail(`\`${TO_FLAG}\` only means something with \`${POSTPONED_FLAG}\` — a decision that closes the debt does not go anywhere.`);
+    // Refused at the boundary as well as normalised in `decideCellText`, because the destination ends up inside a
+    // markdown table row: a line break would split the row in two and the engine would read the task back broken.
+    if (toArg && /[\r\n]/.test(toArg)) fail(`\`${TO_FLAG}\` must be a single line — the destination is written into a \`## Deliverables\` table cell, and a line break splits the row.`);
+    const addressings = [!!pagesArg, !!taskArg, !!rowArg].filter(Boolean).length;
+    if (addressings === 0) fail(`\`${DECIDE_FLAG}\` needs one of \`${PAGES_FLAG} <keys>\`, \`${TASK_FLAG} <id>\` or \`${ROW_FLAG} <task-id>:<n>\` — the row addressing this decision covers.`);
+    if (addressings > 1) fail(`\`${PAGES_FLAG}\` / \`${TASK_FLAG}\` / \`${ROW_FLAG}\` are three addressings for ONE decision — pick one.`);
+  }
+  if (revokeMode) {
+    if (!/^D\d+$/.test(revokeArg)) fail(`\`${REVOKE_FLAG}\` needs a decision id shaped D<N> (e.g. \`${REVOKE_FLAG} D13\`) — got \`${revokeArg}\`.`);
+    for (const [flag, val] of [[WONT_DO_FLAG, wontDoFlag], [POSTPONED_FLAG, postponedFlag], [TO_FLAG, !!toArg], [PAGES_FLAG, !!pagesArg], [TASK_FLAG, !!taskArg], [ROW_FLAG, !!rowArg]]) {
+      if (val) fail(`\`${flag}\` does not go with \`${REVOKE_FLAG}\` — the subject is the decision, and the engine removes exactly the cells it wrote (named in each task's \`decisions:\` map). No addressing to give.`);
+    }
+  }
+  if (tasksMode && !verifyMode && !decideMode && !revokeMode && outFile) fail("`--tasks <dir>` writes the folder itself — `--out` names no artifact in this mode; drop it (the index is always `" + TASK_INDEX_FILE + "` inside that directory)");
   const arg = argv.find((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has(argv[i - 1])); // positional manifest arg ('-' = stdin)
   const fromFile = !!arg && arg !== "-";
   // No manifest path and stdin is an interactive terminal → reading fd 0 would BLOCK forever. Fail loudly
@@ -2792,7 +3690,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd() }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
-  let output, verifyIncomplete = false, verifyRes = null;
+  let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
   if (planMode) output = result.plan + "\n";
   else if (specMode) output = result.designSpec + "\n";
   else if (checklistMode) output = result.checklist + "\n";
@@ -2819,19 +3717,223 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scopes: result.stubIndex,
     }, null, 2) + "\n";
   }
+  // `--tasks` is the one mode that WRITES into a caller-supplied directory, so it is also the one most likely to
+  // hit a filesystem error (`--tasks ./notes.md` ⇒ `ENOTDIR`, a read-only parent, a missing parent). Every sibling
+  // FS operation here routes its failure through `fail()`; without this guard the operator — and the orchestrator
+  // that parses stderr — got a raw Node stack trace instead of the `migrate.mjs: …` diagnostic.
+  // `--verify` is checked BEFORE `--tasks`: with both, verify is the MODE and the folder is only where its open
+  // rows are written. Matched the other way round, `--verify --tasks <dir>` re-sliced the plan and printed no
+  // table at all — the caller asked for a verification and got a task folder.
+  // Derived from the SAME `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
+  // publishes can never be a key nobody was told to read. That is why the engine owns this list.
+  else if (readsDir) {
+    let plan;
+    try {
+      plan = readPlan(result, checklistOpts(manifest));
+      writeReadIndex(readsDir, plan);
+      // …and the skeletons for the two halves the stand does not hold, so no id is ever retyped.
+      writeEvidenceSkeletons(readsDir, plan);
+    } catch (e) { fail(`could not write the read plan to ${readsDir}: ${e.message}`); }
+    output = renderReadPlan(plan, readsDir);
+  }
+  // BEFORE the slicing branch: `--route` writes into a folder that is already cut, and re-slicing it here would
+  // be a second opinion on seams the folder froze.
+  else if (tasksMode && addFile) {
+    let text;
+    try { text = fs.readFileSync(addFile, "utf8"); }
+    catch (e) { fail(`cannot read ${ADD_FLAG} '${addFile}': ${e.message}`); }
+    let decl;
+    try { decl = JSON.parse(text); }
+    catch (e) { fail(`${ADD_FLAG} '${addFile}' is not valid JSON: ${e.message}. Expected shape: ${DECL_SHAPE}`); }
+    let res;
+    try { res = addTasks(tasksDir, result, decl, checklistOpts(manifest)); }
+    catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
+    if (res.refused) {
+      // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
+      // by the writers every other leg shares; a DECLARATION the plan cannot place is named by its own shape.
+      if (res.refusal) {
+        fail(`${ADD_FLAG} wrote nothing — ${refusalCause(res, tasksDir)}:\n`
+          + res.problems.map((x) => "  — " + x).join("\n") + `\n${refusalRemedy(res).trim()}`);
+      }
+      fail(`${ADD_FLAG} '${addFile}' does not resolve against this plan:\n`
+        + res.problems.map((x) => "  — " + x).join("\n") + `\nExpected shape: ${res.shape}`);
+    }
+    output = [`migrate.mjs: wrote ${res.written.length} declared task(s) to ${tasksDir} + ${TASK_INDEX_FILE}.`,
+      ...res.written.map((t) => `  — ${t.file} (${t.rows.length} deliverable(s))`),
+      "The file is the engine's to write and yours to fill: its `Outcome` column is what its status is derived",
+      "from, exactly as for a task cut from the plan. `--start` it like any other before you dispatch.", ""].join("\n");
+  }
+  // BEFORE both folder-writing branches: this one answers a question about the folder and must not be shadowed
+  // by the slicing branch, which would print a wrote-N-tasks note instead of the answer that was asked for.
+  else if (tasksMode && nextMode) {
+    // NOTHING IN THE ANSWER IS PARSED POSITIONALLY (the workaround this replaces read `index.md` by column, and
+    // the report was later reshaped under it). Each named task carries the command that starts it, with every
+    // element encoded for the shell — a path with a space in it is the normal case on Windows, where the node
+    // executable itself lives under `Program Files`.
+    const manifestArg = fromFile ? arg : "-";
+    // EVERY element goes through the encoder, the id included: it is front matter the engine did not necessarily
+    // mint, and an unencoded one would be shell text rather than an argument.
+    let printedCommand = false;
+    const cmdFor = (id) => {
+      printedCommand = true;
+      return [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
+        TASKS_FLAG, shellArg(tasksDir), START_FLAG, shellArg(id)].join(" ");
+    };
+    try { output = runNextMode(result, tasksDir, checklistOpts(manifest), cmdFor); }
+    catch (e) { fail(`cannot read the task folder '${tasksDir}': ${e.message}`); }
+    // …and when the manifest came in on stdin there is no path to print, so the command carries `-` and would
+    // BLOCK on a terminal if it were pasted as it stands. Said here rather than left for the reader to discover.
+    // Gated on whether a command was actually PRINTED, not on the rendered text: the ledger verdict's own prose
+    // names `--start` while dispatching nothing, and a note about "each command above" under it describes none.
+    if (!fromFile && printedCommand) {
+      output += `migrate.mjs: ℹ this run read the manifest from stdin, so the \`-\` in each command above means`
+        + " \"pipe the same manifest in again\" — pasted bare it would wait on a terminal. Pass the manifest as a"
+        + " path to get commands that run exactly as printed.\n";
+    }
+  }
+  // `--decide` / `--revoke` — writes into the frozen folder. Placed BEFORE the slicing branch
+  // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
+  // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
+  else if (tasksMode && decideMode) {
+    const opts = { ...checklistOpts(manifest), decision: decideArg,
+      mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
+      pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
+      taskId: taskArg || null,
+      rowRef: rowArg ? (() => { const at = rowArg.lastIndexOf(":"); return at > 0 ? { taskId: rowArg.slice(0, at), n: rowArg.slice(at + 1) } : { taskId: rowArg, n: Number.NaN }; })() : null };
+    // The same answer, addressed to one row, with every element encoded for the shell.
+    const cmdFor = (x) => [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(fromFile ? arg : "-"),
+      TASKS_FLAG, shellArg(tasksDir), DECIDE_FLAG, shellArg(opts.decision),
+      ...(opts.mode === "postponed" ? [POSTPONED_FLAG, TO_FLAG, shellArg(opts.destination)] : [WONT_DO_FLAG]),
+      ROW_FLAG, shellArg(`${x.task.id}:${x.n}`)].join(" ");
+    let res;
+    try { res = runDecideMode(result, tasksDir, opts, cmdFor); }
+    catch (e) { fail(`cannot apply the decision to '${tasksDir}': ${e.message}`); }
+    if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
+    output = res.note;
+  }
+  else if (tasksMode && revokeMode) {
+    const opts = { ...checklistOpts(manifest), decision: revokeArg };
+    let res;
+    try { res = runRevokeMode(result, tasksDir, opts); }
+    catch (e) { fail(`cannot revoke the decision in '${tasksDir}': ${e.message}`); }
+    if (!res.ok) { process.stderr.write(res.note); process.exit(1); }
+    output = res.note;
+  }
+  // `--route` writes into a folder that is already cut, and re-slicing it here would be a second opinion on
+  // seams the folder froze.
+  else if (tasksMode && routeMode) {
+    try { output = runRouteMode(result, tasksDir, checklistOpts(manifest)); }
+    catch (e) { fail(`cannot write repair tasks to '${tasksDir}': ${e.message}`); }
+  }
+  else if (tasksMode && !verifyMode) {
+    let split = null;
+    if (splitFile) {
+      let text; try { text = fs.readFileSync(splitFile, "utf8"); }
+      catch (e) { fail(`cannot read ${SPLIT_FLAG} '${splitFile}': ${e.message}`); }
+      const parsed = parseSplit(text);
+      // Refused BEFORE anything is written: a malformed split must not leave a folder half-cut behind it.
+      if (!parsed.split) fail(`${SPLIT_FLAG} '${splitFile}' ${parsed.errors.join("; ")}. Expected shape: ${SPLIT_SHAPE}`);
+      split = parsed.split;
+      if (split.planVersion && result.planVersion && split.planVersion !== result.planVersion) {
+        fail(`${SPLIT_FLAG} '${splitFile}' was cut against plan \`${split.planVersion}\` but this manifest renders \`${result.planVersion}\``
+          + " — the seams were decided against different deliverables. Re-cut the split against the current plan, or re-plan against the one it names.");
+      }
+      splitText = text;
+    }
+    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
+  }
   else if (verifyMode) {
-    let built; try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
-    catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); }
+    let built;
+    if (fromDir) {
+      // COMPOSED, not handed over: every value comes out of a file clio wrote at a path `--reads` named, and the
+      // payload is written beside the run so the same gate replays against it offline.
+      // The plan the index is diffed against is derived HERE, from the manifest this run verifies — so a read
+      // plan cut against an earlier draft cannot pass as this one's.
+      let res; try { res = assembleBuilt(fromDir, readPlan(result, checklistOpts(manifest))); }
+      catch (e) { fail(`cannot compose the payload from '${fromDir}': ${e.message}`); }
+      // Built as a statement rather than nested inside the template below (Sonar S4624).
+      const why = res.problems.map((x) => x.file + " — " + x.why).join("; ");
+      if (!res.built) fail(`cannot compose the payload from '${fromDir}': ${why}.`
+        + ` Run \`${READS_FLAG} ${fromDir}\` first, then do the reads it names.`);
+      readProblems = res.problems;
+      built = res.built;
+      try { builtWritten = writeBuilt(fromDir, built); }
+      catch (e) { fail(`cannot write ${BUILT_FILE} to '${fromDir}': ${e.message}`); }
+    }
+    else { try { built = JSON.parse(fs.readFileSync(builtFile, "utf8")); }
+      catch (e) { fail(`cannot read --built '${builtFile}': ${e.message}`); } }
     // VALIDATE BEFORE RENDERING: `renderVerify` is called outside the try above, so a throw inside it surfaces as a
     // raw Node stack instead of a diagnosable message — and a malformed payload must be a loud exit 1, never a
     // table full of ⚠ rows that reads like a half-built page.
     const issue = builtPayloadIssue(built);
+    // A COMPOSED payload that fails the guard is an engine defect or an unreadable source file, not a caller's
+    // hand-authored mistake — so it names the folder it was composed from rather than telling the caller to fix
+    // a file they never wrote.
+    if (issue && fromDir) fail(`the payload composed from '${fromDir}' ${issue}. The files under ${fromDir}/reads/ are what it was built from — check they are the ones \`${READS_FLAG}\` named.`);
     if (issue) fail(`--built '${builtFile}' ${issue}. Expected ` + BUILT_SHAPE + ". Key it by the page keys `--checklist` groups by.");
+    // AC 12: when `--tasks <dir>` is present, the LIST of rows to verify comes from the task
+    // REGISTRY, not the plan walk. Read the folder once here (read-only, before the repair round writes
+    // anything), collect the deliverables the registry has closed by decision, and pass them to
+    // `renderVerify` so those rows never become MISSING. When `--verify` runs without `--tasks`, no
+    // registry exists — `decidedKeys` stays null and `renderVerify` falls back to the plan walk unchanged.
+    let decidedKeys = null;
+    let preMergedSet = null;
+    if (tasksMode) {
+      try {
+        preMergedSet = readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+        if (preMergedSet && !preMergedSet.refused) decidedKeys = decidedRowKeys(preMergedSet);
+        else preMergedSet = null;
+      } catch { /* folder unreadable — fall back to plan walk; the report leg will name the failure */ }
+    }
     // The SAME opts object `--checklist` renders with (checklistOpts): the two must produce the same row set, and
     // a thinner verify-only literal made that a coincidence rather than a guarantee.
-    verifyRes = renderVerify(result, checklistOpts(manifest), built);
-    output = verifyRes.markdown + "\n";
-    verifyIncomplete = !verifyRes.complete; // any MISSING or unverified deliverable ⇒ not done (ONE source of truth)
+    verifyRes = renderVerify(result, checklistOpts(manifest), built, decidedKeys);
+    // The unread-file block goes INTO the artifact, above the table. The table is the only sanctioned report, so
+    // a reader holding it must be able to tell a row nobody could read from a row nobody built.
+    output = [...problemBanner(readProblems), verifyRes.markdown].join("\n") + "\n";
+    verifyIncomplete = verifyRes.missing > 0 || verifyRes.unverified > 0; // rows short on the page ⇒ the BUILD leg
+    // Its own leg: a record filed under an id the run does not publish is a FILING fault, and telling a builder to
+    // "build the missing pieces" over one sends it to repair a page that is not short.
+    orphanEvidence = verifyRes.orphans || [];
+    if (tasksMode) {
+      // an ORCHESTRATED run closes on the MIGRATION RESULT REPORT, not on the machine table alone.
+      // The table's verdict reads only the built pages; the task ledger records what the build agents did NOT
+      // build (needs-decision, blocked, agent-asserted boundaries) and which tasks never closed. Measured: the
+      // table said "2 machine row(s) not confirmed" while the ledger held 5 open tasks, 3 partial and three
+      // handlers recorded not built — and the table was what the user was shown. The report renders BOTH and its
+      // verdict is their conjunction; the report carries the OPEN machine rows and per-page confirmed counts; the full row-level table is a plain --verify (no --tasks), not part of this artifact.
+      // NO REPAIR ROUND OVER ROWS NOBODY READ. An unread page leaves its key out, and `syncRepairDir` turns an
+      // `unverified` row into a repair task — so without this guard the prescribed gate dispatches build agents at
+      // a page that was never checked, burns a round against the cap and can park a cause, while the same run says
+      // on stderr that the rows are NOT CHECKED and want a re-read. The dispatch gate already refuses on the same
+      // principle: rows that cannot be trusted to describe what was built are not rows to schedule work from.
+      const rep = readProblems.length
+        ? { note: `migrate.mjs: ⛔ NO REPAIR TASKS WRITTEN — ${readProblems.length} read(s) could not be used, so the`
+            + " open rows do not describe what was built. Re-run those reads and verify again.\n", set: null, repair: null }
+        : runRepairMode(result, tasksDir, verifyRes, checklistOpts(manifest));
+      repairNote = rep.note;
+      // A refused round merged nothing — read the folder read-only, so the report still says what it holds.
+      // Reuse the AC 12 pre-pass here and ONLY here: this branch is reached when the round wrote nothing
+      // (`rep.set` is null), so the folder is byte-identical to what that pass already read. It cannot be
+      // reused for the post-round report, because `runRepairMode`/`syncRepairDir` write repair task files
+      // between the two and a reused set would render a stale folder.
+      const set = rep.set || preMergedSet || readMergedTaskDir(tasksDir, result, checklistOpts(manifest));
+      // ONE SET, TWO DOCUMENTS. A round that ran already wrote the index from `rep.set`; a refused one wrote nothing,
+      // so the index is re-derived from the same set the report is about to read, or the two disagree on every row
+      // recorded since the last `--tasks` run. Not under a PLAN-level gap: that refusal must leave the index as the
+      // last gap-free slice wrote it. `refreshTaskIndex` also leaves it alone when the set names task files the folder
+      // does not hold, so the index never lists work that was never written.
+      if (!rep.set && !planGaps(result).length) refreshTaskIndex(tasksDir, set);
+      // The plan-vs-built table is NOT written as a file: nothing reads it (the repair round and the report take it
+      // from `verifyRes` in memory), and a second artifact beside the report is one more thing a reader has to reconcile.
+      finalReport = renderFinalReport({ result, verifyRes, set, dir: tasksDir, built, repair: rep.repair, gates: { dispatchFailed: !!dispatchGateFailure },
+        source: fromDir ? "--from <migration-folder>" : "--built <file>" });
+      // The report REPLACES the table as the artifact, so the unread-file banner has to be carried onto it too —
+      // prepending it to the table alone loses it on exactly the command an orchestrated run is told to use.
+      output = [...problemBanner(readProblems), finalReport.markdown].join("\n") + "\n";
+      ledgerIncomplete = !finalReport.complete;
+    }
   }
   else output = JSON.stringify(result, null, 2) + "\n";
   // ⛔ HARD GATE (RV1) + STRUCTURE VALIDATOR: the artifact carries the banners (renderer), but the CLI ALSO
@@ -2845,18 +3947,26 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // ⛔ COVERAGE — a schema member with no artifact and no decision. Gated exactly like the other completeness
   // checks: an unaccounted member means the plan claims a coverage it does not have.
   const coverageBad = result.coverage && !result.coverage.complete;
-  // ⛔ LIST GATE (ENG-94714) — the LIST deliverable's own verdict. It gates exactly like the three above: the plan
+  // ⛔ LIST GATE — the LIST deliverable's own verdict. It gates exactly like the three above: the plan
   // already prints "⛔ The list page is NOT approvable", and without this leg the CLI still exited 0 next to that
   // banner, so an operator (and the build executor, which reads the exit code / `planGaps`, not the Markdown)
   // could build the Freedom list from a section whose `diff` was never readable.
   const listGateBad = result.listGate?.blocked;
-  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete;
+  const notReady = gateBad || structBad || planIncomplete || coverageBad || listGateBad || verifyIncomplete
+    || orphanEvidence.length > 0
+    || !!dispatchGateFailure || !!partialGateFailure || readProblems.length > 0 || ledgerIncomplete
+    || !!startableGateFailure || nextRefusalFailure || taskRefusalFailure || routeRefusalFailure
+    || startRefusalFailure;
   let label = "result";
   if (planMode) label = "plan";
   else if (specMode) label = "design spec";
   else if (checklistMode) label = "checklist";
   else if (stubsMode) label = "imperative-row handoff digest";
+  else if (readsDir) label = "read plan";
+  else if (verifyMode && tasksMode) label = "migration result report";
   else if (verifyMode) label = "verification";
+  else if (tasksMode && nextMode) label = "startable tasks";
+  else if (tasksMode) label = "build tasks";
   if (outFile) {
     // engine WRITES the artifact (Smell #2): the agent presents this file verbatim instead of hand-pasting stdout.
     try { fs.writeFileSync(outFile, output); }
@@ -2865,10 +3975,63 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     process.stdout.write(output);
   }
+  // Same placement rule as the repair note: it names a file written BESIDE the artifact. Saying where the payload
+  // landed is what makes the run re-checkable — `--verify --built <that file>` reproduces this table offline.
+  if (builtWritten) process.stdout.write(`migrate.mjs: composed the verify payload from ${fromDir}/${READS_DIR_NAME}/ and wrote it to ${builtWritten} — replay it offline with \`--verify --built ${builtWritten}\`.
+`);
+  // The repair note goes out AFTER the table (or the wrote-to-file line), because it is about what was written
+  // beside that artifact, not about the artifact itself.
+  if (repairNote) process.stdout.write(repairNote);
+  // THE THIRD exit-2 verdict, and the only one that is about the RUN rather than the plan or the build: the
+  // deliverables may be fine and the folder is written, but tasks were closed with nobody dispatched for them.
+  // Stated separately so it is not read as either of the other two.
+  if (dispatchGateFailure?.startRefusal) {
+    process.stderr.write(`migrate.mjs: ⛔ DISPATCH GATE — nothing was started in ${dispatchGateFailure.dir}.`
+      + " The stdout block above names the task(s) this one waits on, or the task still writing its artifact.\n");
+  }
+  else if (dispatchGateFailure) {
+    const { audit, dir, started } = dispatchGateFailure;
+    process.stderr.write(`migrate.mjs: ⛔ DISPATCH GATE — ${audit.failing.length} closed task(s) in ${dir} have no`
+      + ` valid dispatch record (dispatched ${audit.dispatched} of ${audit.total}).`
+      + (started ? " The task files and the index WERE written and are current — what failed is the run, not the slice." : "")
+      + " This is NOT a plan gap and NOT a short build; re-running the plan changes nothing.\n");
+    process.stderr.write(dispatchFailureText(audit, dir) + "\n");
+  }
+  // Exit 2 for the build's own record of what it did not do — distinct from a short build (`--verify` measures
+  // the page against the plan) and from a dispatch failure. Nothing is re-dispatched BY THIS GATE: it reports, and
+  // `--route` is what opens a round over the rows it names. The causes say which of the two the row is waiting on
+  // — a re-run, or a person.
+  if (partialGateFailure) {
+    const { items, dir: pDir } = partialGateFailure;
+    const nTasks = new Set(items.map((x) => x.task.file)).size;
+    process.stderr.write(`migrate.mjs: ⛔ NOT BUILT — ${items.length} deliverable(s) across ${nTasks} task(s) in ${pDir}`
+      + " were recorded by the agent that built them as NOT built. The task files and the index ARE written and"
+      + " current; what is not true is that this migration is finished.\n");
+    process.stderr.write(notBuiltFailureText(items) + "\n");
+  }
+  // THE FOURTH exit-2 verdict about the RUN rather than the plan or the build, and the only one no command
+  // repairs: nothing is startable and nothing is running, so the folder cannot change until somebody decides
+  // something. Stated apart from the dispatch gate because their remedies share nothing.
+  if (startableGateFailure) {
+    const { dir: sDir, answer } = startableGateFailure;
+    process.stderr.write(`migrate.mjs: ⛔ RUN HALTED — ${answer.held.length + answer.withheld.length} open task(s)`
+      + ` in ${sDir} and NOTHING startable, with nothing in flight. The stdout block above names what holds each`
+      + " one. This is not a build gap and not a plan gap: re-running any mode returns the same answer.\n");
+  }
   if (gateBad) process.stderr.write("migrate.mjs: ⛔ GATE BLOCKED — do NOT build. " + result.gate.reasons.join(" | ") + "\n");
   if (structBad) process.stderr.write("migrate.mjs: ⛔ STRUCTURE INCOMPLETE — plan not ready. " + result.structure.issues.join(" | ") + "\n");
   if (listGateBad) process.stderr.write("migrate.mjs: ⛔ LIST GATE BLOCKED — the list page is NOT approvable (the form page may still be). " + result.listGate.reasons.join(" | ") + "\n");
   if (coverageBad) process.stderr.write(`migrate.mjs: ⛔ COVERAGE INCOMPLETE — ${result.coverage.issues.length} schema member(s) unaccounted (no Freedom artifact, no decision). ` + result.coverage.issues.slice(0, 5).join(" | ") + (result.coverage.issues.length > 5 ? ` | …and ${result.coverage.issues.length - 5} more (see result.coverage.issues)` : "") + "\n");
+  if (orphanEvidence.length) {
+    const named = orphanEvidence.slice(0, 6).map((k) => "`" + k + "`").join(" | ");
+    const more = orphanEvidence.length > 6 ? " | …and " + (orphanEvidence.length - 6) + " more (see the table)" : "";
+    process.stderr.write("migrate.mjs: ⛔ EVIDENCE MIS-FILED — " + orphanEvidence.length
+      + " evidence/judge record(s) are filed under id(s) this run does not publish, so nothing reads them: "
+      + named + more + ". Not a build gap: the page is not short, the records are in the wrong place. Either the"
+      + " id was invented — re-file under the id its row names, and take a page key several tasks share to the user"
+      + " — or the plan moved and the key belongs to a row this run no longer publishes, which is settled by"
+      + " dropping it." + "\n");
+  }
   // D12 — the `--verify` leg of exit 2, stated apart from the three above. `gate`/`structure`/`coverage` fire in
   // EVERY mode and describe the PLAN: a builder cannot build its way out of them, so "loop until --verify is
   // green" against one of those never converges. THIS line is the other condition — MY BUILD is short — and it IS
@@ -2881,12 +4044,36 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const gaps = planGaps(result);
     if (gaps.length) process.stderr.write(`migrate.mjs: ℹ this run ALSO has PLAN-level gaps (${gaps.join(" · ")}) — those are NOT buildable-out-of; fix the plan instead of re-verifying against them.\n`)
   }
+  // The READ leg, stated apart from the build legs above: a row can be open because the page is short OR because
+  // nobody could read it, and those are different jobs — a repair versus a re-read. The table cannot tell them
+  // apart (an omitted key reads ⚠ like any other unconfirmed row), so this is where the difference is said.
+  if (readProblems.length) process.stderr.write(problemLines(readProblems, fromDir).join("\n") + "\n");
+  // the LEDGER leg of exit 2, stated apart from the verify leg: the built pages may all check out
+  // while the task folder still holds open work. The dispatch and not-built lines above already name their own
+  // rows; this line fires for what they do not cover (tasks still todo / in-progress / partial) and names the
+  // report as the place to read it, so an orchestrator reading stderr alone cannot mistake a green table for a
+  // finished run.
+  if (finalReport && !finalReport.complete) {
+    const t = finalReport.counts.tasks;
+    const naPart = t.na ? ` / ${t.na} not-applicable` : "";
+    const blockedPart = t.blocked ? ` / ${t.blocked} blocked` : "";
+    process.stderr.write(`migrate.mjs: ⛔ RUN NOT COMPLETE — ${finalReport.reasons.join(" · ")}. Tasks: ${t.done} done`
+      + `${naPart} / ${t.partial} partial / ${t.inProgress} in-progress / ${t.todo} todo`
+      + `${blockedPart} of ${t.total}. The migration result report (stdout, or the --out file) is the record — present it, not a summary.\n`);
+  }
   if (planMode && result.planMetaMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — required planMeta unfilled: " + result.planMetaMissing.join(", ") + ". Add to manifest.planMeta and re-run.\n");
   if (planMode && result.signalsMissing?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — on-stand signals not resolved: " + result.signalsMissing.join(", ") + ". Run the on-stand check for each key listed above and add its answer to manifest.signals; the ⛔ banner in the --plan output states the exact query and the required fields per key (some carry more than resolved/present). Then re-run.\n");
   if (planMode && result.placementBlockers?.length) process.stderr.write("migrate.mjs: ⛔ PLAN INCOMPLETE — placement not settled: " + result.placementBlockers.join(" | ") + "\n");
+  // WHAT THIS RUN DID NOT CHECK — advisory, on the same stream and in the same voice as the other ℹ notes, so it
+  // cannot land inside the verify table the caller presents verbatim. Without a task folder the verify gate reads
+  // the built pages and nothing about who built them.
+  if (verifyMode && !tasksMode)
+    process.stderr.write(`migrate.mjs: ℹ no ${TASKS_FLAG} <dir> — this run checked the BUILT PAGES only; the dispatch`
+      + ` gate did not run. If this migration used a task folder, re-run with ${TASKS_FLAG} <that folder> before`
+      + " calling it done.\n");
   if (result.parseDiagnostics?.length)
     process.stderr.write(`migrate.mjs: ℹ ${result.parseDiagnostics.length} parse diagnostic(s) — constructs not statically resolved (advisory, see result.parseDiagnostics)\n`);
-  // FIDELITY warnings are advisory (ENG-95862) — printed on the same channel and in the same voice as the parse
+  // FIDELITY warnings are advisory — printed on the same channel and in the same voice as the parse
   // diagnostics above, so demoting them out of the ⛔ banner does not make them invisible.
   const fidelity = (result.effective?.warnings || []).filter((w) => w.severity === "fidelity" && !w.accepted);
   if (fidelity.length) {

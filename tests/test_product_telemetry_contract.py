@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # (migration_plan_approved, branding_approved, ...) — encodes a dimension into
 # the enum: names multiply by flows, every new skill needs a clio release, and
 # comparing one funnel step across flows becomes a UNION over a hand-kept list.
-# Point-in-time snapshot of clio's allow-list, mirrored from clio#1081 (ENG-92551). The
+# Point-in-time snapshot of clio's allow-list, mirrored from clio#1081. The
 # vocabulary is OWNED by `get-guidance name=product-telemetry`, not by this file: a failure here
 # after a clio release means the snapshot is stale, not that the code regressed. Update it from
 # the article and clio's `TelemetryService.AllowedEventNames` together.
@@ -97,11 +97,15 @@ ALLOWED_NON_STAGE_IDENTIFIERS = {
     # An MCP TOOL name, not a stage: classic-to-freedom-migration/SKILL.md tells a run to establish
     # its browser surface by calling it before the first stand write, rather than assuming one.
     "list_connected_browsers",
+    # Also an MCP tool name. The migration skill names it where it explains that a `Request timed out`
+    # from this call IS the diagnosis — it runs on the page's main thread, so a page that blocks that
+    # thread can never answer it, and a measured run lost eight minutes re-probing a frozen tab.
+    "execute_javascript",
 }
 
 
 # Each skill must map the shared stages onto its OWN gates and name its own
-# workflow value. Telemetry previously lived only in the app orchestrator, which
+# workflow value. Telemetry confined to the app orchestrator, which
 # is why every other flow reported nothing.
 SKILL_WORKFLOWS = {
     "classic-to-freedom-migration": "classic-to-freedom-migration",
@@ -199,7 +203,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
             self.assertNotIn(stage, telemetry)
 
     def test_contract_names_the_degradation_path_for_an_older_clio(self):
-        # Raised across fourteen review rounds of PR #96: the contract delegated the vocabulary and
+        # The contract delegates the vocabulary and
         # said nothing about what happens when the connected clio does not accept it. Both halves
         # have to be here, since this is the file an agent reads for CAADT flows and the one place
         # a maintainer looks when a whole install reports nothing.
@@ -215,7 +219,7 @@ class ProductTelemetryContractTests(unittest.TestCase):
     def test_agents_md_does_not_instruct_the_deprecated_event_names(self):
         """AGENTS.md must not name the app-creation events the vocabulary replaced.
 
-        It used to enumerate them as mandatory emission points in the UX Contract and the
+        Enumerating them as mandatory emission points in the UX Contract and the
         Orchestration Checklist while the Product Telemetry section two headings above said
         stages are delegated and must not be spelled from memory. An agent reading the file
         top to bottom got both instructions, and a measured run reported its ENTIRE funnel
@@ -378,11 +382,11 @@ class ProductTelemetryContractTests(unittest.TestCase):
     def test_no_documented_event_name_is_outside_the_vocabulary(self):
         # The previous test catches a stage that exists but is never mentioned; this one catches
         # the opposite — a name that IS mentioned, in a place that reads as an emission point, but
-        # is not (or no longer) in STAGE_EVENTS. Because the vocabulary is delegated rather than
+        # is not in STAGE_EVENTS. Because the vocabulary is delegated rather than
         # restated here, nothing before this test asserted that a name typo'd into AGENTS.md,
         # this contract, a SKILL.md, or the Cursor rule would fail anywhere but at runtime against
         # a live clio — which rejects it silently into the hook's own `rejected`/retry path, not a
-        # CI failure a reviewer would see.
+        # CI failure a reader would see.
         surfaces = {
             "AGENTS.md": read("AGENTS.md"),
             "product-telemetry.md": read("context", "product-telemetry.md"),

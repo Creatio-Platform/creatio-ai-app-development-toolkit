@@ -109,3 +109,11 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-workflow-parity.mjs
+      # The approved plan sliced into a FOLDER of one-task files (`--tasks <dir>`), which an orchestrator walks one
+      # task at a time instead of holding every deliverable in one context: content-derived ids (an inserted page
+      # must not renumber a recorded status onto another task), the leaf-first build order, the caller's status and
+      # notes surviving a re-run, nothing ever deleted, and a plan-level gap writing no folder at all.
+      - name: Run task-slicing goldens
+        if: always()
+        working-directory: engine-tests/classic-to-freedom
+        run: node run-tasks.mjs

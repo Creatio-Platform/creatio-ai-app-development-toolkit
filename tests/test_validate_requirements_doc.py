@@ -625,7 +625,7 @@ class TestValidateRequirementsDocRelatedListInline(unittest.TestCase):
         validate_requirements_doc(doc)  # must not raise
 
     def test_inline_related_list_then_section_with_form_labels_passes(self):
-        # Regression: a trailing Section's page/form labels must NOT fold into
+        # Guard: a trailing Section's page/form labels must NOT fold into
         # the preceding inline related list's block.
         doc = VALID_DOC.replace(
             "- form groups: Main information\n",
