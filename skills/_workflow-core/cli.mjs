@@ -17,7 +17,7 @@
 // The journal on disk IS the resume mechanism: kill the process at any point and
 // `next` reconstructs the state from the recorded outcomes alone.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, readSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { advance } from './driver.mjs'
@@ -67,6 +67,29 @@ function opt(argv, name, fallback = null) {
 // colon in one — and Windows refuses a colon in a path. The id stays the id (the journal replays on it); only the
 // file NAME is sanitised, and it keeps the id readable so an operator can still match the two by eye.
 const safeName = (id) => String(id).replace(/[^A-Za-z0-9_.@+-]+/g, '-')
+
+// ENG-100435: `readFileSync(0)` throws EAGAIN on macOS when stdin is a pipe the writer has not finished
+// filling (a result over ~64 KB), and `submit -` died on it. Read fd 0 chunk by chunk instead: on EAGAIN wait
+// a few ms (still synchronous) and retry, stop at EOF (0 bytes, or the `EOF` error Windows reports for a
+// closed pipe). Decode once at the end, so a multi-byte UTF-8 char split across two chunks survives. Any
+// other read error is thrown to the caller unchanged.
+function readStdinSync() {
+  const chunks = []
+  const buf = Buffer.alloc(64 * 1024)
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  for (;;) {
+    let n
+    try { n = readSync(0, buf, 0, buf.length, null) }
+    catch (e) {
+      if (e.code === 'EAGAIN' || e.code === 'EWOULDBLOCK') { Atomics.wait(pause, 0, 0, 5); continue }
+      if (e.code === 'EOF') break
+      throw e
+    }
+    if (n === 0) break
+    chunks.push(Buffer.from(buf.subarray(0, n)))
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const writeJson = (p, v) => writeFileSync(p, `${JSON.stringify(v, null, 2)}\n`, 'utf8')
@@ -198,7 +221,7 @@ async function cmdSubmit(argv) {
     entry = record(item, OUTCOME.ERROR, new Error(opt(argv, '--error', 'the host reported a failure with no message')))
   } else {
     if (!resultPath) usage('submit needs a result file (or `-` for stdin), or --death / --error')
-    const raw = resultPath === '-' ? readFileSync(0, 'utf8') : readFileSync(resultPath, 'utf8')
+    const raw = resultPath === '-' ? readStdinSync() : readFileSync(resultPath, 'utf8')
     const value = JSON.parse(raw)
     const bad = missingRequired(item.responseSchema, value)
     if (bad.length) usage(`the submitted result does not satisfy the item's responseSchema — missing required key(s): ${bad.join(', ')}`)

@@ -21,6 +21,10 @@ import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
+// ENG-100435: a manifest piped to `migrate.mjs -` resolves its schema `file`s against the CWD, and a path
+// outside it is refused as traversal. `npm test` runs this file from the engine dir, where every fixture path
+// is outside the cwd, so 17 stdin goldens failed there and passed from here. Pin the cwd so both invocations agree.
+process.chdir(DIR);
 const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
@@ -904,6 +908,33 @@ check("migrate.mjs CLI: trailing --out (no path) exits 1 with a clear diagnostic
 const migOutFlag = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
 check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not swallow the flag as a filename",
   migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
+// ENG-100435: a piped manifest over ~64 KB made `readFileSync(0)` throw EAGAIN on macOS (exit 1, "cannot read
+// manifest from stdin"). A ≥ 256 KB manifest on stdin must give the SAME stdout + exit code as that manifest read
+// from a file. The padding is multi-byte (Cyrillic) so a char split across two read chunks is exercised too.
+// `timeout` is the hang guard: a read loop that never sees EOF fails the check instead of stalling the run.
+{
+  const pad = "й".repeat(200 * 1024);
+  // `entity` goes AFTER the padded body, so it only reaches stdout when the read got past the padding.
+  const bigManifest = JSON.stringify({ schemas: [{ pkg: "P", body: `define("P",[],function(){/* ${pad} */return{entitySchemaName:"X",diff:[]};});` }], entity: "BigStdinEntity" });
+  const bigPath = path.join(os.tmpdir(), `c2f_big_manifest_${process.pid}.json`);
+  fs.writeFileSync(bigPath, bigManifest, "utf8");
+  try {
+    const viaStdin = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: bigManifest, encoding: "utf8", timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    const viaFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), bigPath], { encoding: "utf8", timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    check("migrate.mjs CLI (ENG-100435): a ≥ 256 KB manifest piped to stdin is read in full — same exit code and stdout as the same manifest from a file",
+      Buffer.byteLength(bigManifest) >= 256 * 1024 && !/cannot read manifest/.test(viaStdin.stderr || "") && viaStdin.status === viaFile.status
+        && viaStdin.stdout === viaFile.stdout && viaStdin.stdout.includes('"entity": "BigStdinEntity"'),
+      () => ({ stdinStatus: viaStdin.status, fileStatus: viaFile.status, stdinErr: (viaStdin.stderr || "").slice(0, 200), sameStdout: viaStdin.stdout === viaFile.stdout }));
+  } finally { fs.rmSync(bigPath, { force: true }); }
+}
+const migEmpty = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "", encoding: "utf8", timeout: 30000 });
+check("migrate.mjs CLI (ENG-100435): empty stdin exits 1 with the manifest-JSON diagnostic — EOF ends the read, no hang",
+  migEmpty.status === 1 && /manifest is not valid JSON/.test(migEmpty.stderr || "") && (migEmpty.stdout || "").trim() === "",
+  () => ({ status: migEmpty.status, signal: migEmpty.signal, stderr: (migEmpty.stderr || "").slice(0, 160) }));
+const migNotJson = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "not json", encoding: "utf8", timeout: 30000 });
+check("migrate.mjs CLI (ENG-100435): `not json` on stdin exits 1 with `manifest is not valid JSON`",
+  migNotJson.status === 1 && /manifest is not valid JSON/.test(migNotJson.stderr || ""),
+  () => ({ status: migNotJson.status, stderr: (migNotJson.stderr || "").slice(0, 160) }));
 
 /* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
    so a corrupt plan can NEVER read as gate-clean (this guards parseSchema error-propagation: a broken

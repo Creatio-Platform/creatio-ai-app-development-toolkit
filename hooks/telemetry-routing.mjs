@@ -60,9 +60,32 @@ import {
 } from './telemetry/usage-protocol.mjs';
 import { reminder } from './telemetry/reminder.mjs';
 
+// ENG-100435: `fs.readFileSync(0)` throws EAGAIN on macOS when stdin is a pipe the host has not finished
+// filling. A PostToolUse payload carries the tool's response, which can pass ~64 KB, and the hook then read
+// `null` and skipped telemetry without a word. Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still
+// synchronous) and retry, stop at EOF (0 bytes, or the `EOF` error Windows reports for a closed pipe). Decode
+// once at the end, so a multi-byte UTF-8 char split across two chunks survives. Any other read error is thrown.
+function readStdinSync() {
+	const chunks = [];
+	const buf = Buffer.alloc(64 * 1024);
+	const pause = new Int32Array(new SharedArrayBuffer(4));
+	for (;;) {
+		let n;
+		try { n = fs.readSync(0, buf, 0, buf.length, null); }
+		catch (e) {
+			if (e.code === 'EAGAIN' || e.code === 'EWOULDBLOCK') { Atomics.wait(pause, 0, 0, 5); continue; }
+			if (e.code === 'EOF') break;
+			throw e;
+		}
+		if (n === 0) break;
+		chunks.push(Buffer.from(buf.subarray(0, n)));
+	}
+	return Buffer.concat(chunks).toString('utf8');
+}
+
 function readStdin() {
 	try {
-		return JSON.parse(fs.readFileSync(0, 'utf8'));
+		return JSON.parse(readStdinSync());
 	} catch {
 		return null;
 	}
