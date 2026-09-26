@@ -3541,11 +3541,11 @@ function outFileNote(label, outFile, notReady, verifyMode) {
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
-// ENG-100435: `fs.readFileSync(0)` throws EAGAIN on macOS when stdin is a pipe the writer has not finished
-// filling (a manifest over ~64 KB from `spawnSync(…, { input })`), and the run died with "cannot read manifest".
-// Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still synchronous) and retry, stop at EOF (0 bytes,
-// or the `EOF` error Windows reports for a closed pipe). Decode once at the end, so a multi-byte UTF-8 char
-// split across two chunks survives. Any other read error is thrown to the caller unchanged.
+// Reading `process.stdin.isTTY` (the guard above the manifest read) puts fd 0 into non-blocking mode, so on
+// macOS `fs.readFileSync(0)` throws EAGAIN whenever the pipe holds less than the whole manifest (over ~64 KB
+// from `spawnSync(…, { input })`). Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still synchronous)
+// and retry, stop at EOF (0 bytes, or the `EOF` error Windows reports for a closed pipe). Decode once at the end,
+// so a multi-byte UTF-8 char split across two chunks survives. Any other read error is thrown to the caller unchanged.
 function readStdinSync() {
   const chunks = [];
   const buf = Buffer.alloc(64 * 1024);
@@ -4112,7 +4112,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const fidelityList = fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ");
     process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelityList}\n`);
   }
-  // ENG-100435: `exitCode`, not `process.exit(2)` — stdout to a pipe is async on macOS, and exiting here cut the
+  // `exitCode`, not `process.exit(2)`: stdout to a pipe is async on macOS, and an immediate exit truncates the
   // report to its first 8 KB (Node 20) / 64 KB (Node 25). Returning lets Node flush it, then exit 2.
   if (notReady) process.exitCode = 2;
 }

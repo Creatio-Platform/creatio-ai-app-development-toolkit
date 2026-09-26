@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false   # a failure on one OS must NOT cancel the others — the engine + verify-vendor deliberately normalize CRLF/LF, so a platform-specific red is exactly the signal we need to see
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]   # macos-latest: ENG-100435 — a piped stdin read there hit EAGAIN, which neither Linux nor Windows showed
+        os: [ubuntu-latest, windows-latest, macos-latest]   # macos-latest: a piped stdin read is non-blocking there (EAGAIN), which neither Linux nor Windows exercises
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
