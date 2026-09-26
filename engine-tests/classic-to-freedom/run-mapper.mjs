@@ -8520,6 +8520,122 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type === "evidence" && r.pageKey === "child:U1").map((r) => r.vk) }));
 
+/* ---- ENG-100068: `get-page`'s merged `bundle.viewConfig` nests components under MORE than `items` — `crt.Button`
+   holds its `crt.MenuItem`s in `menuItems`, panels their header buttons in `tools`, grids their actions in
+   `bulkActions` / `rowToolbarItems`. The walk used to descend into `items` only, so on a live Contacts_FormPage it
+   saw no `crt.MenuItem` at all and a built `ReloadDataMenuItem` read as "missing: ReloadData". Asserted on the
+   RENDERED count the `childpage` row prints ("N component(s) returned by get-page"), which is the walk's length,
+   and on the ops a name-matching resolver reads. ---- */
+{
+  const cardMenu = { viewConfig: { items: [{ name: "CardToolsContainer", type: "crt.FlexContainer", items: [
+    { name: "ActionButton", type: "crt.Button", menuItems: [
+      { name: "ReloadDataMenuItem", type: "crt.MenuItem" },
+      { name: "ViewOptionsMenuItem", type: "crt.MenuItem", menuItems: [{ name: "TagMenuItem", type: "crt.MenuItem" }] },
+    ] },
+  ] }] } };
+  const menuOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": cardMenu }, ...U1_EVIDENCE });
+  const menuNames = verifyCtx({ pages: { main: cardMenu } }, "main").ops.map((o) => o.name);
+  check("ENG-100068: the native card-action menu items under a crt.Button's `menuItems` (nested too) are flattened — ReloadData/ViewOptions/Tag are on the built page and the rendered count includes them",
+    /page built — 5 component\(s\) returned by get-page/.test(menuOut.markdown)
+    && ["ReloadDataMenuItem", "ViewOptionsMenuItem", "TagMenuItem"].every((n) => menuNames.includes(n))
+    && verifyCtx({ pages: { main: cardMenu } }, "main").typeCount("crt.MenuItem") === 3,
+    () => ({ names: menuNames, row: menuOut.markdown.split("\n").filter((l) => /child:U1/.test(l)).map((l) => l.slice(-160)) }));
+  // `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` reach the walk as well, and
+  // grid `columns` stay OUT of it — a column carrying a `name` is DATA read by the list-column resolver on its own,
+  // never a component (it would otherwise pad the counts and let a column named like a field close the fields row).
+  const nested = { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "PanelAddButton", type: "crt.Button" }], items: [
+      { name: "Grid", type: "crt.DataGrid",
+        columns: [{ code: "PDS_Name", name: "Name", caption: "Name" }, { code: "PDS_Owner", name: "Owner" }],
+        bulkActions: [{ name: "BulkDelete", type: "crt.MenuItem" }],
+        rowToolbarItems: [{ name: "RowOpen", type: "crt.MenuItem" }],
+        headerToolbarItems: [{ name: "GridExport", type: "crt.Button" }] },
+      { name: "Lookup", type: "crt.ComboBox", listActions: [{ name: "AddNewRecord", type: "crt.ComboboxAction" }] },
+    ] },
+  ] } };
+  const nestedCtx = verifyCtx({ pages: { main: nested } }, "main");
+  const nestedNames = nestedCtx.ops.map((o) => o.name);
+  const nestedOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": nested }, ...U1_EVIDENCE });
+  check("ENG-100068: components under `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` are flattened exactly once; grid `columns` are NOT",
+    ["PanelAddButton", "BulkDelete", "RowOpen", "GridExport", "AddNewRecord"].every((n) => nestedNames.includes(n))
+    && !nestedNames.includes("Name") && !nestedNames.includes("Owner")
+    && nestedNames.length === 8 && new Set(nestedNames).size === 8
+    && /page built — 8 component\(s\) returned by get-page/.test(nestedOut.markdown)
+    /* the columns are still read — by their own resolver, off the grid node */
+    && [...nestedCtx.gridColumns.codes].sort().join(",") === "PDS_Name,PDS_Owner",
+    () => ({ names: nestedNames, cols: [...nestedCtx.gridColumns.codes] }));
+  // The action slots the component contracts declare for child view elements really reach the walk — FeedItem's item menu, a ComboBox's inline control
+  // actions, a rich-text editor's clip menu, a list widget's header menu, the communication options' row menu and a
+  // message editor's toolbar/input slots.
+  const actionSlots = { viewConfig: { items: [
+    { name: "Feed", type: "crt.FeedItem", itemActionItems: [{ name: "FeedEdit", type: "crt.MenuItem" }, { name: "FeedDelete", type: "crt.MenuItem" }] },
+    { name: "Owner", type: "crt.ComboBox", controlActions: [{ name: "OwnerGoTo", type: "crt.MenuItem" }] },
+    { name: "Notes", type: "crt.RichTextEditor", attachmentMenuItems: [{ name: "NotesAttach", type: "crt.MenuItem" }] },
+    { name: "Widget", type: "crt.ListWidget", widgetToolbarItems: [{ name: "WidgetExport", type: "crt.MenuItem" }] },
+    { name: "Comm", type: "crt.CommunicationOptions", optionActions: [{ name: "CommCall", type: "crt.MenuItem" }] },
+    { name: "Body", type: "crt.MessageEditorBody", toolbarItems: [{ name: "AttachFileButton", type: "crt.Button" }],
+      inputs: [{ name: "BodyInput", type: "crt.MessageEditorInput" }] },
+    { name: "Pipeline", type: "crt.FullPipelineWidget", toolbarMenuItems: [{ name: "PipelineRefresh", type: "crt.MenuItem" }] },
+  ] } };
+  const slotCtx = verifyCtx({ pages: { main: actionSlots } }, "main");
+  const slotNames = slotCtx.ops.map((o) => o.name);
+  check("ENG-100068: components under `itemActionItems` / `controlActions` / `attachmentMenuItems` / `widgetToolbarItems` / `optionActions` / `toolbarItems` / `inputs` / `toolbarMenuItems` are flattened exactly once",
+    ["FeedEdit", "FeedDelete", "OwnerGoTo", "NotesAttach", "WidgetExport", "CommCall", "AttachFileButton", "BodyInput", "PipelineRefresh"].every((n) => slotNames.includes(n))
+    && slotNames.length === 16 && new Set(slotNames).size === 16 && slotCtx.typeCount("crt.MenuItem") === 7,
+    () => ({ names: slotNames }));
+}
+
+/* ---- ENG-100068 review (Major): a table-emitted element row is closed by IDENTITY, not by a global type count.
+   Widening the walk surfaced every `crt.Button` in `tools` / `menuItems`, and the `element` row counted the type: a
+   plan expecting the custom `Recalculate` button read ✅ Done on a page whose only button was a panel's `tools`
+   `AddRelatedRecord`. The same leak existed before for any button under `items` (a template's Save button). ---- */
+{
+  const recalcRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+    tableElements: [{ classic: "RecalculateButton", element: "Recalculate", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.RecalculateClicked" }] }, signals: {} };
+  const recalcRow = (md) => md.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | ");
+  const unrelated = { viewConfig: { items: [
+    { name: "SaveButton", type: "crt.Button" },
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+  ] } };
+  const unrelatedOut = renderVerify(recalcRes, {}, { pages: { main: unrelated } });
+  check("ENG-100068 review: an unrelated toolbar button under `tools` (and a template button under `items`) does NOT close a row that expects the `Recalculate` button — ❌ MISSING naming it",
+    /❌ MISSING/.test(recalcRow(unrelatedOut.markdown)) && /no crt\.Button built \(1 expected\)/.test(unrelatedOut.markdown)
+    && /missing: Recalculate/.test(unrelatedOut.markdown) && /2 other crt\.Button on the page/.test(unrelatedOut.markdown)
+    && unrelatedOut.complete === false,
+    () => recalcRow(unrelatedOut.markdown));
+  const builtOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+    { name: "Recalculate", type: "crt.Button" },
+  ] } } } });
+  check("ENG-100068 review: the `Recalculate` button built under its emitted name closes the row ✅ Done, matched BY NAME",
+    /✅ Done/.test(recalcRow(builtOut.markdown)) && /matched BY NAME \(Recalculate\)/.test(builtOut.markdown),
+    () => recalcRow(builtOut.markdown));
+  const wrongTypeOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate", type: "crt.Label" }] } } } });
+  check("ENG-100068 review: the expected name built as the WRONG type is not a match — ❌ MISSING saying what it was built as",
+    /❌ MISSING/.test(recalcRow(wrongTypeOut.markdown)) && /Recalculate is built as .crt\.Label./.test(wrongTypeOut.markdown),
+    () => recalcRow(wrongTypeOut.markdown));
+  const untypedOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate" }] } } } });
+  check("ENG-100068 review: the expected name built with NO type says so in prose — no code span around a non-type",
+    /Recalculate is built as an untyped component/.test(untypedOut.markdown),
+    () => recalcRow(untypedOut.markdown));
+  const namelessOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ type: "crt.Button" }] } } } });
+  check("ENG-100068 review: components present but NONE named → ⚠ identity NOT checked, never ✅ off the type count",
+    /⚠/.test(recalcRow(namelessOut.markdown)) && /identity NOT checked/.test(recalcRow(namelessOut.markdown)),
+    () => recalcRow(namelessOut.markdown));
+  const twoRes = { ...recalcRes, changeSet: { ...recalcRes.changeSet, tableElements: [
+    { classic: "A", element: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+    { classic: "B", element: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  ] } };
+  const partialOut = renderVerify(twoRes, {}, { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Button" }] } } } });
+  check("ENG-100068 review: 2 expected / 1 built under its name → ⚠ partial naming the missing one",
+    /⚠/.test(recalcRow(partialOut.markdown)) && /1\/2 crt\.Button built \(matched by name\) — missing: B/.test(partialOut.markdown),
+    () => recalcRow(partialOut.markdown));
+  const absentOut = renderVerify(recalcRes, {}, { pages: {} });
+  check("ENG-100068 review: no `--built.pages` entry keeps the D6 tri-state — ⚠ unverified, never ❌",
+    /⚠/.test(recalcRow(absentOut.markdown)) && !/❌ MISSING/.test(recalcRow(absentOut.markdown)),
+    () => recalcRow(absentOut.markdown));
+}
+
 // SCOPE: the `components: [] + noChangesReason` concession is `#quality-gates`-ONLY. A `#childpage`
 // record proves a page was BUILT, which an empty answer never can — "nothing to fix" is not a meaningful outcome
 // for it — so the same no-diff shape here must stay ⚠ unverified, never a false close.
