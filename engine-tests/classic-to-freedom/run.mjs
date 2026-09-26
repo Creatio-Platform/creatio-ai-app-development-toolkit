@@ -145,19 +145,19 @@ const stray = mergeHierarchy([
   synth("Top", [{ operation: "remove", name: "Budget" }, { operation: "remove", name: "e" }, { operation: "remove", name: "BantGroup" }]),
 ]);
 check("ENG-100314: a stray remove amid real removes — real ones stay in removed[], the stray one is a fidelity note only",
-  stray.removed.map(r => r.name).sort().join(",") === "BantGroup,Budget"
+  stray.removed.map(r => r.name).sort((a, b) => a.localeCompare(b)).join(",") === "BantGroup,Budget"
   && stray.warnings.length === 1 && stray.warnings[0].name === "e" && stray.warnings[0].severity === "fidelity",
   () => ({ removed: stray.removed, warnings: stray.warnings }));
 // A LATER layer that DOES define the name is the genuine ordering signal: the remove ran before its target existed.
-for (const [label, laterOp] of [
+for (const [label, laterOp] of /** @type {[string, object][]} */ ([
   ["insert", { operation: "insert", name: "Late", parentName: "Header", propertyName: "items", bindTo: "Late" }],
   ["merge", { operation: "merge", name: "Late", values: { caption: "x" } }],
   ["move", { operation: "move", name: "Late", parentName: "Header" }],
   ["parentName", { operation: "insert", name: "Kid", parentName: "Late", propertyName: "items", bindTo: "Kid" }],
-]) {
+])) {
   const r = mergeHierarchy([synth("Early", [{ operation: "remove", name: "Late" }]), synth("Later", [laterOp])]);
   const w = r.warnings.find(x => x.op === "remove" && x.name === "Late");
-  check(`ENG-100314: remove of a name a LATER layer references (${label}) stays CORRECTNESS and names that layer (F1)`,
+  check(`ENG-100314: remove of a name a LATER layer references (${String(label)}) stays CORRECTNESS and names that layer (F1)`,
     !!w && w.severity === "correctness" && /referenced by Later/.test(w.hint) && /schema order \(F1\)/.test(w.hint), () => r.warnings);
 }
 // Two layers both removing the same stray name are still two no-ops — a remove is not a reference.
