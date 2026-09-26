@@ -4112,5 +4112,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const fidelityList = fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ");
     process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelityList}\n`);
   }
-  if (notReady) process.exit(2);
+  // ENG-100435: `exitCode`, not `process.exit(2)` — stdout to a pipe is async on macOS, and exiting here cut the
+  // report to its first 8 KB (Node 20) / 64 KB (Node 25). Returning lets Node flush it, then exit 2.
+  if (notReady) process.exitCode = 2;
 }

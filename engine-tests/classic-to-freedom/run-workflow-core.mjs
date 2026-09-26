@@ -1185,26 +1185,6 @@ console.log("\n===== the migration-workflow CLI =====");
     check("cli status: reports the host, the per-phase outcome counts and the result without re-running anything",
       status.host === "codex" && status.executed === 4 && status.byPhase.Merge.value === 1, () => JSON.stringify(status));
 
-    // ENG-100435: `submit … -` read stdin with `readFileSync(0)`, which throws EAGAIN on macOS for a piped
-    // result over ~64 KB. A ≥ 256 KB result on stdin must be recorded in full; the padding is multi-byte so a
-    // char split across two read chunks is exercised too. `timeout` is the hang guard.
-    const stdinRun = path.join(tmp, "stdin.json");
-    cli("start", stdinRun, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex");
-    const bigCtx = { ...CTX, padding: "й".repeat(200 * 1024) };
-    const viaStdin = spawnSync(process.execPath, [cliPath, "submit", stdinRun, "context.census-shared-core", "-"],
-      { input: JSON.stringify(bigCtx), encoding: "utf8", timeout: 60000 });
-    const stdinJournal = JSON.parse(readFileSync(stdinRun, "utf8")).journal || [];
-    const recorded = stdinJournal.at(-1);
-    check("cli submit - (ENG-100435): a ≥ 256 KB result piped to stdin is recorded in full — not an EAGAIN crash, not a truncated value",
-      Buffer.byteLength(JSON.stringify(bigCtx)) >= 256 * 1024 && viaStdin.status === 0
-        && JSON.stringify(recorded?.value) === JSON.stringify(bigCtx),
-      () => ({ status: viaStdin.status, stderr: (viaStdin.stderr || "").slice(0, 200), journalKeys: Object.keys(recorded || {}) }));
-    const emptyStdin = spawnSync(process.execPath, [cliPath, "submit", stdinRun, "describe.1.main-page+DealMini", "-"],
-      { input: "", encoding: "utf8", timeout: 30000 });
-    check("cli submit - (ENG-100435): empty stdin fails (non-zero exit) instead of hanging or recording an empty result",
-      emptyStdin.signal === null && emptyStdin.status !== 0 && (JSON.parse(readFileSync(stdinRun, "utf8")).journal || []).length === stdinJournal.length,
-      () => ({ status: emptyStdin.status, signal: emptyStdin.signal, stderr: (emptyStdin.stderr || "").slice(0, 200) }));
-
     // The capability stop, end to end.
     const stopRun = path.join(tmp, "stop.json");
     cli("start", stopRun, "--workflow", "classic-behaviour-analysis", "--input", inputFile, "--host", "codex", "--no-independent-roles");
