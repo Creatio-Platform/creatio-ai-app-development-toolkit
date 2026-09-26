@@ -8520,10 +8520,10 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type === "evidence" && r.pageKey === "child:U1").map((r) => r.vk) }));
 
-/* ---- ENG-100068: `get-page`'s merged `bundle.viewConfig` nests components under MORE than `items` — `crt.Button`
+/* ---- `get-page`'s merged `bundle.viewConfig` nests components under MORE than `items` — `crt.Button`
    holds its `crt.MenuItem`s in `menuItems`, panels their header buttons in `tools`, grids their actions in
-   `bulkActions` / `rowToolbarItems`. The walk used to descend into `items` only, so on a live Contacts_FormPage it
-   saw no `crt.MenuItem` at all and a built `ReloadDataMenuItem` read as "missing: ReloadData". Asserted on the
+   `bulkActions` / `rowToolbarItems`. The walk descends into every one of these slots, so a built `ReloadDataMenuItem`
+   under a card's `menuItems` counts as a `crt.MenuItem` rather than reading as "missing: ReloadData". Asserted on the
    RENDERED count the `childpage` row prints ("N component(s) returned by get-page"), which is the walk's length,
    and on the ops a name-matching resolver reads. ---- */
 {
@@ -8535,7 +8535,7 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   ] }] } };
   const menuOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": cardMenu }, ...U1_EVIDENCE });
   const menuNames = verifyCtx({ pages: { main: cardMenu } }, "main").ops.map((o) => o.name);
-  check("ENG-100068: the native card-action menu items under a crt.Button's `menuItems` (nested too) are flattened — ReloadData/ViewOptions/Tag are on the built page and the rendered count includes them",
+  check("the native card-action menu items under a crt.Button's `menuItems` (nested too) are flattened — ReloadData/ViewOptions/Tag are on the built page and the rendered count includes them",
     /page built — 5 component\(s\) returned by get-page/.test(menuOut.markdown)
     && ["ReloadDataMenuItem", "ViewOptionsMenuItem", "TagMenuItem"].every((n) => menuNames.includes(n))
     && verifyCtx({ pages: { main: cardMenu } }, "main").typeCount("crt.MenuItem") === 3,
@@ -8556,7 +8556,7 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   const nestedCtx = verifyCtx({ pages: { main: nested } }, "main");
   const nestedNames = nestedCtx.ops.map((o) => o.name);
   const nestedOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": nested }, ...U1_EVIDENCE });
-  check("ENG-100068: components under `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` are flattened exactly once; grid `columns` are NOT",
+  check("components under `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` are flattened exactly once; grid `columns` are NOT",
     ["PanelAddButton", "BulkDelete", "RowOpen", "GridExport", "AddNewRecord"].every((n) => nestedNames.includes(n))
     && !nestedNames.includes("Name") && !nestedNames.includes("Owner")
     && nestedNames.length === 8 && new Set(nestedNames).size === 8
@@ -8579,16 +8579,16 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   ] } };
   const slotCtx = verifyCtx({ pages: { main: actionSlots } }, "main");
   const slotNames = slotCtx.ops.map((o) => o.name);
-  check("ENG-100068: components under `itemActionItems` / `controlActions` / `attachmentMenuItems` / `widgetToolbarItems` / `optionActions` / `toolbarItems` / `inputs` / `toolbarMenuItems` are flattened exactly once",
+  check("components under `itemActionItems` / `controlActions` / `attachmentMenuItems` / `widgetToolbarItems` / `optionActions` / `toolbarItems` / `inputs` / `toolbarMenuItems` are flattened exactly once",
     ["FeedEdit", "FeedDelete", "OwnerGoTo", "NotesAttach", "WidgetExport", "CommCall", "AttachFileButton", "BodyInput", "PipelineRefresh"].every((n) => slotNames.includes(n))
     && slotNames.length === 16 && new Set(slotNames).size === 16 && slotCtx.typeCount("crt.MenuItem") === 7,
     () => ({ names: slotNames }));
 }
 
-/* ---- ENG-100068 review (Major): a table-emitted element row is closed by IDENTITY, not by a global type count.
-   Widening the walk surfaced every `crt.Button` in `tools` / `menuItems`, and the `element` row counted the type: a
-   plan expecting the custom `Recalculate` button read ✅ Done on a page whose only button was a panel's `tools`
-   `AddRelatedRecord`. The same leak existed before for any button under `items` (a template's Save button). ---- */
+/* ---- A table-emitted element row is closed by IDENTITY, not by a global type count.
+   The walk sees every `crt.Button` in `tools` / `menuItems` / `items`, so counting the type would let a panel's
+   `tools` `AddRelatedRecord` or a template's Save button close a row that expects the custom `Recalculate` button;
+   the row therefore matches the expected element by name and type. ---- */
 {
   const recalcRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
     tableElements: [{ classic: "RecalculateButton", element: "Recalculate", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.RecalculateClicked" }] }, signals: {} };
@@ -8598,7 +8598,7 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
     { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
   ] } };
   const unrelatedOut = renderVerify(recalcRes, {}, { pages: { main: unrelated } });
-  check("ENG-100068 review: an unrelated toolbar button under `tools` (and a template button under `items`) does NOT close a row that expects the `Recalculate` button — ❌ MISSING naming it",
+  check("an unrelated toolbar button under `tools` (and a template button under `items`) does NOT close a row that expects the `Recalculate` button — ❌ MISSING naming it",
     /❌ MISSING/.test(recalcRow(unrelatedOut.markdown)) && /no crt\.Button built \(1 expected\)/.test(unrelatedOut.markdown)
     && /missing: Recalculate/.test(unrelatedOut.markdown) && /2 other crt\.Button on the page/.test(unrelatedOut.markdown)
     && unrelatedOut.complete === false,
@@ -8607,19 +8607,19 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
     { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
     { name: "Recalculate", type: "crt.Button" },
   ] } } } });
-  check("ENG-100068 review: the `Recalculate` button built under its emitted name closes the row ✅ Done, matched BY NAME",
+  check("the `Recalculate` button built under its emitted name closes the row ✅ Done, matched BY NAME",
     /✅ Done/.test(recalcRow(builtOut.markdown)) && /matched BY NAME \(Recalculate\)/.test(builtOut.markdown),
     () => recalcRow(builtOut.markdown));
   const wrongTypeOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate", type: "crt.Label" }] } } } });
-  check("ENG-100068 review: the expected name built as the WRONG type is not a match — ❌ MISSING saying what it was built as",
+  check("the expected name built as the WRONG type is not a match — ❌ MISSING saying what it was built as",
     /❌ MISSING/.test(recalcRow(wrongTypeOut.markdown)) && /Recalculate is built as .crt\.Label./.test(wrongTypeOut.markdown),
     () => recalcRow(wrongTypeOut.markdown));
   const untypedOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate" }] } } } });
-  check("ENG-100068 review: the expected name built with NO type says so in prose — no code span around a non-type",
+  check("the expected name built with NO type says so in prose — no code span around a non-type",
     /Recalculate is built as an untyped component/.test(untypedOut.markdown),
     () => recalcRow(untypedOut.markdown));
   const namelessOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ type: "crt.Button" }] } } } });
-  check("ENG-100068 review: components present but NONE named → ⚠ identity NOT checked, never ✅ off the type count",
+  check("components present but NONE named → ⚠ identity NOT checked, never ✅ off the type count",
     /⚠/.test(recalcRow(namelessOut.markdown)) && /identity NOT checked/.test(recalcRow(namelessOut.markdown)),
     () => recalcRow(namelessOut.markdown));
   const twoRes = { ...recalcRes, changeSet: { ...recalcRes.changeSet, tableElements: [
@@ -8627,11 +8627,11 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
     { classic: "B", element: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
   ] } };
   const partialOut = renderVerify(twoRes, {}, { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Button" }] } } } });
-  check("ENG-100068 review: 2 expected / 1 built under its name → ⚠ partial naming the missing one",
+  check("2 expected / 1 built under its name → ⚠ partial naming the missing one",
     /⚠/.test(recalcRow(partialOut.markdown)) && /1\/2 crt\.Button built \(matched by name\) — missing: B/.test(partialOut.markdown),
     () => recalcRow(partialOut.markdown));
   const absentOut = renderVerify(recalcRes, {}, { pages: {} });
-  check("ENG-100068 review: no `--built.pages` entry keeps the D6 tri-state — ⚠ unverified, never ❌",
+  check("no `--built.pages` entry keeps the D6 tri-state — ⚠ unverified, never ❌",
     /⚠/.test(recalcRow(absentOut.markdown)) && !/❌ MISSING/.test(recalcRow(absentOut.markdown)),
     () => recalcRow(absentOut.markdown));
 }

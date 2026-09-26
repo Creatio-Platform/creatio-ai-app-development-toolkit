@@ -2261,9 +2261,9 @@ function layoutWidgetType(w) {
 // Own fn so checklistGroups stays under Sonar CC 15.
 // The table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected" rather
 // than one row per element. Own fn so `buildCoverageRows` stays under Sonar's cognitive-complexity budget.
-// Each row also carries the expected element NAMES (ENG-100068 review): the mapper emits every table element into
+// Each row also carries the expected element NAMES: the mapper emits every table element into
 // `viewConfigDiff` under `element` (the uniquified name — `classic` is the fallback for a hand-built ChangeSet), so
-// the gate matches identity the way the fields row does. Counting the TYPE let any `crt.Button` on the page — a
+// the gate matches identity the way the fields row does. Counting the TYPE would let any `crt.Button` on the page — a
 // template's Save button, a panel's `tools` add-button — close a row that expects a differently named button.
 function tableElementRows(cs) {
   const byType = new Map();
@@ -3286,10 +3286,10 @@ const BUILT_TYPES = {
 // `--built.pages` entry means nobody looked (⚠), a partial count is ⚠, zero built is ❌. Reusing the tri-state
 // rather than a bare `hasType` check is what keeps "the verifier never fetched this page" from reading as
 // "you failed to build it".
-// IDENTITY match (ENG-100068 review), used when every expected element published its name: an element counts only
+// IDENTITY match, used when every expected element published its name: an element counts only
 // when a built component carries its NAME and the expected TYPE. Another component of the same type is not
-// evidence — the case that made this necessary was a panel's `tools` `AddRelatedRecord` button closing a row that
-// expected the custom `Recalculate` button. Own fn so `resolveElementVk` stays under Sonar CC 15.
+// evidence — e.g. a panel's `tools` `AddRelatedRecord` button must not close a row that expects the custom
+// `Recalculate` button. Own fn so `resolveElementVk` stays under Sonar CC 15.
 function resolveElementByIdentity(vk, names, ctx) {
   const named = ctx.ops.filter((o) => o.name);
   if (ctx.ops.length && !named.length) return ["⚠ verify", `identity NOT checked — the built page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected ${vk.ctype} could be matched by name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
