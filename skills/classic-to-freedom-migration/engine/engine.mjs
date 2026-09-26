@@ -1478,6 +1478,8 @@ function sanitizeConditions(conds) {
 //     content (fields/rules/details/methods/components touched by a schema schema) and treats
 //     template-only elements — e.g. the 300+ framework methods on BaseEntityPage — as context, not
 //     payload. Without this, seeding the full chain floods the ChangeSet with base noise.
+//   opts.noParentTemplate — the manifest's declaration that the page has no parent template; only rewords the
+//     no-seed caveat on a never-defined remove.
 // Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
 // the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
 // in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
@@ -1543,6 +1545,25 @@ function makeItem(op, seed, pkg) {
 //                   model. There is nothing to fix in the body or the seed — only in this engine — so the gate's
 //                   remedy would be an instruction nobody can act on ⇒ advisory, never a block. Same reasoning the
 //                   `unknown-enum-member` exemption already uses (migrate.mjs `isStructuralDiag`).
+// The one producer whose severity is decided AFTER the fold, not at the op: a `remove` of a name nothing
+// below defined. At replay time it is indistinguishable from F1/F2, so it is recorded as `correctness`; once the whole
+// fold has run, `settleUndefinedRemoves` asks the question the severity sentence above turns on. If NO applicable op
+// anywhere in the SUPPLIED fold (seed or layer) inserts, patches, moves, sets, parents under or aliases that name, the
+// remove targeted something that exists on no reading of the SUPPLIED chain — and the Classic runtime ignores a
+// remove of a name it does not have (`JsonApplier.remove` finds nothing and changes nothing). Schema order cannot be
+// wrong for a name no supplied schema defines, so F1 is ruled out and the operator has nothing to reorder.
+// COMPLETENESS ASSUMPTION — F2 is NOT ruled out, only made unlikely. Absence from the supplied fold proves absence
+// in Classic only when the supplied chain is the whole chain, and nothing here can prove that: `looksSkeletal`
+// (< 5 methods / all stubs) blocks, but `possiblyPartial` (5..149 methods) is advisory only, `noParentTemplate: true`
+// disables the no-seed gate reason (migrate.mjs `computeGate`), and even a 150+-method seed can be missing a parent
+// layer. So the demotion to `fidelity` keeps the gate open (a stray `remove "e"` on BlythecoDev OpportunityPageV2 is
+// the founding case), but the hint never claims "not a seed problem": it says "no effect in Classic unless the chain
+// is incomplete", and when the seed is partial or absent it says outright that the seed may lack the name.
+// A name some applicable op DOES reference keeps `correctness` — that is the genuine ordering / seed signal — with ONE
+// exception, the remove-and-restate idiom: the remove's OWN layer also inserts the name and no LOWER layer references
+// it. A layer's removes run before its inserts, so the remove hits nothing and the insert defines the element;
+// references from HIGHER layers land on that re-inserted element, so they are no ordering signal either. See
+// `settleUndefinedRemoves`.
 // `migrate.mjs` blocks on `correctness` only, and quotes each warning's OWN hint rather than pasting one summary
 // sentence ("op hit a missing item / skeletal seed") onto every producer — that string sent a 12-hour investigation
 // to the wrong file.
@@ -1561,10 +1582,28 @@ function saveAlias(aliases, op) {
 }
 function aliasFor(aliases, name) { return aliases.get(name) || null; }
 // The item an op targets, resolving the alias when the literal name is not in the map.
+// A record the RUNTIME does not have counts as NOT in the map, so the op falls through to the alias as
+// Classic does (literal name absent → alias). Three such records:
+//   * a `neverDefined` tombstone — the diagnostic record `replayRemove` leaves for a remove that hit nothing
+//     (`Early: remove "Old"` → `Later: insert "Real", alias {name:"Old"}` → `Top: remove "Old"`);
+//   * a real tombstone (`removed`) — Classic deleted the element (`Early: insert "Old"` → `Mid: remove "Old"` →
+//     `Later: insert "Real", alias {name:"Old"}` → `Top: remove "Old"`);
+//   * an `engineOnlyStub` — a merge onto nothing, which Classic ignored (`Early: merge "Old"` → `Later: insert
+//     "Real", alias {name:"Old"}` → `Top: remove "Old"`).
+// In all three Top's op must not land on the literal record and leave `Real` alive: Classic removes it through
+// the alias. The fallback needs a LIVE alias target: with no alias (or a dead target) the literal record is kept, so
+// the move-resurrect idiom (`remove X` → `move X`) lands on its tombstone and resurrects it only when no LIVE alias
+// target exists; with one, the move lands on the alias target and X stays removed (Classic's lookup across layers).
+function isRuntimeAbsent(item) {
+  return !!(item.neverDefined || item.removed || item.engineOnlyStub);
+}
 function resolveTarget(items, aliases, name) {
-  if (items.has(name)) return name;
+  const own = items.get(name);
+  if (own && !isRuntimeAbsent(own)) return name;
   const a = aliasFor(aliases, name);
-  return a && items.has(a.realName) ? a.realName : name;
+  const real = a && items.get(a.realName);
+  if (real && (!own || !isRuntimeAbsent(real))) return a.realName;
+  return name;
 }
 function isExcludedByAlias(aliases, op) {
   if (op.operation === "remove" && op.properties?.length) return false; // never excluded — runtime carve-out
@@ -1572,7 +1611,7 @@ function isExcludedByAlias(aliases, op) {
   return !!a && a.excludeOperations.includes(op.operation);
 }
 
-function replayDiffOp(op, items, { seed, pkg, aliases }, warnings) {
+function replayDiffOp(op, items, { seed, pkg, aliases, undefinedRemoves, layer }, warnings) {
   const target = aliases ? resolveTarget(items, aliases, op.name) : op.name;
   const cur = items.get(target);
   if (op.operation === "insert") {
@@ -1591,7 +1630,7 @@ function replayDiffOp(op, items, { seed, pkg, aliases }, warnings) {
   if (op.operation === "remove") {
     // the `properties` form is a different operation wearing the same name — and only when the item exists
     if (cur && op.properties?.length) return replayRemoveProperties(op, cur, { seed, pkg }, warnings);
-    return replayRemove(op, cur, items, { seed, pkg }, warnings);
+    return replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, warnings);
   }
 }
 
@@ -1704,22 +1743,153 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   // repeats what `SiteEvent`'s insert already set, so nothing was visibly wrong; a move that states a DIFFERENT
   // kind was silently ignored. Same key-presence rule as `merge`, same helper, so the two cannot drift apart.
   mergeIdentityProps(op, cur, pkg, warnings, "move");
-  if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
+  // A resurrected tombstone is a LIVE element again, so it drops the never-defined marks too: a stale
+  // `neverDefined` would make `resolveTarget` treat the alive item as absent and send a later op on its name to an
+  // alias target instead (`remove Old` → `move Old` → `insert Real alias Old` → `merge Old` would patch `Real`).
+  if (cur.removed) {
+    cur.removed = false; cur.removedBy = null; cur.removedBySeed = false;
+    delete cur.neverDefined; delete cur.noOpRemove;
+  }
   cur.provenance.push(pkg);
   markClientTouch(cur, seed, pkg); // a CLIENT schema repositioned this (possibly base-owned) element
 }
 
 // removedBySeed: a template-internal remove (base template dropping a base element) is context,
 // not a client B6 decision — the mapper filters it out like every other template-only element.
-function replayRemove(op, cur, items, { seed, pkg }, warnings) {
-  if (cur) { cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed; return; }
+function replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, warnings) {
+  if (cur) {
+    // A CLIENT layer re-removing a stray name only a SEED layer removed before. The seed's own no-op is
+    // pre-closed as template-owned (`settleUndefinedRemoves`), so without a record of its own the client's remove —
+    // a client decision — would be hidden behind the template's closed note. It gets its own provisional warning.
+    const reRemovesSeedStray = cur.neverDefined && cur.removed && cur.removedBySeed && !seed;
+    cur.removed = true; cur.removedBy = pkg; cur.removedBySeed = seed;
+    if (reRemovesSeedStray) recordUndefinedRemove(cur, { seed, pkg, undefinedRemoves, layer }, warnings);
+    return;
+  }
   // `unmodelledProps` is carried even on a TOMBSTONE, and it is not decoration: a `remove` of an item nothing
   // defined records this stub, and a LATER layer may legitimately `merge` onto that same name (classic's
   // remove-then-restate idiom) — which reaches `cur.unmodelledProps.add(...)` and would throw on a stub without
   // the field. Every item record in this fold carries the same shape, exactly as `makeItem`'s own comment requires.
-  items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
-    declaringPackage: seed ? null : pkg, unmodelledProps: new Set() });
-  warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
+  // `neverDefined` marks it as a DIAGNOSTIC record the runtime does not have — `resolveTarget` must not
+  // let it shadow a real alias target registered later.
+  const tomb = { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
+    declaringPackage: seed ? null : pkg, unmodelledProps: new Set(), neverDefined: true };
+  items.set(op.name, tomb);
+  recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, warnings);
+}
+// Provisional: `settleUndefinedRemoves` re-decides the severity once the whole fold is known. `seed` is
+// captured HERE, at replay time: the tombstone's own `removedBySeed` is overwritten by any later remove of the name,
+// so reading it at settle time judged a seed layer's fact by a client layer's op.
+function recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, warnings) {
+  const warning = { op: "remove", name: tomb.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" };
+  warnings.push(warning);
+  undefinedRemoves.push({ tomb, warning, layer, seed });
+}
+
+// The names each APPLICABLE op of one layer references, recorded into `refs` (name → [{pkg, operation,
+// layer}]). Called on the layer's BUCKETS, i.e. after `splitDiffOps`, so the set is exactly what the runtime runs:
+// an unknown `operation` lands in no bucket and an alias-excluded op is dropped there, so neither can manufacture a
+// reference. What counts:
+//   * the `name` of an insert / merge / move / set — the op defines or patches that element;
+//   * the `parentName` of an insert / move — a child placed under the name, so something expects it to exist
+//     (a `merge` / `set` carrying `parentName` places nothing, and a `remove` carrying one removes nothing);
+//   * `alias.name` on an insert — the alias registration. A remove of that name is resolved THROUGH the alias once it
+//     is registered, so a remove that ran before the registration is the F1 ordering signal, not a no-op. NOT when
+//     the alias lists `remove` in `excludeOperations`: a plain remove of the name is then dropped after the
+//     registration and hits nothing before it, so no schema order lets it reach the target (`isExcludedByAlias`).
+// A `remove` (plain or with `properties`) is never a reference: two layers removing the same stray name are still
+// two no-ops.
+const REFERENCE_BUCKETS = ["insert", "merge", "move", "set"];
+const aliasExcludesRemove = (alias) => Array.isArray(alias.excludeOperations) && alias.excludeOperations.includes("remove");
+function recordReferences(buckets, pkg, layer, refs) {
+  const add = (name, operation) => {
+    if (!isStr(name)) return;
+    if (!refs.has(name)) refs.set(name, []);
+    refs.get(name).push({ pkg, operation, layer });
+  };
+  for (const bucket of REFERENCE_BUCKETS) {
+    for (const op of buckets[bucket]) {
+      add(op.name, op.operation);
+      if (bucket === "insert" || bucket === "move") add(op.parentName, "parentName");
+      if (bucket === "insert" && op.alias && !aliasExcludesRemove(op.alias)) add(op.alias.name, "alias");
+    }
+  }
+}
+// The reference that best explains a remove recorded in layer `layer`. A LATER layer is preferred — it is the one
+// the runtime ran after the remove, i.e. the genuine F1 ordering signal. A LOWER hit did NOT give the remove an item
+// to hit (a `move` onto nothing, a child `parentName` under a base element the seed lacks, …), so it points at the
+// seed (F2) rather than at order; a SAME-layer hit is either the remove-and-restate idiom (see settle) or a child
+// under a name the layer itself never defines. When the remove's OWN layer inserts the name, only a LOWER reference
+// can have broken the idiom (`isRestateIdiom`), so that one is named — the same-layer insert and any later reference
+// act on the re-inserted element and explain nothing.
+function pickReference(list, layer) {
+  if (list.some((r) => r.layer === layer && r.operation === "insert")) return list.find((r) => r.layer < layer) || list[0];
+  return list.find((r) => r.layer > layer) || list.find((r) => r.layer === layer) || list[0];
+}
+// How the seed limits what a "nothing defines it" verdict proves — the seed-completeness assumption.
+function seedCaveat(seedState, name) {
+  if (seedState === "declaredNone") return ` noParentTemplate is declared, so the parent chain was not checked — a base element named '${name}' may exist there (F2).`;
+  if (seedState === "absent") return ` No base seed was supplied, so the parent-template chain was not checked and may define '${name}' (F2): supply the seed, or confirm the page really has no parent template.`;
+  if (seedState === "skeletal") return ` The supplied base seed looks SKELETAL (seedQuality.looksSkeletal), so it may lack '${name}' (F2): re-fetch the real parent-template bodies.`;
+  if (seedState === "partial") return ` The supplied base seed looks PARTIAL (seedQuality.possiblyPartial), so it may lack '${name}' (F2): confirm the full parent-template chain was captured before accepting this as a no-op.`;
+  return "";
+}
+// The correctness hint's tail for a referenced name: WHICH layer referenced it and whether it is lower, the same or
+// later — the cause differs. Own fn so `settleUndefinedRemoves` stays under the Sonar CC 15 ceiling (S3776).
+function referencedHint(name, list, layer) {
+  const ref = pickReference(list, layer);
+  if (ref.layer > layer) {
+    return ` — '${name}' IS referenced by ${ref.pkg} (${ref.operation}, a later layer), so something expects this item: the remove most likely ran before the layer that defines it — schema order (F1) — or the base element is missing from the seed (F2)`;
+  }
+  const where = ref.layer < layer ? "a lower layer" : "the same layer";
+  return ` — '${name}' IS referenced by ${ref.pkg} (${ref.operation}, ${where}), so something expects this item, yet that op does not give the remove an item to hit: the base element is most likely missing from the seed (F2) — or the schemas are out of order (F1)`;
+}
+// Settle each provisional remove-of-undefined warning (see the SEVERITY note above for the reasoning).
+// Three outcomes:
+//   * no reference at all → a no-op in Classic unless the supplied chain is incomplete: `fidelity`, tombstone marked
+//     `noOpRemove` so `removed[]` does not report an element the page never had as one the client removed;
+//   * the remove's OWN layer inserts the name and no LOWER layer references it → the remove-and-restate idiom.
+//     `DIFF_OP_BUCKETS` runs a layer's removes before its inserts, so the remove hits nothing and the insert defines
+//     the element; reordering schemas cannot change that, so blaming schema order would be an instruction nobody can
+//     act on: `fidelity`, with its own hint (the insert replaced the tombstone in the item map already). References
+//     from HIGHER layers do not break the idiom — they land on the re-inserted element (the common shape: one package
+//     restates a base element, a later one customises it);
+//   * anything else → stays `correctness`, and the hint names the referencing layer and whether it is lower, the
+//     same or later, so the reader goes straight to the ordering (F1) or seed (F2) question.
+// A no-op that a SEED layer itself performs (the base template removing a name its own chain never defined) is not a
+// client decision (same rule as `removed[].fromTemplate`), so with a trustworthy seed it is recorded as CLOSED by the
+// engine (`fromTemplate`, `accepted`, disposition `n/a`) rather than left for the operator to disposition. Whether the
+// remove came from a seed layer is the `seed` flag captured at replay time, never the tombstone's `removedBySeed`.
+function isRestateIdiom(list, layer) {
+  return list.some((r) => r.layer === layer && r.operation === "insert") && list.every((r) => r.layer >= layer);
+}
+// A seed layer's own no-op over a trustworthy seed (no caveat) is closed by the engine — used by both no-op outcomes.
+function closeIfTemplateOwned(warning, seed, caveat) {
+  if (!seed || caveat) return;
+  warning.fromTemplate = true;
+  warning.accepted = true;
+  warning.disposition = "n/a";
+  warning.note = "the base template's own no-op remove — not a client decision";
+}
+function settleUndefinedRemoves(undefinedRemoves, refs, seedState) {
+  for (const { tomb, warning, layer, seed } of undefinedRemoves) {
+    const list = refs.get(tomb.name) || [];
+    const caveat = seedCaveat(seedState, tomb.name);
+    if (isRestateIdiom(list, layer)) {
+      tomb.noOpRemove = true;
+      warning.severity = SEVERITY.FIDELITY;
+      const later = list.find((r) => r.layer > layer);
+      const laterNote = later ? ` A later layer (${later.pkg}, ${later.operation}) references '${tomb.name}' too; it acts on the re-inserted element.` : "";
+      warning.hint = `re-inserted by the same layer (${warning.schema}): it removes '${tomb.name}' and inserts it again, and the runtime runs a layer's removes before its inserts, so the remove hits nothing and the insert defines the element — no effect on the folded page.${laterNote} The idiom normally restates a BASE element, so the base seed may lack '${tomb.name}' (F2) — confirm it if the seed is partial.${caveat}`;
+      closeIfTemplateOwned(warning, seed, caveat);
+      continue;
+    }
+    if (list.length) { warning.hint += referencedHint(tomb.name, list, layer); continue; }
+    tomb.noOpRemove = true;
+    warning.severity = SEVERITY.FIDELITY;
+    warning.hint = `no effect in Classic unless the chain is incomplete: '${tomb.name}' is not defined anywhere in the supplied chain (no layer and no seed inserts, patches, moves, sets, parents under or aliases it), and the runtime ignores a remove of a name it does not have. Confirm the base seed if it is partial (F2); otherwise this is most likely a stray or mistyped name, with nothing to migrate for it.${caveat}`;
+    closeIfTemplateOwned(warning, seed, caveat);
+  }
 }
 
 // `remove` carrying a `properties` array: delete ONLY those keys, keep the element (core `json-applier.js`
@@ -1979,13 +2149,16 @@ function splitDiffOps(diff, aliases) {
 }
 
 function replayTagged(tagged, stores, warnings) {
-  const { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps } = stores;
+  const { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps, undefinedRemoves, refs } = stores;
   // Singleton across the whole fold, matching the runtime's one-reset lifetime.
   const aliases = new Map();
-  for (const { L, seed } of tagged) {
+  // `layer` = the position in the fold (seed layers first). A package NAME cannot stand in for it: one package can be
+  // both a template schema and a page schema, so "same layer" is decided by position.
+  for (const [layer, { L, seed }] of tagged.entries()) {
     const buckets = splitDiffOps(L.diff, aliases);
+    recordReferences(buckets, L.pkg, layer, refs);
     for (const bucket of DIFF_OP_BUCKETS) {
-      for (const op of buckets[bucket]) replayDiffOp(op, items, { seed, pkg: L.pkg, aliases }, warnings);
+      for (const op of buckets[bucket]) replayDiffOp(op, items, { seed, pkg: L.pkg, aliases, undefinedRemoves, layer }, warnings);
     }
     mergeRuleBlocks(L, seed, rules);
     mergeDetails(L, seed, details);
@@ -2045,40 +2218,6 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   ];
   const entity = schemas.find(l => l.entitySchemaName !== "?")?.entitySchemaName || "?";
 
-  replayTagged(tagged, { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps }, warnings);
-  // Propagate container removals down the subtree (runtime parity) — see cascadeRemove. This clears the false
-  // `unresolvedParents` that HARD-BLOCKED legitimate remove+re-layout pages (base children of a removed container).
-  cascadeRemove(items);
-
-  const alive = [...items.values()].filter(i => !i.removed);
-  // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep
-  // them out of `removed` so they don't flood the removals worklist; excluding them from `alive` already cleared
-  // the false unresolvedParents.
-  const removed = [...items.values()].filter(i => i.removed && !i.cascadeRemoved);
-  const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
-
-  // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template
-  // elements the client's schemas sit inside (e.g. Header, GeneralInfoTab from BaseModulePageV2).
-  // This is the precise seed list F2 must supply so layout targets resolve and base tabs survive.
-  // Computed over the ALIVE set only (NOT items.keys(), which includes remove-tombstones): the mapper's
-  // routing index is alive-only, so a parent that survives only as a tombstone must still count as
-  // unresolved here — otherwise the diagnostic gives a false all-clear the mapper contradicts.
-  const aliveNames = new Set(alive.map(i => i.name));
-  const unresolvedParents = [...new Set(
-    alive.map(i => i.parent).filter(p => p && !aliveNames.has(p))
-  )].sort(byLocale);
-  // feature toggles referenced by the SCHEMA schemas (not the base template) — they gate element
-  // visibility at runtime; the rendered page shows one feature-state while this is the full union.
-  const features = [...new Set(schemas.flatMap(l => l.features || []))].sort(byLocale);
-  const cardActionHints = [...new Set(schemas.flatMap(l => l.actionHints || []))].sort(byLocale);
-  // #8c — process launch detected in the SCHEMA's OWN schemas (not the seed: the base template's "Run
-  // process by record" is template-provided; here we surface the CLIENT page's own process launch).
-  const processLaunch = schemas.some(l => l.processLaunch);
-  const processNames = [...new Set(schemas.flatMap(l => l.processLaunch?.names || []))].sort(byLocale);
-  // referenced UI modules the SCHEMA's own schemas pull in via define() (not the base template) — their
-  // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
-  const referencedModules = [...new Set(schemas.flatMap(l => l.refModules || []))].sort(byLocale);
-
   // #19 — seed QUALITY validation. A real fetched base-template body (BaseModulePageV2 → BasePageV2 →
   // BaseEntityPage) always defines methods — hundreds of them, incl. `getActions` (which surfaces the
   // base ProcessButton / Run process). A hand-authored SKELETON seed (the recurring failure: the agent
@@ -2122,6 +2261,52 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     seedMethods: seedMethodNames.size, seedRealMethods: seedNonEmptyMethods.size, hasGetActions,
     looksSkeletal, possiblyPartial,
   };
+  // Removes that hit no item, re-judged once the whole fold is known against every applicable reference
+  // (`refs`) and the seed's completeness (computed above, before the fold, so the verdict can say when the seed may
+  // lack the name). The skeletal-seed WARNING itself is still pushed after the fold, keeping `warnings` in op order.
+  const undefinedRemoves = [];
+  const refs = new Map();
+  replayTagged(tagged, { items, rules, details, methods, components, attributes, messages, mixins, moduleDeps, undefinedRemoves, refs }, warnings);
+  let seedState = "complete";
+  if (!seedTemplate.length) seedState = opts.noParentTemplate === true ? "declaredNone" : "absent";
+  else if (looksSkeletal) seedState = "skeletal";
+  else if (possiblyPartial) seedState = "partial";
+  settleUndefinedRemoves(undefinedRemoves, refs, seedState);
+  // Propagate container removals down the subtree (runtime parity) — see cascadeRemove. This clears the false
+  // `unresolvedParents` that HARD-BLOCKED legitimate remove+re-layout pages (base children of a removed container).
+  cascadeRemove(items);
+
+  const alive = [...items.values()].filter(i => !i.removed);
+  // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep
+  // them out of `removed` so they don't flood the removals worklist; excluding them from `alive` already cleared
+  // the false unresolvedParents.
+  // Nor a no-op remove of a name nothing ever defined: the page never had that element, so listing it
+  // as removed tells the reader the client dropped something that was there. Its fidelity warning still names it.
+  const removed = [...items.values()].filter(i => i.removed && !i.cascadeRemoved && !i.noOpRemove);
+  const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);
+
+  // Parent containers referenced by an ALIVE item but never defined by an ALIVE item == base-template
+  // elements the client's schemas sit inside (e.g. Header, GeneralInfoTab from BaseModulePageV2).
+  // This is the precise seed list F2 must supply so layout targets resolve and base tabs survive.
+  // Computed over the ALIVE set only (NOT items.keys(), which includes remove-tombstones): the mapper's
+  // routing index is alive-only, so a parent that survives only as a tombstone must still count as
+  // unresolved here — otherwise the diagnostic gives a false all-clear the mapper contradicts.
+  const aliveNames = new Set(alive.map(i => i.name));
+  const unresolvedParents = [...new Set(
+    alive.map(i => i.parent).filter(p => p && !aliveNames.has(p))
+  )].sort(byLocale);
+  // feature toggles referenced by the SCHEMA schemas (not the base template) — they gate element
+  // visibility at runtime; the rendered page shows one feature-state while this is the full union.
+  const features = [...new Set(schemas.flatMap(l => l.features || []))].sort(byLocale);
+  const cardActionHints = [...new Set(schemas.flatMap(l => l.actionHints || []))].sort(byLocale);
+  // #8c — process launch detected in the SCHEMA's OWN schemas (not the seed: the base template's "Run
+  // process by record" is template-provided; here we surface the CLIENT page's own process launch).
+  const processLaunch = schemas.some(l => l.processLaunch);
+  const processNames = [...new Set(schemas.flatMap(l => l.processLaunch?.names || []))].sort(byLocale);
+  // referenced UI modules the SCHEMA's own schemas pull in via define() (not the base template) — their
+  // rendered UI is outside the page-schema migration unit; the mapper flags them (referenced-module).
+  const referencedModules = [...new Set(schemas.flatMap(l => l.refModules || []))].sort(byLocale);
+
   if (looksSkeletal) {
     const allStub = seedMethodNames.size >= SEED_MIN_METHODS && seedNonEmptyMethods.size === 0;
     const detail = allStub ? "but ALL of them are EMPTY stubs (no bodies)" : `(below the ${SEED_MIN_METHODS}-method floor)`;
