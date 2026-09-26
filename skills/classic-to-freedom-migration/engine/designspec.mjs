@@ -2261,16 +2261,22 @@ function layoutWidgetType(w) {
 // Own fn so checklistGroups stays under Sonar CC 15.
 // The table-emitted elements, grouped by componentType so the gate reads "2 crt.Button expected" rather
 // than one row per element. Own fn so `buildCoverageRows` stays under Sonar's cognitive-complexity budget.
+// Each row also carries the expected element NAMES: the mapper emits every table element into
+// `viewConfigDiff` under `element` (the uniquified name — `classic` is the fallback for a hand-built ChangeSet), so
+// the gate matches identity the way the fields row does. Counting the TYPE would let any `crt.Button` on the page — a
+// template's Save button, a panel's `tools` add-button — close a row that expects a differently named button.
 function tableElementRows(cs) {
   const byType = new Map();
   for (const el of cs.tableElements || []) {
-    const e = byType.get(el.componentType) || { n: 0, kinds: new Set() };
+    const e = byType.get(el.componentType) || { n: 0, kinds: new Set(), names: [] };
     e.n++; e.kinds.add(String(el.classicKind || "element"));
+    const name = el.element || el.classic;
+    if (name) e.names.push(String(name));
     byType.set(el.componentType, e);
   }
   return [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([ctype, e]) => ({
     label: `${[...e.kinds].sort((a, b) => a.localeCompare(b)).map(esc).join(" / ")} — ${e.n} expected (\`${ctype}\`)`,
-    vk: { type: "element", ctype, n: e.n },
+    vk: { type: "element", ctype, n: e.n, names: e.names },
   }));
 }
 
@@ -3280,7 +3286,33 @@ const BUILT_TYPES = {
 // `--built.pages` entry means nobody looked (⚠), a partial count is ⚠, zero built is ❌. Reusing the tri-state
 // rather than a bare `hasType` check is what keeps "the verifier never fetched this page" from reading as
 // "you failed to build it".
+// IDENTITY match, used when every expected element published its name: an element counts only
+// when a built component carries its NAME and the expected TYPE. Another component of the same type is not
+// evidence — e.g. a panel's `tools` `AddRelatedRecord` button must not close a row that expects the custom
+// `Recalculate` button. Own fn so `resolveElementVk` stays under Sonar CC 15.
+function resolveElementByIdentity(vk, names, ctx) {
+  const named = ctx.ops.filter((o) => o.name);
+  if (ctx.ops.length && !named.length) return ["⚠ verify", `identity NOT checked — the built page returned ${ctx.ops.length} component(s) but NOT ONE carries an element name, so none of the ${vk.n} expected ${vk.ctype} could be matched by name; re-run get-page and pass \`bundle.viewConfig\` VERBATIM`, "unverified"];
+  const typesOf = (n) => named.filter((o) => o.name === n).map((o) => o.type || "");
+  const matched = names.filter((n) => typesOf(n).includes(vk.ctype));
+  const wrongType = names.filter((n) => !matched.includes(n) && typesOf(n).length);
+  const missing = names.filter((n) => !typesOf(n).length);
+  if (matched.length >= vk.n) return ["✅ Done", `${matched.length} ${vk.ctype} built — all ${vk.n} matched BY NAME (${matched.map((n) => esc(n)).join(", ")})`, "ok"];
+  const parts = [];
+  if (missing.length) parts.push(`missing: ${missing.slice(0, 8).map((n) => esc(n)).join(", ")}${missing.length > 8 ? "…" : ""}`);
+  const builtAs = (n) => { const t = typesOf(n).find(Boolean); return t ? "`" + esc(t) + "`" : "an untyped component"; };
+  if (wrongType.length) parts.push(wrongType.map((n) => `${esc(n)} is built as ${builtAs(n)}`).join(", "));
+  const detail = parts.length ? ` — ${parts.join("; ")}` : "";
+  if (matched.length) return ["⚠ verify", `${matched.length}/${vk.n} ${vk.ctype} built (matched by name)${detail}`, "unverified"];
+  if (ctx.entryAbsent) return absentEntry(ctx, `the ${vk.ctype} element(s)`);
+  const others = ctx.typeCount(vk.ctype);
+  const otherNote = others ? ` (${others} other ${vk.ctype} on the page, none carrying an expected name)` : "";
+  return ["❌ MISSING", `no ${vk.ctype} built (${vk.n} expected)${detail}${otherNote}`, "missing"];
+}
 function resolveElementVk(vk, ctx) {
+  const names = [...new Set(vk.names || [])];
+  if (names.length && names.length === vk.n) return resolveElementByIdentity(vk, names, ctx);
+  // No (or incomplete) names published — a hand-built ChangeSet only; the mapper always sets `element`. Count TYPE.
   const b = ctx.typeCount(vk.ctype);
   if (b >= vk.n) return ["✅ Done", `${b} ${vk.ctype} built`, "ok"];
   if (b > 0) return ["⚠ verify", `${b}/${vk.n} ${vk.ctype} built`, "unverified"];
@@ -4056,7 +4088,7 @@ export function resolveVk(vk, ctx) {
 const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // `bundle.viewConfig` is a JSON TREE (`items` nesting) — plain JSON, no parser involved. Walk it into the flat
 // `{name, type}` op list every resolver already counts. Nodes carry no `parentName`; that is safe, because no
-// resolver reads one (fields match on `name`, everything else counts `type`).
+// resolver reads one (fields and table-emitted elements match on `name`, everything else counts `type`).
 // The page attribute a FIELD component binds to, read off the node's own binding (`control: "$Contact"` for an
 // input, `value` / `checked` for the value-bound kinds). It is the field's COLUMN identity as the built page states
 // it, and the identity leg of the fields row (`resolveFieldsByIdentity`) matches on it beside the element name —
@@ -4101,7 +4133,7 @@ function walkViewConfig(node, out = []) {
 }
 // GRID COLUMNS are the one deliverable a `{name, type}` flattening cannot see: a Freedom list page keeps them as
 // DATA inside the grid's own op (`DataTable` carries `values.columns: [{ code: "PDS_<Col>", … }]`), not as page
-// items with a name and a type, so `walkViewConfig` walks past them.
+// items with a name and a type, and `walkViewConfig` skips the `columns` key on purpose, so it walks past them.
 //
 // Read them from the NODE THE CHANGESET TARGETS (`LIST_GRID`), never from wherever a `columns` array turns up: a
 // stock list page ships `DataTable_Summaries` beside the grid, and a detail on the page can carry its own columns, so
