@@ -992,9 +992,9 @@ check("perf/correctness: a DIFFERENT-flavor diamond (same schema folded as child
   flavorDiamond.memoStats.hits === 0 && flavorDiamond.memoStats.misses === 2
     && /Mini page \(quick-add\)/.test(fdMiniSpec) && !/Mini page \(quick-add\)/.test(fdChildSpec),
   () => ({ memoStats: flavorDiamond.memoStats, miniHasHeading: /Mini page \(quick-add\)/.test(fdMiniSpec), childHasHeading: /Mini page \(quick-add\)/.test(fdChildSpec) }));
-// ENG-100314 (review round 2, #6) — the same leak for a CHILD edit page: its sub-bundle carries the module's `section`
-// and a `planMeta.sectionSchema`. `isSectionScope` excluded only `isMiniPage`, so the child's own spec rendered a
-// "### List page" block with "⚠ Section schema not gathered … re-run". A child fold is a nested fold, never a section.
+// The same leak for a CHILD edit page: its sub-bundle carries the module's `section` and a
+// `planMeta.sectionSchema`. A child fold is a nested fold, never a section, so the child's own spec renders no
+// "### List page" block and no "⚠ Section schema not gathered … re-run".
 const childSecBody = `define("SharedSection",[],function(){return{entitySchemaName:"Shared",methods:{},diff:[]};});`;
 const childLeak = runMigration({ entity: "PE", noParentTemplate: true, addRecordMiniPage: false,
   schemas: [{ pkg: "PP", body: `define("PPage",[],function(){return{entitySchemaName:"PE",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"F"}}],details:{D1:{schemaName:"D1",entitySchemaName:"Shared"}}};});` }],
@@ -1002,7 +1002,7 @@ const childLeak = runMigration({ entity: "PE", noParentTemplate: true, addRecord
   childPageSchemas: { SharedPage: { entity: "Shared", noParentTemplate: true, planMeta: { sectionSchema: "SharedSection" },
     section: [{ pkg: "SP", body: childSecBody }], schemas: [{ pkg: "SP", body: SHARED_FLAVOR_BODY }] } } });
 const childLeakSpec = childLeak.childPages.find((c) => c.spec)?.spec || "";
-check("ENG-100314 (#6): a child sub-bundle carrying `section` + `planMeta.sectionSchema` renders NO List-page block in the child's own spec",
+check("a child sub-bundle carrying `section` + `planMeta.sectionSchema` renders NO List-page block in the child's own spec",
   childLeakSpec.length > 0 && !/### List page/.test(childLeakSpec) && !/Section schema not gathered/.test(childLeakSpec)
   && !(childLeak.structure.issues || []).some((i) => /SharedPage/.test(i)),
   () => ({ hasList: /### List page/.test(childLeakSpec), issues: childLeak.structure.issues }));
@@ -2251,11 +2251,11 @@ check("mini-page FOLD: manifest.addRecordMiniPage + miniPageSchemas → mini-pag
     schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` }],
     section: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }] }, { baseDir: FIX });
     return r.structure.complete === true && /### Add mini-page mapping/.test(r.plan) && /#### Mini page: ApplicantMiniPage/.test(r.plan) && r.plan.includes("QuickName") && /via mini page/.test(r.designSpec); })());
-// ENG-100314 (F2) — `get-classic-page-sources --schema-name OpportunityMiniPage` writes the module's `section` into
-// the mini-page bundle. Nested under `miniPageSchemas` that key made the mini page's own run fold a section and then
-// demand an add-record mini page OF THE MINI PAGE ("its OWN structure is incomplete"). A mini-page fold is never a
+// `get-classic-page-sources --schema-name OpportunityMiniPage` writes the module's `section` into the mini-page
+// bundle. Folding that key would make the mini page's own run fold a section and then demand an add-record mini
+// page OF THE MINI PAGE ("its OWN structure is incomplete"). A mini-page fold is never a
 // section scope — the PARENT run owns the section — so the nested run ignores it and the structure stays complete.
-check("ENG-100314 (F2): a `section` key inside a miniPageSchemas bundle does NOT make the mini page's own structure incomplete",
+check("a `section` key inside a miniPageSchemas bundle does NOT make the mini page's own structure incomplete",
   (() => { const r = runMigration({ entity: "Applicant", addRecordMiniPage: { schema: "ApplicantMiniPage" },
     miniPageSchemas: { ApplicantMiniPage: { schemas: [{ pkg: "P", body: `define("ApplicantMiniPage",[],function(){return{entitySchemaName:"Applicant",diff:[{operation:"insert",name:"QF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"QuickName"}}]};});` }], seed: CLEAN_SEED,
       section: { schemas: [{ pkg: "HRApplicant", body: `define("Applicant1Section",[],function(){return{entitySchemaName:"Applicant",methods:{},diff:[]};});` }], listColumns: null } } },
@@ -2264,10 +2264,10 @@ check("ENG-100314 (F2): a `section` key inside a miniPageSchemas bundle does NOT
     return r.structure.complete === true && !r.miniPage?.structIncomplete && /#### Mini page: ApplicantMiniPage/.test(r.plan); })(),
   () => "structure incomplete: the nested mini-page run still folded its `section`");
 // A named mini page NOT folded (no miniPageSchemas) → structure INCOMPLETE (must fold or record false).
-// ENG-100314 (F5) — the same fix for a TYPED-page fold: its bundle carries the module's `section` too, and without
-// `addRecordMiniPage` in the sub-bundle the nested run used to report "typed page 'X': its OWN structure is
-// incomplete" (the ENG-95218 leak golden works around it with `addRecordMiniPage: false`; this one does not).
-check("ENG-100314 (F5): a `section` key inside a typedPageSchemas bundle (no addRecordMiniPage there) does NOT make the typed page's own structure incomplete",
+// The same rule for a TYPED-page fold: its bundle carries the module's `section` too, and even without
+// `addRecordMiniPage` in the sub-bundle the nested run must not report "typed page 'X': its OWN structure is
+// incomplete" (the section-leak golden sets `addRecordMiniPage: false`; this one does not).
+check("a `section` key inside a typedPageSchemas bundle (no addRecordMiniPage there) does NOT make the typed page's own structure incomplete",
   (() => { const pg = (n) => ({ pkg: "P", body: `define("${n}",[],function(){return{entitySchemaName:"App",diff:[{operation:"insert",name:"F",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"Name"}}]};});` });
     const sec = [{ pkg: "P", body: `define("AppSection",[],function(){return{entitySchemaName:"App",methods:{},diff:[]};});` }];
     const r = runMigration({ entity: "App", addRecordMiniPage: false, noParentTemplate: true, schemas: [pg("AppPage")], section: sec,
@@ -11373,7 +11373,7 @@ const n2TreeManifest = (titleA, titleB) => ({
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
 
-  // ENG-100314 — a `remove` of a name NO layer and NO seed ever defines (BlythecoDev OpportunityPageV2's stray
+  // A `remove` of a name NO layer and NO seed ever defines (BlythecoDev OpportunityPageV2's stray
   // `remove "e"`). Classic ignores it, and neither F1 nor F2 can clear it, so it must not block the plan: it renders
   // as a ⚠ fidelity advisory that says it has no effect, and `warningDispositions` can close it.
   const noOpDiff = [
@@ -11383,14 +11383,14 @@ const n2TreeManifest = (titleA, titleB) => ({
   ];
   const noOp = mkRun(noOpDiff);
   const noOpWarn = (noOp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
-  check("ENG-100314: a remove of a never-defined name does NOT block the gate — gate.blocked is false",
+  check("a remove of a never-defined name does NOT block the gate — gate.blocked is false",
     noOp.gate.blocked === false && noOpWarn?.severity === "fidelity", () => ({ reasons: noOp.gate.reasons, warning: noOpWarn }));
-  check("ENG-100314: the plan renders it as a ⚠ fidelity advisory whose hint says it has no effect in Classic",
+  check("the plan renders it as a ⚠ fidelity advisory whose hint says it has no effect in Classic",
     /fidelity note\(s\)/.test(noOp.plan) && /no effect in Classic unless the chain is incomplete: 'e' is not defined anywhere in the supplied chain/.test(noOp.plan)
     && /\*\*e\*\* @`P`/.test(noOp.plan), () => (noOp.plan.match(/^>.*\*\*e\*\*.*$/m) || ["(no advisory line)"])[0]);
   const noOpDisp = mkRun(noOpDiff, { warningDispositions: { "remove:e:P": { resolved: true, disposition: "n/a", note: "stray remove of a name no schema defines" } } });
   const noOpDispWarn = (noOpDisp.effective.warnings || []).find((w) => w.name === "e");
-  check("ENG-100314: `warningDispositions` CLOSES the no-op remove note (it is fidelity, so the hatch is open to it)",
+  check("`warningDispositions` CLOSES the no-op remove note (it is fidelity, so the hatch is open to it)",
     noOpDisp.gate.blocked === false && noOpDispWarn?.accepted === true && !noOpDispWarn.dispositionRefused
     && /CLOSED by a recorded disposition/.test(noOpDisp.plan), () => noOpDispWarn);
   // …while a remove whose name a LATER layer defines is still the ordering signal, and still blocks.
@@ -11398,12 +11398,12 @@ const n2TreeManifest = (titleA, titleB) => ({
     { pkg: "Early", body: `define("Early",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "Late" }])}};});` },
     { pkg: "Later", body: `define("Later",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "Header", values: { itemType: 15 } }, { operation: "insert", name: "Late", parentName: "Header", propertyName: "items", values: { bindTo: "Late" } }])}};});` },
   ] }, { baseDir: FIX });
-  check("ENG-100314: a remove of a name a LATER layer inserts still BLOCKS the gate as correctness (schema order F1)",
+  check("a remove of a name a LATER layer inserts still BLOCKS the gate as correctness (schema order F1)",
     late.gate.blocked === true && (late.gate.reasons || []).some((r) => /remove 'Late' @Early/.test(r) && /referenced by Later/.test(r)),
     () => late.gate.reasons);
-  // ENG-100314 (F3) — `noParentTemplate: true` switches the no-seed gate reason off, so the no-op verdict is the only
+  // `noParentTemplate: true` switches the no-seed gate reason off, so the no-op verdict is the only
   // place that can say the parent chain went unchecked: the plan line must say so.
-  check("ENG-100314 (F3): under `noParentTemplate: true` the rendered no-op advisory says the unchecked parent chain may define the name",
+  check("under `noParentTemplate: true` the rendered no-op advisory says the unchecked parent chain may define the name",
     /\*\*e\*\* @`P` — .*noParentTemplate is declared, so the parent chain was not checked — a base element named 'e' may exist there \(F2\)/.test(noOp.plan)
     && !/confirm the page really has no parent template/.test(noOp.plan),
     () => (noOp.plan.match(/^>.*\*\*e\*\*.*$/m) || ["(no advisory line)"])[0]);
@@ -11411,12 +11411,12 @@ const n2TreeManifest = (titleA, titleB) => ({
   const noOpPartial = runMigration({ entity: "E", seed: CLEAN_SEED, schemas: [
     { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }, { operation: "remove", name: "e" }])}};});` }] }, { baseDir: FIX });
   const noOpPartialW = (noOpPartial.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
-  check("ENG-100314 (F3): over a possiblyPartial seed the no-op remove stays advisory but its plan line says the PARTIAL seed may lack the name",
+  check("over a possiblyPartial seed the no-op remove stays advisory but its plan line says the PARTIAL seed may lack the name",
     noOpPartial.effective.seedQuality.possiblyPartial === true && noOpPartialW?.severity === "fidelity"
     && !(noOpPartial.gate.reasons || []).some((r) => /remove 'e'/.test(r))
     && /\*\*e\*\* @`P` — .*base seed looks PARTIAL \(seedQuality\.possiblyPartial\), so it may lack 'e' \(F2\)/.test(noOpPartial.plan),
     () => ({ w: noOpPartialW, reasons: noOpPartial.gate.reasons }));
-  // ENG-100314 (review round 2, #2) — a stray remove inside a COMPLETE seed is pre-closed by the ENGINE as the base
+  // A stray remove inside a COMPLETE seed is pre-closed by the ENGINE as the base
   // template's own no-op (`fromTemplate`). No operator recorded anything, so the plan must not say "CLOSED by a
   // recorded disposition": it has its own "CLOSED by the engine" line. 150 real-bodied methods = not possiblyPartial.
   const fullSeedMethods = Array.from({ length: 160 }, (_, i) => `m${i}:function(){return ${i};}`).join(",");
@@ -11424,7 +11424,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   const tplNoOp = runMigration({ entity: "E", seed: fullSeed, schemas: [
     { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }])}};});` }] }, { baseDir: FIX });
   const tplNoOpW = (tplNoOp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "tplStray");
-  check("ENG-100314 (#2): a seed-owned no-op remove renders as CLOSED by the ENGINE, not as CLOSED by a recorded disposition",
+  check("a seed-owned no-op remove renders as CLOSED by the ENGINE, not as CLOSED by a recorded disposition",
     tplNoOp.effective.seedQuality.possiblyPartial === false && tplNoOpW?.fromTemplate === true && tplNoOpW.accepted === true
     && /fidelity note\(s\) CLOSED by the engine — the base template's own no-op, not a client decision: `remove:tplStray`/.test(tplNoOp.plan)
     && !/CLOSED by a recorded disposition/.test(tplNoOp.plan) && !/\*\*tplStray\*\* @/.test(tplNoOp.plan),
@@ -11433,7 +11433,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   const tplNoOpDisp = runMigration({ entity: "E", seed: fullSeed, warningDispositions: { "remove:tplStray": { resolved: true, disposition: "accepted", note: "operator note" } }, schemas: [
     { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "insert", name: "F", parentName: "ProfileContainer", propertyName: "items", values: { bindTo: "F" } }])}};});` }] }, { baseDir: FIX });
   const tplNoOpDispW = (tplNoOpDisp.effective.warnings || []).find((w) => w.op === "remove" && w.name === "tplStray");
-  check("ENG-100314: a `warningDispositions` answer does not overwrite an engine-closed (`fromTemplate`) note — disposition n/a and the engine's note stand",
+  check("a `warningDispositions` answer does not overwrite an engine-closed (`fromTemplate`) note — disposition n/a and the engine's note stand",
     tplNoOpDispW?.fromTemplate === true && tplNoOpDispW.disposition === "n/a" && /not a client decision/.test(tplNoOpDispW.note)
     && !/operator note/.test(tplNoOpDisp.plan) && !/CLOSED by a recorded disposition/.test(tplNoOpDisp.plan),
     () => ({ w: tplNoOpDispW, lines: tplNoOpDisp.plan.split("\n").filter((l) => /CLOSED|tplStray/.test(l)) }));

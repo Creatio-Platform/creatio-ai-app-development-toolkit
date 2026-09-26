@@ -1479,7 +1479,7 @@ function sanitizeConditions(conds) {
 //     template-only elements — e.g. the 300+ framework methods on BaseEntityPage — as context, not
 //     payload. Without this, seeding the full chain floods the ChangeSet with base noise.
 //   opts.noParentTemplate — the manifest's declaration that the page has no parent template; only rewords the
-//     no-seed caveat on a never-defined remove (ENG-100314).
+//     no-seed caveat on a never-defined remove.
 // Single source of truth for a freshly-DEFINED diff item's record shape. BOTH the `insert` branch and
 // the `merge`-onto-absent stub produce this exact shape; keeping one factory means a new field is added
 // in ONE place — the asymmetric-drift risk RV4 hit (a field added to one branch, missed in the other).
@@ -1545,7 +1545,7 @@ function makeItem(op, seed, pkg) {
 //                   model. There is nothing to fix in the body or the seed — only in this engine — so the gate's
 //                   remedy would be an instruction nobody can act on ⇒ advisory, never a block. Same reasoning the
 //                   `unknown-enum-member` exemption already uses (migrate.mjs `isStructuralDiag`).
-// ENG-100314 — the one producer whose severity is decided AFTER the fold, not at the op: a `remove` of a name nothing
+// The one producer whose severity is decided AFTER the fold, not at the op: a `remove` of a name nothing
 // below defined. At replay time it is indistinguishable from F1/F2, so it is recorded as `correctness`; once the whole
 // fold has run, `settleUndefinedRemoves` asks the question the severity sentence above turns on. If NO applicable op
 // anywhere in the SUPPLIED fold (seed or layer) inserts, patches, moves, sets, parents under or aliases that name, the
@@ -1582,7 +1582,7 @@ function saveAlias(aliases, op) {
 }
 function aliasFor(aliases, name) { return aliases.get(name) || null; }
 // The item an op targets, resolving the alias when the literal name is not in the map.
-// ENG-100314 — a record the RUNTIME does not have counts as NOT in the map, so the op falls through to the alias as
+// A record the RUNTIME does not have counts as NOT in the map, so the op falls through to the alias as
 // Classic does (literal name absent → alias). Three such records:
 //   * a `neverDefined` tombstone — the diagnostic record `replayRemove` leaves for a remove that hit nothing
 //     (`Early: remove "Old"` → `Later: insert "Real", alias {name:"Old"}` → `Top: remove "Old"`);
@@ -1590,7 +1590,7 @@ function aliasFor(aliases, name) { return aliases.get(name) || null; }
 //     `Later: insert "Real", alias {name:"Old"}` → `Top: remove "Old"`);
 //   * an `engineOnlyStub` — a merge onto nothing, which Classic ignored (`Early: merge "Old"` → `Later: insert
 //     "Real", alias {name:"Old"}` → `Top: remove "Old"`).
-// In all three Top's op used to land on the literal record and `Real` survived, although Classic removes it through
+// In all three Top's op must not land on the literal record and leave `Real` alive: Classic removes it through
 // the alias. The fallback needs a LIVE alias target: with no alias (or a dead target) the literal record is kept, so
 // the move-resurrect idiom (`remove X` → `move X`) lands on its tombstone and resurrects it only when no LIVE alias
 // target exists; with one, the move lands on the alias target and X stays removed (Classic's lookup across layers).
@@ -1743,9 +1743,9 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   // repeats what `SiteEvent`'s insert already set, so nothing was visibly wrong; a move that states a DIFFERENT
   // kind was silently ignored. Same key-presence rule as `merge`, same helper, so the two cannot drift apart.
   mergeIdentityProps(op, cur, pkg, warnings, "move");
-  // ENG-100314 — a resurrected tombstone is a LIVE element again, so it drops the never-defined marks too: a stale
-  // `neverDefined` made `resolveTarget` treat the alive item as absent and send a later op on its name to an alias
-  // target instead (`remove Old` → `move Old` → `insert Real alias Old` → `merge Old` patched `Real`).
+  // A resurrected tombstone is a LIVE element again, so it drops the never-defined marks too: a stale
+  // `neverDefined` would make `resolveTarget` treat the alive item as absent and send a later op on its name to an
+  // alias target instead (`remove Old` → `move Old` → `insert Real alias Old` → `merge Old` would patch `Real`).
   if (cur.removed) {
     cur.removed = false; cur.removedBy = null; cur.removedBySeed = false;
     delete cur.neverDefined; delete cur.noOpRemove;
@@ -1758,7 +1758,7 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
 // not a client B6 decision — the mapper filters it out like every other template-only element.
 function replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, warnings) {
   if (cur) {
-    // ENG-100314 — a CLIENT layer re-removing a stray name only a SEED layer removed before. The seed's own no-op is
+    // A CLIENT layer re-removing a stray name only a SEED layer removed before. The seed's own no-op is
     // pre-closed as template-owned (`settleUndefinedRemoves`), so without a record of its own the client's remove —
     // a client decision — would be hidden behind the template's closed note. It gets its own provisional warning.
     const reRemovesSeedStray = cur.neverDefined && cur.removed && cur.removedBySeed && !seed;
@@ -1770,14 +1770,14 @@ function replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, wa
   // defined records this stub, and a LATER layer may legitimately `merge` onto that same name (classic's
   // remove-then-restate idiom) — which reaches `cur.unmodelledProps.add(...)` and would throw on a stub without
   // the field. Every item record in this fold carries the same shape, exactly as `makeItem`'s own comment requires.
-  // `neverDefined` (ENG-100314) marks it as a DIAGNOSTIC record the runtime does not have — `resolveTarget` must not
+  // `neverDefined` marks it as a DIAGNOSTIC record the runtime does not have — `resolveTarget` must not
   // let it shadow a real alias target registered later.
   const tomb = { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
     declaringPackage: seed ? null : pkg, unmodelledProps: new Set(), neverDefined: true };
   items.set(op.name, tomb);
   recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, warnings);
 }
-// ENG-100314 — provisional: `settleUndefinedRemoves` re-decides the severity once the whole fold is known. `seed` is
+// Provisional: `settleUndefinedRemoves` re-decides the severity once the whole fold is known. `seed` is
 // captured HERE, at replay time: the tombstone's own `removedBySeed` is overwritten by any later remove of the name,
 // so reading it at settle time judged a seed layer's fact by a client layer's op.
 function recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, warnings) {
@@ -1786,7 +1786,7 @@ function recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, war
   undefinedRemoves.push({ tomb, warning, layer, seed });
 }
 
-// ENG-100314 — the names each APPLICABLE op of one layer references, recorded into `refs` (name → [{pkg, operation,
+// The names each APPLICABLE op of one layer references, recorded into `refs` (name → [{pkg, operation,
 // layer}]). Called on the layer's BUCKETS, i.e. after `splitDiffOps`, so the set is exactly what the runtime runs:
 // an unknown `operation` lands in no bucket and an alias-excluded op is dropped there, so neither can manufacture a
 // reference. What counts:
@@ -1821,12 +1821,12 @@ function recordReferences(buckets, pkg, layer, refs) {
 // seed (F2) rather than at order; a SAME-layer hit is either the remove-and-restate idiom (see settle) or a child
 // under a name the layer itself never defines. When the remove's OWN layer inserts the name, only a LOWER reference
 // can have broken the idiom (`isRestateIdiom`), so that one is named — the same-layer insert and any later reference
-// act on the re-inserted element and explain nothing (ENG-100314).
+// act on the re-inserted element and explain nothing.
 function pickReference(list, layer) {
   if (list.some((r) => r.layer === layer && r.operation === "insert")) return list.find((r) => r.layer < layer) || list[0];
   return list.find((r) => r.layer > layer) || list.find((r) => r.layer === layer) || list[0];
 }
-// How the seed limits what a "nothing defines it" verdict proves — the ENG-100314 completeness assumption.
+// How the seed limits what a "nothing defines it" verdict proves — the seed-completeness assumption.
 function seedCaveat(seedState, name) {
   if (seedState === "declaredNone") return ` noParentTemplate is declared, so the parent chain was not checked — a base element named '${name}' may exist there (F2).`;
   if (seedState === "absent") return ` No base seed was supplied, so the parent-template chain was not checked and may define '${name}' (F2): supply the seed, or confirm the page really has no parent template.`;
@@ -1844,7 +1844,7 @@ function referencedHint(name, list, layer) {
   const where = ref.layer < layer ? "a lower layer" : "the same layer";
   return ` — '${name}' IS referenced by ${ref.pkg} (${ref.operation}, ${where}), so something expects this item, yet that op does not give the remove an item to hit: the base element is most likely missing from the seed (F2) — or the schemas are out of order (F1)`;
 }
-// ENG-100314 — settle each provisional remove-of-undefined warning (see the SEVERITY note above for the reasoning).
+// Settle each provisional remove-of-undefined warning (see the SEVERITY note above for the reasoning).
 // Three outcomes:
 //   * no reference at all → a no-op in Classic unless the supplied chain is incomplete: `fidelity`, tombstone marked
 //     `noOpRemove` so `removed[]` does not report an element the page never had as one the client removed;
@@ -2153,7 +2153,7 @@ function replayTagged(tagged, stores, warnings) {
   // Singleton across the whole fold, matching the runtime's one-reset lifetime.
   const aliases = new Map();
   // `layer` = the position in the fold (seed layers first). A package NAME cannot stand in for it: one package can be
-  // both a template schema and a page schema, so "same layer" is decided by position (ENG-100314).
+  // both a template schema and a page schema, so "same layer" is decided by position.
   for (const [layer, { L, seed }] of tagged.entries()) {
     const buckets = splitDiffOps(L.diff, aliases);
     recordReferences(buckets, L.pkg, layer, refs);
@@ -2261,7 +2261,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
     seedMethods: seedMethodNames.size, seedRealMethods: seedNonEmptyMethods.size, hasGetActions,
     looksSkeletal, possiblyPartial,
   };
-  // ENG-100314 — removes that hit no item, re-judged once the whole fold is known against every applicable reference
+  // Removes that hit no item, re-judged once the whole fold is known against every applicable reference
   // (`refs`) and the seed's completeness (computed above, before the fold, so the verdict can say when the seed may
   // lack the name). The skeletal-seed WARNING itself is still pushed after the fold, keeping `warnings` in op order.
   const undefinedRemoves = [];
@@ -2280,7 +2280,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
   // cascade-removed items are structural cleanup (a removed container's subtree), NOT a client B6 decision — keep
   // them out of `removed` so they don't flood the removals worklist; excluding them from `alive` already cleared
   // the false unresolvedParents.
-  // ENG-100314 — nor a no-op remove of a name nothing ever defined: the page never had that element, so listing it
+  // Nor a no-op remove of a name nothing ever defined: the page never had that element, so listing it
   // as removed tells the reader the client dropped something that was there. Its fidelity warning still names it.
   const removed = [...items.values()].filter(i => i.removed && !i.cascadeRemoved && !i.noOpRemove);
   const activeRules = [...rules.values()].filter(r => r.enabled && !r.removed);

@@ -810,7 +810,7 @@ function renderSpecHeader(result, opts, entity, fields, cs) {
   return L;
 }
 
-// ENG-100314 — a sub-page fold nested into a parent plan (mini page, per-type typed form, child edit page — the three
+// A sub-page fold nested into a parent plan (mini page, per-type typed form, child edit page — the three
 // `foldSubPage` call sites in migrate.mjs, flagged `isMiniPage` / `formOnly` / `isChildPage`). Such a run is NEVER a
 // section scope: the ROOT run owns the section and its list page. Shared with migrate.mjs (its `sectionInput` call
 // site and `subPageSpecOpts`) so the three flags are listed once. In a RENDER `formOnly` also marks renderPlan's own
@@ -820,8 +820,8 @@ export function isNestedFold(opts) {
 }
 // A SECTION migration when the section chain folded, OR a mini page / section schema is named even though the
 // chain wasn't gathered (bundle returned sectionLayerCount:0). A nested fold (`isNestedFold`) is never a section:
-// a child sub-bundle carrying `planMeta.sectionSchema` rendered a List-page block with "⚠ Section schema not
-// gathered … re-run" (ENG-100314). Extracted for CC.
+// a child sub-bundle carrying `planMeta.sectionSchema` renders no List-page block and no "⚠ Section schema not
+// gathered … re-run". Extracted for CC.
 function isSectionScope(result, section, opts) {
   return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !isNestedFold(opts));
 }
@@ -1669,7 +1669,7 @@ function renderFidelityWarnings(result) {
     for (const w of open) P.push(`> - \`${esc(w.op)}\` **${esc(w.name)}** @\`${esc(w.schema)}\` — ${esc(w.hint || w.message || "(no hint)")}`);
     P.push("");
   }
-  // ENG-100314 — a `fromTemplate` note was closed by the ENGINE (the base template's own no-op remove), not by an
+  // A `fromTemplate` note was closed by the ENGINE (the base template's own no-op remove), not by an
   // operator's `warningDispositions` answer: rendering it as "CLOSED by a recorded disposition" names a record that
   // does not exist. Listed on its own line, in the same auditable form.
   const closedList = (list) => list.map((w) => {

@@ -67,7 +67,7 @@ Reconstructing the effective page from 9 layers — which an LLM subagent estima
     the fold (below), and three are fidelity; `computeGate` blocks on correctness only and **quotes each blocking
     warning's own hint** instead of appending one summary sentence to all of them. A warning
     with no `severity` is read as `correctness`, so a producer that forgets to declare one fails loud.
-  - **A `remove` of a never-defined name is settled after the fold (ENG-100314).** At replay time a remove that hits
+  - **A `remove` of a never-defined name is settled after the fold.** At replay time a remove that hits
     no item is indistinguishable from F1/F2, so it is recorded as `correctness`; `settleUndefinedRemoves` then re-judges
     it against every REFERENCE the fold recorded. A reference is taken from each layer's buckets AFTER `splitDiffOps`, so
     it is exactly what the runtime runs: the `name` of an insert / merge / move / set, the `parentName` of an insert /
@@ -104,12 +104,12 @@ Reconstructing the effective page from 9 layers — which an LLM subagent estima
     and X stays removed, matching Classic's lookup across layers). A move that resurrects a tombstone clears `neverDefined` / `noOpRemove`,
     so the resurrected element is not treated as absent afterwards. Found on BlythecoDev `OpportunityPageV2` (`remove "e"` amid the BANT removes; no layer of 16 nor seed body of
     26 defines `e`).
-  - **Nested folds ignore `manifest.section` (ENG-100314, F2).** A mini-page, typed-page or child-page fold
+  - **Nested folds ignore `manifest.section`.** A mini-page, typed-page or child-page fold
     (`isMiniPage` / `formOnly` / `isChildPage`, one helper `isNestedFold` in designspec.mjs shared with migrate.mjs) is
     never a section scope — the root run owns the section and its list page. `get-classic-page-sources --schema-name
-    <X>` still writes the module's `section` into the sub-bundle; reading it made the nested run demand an add-record
+    <X>` still writes the module's `section` into the sub-bundle; reading it would make the nested run demand an add-record
     mini page of the sub-page ("its OWN structure is incomplete"). The renderer's `isSectionScope` uses the same helper,
-    so a child sub-bundle carrying `planMeta.sectionSchema` no longer renders a List-page block ("⚠ Section schema not
+    so a child sub-bundle carrying `planMeta.sectionSchema` renders no List-page block ("⚠ Section schema not
     gathered … re-run") inside the child's spec.
   - Measured against real data: 130 schema bodies across 5 real Classic pages contain `insert` 367, `merge` 51, `move` 7, plain `remove` 4, and **zero** `set`, `remove`-with-`properties`, `alias`, `remove`+`move` on one name, or `insert`+`merge` on one name. So the group-ordering, alias, `set` and remove-properties paths are exercised only by goldens, validated against `json-applier.js` rather than against observed pages — and the pre/post differential over that corpus reports no page changed by any of them.
 - Type-name vocabulary. `get-entity-schema-properties` reports clio's OWN readback names, not the engine's tokens and not always a numeric code: `EntitySchemaDesignerSupport.GetFriendlyTypeName` yields `Currency0-3` for the money subtypes, `Decimal0/1/3/4/8` for the decimals, `PhoneNumber` for 42, `RichText` for 43, `WebLink` for 44. Observed on a stand: `Contact.Phone`/`MobilePhone`/`HomePhone` = `PhoneNumber`, `Product`/`Invoice` = `Currency2`, `Invoice` = `Decimal8`. Ten of those twelve names were not keys in `mapper.mjs`, so ordinary money, decimal and phone fields raised the loud `field-control` decision claiming their TYPE was unrecognized — the engine knew the type and only not clio's spelling. `CLIO_TYPE_ALIAS` maps them onto the existing tokens through one shared `normalizeDvt`, used by BOTH the control choice and the reader-facing type label (those two diverged before on the numeric codes). Real effect: `ContactPageV2` loses its only `field-control` decision. Note a stand can also return a bare numeric code for the same column, so both forms must keep working.

@@ -2400,10 +2400,10 @@ export function runMigration(manifest, opts = {}) {
   const seedTemplate = parse(manifest.seed);
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
-  // ENG-100314 (F2) — a NESTED fold (mini page, per-type typed form, child edit page — the three `foldSubPage` call
+  // A NESTED fold (mini page, per-type typed form, child edit page — the three `foldSubPage` call
   // sites, flagged `isMiniPage` / `formOnly` / `isChildPage`) is NEVER a section scope: the ROOT run owns the section
   // and its list page. `get-classic-page-sources --schema-name <X>` still writes the module's `section` into the
-  // sub-bundle, and reading it here made the nested run demand an add-record mini page OF the sub-page — "its OWN
+  // sub-bundle, and reading it here would make the nested run demand an add-record mini page OF the sub-page — "its OWN
   // structure is incomplete" (mini) / "typed page 'X': its OWN structure is incomplete" (typed), with nothing the
   // operator could supply to clear it short of `addRecordMiniPage: false` in every sub-bundle.
   const sectionData = sectionInput(isNestedFold(opts) ? undefined : manifest.section, manifest);
