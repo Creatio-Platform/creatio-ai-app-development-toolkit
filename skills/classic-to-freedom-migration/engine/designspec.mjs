@@ -810,10 +810,20 @@ function renderSpecHeader(result, opts, entity, fields, cs) {
   return L;
 }
 
+// ENG-100314 — a sub-page fold nested into a parent plan (mini page, per-type typed form, child edit page — the three
+// `foldSubPage` call sites in migrate.mjs, flagged `isMiniPage` / `formOnly` / `isChildPage`). Such a run is NEVER a
+// section scope: the ROOT run owns the section and its list page. Shared with migrate.mjs (its `sectionInput` call
+// site and `subPageSpecOpts`) so the three flags are listed once. In a RENDER `formOnly` also marks renderPlan's own
+// form-page call; that one must skip the List-page block too (renderPlan renders it via `listPageOnly`).
+export function isNestedFold(opts) {
+  return !!(opts.isMiniPage || opts.formOnly || opts.isChildPage);
+}
 // A SECTION migration when the section chain folded, OR a mini page / section schema is named even though the
-// chain wasn't gathered (bundle returned sectionLayerCount:0). A MINI page is never a section. Extracted for CC.
+// chain wasn't gathered (bundle returned sectionLayerCount:0). A nested fold (`isNestedFold`) is never a section:
+// a child sub-bundle carrying `planMeta.sectionSchema` rendered a List-page block with "⚠ Section schema not
+// gathered … re-run" (ENG-100314). Extracted for CC.
 function isSectionScope(result, section, opts) {
-  return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !opts.isMiniPage);
+  return !!((section || result.miniPage || opts.planMeta?.sectionSchema) && !isNestedFold(opts));
 }
 
 // Group the Layout rows by region (first-seen order) then rank regions: side profile / header FIRST, then tabs,
@@ -1117,9 +1127,9 @@ export function renderDesignSpec(result, opts = {}) {
   // A MINI page is NOT a section — it has no list page. When rendering the mini page's OWN spec (isMiniPage),
   // suppress the List-page block entirely (rendering one gave the mini fold a spurious "##### List page" with a
   // misleading "no add-record mini page" line — a mini page inside a mini page).
-  // A MINI page is NOT a section (no list page). List page renders for a section migration only, not formOnly.
-  const isSectionMigration = isSectionScope(result, section, opts);
-  if (isSectionMigration && !opts.formOnly) L.push(...renderListPageBlock(result, section, opts));
+  // A MINI page is NOT a section (no list page). List page renders for a section migration only, never for a nested
+  // fold or a formOnly render (`isNestedFold`, applied inside `isSectionScope`).
+  if (isSectionScope(result, section, opts)) L.push(...renderListPageBlock(result, section, opts));
 
   // TYPED entity: the base fold is NOT a deliverable — it only supplies the List page (section concerns) and
   // shared context. Its own form Layout/Logic/Confirm must NOT render (it's empty/misleading: 0 rules etc.,
@@ -1659,13 +1669,20 @@ function renderFidelityWarnings(result) {
     for (const w of open) P.push(`> - \`${esc(w.op)}\` **${esc(w.name)}** @\`${esc(w.schema)}\` — ${esc(w.hint || w.message || "(no hint)")}`);
     P.push("");
   }
-  const closed = all.filter((w) => w.accepted);
+  // ENG-100314 — a `fromTemplate` note was closed by the ENGINE (the base template's own no-op remove), not by an
+  // operator's `warningDispositions` answer: rendering it as "CLOSED by a recorded disposition" names a record that
+  // does not exist. Listed on its own line, in the same auditable form.
+  const closedList = (list) => list.map((w) => {
+    const note = w.note ? ` (${esc(w.note)})` : "";
+    return `\`${esc(w.op)}:${esc(w.name)}\` → **${esc(w.disposition)}**${note}`;
+  }).join(" · ");
+  const closedByEngine = all.filter((w) => w.accepted && w.fromTemplate);
+  if (closedByEngine.length) {
+    P.push(`> ℹ ${closedByEngine.length} fidelity note(s) CLOSED by the engine — the base template's own no-op, not a client decision: ${closedList(closedByEngine)}`, "");
+  }
+  const closed = all.filter((w) => w.accepted && !w.fromTemplate);
   if (closed.length) {
-    const closedList = closed.map((w) => {
-      const note = w.note ? ` (${esc(w.note)})` : "";
-      return `\`${esc(w.op)}:${esc(w.name)}\` → **${esc(w.disposition)}**${note}`;
-    }).join(" · ");
-    P.push(`> ℹ ${closed.length} fidelity note(s) CLOSED by a recorded disposition: ${closedList}`, "");
+    P.push(`> ℹ ${closed.length} fidelity note(s) CLOSED by a recorded disposition: ${closedList(closed)}`, "");
   }
   if (refused.length) {
     const refusedList = refused.map((w) => `\`${esc(w.op)}:${esc(w.name)}\``).join(", ");

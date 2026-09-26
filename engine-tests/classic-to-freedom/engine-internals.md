@@ -63,9 +63,54 @@ Reconstructing the effective page from 9 layers — which an LLM subagent estima
     item no lower schema defined, or the seed is not a real fetched body — the engine's reading of the page is wrong,
     and the remedy is an act the operator can perform: fix schema order F1 / fetch the seed F2) or `fidelity` (the
     mapping is right; an effect of the op is not represented — the remedy is in this engine, so blocking on it produces
-    a ⛔ nobody can clear). Five producers are correctness, three are fidelity; `computeGate` blocks on correctness only
-    and **quotes each blocking warning's own hint** instead of appending one summary sentence to all eight. A warning
+    a ⛔ nobody can clear). Four producers are always correctness, the `remove` of an undefined name is settled after
+    the fold (below), and three are fidelity; `computeGate` blocks on correctness only and **quotes each blocking
+    warning's own hint** instead of appending one summary sentence to all of them. A warning
     with no `severity` is read as `correctness`, so a producer that forgets to declare one fails loud.
+  - **A `remove` of a never-defined name is settled after the fold (ENG-100314).** At replay time a remove that hits
+    no item is indistinguishable from F1/F2, so it is recorded as `correctness`; `settleUndefinedRemoves` then re-judges
+    it against every REFERENCE the fold recorded. A reference is taken from each layer's buckets AFTER `splitDiffOps`, so
+    it is exactly what the runtime runs: the `name` of an insert / merge / move / set, the `parentName` of an insert /
+    move, and an insert's `alias.name`. Unknown operations (dropped by the split) and alias-excluded ops never count,
+    and a `remove` — even one carrying `parentName` or `properties` — is never a reference. Three outcomes:
+    - **no reference** → the remove is a no-op in Classic *unless the supplied chain is incomplete*: `fidelity`, the
+      tombstone is flagged `noOpRemove` and kept out of `removed[]`. If the remove sits in a SEED layer and the seed
+      looks complete, the note is pre-closed by the engine (`fromTemplate`, `accepted`, `n/a`) — the base template's own
+      no-op is not a client decision — and the plan lists it as "CLOSED by the engine", apart from notes an operator
+      closed through `warningDispositions`. Whether the remove came from a seed layer is captured at replay time, not
+      read off the tombstone (a later remove overwrites `removedBySeed`); a CLIENT layer that removes the same stray name
+      again gets its own open note, so the template's closed one cannot hide a client decision.
+    - **the remove's own layer inserts the name, and no LOWER layer references it** → the remove-and-restate idiom. A
+      layer's removes run before its inserts (`DIFF_OP_BUCKETS`), so the remove hits nothing and the insert defines the
+      element; no schema order can change that: `fidelity` with its own "re-inserted by the same layer" hint. References
+      from HIGHER layers (a later merge, a later child under the name) do not break it — they land on the re-inserted
+      element; this is the common shape (one package restates a base element, a later one customises it).
+    - **anything else** → stays `correctness`; the hint names the referencing layer and says whether it is a lower, the
+      same or a later layer (a later one is preferred — that is the F1 ordering signal; a lower or same-layer one that
+      gave the remove nothing to hit points at the seed, F2; when the own layer re-inserts the name, the lower reference
+      that broke the idiom is the one named).
+    **Completeness assumption.** "Nothing in the supplied fold defines it" proves absence in Classic only when the
+    supplied chain is the whole chain, and the engine cannot prove that: `looksSkeletal` blocks, but `possiblyPartial`
+    (5..149 seed methods) is advisory only, `noParentTemplate: true` disables the no-seed gate reason, and a 150+-method
+    seed can still miss a parent layer. So the demotion keeps the gate open, but the hint never rules F2 out ("no effect
+    in Classic unless the chain is incomplete — confirm the base seed if it is partial"), and when the seed is absent,
+    skeletal or `possiblyPartial` (seed completeness is computed before the fold for this reason) it says outright that
+    the seed may lack the name.
+    **Aliases.** `resolveTarget` treats every record the runtime does not have as absent, so an op on the name falls
+    through to an alias registered in between, as the runtime's literal-name lookup does: the `neverDefined` tombstone a
+    never-defined remove leaves, a real tombstone (`removed`), and an `engineOnlyStub` (a merge onto nothing). The
+    fallback needs a LIVE alias target; without one the literal record is kept, so the move-resurrect idiom (`remove X`
+    → `move X`) lands on its tombstone when no LIVE alias target exists (with one, the move lands on the alias target
+    and X stays removed, matching Classic's lookup across layers). A move that resurrects a tombstone clears `neverDefined` / `noOpRemove`,
+    so the resurrected element is not treated as absent afterwards. Found on BlythecoDev `OpportunityPageV2` (`remove "e"` amid the BANT removes; no layer of 16 nor seed body of
+    26 defines `e`).
+  - **Nested folds ignore `manifest.section` (ENG-100314, F2).** A mini-page, typed-page or child-page fold
+    (`isMiniPage` / `formOnly` / `isChildPage`, one helper `isNestedFold` in designspec.mjs shared with migrate.mjs) is
+    never a section scope — the root run owns the section and its list page. `get-classic-page-sources --schema-name
+    <X>` still writes the module's `section` into the sub-bundle; reading it made the nested run demand an add-record
+    mini page of the sub-page ("its OWN structure is incomplete"). The renderer's `isSectionScope` uses the same helper,
+    so a child sub-bundle carrying `planMeta.sectionSchema` no longer renders a List-page block ("⚠ Section schema not
+    gathered … re-run") inside the child's spec.
   - Measured against real data: 130 schema bodies across 5 real Classic pages contain `insert` 367, `merge` 51, `move` 7, plain `remove` 4, and **zero** `set`, `remove`-with-`properties`, `alias`, `remove`+`move` on one name, or `insert`+`merge` on one name. So the group-ordering, alias, `set` and remove-properties paths are exercised only by goldens, validated against `json-applier.js` rather than against observed pages — and the pre/post differential over that corpus reports no page changed by any of them.
 - Type-name vocabulary. `get-entity-schema-properties` reports clio's OWN readback names, not the engine's tokens and not always a numeric code: `EntitySchemaDesignerSupport.GetFriendlyTypeName` yields `Currency0-3` for the money subtypes, `Decimal0/1/3/4/8` for the decimals, `PhoneNumber` for 42, `RichText` for 43, `WebLink` for 44. Observed on a stand: `Contact.Phone`/`MobilePhone`/`HomePhone` = `PhoneNumber`, `Product`/`Invoice` = `Currency2`, `Invoice` = `Decimal8`. Ten of those twelve names were not keys in `mapper.mjs`, so ordinary money, decimal and phone fields raised the loud `field-control` decision claiming their TYPE was unrecognized — the engine knew the type and only not clio's spelling. `CLIO_TYPE_ALIAS` maps them onto the existing tokens through one shared `normalizeDvt`, used by BOTH the control choice and the reader-facing type label (those two diverged before on the numeric codes). Real effect: `ContactPageV2` loses its only `field-control` decision. Note a stand can also return a bare numeric code for the same column, so both forms must keep working.
 - Classic field-control coverage: the engine's control table is a **Freedom-side** judgement and does NOT equal Classic's own coverage — the earlier comment claiming it did was wrong in both directions. Classic RENDERS two types the engine gives no control (`MAPPING` → `generateMappingEdit`, `STAGE_INDICATOR` → `generateStageIndicator`) and THROWS `UnsupportedTypeException` for five the engine does map (`HASH_TEXT`, `SECURE_TEXT`, `IMAGELOOKUP`, `LOCALIZABLE_STRING`, `METADATA_TEXT`). Because it throws, a working classic page cannot carry such a column as a plain model item at all. `BLOB` is the correct exemplar of "Classic refuses to render it". Also note `getItemDataValueType` (CrtNUI 7.8.0 L1796-1810) gives the item's OWN `dataValueType` precedence OVER the column — an override, not a fallback — and `0` (GUID) is a legal declared value there.
