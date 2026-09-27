@@ -2928,9 +2928,12 @@ function buildCardActionRows(cs) {
   const isNative = (a) => TEMPLATE_CARD_ACTIONS.has(a) && !BUTTON_ONLY_CARD_ACTIONS.has(a);
   // A custom action also carries its name: `hasType("crt.Button")` alone is satisfied by the template's own Actions
   // button, so the name is what tells a built custom action from an unbuilt one.
+  // Every custom hint of the card rides on each custom row as `siblings`, so a text that spells a longer sibling
+  // (`ApproveAllMenuItem` for `approveAll`) is not also credited to the shorter hint it starts with (`approve`).
+  const customs = acts.filter((a) => !isNative(a) && !BUTTON_ONLY_CARD_ACTIONS.has(a)).map((a) => a.replace(/Button$/, ""));
   const rows = acts.filter((a) => !isNative(a))
     .map((a) => ({ label: `Card action — ${esc(a.replace(/Button$/, ""))}`,
-      vk: BUTTON_ONLY_CARD_ACTIONS.has(a) ? { type: "card" } : { type: "card", names: [a.replace(/Button$/, "")] } }));
+      vk: BUTTON_ONLY_CARD_ACTIONS.has(a) ? { type: "card" } : { type: "card", names: [a.replace(/Button$/, "")], siblings: customs } }));
   const natives = acts.filter(isNative);
   if (natives.length) {
     // the template ships these controls under stable element names, so the row is machine-checkable.
@@ -3372,10 +3375,10 @@ function resolveFeatureVk(vk, ctx) {
 // Keyed to the LIST page, so `ctx.entryAbsent` has already answered "nobody showed me that page" (⚠,
 // never ❌) before this runs. Everything reaching here was measured on the page, so a hard ❌ is honest
 // for any template - no guess from the template name needed.
+const isRemove = (o) => String(o.operation || "") === "remove";
 function resolveInheritableFeature(vk, ctx) {
   if (ctx.hasType(vk.ftype)) return ["✅ Done", `found ${vk.ftype}`, "ok"];
   const nameMatches = (o) => o.name === vk.byName || String(o.name || "").startsWith(vk.byName + "_");
-  const isRemove = (o) => String(o.operation || "") === "remove";
   // A page that DROPS the inherited element still reports it as an op keyed by the same NAME, so matching on
   // the name alone called the one shape this row exists to catch "built". `merge`, `insert` and `move` all
   // leave the element in place; `remove` is the only one that takes it away, and it gets its own verdict.
@@ -3409,11 +3412,15 @@ export function resolveComponentVk(vk, ctx) {
 // and digits (`CalculateSaasMetricsMenuItem`, caption "Calculate SaaS metrics", `usr.CalculateSaaSMetricsRequest`
 // all match `calculateSaaSMetrics`). The match must start AND end on a word boundary of the built text, so an
 // element that only contains the name inside a longer word does not close it: "Recalculate SaaS metrics" is not
-// `calculateSaaSMetrics`, `PostData` is `post` but `RepostData` is not. Any crt.Button is not evidence — the
-// template's Actions button is one — so no match reads ⚠ verify, never ✅.
+// `calculateSaaSMetrics`, `PostData` is `post` but `RepostData` is not. When the card also declares a longer hint
+// that starts with this one (`approve` / `approveAll`), a text spelling the longer hint closes only that one. A
+// `remove` op is not evidence. Only ASCII letters and digits are compared, so a Cyrillic or German caption cannot
+// close the row — the element name or `clicked.request` must carry the action name. Any crt.Button is not evidence —
+// the template's Actions button is one — so no match reads ⚠ verify, never ✅.
 function customActionTexts(o, resources) {
-  const texts = [o.name, o.caption, o.request];
-  if (o.caption != null) texts.push(builtCaption(o.caption, resources));
+  const caption = opCaption(o);
+  const texts = [o.name, caption, opRequest(o)];
+  if (caption != null) texts.push(builtCaption(caption, resources));
   return texts.filter((t) => typeof t === "string" && t !== "");
 }
 // The text as `normId` sees it, plus the offsets in it where a word starts or ends: after a separator, at a
@@ -3439,23 +3446,30 @@ function wordBounds(text) {
   bounds.add(norm.length);
   return { norm, bounds };
 }
-function containsAsWords(text, key) {
+// `key` occurs in the text starting and ending on word boundaries, and that occurrence is not the start of a longer
+// sibling key that also ends on a boundary there: with hints `approve` and `approveAll`, `ApproveAllMenuItem` spells
+// `approveAll` only.
+function containsAsWords(text, key, longer = []) {
   const { norm, bounds } = wordBounds(text);
   for (let i = norm.indexOf(key); i !== -1; i = norm.indexOf(key, i + 1)) {
-    if (bounds.has(i) && bounds.has(i + key.length)) return true;
+    if (!bounds.has(i) || !bounds.has(i + key.length)) continue;
+    if (!longer.some((k) => norm.startsWith(k, i) && bounds.has(i + k.length))) return true;
   }
   return false;
 }
-function builtElementNamesAction(texts, name) {
+function builtElementNamesAction(texts, name, siblings = []) {
   const key = normId(name);
-  return key !== "" && texts.some((t) => containsAsWords(t, key));
+  if (key === "") return false;
+  const longer = siblings.map(normId).filter((k) => k.length > key.length && k.startsWith(key));
+  return texts.some((t) => containsAsWords(t, key, longer));
 }
 function resolveCustomCardActionVk(vk, ctx) {
   const resources = entryObject(ctx.page)?.resources;
-  const builtTexts = ctx.ops.map((o) => customActionTexts(o, resources));
-  const missing = vk.names.filter((n) => !builtTexts.some((texts) => builtElementNamesAction(texts, n)));
+  // A removed element is evidence the action is absent, never that it is built.
+  const builtTexts = ctx.ops.filter((o) => !isRemove(o)).map((o) => customActionTexts(o, resources));
+  const missing = vk.names.filter((n) => !builtTexts.some((texts) => builtElementNamesAction(texts, n, vk.siblings)));
   if (!missing.length) return ["✅ Done", `an element named or captioned for ${vk.names.map(esc).join(", ")} is present — confirm it triggers the action`, "ok"];
-  return ["⚠ verify", `no built element's name, caption or request contains ${missing.map(esc).join(", ")} — name the element (or its caption) after the action, or confirm it is built`, "unverified"];
+  return ["⚠ verify", `no built element's name, caption or request contains ${missing.map(esc).join(", ")} — name the element or its \`clicked.request\` after the action (a caption counts only in ASCII letters, so a localized one cannot match), or confirm it is built`, "unverified"];
 }
 // BUSINESS RULES. A page's declarative rules do NOT live in its body: each persists as a separate
 // BusinessRule_* schema, invisible to `viewConfig`, so the row's evidence is `--built.pages[<key>].businessRules` —
@@ -4136,6 +4150,11 @@ export function boundAttributeOf(node) {
   const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
   return m ? m[1] : attr;
 }
+// A node's caption and `clicked.request`, under every shape the op list carries: flat on a walked node, under
+// `values` on a diff op. The same readers serve the walk and the raw `ops` payload, so both paths match alike.
+const firstString = (...vs) => vs.find((v) => typeof v === "string");
+function opCaption(o) { return firstString(o.caption, o.values?.caption); }
+function opRequest(o) { return firstString(o.request, o.clicked?.request, o.values?.clicked?.request); }
 // One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
 // component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,
 // never the children array); a FIELD keeps `bound` (the column identity the fields row reads). Extracted so
@@ -4145,8 +4164,8 @@ function pushWalkNode(node, out) {
   const bound = [node.items, node.values?.items].find((v) => typeof v === "string");
   const attr = boundAttributeOf(node);
   // `caption` and `clicked.request` identify a menu item whose element name does not spell its action.
-  const caption = [node.caption, node.values?.caption].find((v) => typeof v === "string");
-  const request = [node.clicked?.request, node.values?.clicked?.request].find((v) => typeof v === "string");
+  const caption = opCaption(node);
+  const request = opRequest(node);
   out.push({ name: node.name, type: node.type, ...(cols ? { columns: cols } : {}), ...(bound ? { items: bound } : {}), ...(attr ? { bound: attr } : {}),
     ...(caption ? { caption } : {}), ...(request ? { request } : {}) });
 }

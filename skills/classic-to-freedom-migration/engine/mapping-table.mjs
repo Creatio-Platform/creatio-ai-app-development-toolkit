@@ -346,6 +346,9 @@ const FEATURE_ROWS = [
 // bound ENTITY says what it is. They are rows, not `if`s, so they resolve through the same table and are visible
 // to the same registry check. `*File` is a PREDICATE, not an equality test — hardcoding it as one is how an
 // `ApplicantFile` detail stopped being Attachments.
+// Columns only a `BaseVisa` descendant carries: who approves, what for, and whether the approval was withdrawn.
+const VISA_COLUMNS = new Set(["VisaOwner", "Objective", "IsCanceled"]);
+const hasVisaShape = (columns) => !Array.isArray(columns) || columns.length === 0 || columns.some((c) => VISA_COLUMNS.has(typeof c === "string" ? c : c?.name));
 const FEATURE_ENTITY_ROWS = [
   row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v) => typeof v === "string" && v.endsWith("File") } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
@@ -356,8 +359,13 @@ const FEATURE_ENTITY_ROWS = [
   // correctly ships a `crt.ApprovalList` — so the row can never close on a correct page. The entity must be exactly
   // `<detailColumn>Visa` (`UsrContractVisa` keyed by `UsrContract`): a `Visa` suffix alone also names business lists
   // such as an employee's travel visas, which must stay related lists rather than gate two approval components.
+  // Standard FK naming gives a travel-visa list the same shape (`UsrEmployeeVisa` keyed by `UsrEmployee`), so when
+  // the detail's own schema was read (`columns` non-empty) it must also show an approval column; a detail whose
+  // columns are all business columns stays a related list. Without columns the match stays an inference, and the
+  // plan asks the user to confirm it.
   row({ match: { by: MATCH.ENTITY, entity: "*", qualifiers: { entity: (v, c) => typeof v === "string"
-      && typeof c?.detailColumn === "string" && c.detailColumn !== "" && v === `${c.detailColumn}Visa` } },
+      && typeof c?.detailColumn === "string" && c.detailColumn !== "" && v === `${c.detailColumn}Visa`
+      && hasVisaShape(c.columns) } },
     role: ROLE.STRUCT, tier: TIER.AUTO, ownedBy: OWNER.DETAIL, uiShape: "component",
     verify: { componentType: "crt.ApprovalList" },
     meta: { feature: "Approvals", freedom: "Freedom Approvals = TWO components (approval module + approval list)", templateProvided: false, uiShape: "component", byEntity: true } }),
@@ -488,8 +496,9 @@ export function rowForItem(item) {
 // against a table that HAS two overlapping suffixes, and today's rows do not overlap — so a check written against
 // the live table would pass whichever way the sort ran.
 // `detailColumn` is the detail's FK to the master; the `*Visa` entity row needs it to tell an approvals detail from a
-// business list whose entity name merely ends in `Visa`.
-export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS, detailColumn = null } = {}) {
+// business list whose entity name merely ends in `Visa`, and `columns` (the detail schema's bound columns, when it was
+// read) to tell it from a list whose entity name also matches that shape.
+export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_ROWS, detailColumn = null, columns = null } = {}) {
   const suffixRows = rows.filter((r) => r.match.by === MATCH.SCHEMA_SUFFIX);
   if (schemaName) {
     const exact = suffixRows.find((r) => r.match.schemaNameSuffix === schemaName);
@@ -502,7 +511,7 @@ export function resolveFeatureRow(schemaName, entity = null, { rows = MAPPING_RO
     const byEntity = rows.filter((r) => r.match.by === MATCH.ENTITY);
     const exact = byEntity.find((r) => r.match.entity === entity && !r.match.qualifiers);
     if (exact) return exact;
-    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity, detailColumn }));
+    const pred = byEntity.find((r) => r.match.qualifiers && qualifiersMatch(r.match.qualifiers, { entity, detailColumn, columns }));
     if (pred) return pred;
   }
   return null;

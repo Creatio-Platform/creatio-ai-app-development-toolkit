@@ -207,11 +207,41 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
     // The name must sit on word boundaries: a verb-prefixed neighbour ("Recalculate SaaS metrics") is another action.
     const lookalikes = [{ name: "RecalculateSaaSMetricsMenuItem" }, { name: "MenuItem_other", caption: "Recalculate SaaS Metrics" },
-      { name: "MenuItem_other", clicked: { request: "usr.RecalculateSaaSMetricsRequest" } }, { name: "CalculateSaaSMetricsDailyMenuItem" }];
+      { name: "MenuItem_other", clicked: { request: "usr.RecalculateSaaSMetricsRequest" } }];
     check("card: an element whose name, caption or request only contains the action name inside a longer word does not close it",
-      () => st(resolveVk(custom, builtWith(lookalikes[0]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[1]))) === "⚠ verify"
-        && st(resolveVk(custom, builtWith(lookalikes[2]))) === "⚠ verify" && st(resolveVk(custom, builtWith(lookalikes[3]))) === "✅ Done",
+      () => lookalikes.every((v) => st(resolveVk(custom, builtWith(v))) === "⚠ verify"),
       () => lookalikes.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    check("card: a whole-word match followed by more words closes the action when none of the card's other hints starts with this one (`CalculateSaaSMetricsDailyMenuItem` for `calculateSaaSMetrics`)",
+      () => st(resolveVk(custom, builtWith({ name: "CalculateSaaSMetricsDailyMenuItem" }))) === "✅ Done",
+      () => resolveVk(custom, builtWith({ name: "CalculateSaaSMetricsDailyMenuItem" })));
+    // Sibling hints: a text that spells the longer hint closes only that one.
+    const pair = checklistGroups({ entity: "X", changeSet: { cardActions: ["approve", "approveAll"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action — "));
+    const approve = pair.find((r) => r.label === "Card action — approve")?.vk;
+    const approveAll = pair.find((r) => r.label === "Card action — approveAll")?.vk;
+    const onlyAll = [{ name: "ApproveAllMenuItem" }, { name: "MenuItem_x", caption: "Approve all" }, { name: "MenuItem_x", clicked: { request: "usr.ApproveAllRequest" } }];
+    check("card: with sibling hints `approve` / `approveAll`, an element built only for `approveAll` (by name, caption or request) closes `approveAll` and leaves `approve` ⚠ verify",
+      () => approve?.siblings?.includes("approveAll") && onlyAll.every((v) => st(resolveVk(approveAll, builtWith(v))) === "✅ Done"
+        && st(resolveVk(approve, builtWith(v))) === "⚠ verify") && /approve/.test(ev(resolveVk(approve, builtWith(onlyAll[0])))),
+      () => onlyAll.map((v) => [v, resolveVk(approve, builtWith(v)), resolveVk(approveAll, builtWith(v))]));
+    const bothBuilt = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", name: "ApproveMenuItem" }, { type: "crt.MenuItem", name: "ApproveAllMenuItem" }] }] } } } }, "main");
+    check("card: with sibling hints `approve` / `approveAll`, a page carrying an element for each closes both",
+      () => st(resolveVk(approve, bothBuilt)) === "✅ Done" && st(resolveVk(approveAll, bothBuilt)) === "✅ Done",
+      () => [resolveVk(approve, bothBuilt), resolveVk(approveAll, bothBuilt)]);
+    // The raw `ops` payload (no viewConfig): caption and request under `values`, and a `remove` op is not evidence.
+    const opsPage = (ops) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", ops } } }, "main");
+    const opsDone = [
+      [{ operation: "insert", name: "MenuItem_calc", values: { type: "crt.MenuItem", caption: "Calculate SaaS metrics" } }],
+      [{ operation: "insert", name: "MenuItem_calc", values: { type: "crt.MenuItem", clicked: { request: "usr.CalculateSaaSMetricsRequest" } } }],
+      [{ operation: "insert", name: "CalculateSaaSMetricsMenuItem", type: "crt.MenuItem" }],
+    ];
+    check("card (ops payload): a caption in `values`, a request in `values.clicked` or a plain named crt.MenuItem op closes the custom action",
+      () => opsDone.every((ops) => st(resolveVk(custom, opsPage(ops))) === "✅ Done"),
+      () => opsDone.map((ops) => resolveVk(custom, opsPage(ops))));
+    const removed = opsPage([{ operation: "remove", name: "CalculateSaaSMetricsMenuItem" }]);
+    check("card (ops payload): a `remove` op named for the action does not close it",
+      () => st(resolveVk(custom, removed)) === "⚠ verify", () => resolveVk(custom, removed));
     const short = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
       .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
     check("card: a short action name (`post`) closes on a whole word (`PostMenuItem`, caption \"Post\") but not inside another (`RepostMenuItem`, `PostponeMenuItem`)",

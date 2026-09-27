@@ -1120,9 +1120,14 @@ const visaPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "Form
 const visaBuilt = visaPage([{ type: "crt.Approval", name: "AW" }, { type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
 const visaAsGrid = visaPage([{ type: "crt.DataGrid", name: "VisasGrid" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
 check("*Visa-entity detail: every Approvals / Related-lists row closes ✅ on a page with crt.Approval + crt.ApprovalList + one grid; the Approvals rows read ❌ when the visas ship as a crt.DataGrid",
-  visaRows.length === 3 && visaRows.every(r => resolveVk(r.vk, visaBuilt)[0] === "✅ Done")
+  visaRows.map(r => r.label).join(" | ") === "Related lists — 1 expected | Approvals (`crt.ApprovalList`) | Approvals — second required component (`crt.Approval`)"
+  && visaRows.every(r => resolveVk(r.vk, visaBuilt)[0] === "✅ Done")
   && visaRows.filter(r => r.label.startsWith("Approvals")).every(r => resolveVk(r.vk, visaAsGrid)[0] === "❌ MISSING"),
   () => visaRows.map(r => [r.label, resolveVk(r.vk, visaBuilt), resolveVk(r.vk, visaAsGrid)]));
+const visaListOnly = visaPage([{ type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
+check("*Visa-entity detail: a page that ships only crt.ApprovalList closes the approval-list and Related-lists rows, and the crt.Approval row reads ❌ MISSING",
+  visaRows.every(r => resolveVk(r.vk, visaListOnly)[0] === (r.vk.ftype === "crt.Approval" ? "❌ MISSING" : "✅ Done")),
+  () => visaRows.map(r => [r.label, resolveVk(r.vk, visaListOnly)]));
 
 /* ---- an entity that only ends in `Visa` (a business list of travel visas keyed by another column) stays a related list ---- */
 const bizVisaClient = L("Client", { entity: "X", details: {
@@ -1133,6 +1138,22 @@ const bizVisacs = mapToFreedom(mergeHierarchy([bizVisaClient]));
 check("an entity ending in `Visa` that is not `<detailColumn>Visa` stays a related list — no Approvals row, no crt.Approval gate",
   !bizVisacs.standardFeatures.some(s => s.feature === "Approvals") && bizVisacs.details.some(d => d.entity === "UsrEmployeeVisa"),
   () => ({ features: bizVisacs.standardFeatures.map(s => s.feature), details: bizVisacs.details.map(d => d.entity) }));
+/* ---- `<detailColumn>Visa` is Approvals only when the detail's read columns carry an approval column ---- */
+const employeeVisaClient = L("Client", { entity: "X", details: {
+    Visas: { schemaName: "Schema9Detail", entitySchemaName: "UsrEmployeeVisa", detailColumn: "UsrEmployee", masterColumn: "Id" } },
+  diff: [di({ name: "Tv", parentName: "Tabs", propertyName: "tabs", isTab: true, caption: "Resources.Strings.Tv" }),
+         di({ name: "Visas", parentName: "Tv", propertyName: "items", itemType: 2 })] });
+const employeeVisacs = mapToFreedom(mergeHierarchy([employeeVisaClient]),
+  { detailSchemas: { Schema9Detail: { entity: "UsrEmployeeVisa", columns: ["UsrCountry", "UsrVisaType", "UsrValidTo"], title: "Visas" } } });
+check("`UsrEmployeeVisa` keyed by `UsrEmployee` whose read columns are all business columns stays a related list — no Approvals row, no crt.Approval gate",
+  !employeeVisacs.standardFeatures.some(s => s.feature === "Approvals") && employeeVisacs.details.some(d => d.entity === "UsrEmployeeVisa")
+  && !/crt\.Approval/.test(renderChecklist({ entity: "X", changeSet: employeeVisacs }, {})),
+  () => ({ features: employeeVisacs.standardFeatures.map(s => s.feature), details: employeeVisacs.details.map(d => d.entity) }));
+const approvalColsVisacs = mapToFreedom(mergeHierarchy([visaClient]),
+  { detailSchemas: { Schema7Detail: { entity: "UsrContractVisa", columns: ["VisaOwner", "Objective", "Status"], title: "Approvals" } } });
+check("`UsrContractVisa` keyed by `UsrContract` whose read columns carry an approval column (`VisaOwner`) is Approvals",
+  approvalColsVisacs.standardFeatures.some(s => s.feature === "Approvals") && !approvalColsVisacs.details.some(d => d.entity === "UsrContractVisa"),
+  () => ({ features: approvalColsVisacs.standardFeatures.map(s => s.feature), details: approvalColsVisacs.details.map(d => d.entity) }));
 
 /* ---- ContactCommunication → the native Communication-options component (NOT a plain grid), inferred by entity ---- */
 const commClient = L("Client", { entity: "X", details: {
@@ -3177,6 +3198,9 @@ check("feature resolution is exact-name first, then longest suffix, then the ENT
   && resolveFeatureRow("Schema7Detail", "UsrContractVisa") === null
   && resolveFeatureRow("Schema9Detail", "UsrEmployeeVisa", { detailColumn: "UsrEmployee2" }) === null
   && resolveFeatureRow("Schema7Detail", "UsrVisaReason", { detailColumn: "UsrVisa" }) === null
+  && resolveFeatureRow("Schema9Detail", "UsrEmployeeVisa", { detailColumn: "UsrEmployee", columns: ["UsrCountry", "UsrValidTo"] }) === null
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract", columns: ["Objective"] })?.meta.feature === "Approvals"
+  && resolveFeatureRow("Schema7Detail", "UsrContractVisa", { detailColumn: "UsrContract", columns: [] })?.meta.feature === "Approvals"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.feature === "Attachments"
   && resolveFeatureRow("Schema9Detail", "ApplicantFile")?.meta.byEntity === true
   && resolveFeatureRow("FileDetailV2")?.meta.byEntity !== true,
