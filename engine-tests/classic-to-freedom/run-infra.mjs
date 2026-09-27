@@ -3,7 +3,7 @@
 // glob→regex matcher in scripts/check-sonar-exclusions.mjs. These give a deterministic, network-free way to
 // tell "my parser is wrong" from "npm is unreachable" / "the glob is stale". Zero dependencies (node built-ins).
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, rmSync, readdirSync, statSync, unlinkSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +16,7 @@ import { vendoredIndex } from "../../skills/classic-to-freedom-migration/engine/
 import { toRegex, baseDir } from "../../scripts/check-sonar-exclusions.mjs";
 import { stripImports, buildManifest } from "../../scripts/build-workflows.mjs";
 import { spawnSync } from "node:child_process";
+import * as diag from "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs";
 
 // git is spawned by absolute path, never by bare name: a writable directory earlier on PATH
 // could otherwise shadow it (Sonar S4036). These are the stock install locations on the CI
@@ -937,6 +938,59 @@ check("doc lint (AC4): step 7 does not instruct the caller to hand tasks out in 
   check("doc lint: every exit-2 verdict the engine can print has an entry in step 8's dictionary — including the halted run, whose remedy is a decision rather than a command",
     () => exit2Verdicts.every((v) => dictLine.includes(v)),
     () => ({ missing: exit2Verdicts.filter((v) => !dictLine.includes(v)) }));
+}
+
+console.log("\n===== run diagnostics (offline, injected runner) =====");
+{
+  // A stubbed runner stands in for clio and git, so every branch is exercised without a network or a clio install.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "diag-"));
+  const settings = path.join(tmp, "appsettings.json");
+  writeFileSync(settings, JSON.stringify({ Environments: { Demo: { Uri: "https://demo.example", Password: "secret" } } }));
+  const clioInfo = `[INF] - clio:   8.1.0.134\n[INF] - gate:   2.0.0.53\n[INF] - settings file path: ${settings}\n`;
+  const stand = "[WAR] - cliogate is not installed\n" + JSON.stringify({ coreVersion: "10.0.0.858", dbEngineType: "PostgreSql",
+    frameworkDescription: ".NET Framework 4.8", user: { displayValue: "Supervisor" }, userAccount: { displayValue: "Our company" } });
+  const runner = (over = {}) => (cmd, args) => {
+    const key = `${cmd} ${args.filter((a) => !a.startsWith("/") && !/^[A-Z]:/.test(a)).join(" ")}`;
+    if (key in over) return over[key];
+    if (key === "clio info") return { ok: true, out: clioInfo };
+    if (key.startsWith("clio get-info")) return { ok: true, out: stand };
+    if (key === "git -C rev-parse --abbrev-ref HEAD") return { ok: true, out: "feature/x\n" };
+    if (key === "git -C rev-parse --short HEAD") return { ok: true, out: "abc1234\n" };
+    return { ok: false, out: "" };
+  };
+  const root = path.join(tmp, "plugin");
+  const mk = (rel, content) => { const f = path.join(root, rel); mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, content); };
+  mk(".codex-plugin/plugin.json", JSON.stringify({ version: "1.12.0" }));
+  const out = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: the skill version is read from the first plugin.json present, and a non-git install prints no branch/commit (it is not an error)",
+    () => out.includes("classic-to-freedom-migration `1.12.0`\n") && !/branch|commit/.test(out.split("\n")[2]), () => out);
+  check("diagnostics: clio and bundled cliogate versions come from `clio info`", () => out.includes("`8.1.0.134` (CLI on PATH) · bundled cliogate `2.0.0.53`"), () => out);
+  check("diagnostics: the stand URL is looked up case-insensitively in the clio settings file, and nothing else from that entry is printed",
+    () => out.includes("`demo` · `https://demo.example`") && !out.includes("secret"), () => out);
+  check("diagnostics: the stand line carries version, DB and framework, a missing product reads `unknown (cliogate not installed)`, and the session's user/account never appear",
+    () => out.includes("Creatio `10.0.0.858` · product unknown (cliogate not installed) · DB `PostgreSql` · `.NET Framework 4.8`")
+      && !/Supervisor|Our company/.test(out), () => out);
+  mkdirSync(path.join(root, ".git"), { recursive: true });
+  const withGit = diag.render(diag.collect({ environment: "demo", root, run: runner() }));
+  check("diagnostics: a git checkout adds its branch and short commit", () => withGit.includes("`1.12.0` · branch `feature/x` · commit `abc1234`"), () => withGit);
+  const detached = diag.render(diag.collect({ environment: "demo", root, run: runner({ "git -C rev-parse --abbrev-ref HEAD": { ok: true, out: "HEAD\n" } }) }));
+  check("diagnostics: a detached checkout says so instead of printing the literal `HEAD` as a branch", () => detached.includes("branch detached · commit `abc1234`"), () => detached);
+  const down = diag.render(diag.collect({ environment: "demo", root, run: runner({ "clio get-info -e demo": { ok: false, out: "[ERR] - Could not connect to the Creatio application at 'https://demo.example'." } }) }));
+  check("diagnostics: an unreachable stand is `unknown (<clio's reason>)`, and the other lines are still filled",
+    () => down.includes("- **Stand:** unknown (Could not connect to the Creatio application at 'https://demo.example'.)") && down.includes("`8.1.0.134`"), () => down);
+  const noClio = diag.render(diag.collect({ environment: "demo", root, run: () => ({ ok: false, error: "clio not found on PATH" }) }));
+  check("diagnostics: with no clio every clio-derived value names that reason instead of failing",
+    () => noClio.includes("**clio:** unknown (clio not found on PATH)") && noClio.includes("**Stand:** unknown (clio not found on PATH)"), () => noClio);
+  const bare = diag.render(diag.collect({ root: tmp, run: runner() }));
+  check("diagnostics: no plugin.json and no --environment still render a block, each gap with its reason",
+    () => bare.includes("unknown (no plugin.json beside the skill)") && bare.includes("unknown (no --environment given)") && !bare.includes("**Stand:**"), () => bare);
+  check("diagnostics: the CLI entry point exits 0 and prints the block even when nothing can be read",
+    () => {
+      const r = spawnSync(process.execPath, [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../skills/classic-to-freedom-migration/engine/diagnostics.mjs")],
+        { encoding: "utf8", env: { PATH: "" } });
+      return r.status === 0 && r.stdout.startsWith("### Run diagnostics") && r.stdout.includes("unknown (clio not found on PATH)");
+    });
+  rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n=================\nINFRA GOLDEN: ${pass} passed, ${fail} failed`);

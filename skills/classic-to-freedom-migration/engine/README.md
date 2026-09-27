@@ -464,6 +464,7 @@ span, passthrough-vs-real, assigned-from-another-module) — the parser still ne
 - `assemble.mjs` — `--verify --from`: opens the files `reads/index.json` names and composes the `--built` payload out of them, writing `built.json` beside the run. Reports what it could not read; never fills a gap in.
 - `tasks.mjs` — `--tasks`: the same checklist rows cut into one file per task plus a derived index, and the merge that keeps a caller's recorded `status` and notes across a re-slice. No rendering of its own beyond those two files.
 - `migrate.mjs` — CLI driver.
+- `diagnostics.mjs` — `node diagnostics.mjs --environment <name>`: the `### Run diagnostics` block SKILL.md step 1.2a prints before any discovery — skill version (`plugin.json`, plus git branch/commit when the install is a checkout), clio version (`clio info`), stand URL/Creatio version/product/DB/framework (`clio get-info`, 20 s limit). Every unreadable value is `unknown (<reason>)`; it always exits 0 and never prints the session's user or account.
 
 ## Tests & internals
 
