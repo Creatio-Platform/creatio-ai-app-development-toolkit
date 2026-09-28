@@ -21,6 +21,10 @@ import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
+// A manifest piped to `migrate.mjs -` resolves its schema `file`s against the CWD, and a path outside it is
+// refused as traversal. `npm test` runs this file from the engine dir, where every fixture path is outside the
+// cwd, so the stdin goldens depend on where the runner is started from. Pin the cwd so every invocation agrees.
+process.chdir(DIR);
 const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
@@ -904,6 +908,33 @@ check("migrate.mjs CLI: trailing --out (no path) exits 1 with a clear diagnostic
 const migOutFlag = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--out", "--plan"], { input: okManifest, encoding: "utf8" });
 check("migrate.mjs CLI: --out followed by a flag (--plan) exits 1 — does not swallow the flag as a filename",
   migOutFlag.status === 1 && /--out/.test(migOutFlag.stderr || ""));
+// On macOS fd 0 is non-blocking once `process.stdin.isTTY` has been read, so a piped manifest over ~64 KB is
+// not fully available at the first read (EAGAIN). A ≥ 256 KB manifest on stdin must give the SAME stdout + exit
+// code as that manifest read from a file. The padding is multi-byte (Cyrillic) so a char split across two read chunks is exercised too.
+// `timeout` is the hang guard: a read loop that never sees EOF fails the check instead of stalling the run.
+{
+  const pad = "й".repeat(200 * 1024);
+  // `entity` goes AFTER the padded body, so it only reaches stdout when the read got past the padding.
+  const bigManifest = JSON.stringify({ schemas: [{ pkg: "P", body: `define("P",[],function(){/* ${pad} */return{entitySchemaName:"X",diff:[]};});` }], entity: "BigStdinEntity" });
+  const bigPath = path.join(os.tmpdir(), `c2f_big_manifest_${process.pid}.json`);
+  fs.writeFileSync(bigPath, bigManifest, "utf8");
+  try {
+    const viaStdin = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: bigManifest, encoding: "utf8", timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    const viaFile = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), bigPath], { encoding: "utf8", timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+    check("migrate.mjs CLI: a ≥ 256 KB manifest piped to stdin is read in full — same exit code and stdout as the same manifest from a file",
+      Buffer.byteLength(bigManifest) >= 256 * 1024 && !/cannot read manifest/.test(viaStdin.stderr || "") && viaStdin.status === viaFile.status
+        && viaStdin.stdout === viaFile.stdout && viaStdin.stdout.includes('"entity": "BigStdinEntity"'),
+      () => ({ stdinStatus: viaStdin.status, fileStatus: viaFile.status, stdinErr: (viaStdin.stderr || "").slice(0, 200), sameStdout: viaStdin.stdout === viaFile.stdout }));
+  } finally { fs.rmSync(bigPath, { force: true }); }
+}
+const migEmpty = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "", encoding: "utf8", timeout: 30000 });
+check("migrate.mjs CLI: empty stdin exits 1 with the manifest-JSON diagnostic — EOF ends the read, no hang",
+  migEmpty.status === 1 && /manifest is not valid JSON/.test(migEmpty.stderr || "") && (migEmpty.stdout || "").trim() === "",
+  () => ({ status: migEmpty.status, signal: migEmpty.signal, stderr: (migEmpty.stderr || "").slice(0, 160) }));
+const migNotJson = spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-"], { input: "not json", encoding: "utf8", timeout: 30000 });
+check("migrate.mjs CLI: `not json` on stdin exits 1 with `manifest is not valid JSON`",
+  migNotJson.status === 1 && /manifest is not valid JSON/.test(migNotJson.stderr || ""),
+  () => ({ status: migNotJson.status, stderr: (migNotJson.stderr || "").slice(0, 160) }));
 
 /* ---- gate coverage: a syntactically BROKEN schema body must propagate parseErrors -> gate.blocked -> exit 2,
    so a corrupt plan can NEVER read as gate-clean (this guards parseSchema error-propagation: a broken
@@ -6099,8 +6130,14 @@ check("F2 dashboards verify: a non-V3 template gets the SAME ⚠ for the same mi
      the unrelated `TestPkg`) — so the agent reports it stand-only and silently drops delivery. ---- */
 const SKILL_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration");
 const flatten = (p) => fs.readFileSync(p, "utf8").replace(/\s+/g, " ");
-const skillFlat = flatten(path.join(SKILL_DIR, "SKILL.md"));
-const mappingFlat = flatten(path.join(SKILL_DIR, "references", "classic-to-freedom-mapping.md"));
+const MAPPING_REF = "classic-to-freedom-mapping.md";
+// "The skill" is SKILL.md plus the procedure references it hands out by reader (the dashboards brief, the
+// conditional manifest inputs, the orchestration reference) — every reference except the mapping one, which is
+// the other side of the one-owner rule below.
+const skillFlat = [path.join(SKILL_DIR, "SKILL.md"),
+  ...fs.readdirSync(path.join(SKILL_DIR, "references")).filter((f) => f.endsWith(".md") && f !== MAPPING_REF).sort()
+    .map((f) => path.join(SKILL_DIR, "references", f))].map(flatten).join(" ");
+const mappingFlat = flatten(path.join(SKILL_DIR, "references", MAPPING_REF));
 // One fact, one owner. The trap and its recipe are PROCEDURE, so they live in the skill that executes them;
 // the reference names the parameter and points there. Requiring BOTH documents to carry it, as this pair of
 // goldens would, locks the duplication in place - a reader then has two copies to keep in step, and the
@@ -8584,6 +8621,122 @@ check("F4/D3: a one-key JSON object closes the unresolved child's STRUCTURAL row
   && checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).find((r) => r.vk?.id === "child:U1#childpage").vk.requires.join("+") === "referencePage+components",
   () => ({ junk: pgJunkNoEvidence.pages["child:U1"], withEv: pgJunkWithEvidence.pages["child:U1"],
     ids: checklistGroups(pgRun, pgOpts).flatMap((g) => g.rows).filter((r) => r.vk?.type === "evidence" && r.pageKey === "child:U1").map((r) => r.vk) }));
+
+/* ---- `get-page`'s merged `bundle.viewConfig` nests components under MORE than `items` — `crt.Button`
+   holds its `crt.MenuItem`s in `menuItems`, panels their header buttons in `tools`, grids their actions in
+   `bulkActions` / `rowToolbarItems`. The walk descends into every one of these slots, so a built `ReloadDataMenuItem`
+   under a card's `menuItems` counts as a `crt.MenuItem` rather than reading as "missing: ReloadData". Asserted on the
+   RENDERED count the `childpage` row prints ("N component(s) returned by get-page"), which is the walk's length,
+   and on the ops a name-matching resolver reads. ---- */
+{
+  const cardMenu = { viewConfig: { items: [{ name: "CardToolsContainer", type: "crt.FlexContainer", items: [
+    { name: "ActionButton", type: "crt.Button", menuItems: [
+      { name: "ReloadDataMenuItem", type: "crt.MenuItem" },
+      { name: "ViewOptionsMenuItem", type: "crt.MenuItem", menuItems: [{ name: "TagMenuItem", type: "crt.MenuItem" }] },
+    ] },
+  ] }] } };
+  const menuOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": cardMenu }, ...U1_EVIDENCE });
+  const menuNames = verifyCtx({ pages: { main: cardMenu } }, "main").ops.map((o) => o.name);
+  check("the native card-action menu items under a crt.Button's `menuItems` (nested too) are flattened — ReloadData/ViewOptions/Tag are on the built page and the rendered count includes them",
+    /page built — 5 component\(s\) returned by get-page/.test(menuOut.markdown)
+    && ["ReloadDataMenuItem", "ViewOptionsMenuItem", "TagMenuItem"].every((n) => menuNames.includes(n))
+    && verifyCtx({ pages: { main: cardMenu } }, "main").typeCount("crt.MenuItem") === 3,
+    () => ({ names: menuNames, row: menuOut.markdown.split("\n").filter((l) => /child:U1/.test(l)).map((l) => l.slice(-160)) }));
+  // `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` reach the walk as well, and
+  // grid `columns` stay OUT of it — a column carrying a `name` is DATA read by the list-column resolver on its own,
+  // never a component (it would otherwise pad the counts and let a column named like a field close the fields row).
+  const nested = { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "PanelAddButton", type: "crt.Button" }], items: [
+      { name: "Grid", type: "crt.DataGrid",
+        columns: [{ code: "PDS_Name", name: "Name", caption: "Name" }, { code: "PDS_Owner", name: "Owner" }],
+        bulkActions: [{ name: "BulkDelete", type: "crt.MenuItem" }],
+        rowToolbarItems: [{ name: "RowOpen", type: "crt.MenuItem" }],
+        headerToolbarItems: [{ name: "GridExport", type: "crt.Button" }] },
+      { name: "Lookup", type: "crt.ComboBox", listActions: [{ name: "AddNewRecord", type: "crt.ComboboxAction" }] },
+    ] },
+  ] } };
+  const nestedCtx = verifyCtx({ pages: { main: nested } }, "main");
+  const nestedNames = nestedCtx.ops.map((o) => o.name);
+  const nestedOut = renderVerify(pgRun, pgOpts, { pages: { main: pgFullMain, "child:U1": nested }, ...U1_EVIDENCE });
+  check("components under `tools` / `bulkActions` / `rowToolbarItems` / `headerToolbarItems` / `listActions` are flattened exactly once; grid `columns` are NOT",
+    ["PanelAddButton", "BulkDelete", "RowOpen", "GridExport", "AddNewRecord"].every((n) => nestedNames.includes(n))
+    && !nestedNames.includes("Name") && !nestedNames.includes("Owner")
+    && nestedNames.length === 8 && new Set(nestedNames).size === 8
+    && /page built — 8 component\(s\) returned by get-page/.test(nestedOut.markdown)
+    /* the columns are still read — by their own resolver, off the grid node */
+    && [...nestedCtx.gridColumns.codes].sort().join(",") === "PDS_Name,PDS_Owner",
+    () => ({ names: nestedNames, cols: [...nestedCtx.gridColumns.codes] }));
+  // The action slots the component contracts declare for child view elements really reach the walk — FeedItem's item menu, a ComboBox's inline control
+  // actions, a rich-text editor's clip menu, a list widget's header menu, the communication options' row menu and a
+  // message editor's toolbar/input slots.
+  const actionSlots = { viewConfig: { items: [
+    { name: "Feed", type: "crt.FeedItem", itemActionItems: [{ name: "FeedEdit", type: "crt.MenuItem" }, { name: "FeedDelete", type: "crt.MenuItem" }] },
+    { name: "Owner", type: "crt.ComboBox", controlActions: [{ name: "OwnerGoTo", type: "crt.MenuItem" }] },
+    { name: "Notes", type: "crt.RichTextEditor", attachmentMenuItems: [{ name: "NotesAttach", type: "crt.MenuItem" }] },
+    { name: "Widget", type: "crt.ListWidget", widgetToolbarItems: [{ name: "WidgetExport", type: "crt.MenuItem" }] },
+    { name: "Comm", type: "crt.CommunicationOptions", optionActions: [{ name: "CommCall", type: "crt.MenuItem" }] },
+    { name: "Body", type: "crt.MessageEditorBody", toolbarItems: [{ name: "AttachFileButton", type: "crt.Button" }],
+      inputs: [{ name: "BodyInput", type: "crt.MessageEditorInput" }] },
+    { name: "Pipeline", type: "crt.FullPipelineWidget", toolbarMenuItems: [{ name: "PipelineRefresh", type: "crt.MenuItem" }] },
+  ] } };
+  const slotCtx = verifyCtx({ pages: { main: actionSlots } }, "main");
+  const slotNames = slotCtx.ops.map((o) => o.name);
+  check("components under `itemActionItems` / `controlActions` / `attachmentMenuItems` / `widgetToolbarItems` / `optionActions` / `toolbarItems` / `inputs` / `toolbarMenuItems` are flattened exactly once",
+    ["FeedEdit", "FeedDelete", "OwnerGoTo", "NotesAttach", "WidgetExport", "CommCall", "AttachFileButton", "BodyInput", "PipelineRefresh"].every((n) => slotNames.includes(n))
+    && slotNames.length === 16 && new Set(slotNames).size === 16 && slotCtx.typeCount("crt.MenuItem") === 7,
+    () => ({ names: slotNames }));
+}
+
+/* ---- A table-emitted element row is closed by IDENTITY, not by a global type count.
+   The walk sees every `crt.Button` in `tools` / `menuItems` / `items`, so counting the type would let a panel's
+   `tools` `AddRelatedRecord` or a template's Save button close a row that expects the custom `Recalculate` button;
+   the row therefore matches the expected element by name and type. ---- */
+{
+  const recalcRes = { entity: "X", changeSet: { viewConfigDiff: [], images: [], standardFeatures: [], details: [], cardActions: [],
+    tableElements: [{ classic: "RecalculateButton", element: "Recalculate", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B", request: "usr.RecalculateClicked" }] }, signals: {} };
+  const recalcRow = (md) => md.split("\n").filter((l) => /crt\.Button/.test(l)).join(" | ");
+  const unrelated = { viewConfig: { items: [
+    { name: "SaveButton", type: "crt.Button" },
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+  ] } };
+  const unrelatedOut = renderVerify(recalcRes, {}, { pages: { main: unrelated } });
+  check("an unrelated toolbar button under `tools` (and a template button under `items`) does NOT close a row that expects the `Recalculate` button — ❌ MISSING naming it",
+    /❌ MISSING/.test(recalcRow(unrelatedOut.markdown)) && /no crt\.Button built \(1 expected\)/.test(unrelatedOut.markdown)
+    && /missing: Recalculate/.test(unrelatedOut.markdown) && /2 other crt\.Button on the page/.test(unrelatedOut.markdown)
+    && unrelatedOut.complete === false,
+    () => recalcRow(unrelatedOut.markdown));
+  const builtOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [
+    { name: "Panel", type: "crt.ExpansionPanel", tools: [{ name: "AddRelatedRecord", type: "crt.Button" }], items: [] },
+    { name: "Recalculate", type: "crt.Button" },
+  ] } } } });
+  check("the `Recalculate` button built under its emitted name closes the row ✅ Done, matched BY NAME",
+    /✅ Done/.test(recalcRow(builtOut.markdown)) && /matched BY NAME \(Recalculate\)/.test(builtOut.markdown),
+    () => recalcRow(builtOut.markdown));
+  const wrongTypeOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate", type: "crt.Label" }] } } } });
+  check("the expected name built as the WRONG type is not a match — ❌ MISSING saying what it was built as",
+    /❌ MISSING/.test(recalcRow(wrongTypeOut.markdown)) && /Recalculate is built as .crt\.Label./.test(wrongTypeOut.markdown),
+    () => recalcRow(wrongTypeOut.markdown));
+  const untypedOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ name: "Recalculate" }] } } } });
+  check("the expected name built with NO type says so in prose — no code span around a non-type",
+    /Recalculate is built as an untyped component/.test(untypedOut.markdown),
+    () => recalcRow(untypedOut.markdown));
+  const namelessOut = renderVerify(recalcRes, {}, { pages: { main: { viewConfig: { items: [{ type: "crt.Button" }] } } } });
+  check("components present but NONE named → ⚠ identity NOT checked, never ✅ off the type count",
+    /⚠/.test(recalcRow(namelessOut.markdown)) && /identity NOT checked/.test(recalcRow(namelessOut.markdown)),
+    () => recalcRow(namelessOut.markdown));
+  const twoRes = { ...recalcRes, changeSet: { ...recalcRes.changeSet, tableElements: [
+    { classic: "A", element: "A", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+    { classic: "B", element: "B", componentType: "crt.Button", classicKind: "BUTTON", parent: "Header", tier: "B" },
+  ] } };
+  const partialOut = renderVerify(twoRes, {}, { pages: { main: { viewConfig: { items: [{ name: "A", type: "crt.Button" }] } } } });
+  check("2 expected / 1 built under its name → ⚠ partial naming the missing one",
+    /⚠/.test(recalcRow(partialOut.markdown)) && /1\/2 crt\.Button built \(matched by name\) — missing: B/.test(partialOut.markdown),
+    () => recalcRow(partialOut.markdown));
+  const absentOut = renderVerify(recalcRes, {}, { pages: {} });
+  check("no `--built.pages` entry keeps the D6 tri-state — ⚠ unverified, never ❌",
+    /⚠/.test(recalcRow(absentOut.markdown)) && !/❌ MISSING/.test(recalcRow(absentOut.markdown)),
+    () => recalcRow(absentOut.markdown));
+}
 
 // SCOPE: the `components: [] + noChangesReason` concession is `#quality-gates`-ONLY. A `#childpage`
 // record proves a page was BUILT, which an empty answer never can — "nothing to fix" is not a meaningful outcome
@@ -13018,8 +13171,8 @@ check("the rendered read plan tells the agent how to report a page the stand DEN
   }
 }
 {
-  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what SKILL.md 7.5 and step 8 tell the
-  // orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
+  // THE PRESCRIBED GATE COMMAND. `--from` and `--tasks` together is what step 7.5
+  // (`references/orchestrate-build.md`) and SKILL.md step 8 tell the orchestrator to run, and it is not a union of the two halves: `--from` defaults `--out` into the folder, the
   // report replaces the table as the artifact, and the repair round reads the same open rows. An unread page
   // makes those rows untrustworthy, so no round may be written from them.
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "c2f_ft_"));

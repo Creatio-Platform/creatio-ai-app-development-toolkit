@@ -3541,6 +3541,29 @@ function outFileNote(label, outFile, notReady, verifyMode) {
   return `migrate.mjs: wrote ${label} to ${outFile}, but ⛔ this run is BLOCKED/INCOMPLETE — do NOT build or present it; fix the ⛔ items at the top of the file and re-run.\n`;
 }
 
+// Reading `process.stdin.isTTY` (the guard above the manifest read) puts fd 0 into non-blocking mode, so on
+// macOS `fs.readFileSync(0)` throws EAGAIN whenever the pipe holds less than the whole manifest (over ~64 KB
+// from `spawnSync(…, { input })`). Read fd 0 chunk by chunk instead: on EAGAIN wait a few ms (still synchronous)
+// and retry, stop at EOF (0 bytes, or the `EOF` error Windows reports for a closed pipe). Decode once at the end,
+// so a multi-byte UTF-8 char split across two chunks survives. Any other read error is thrown to the caller unchanged.
+function readStdinSync() {
+  const chunks = [];
+  const buf = Buffer.alloc(64 * 1024);
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    let n;
+    try { n = fs.readSync(0, buf, 0, buf.length, null); }
+    catch (e) {
+      if (e.code === "EAGAIN" || e.code === "EWOULDBLOCK") { Atomics.wait(pause, 0, 0, 5); continue; }
+      if (e.code === "EOF") break;
+      throw e;
+    }
+    if (n === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const fail = (msg) => { process.stderr.write("migrate.mjs: " + msg + "\n"); process.exit(1); };
   const argv = process.argv.slice(2);
@@ -3687,7 +3710,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("no manifest: pass a manifest path, or pipe JSON to stdin. (`--out <file>` names the OUTPUT — the manifest is a separate argument.)");
   let raw;
   const manifestLabel = fromFile ? `'${arg}'` : "from stdin";
-  try { raw = fromFile ? fs.readFileSync(arg, "utf8") : fs.readFileSync(0, "utf8"); }
+  try { raw = fromFile ? fs.readFileSync(arg, "utf8") : readStdinSync(); }
   catch (e) { fail(`cannot read manifest ${manifestLabel}: ${e.message}`); }
   let manifest;
   try { manifest = JSON.parse(raw); }
@@ -4089,5 +4112,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const fidelityList = fidelity.slice(0, 4).map((w) => `${w.op} '${w.name}' @${w.schema}`).join(" | ");
     process.stderr.write(`migrate.mjs: ℹ ${fidelity.length} fidelity warning(s) — the mapping is correct, an effect is not represented (advisory, see result.effective.warnings): ${fidelityList}\n`);
   }
-  if (notReady) process.exit(2);
+  // `exitCode`, not `process.exit(2)`: stdout to a pipe is async on macOS, and an immediate exit truncates the
+  // report to its first 8 KB (Node 20) / 64 KB (Node 25). Returning lets Node flush it, then exit 2.
+  if (notReady) process.exitCode = 2;
 }
