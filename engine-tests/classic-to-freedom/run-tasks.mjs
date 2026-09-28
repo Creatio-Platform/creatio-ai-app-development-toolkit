@@ -8028,13 +8028,14 @@ check("identity digest guard: rendering the identity condition does NOT move any
 
 // Per-item field / related-list rows weigh nothing: the Layout row that places an item carries its build weight.
 {
-  const itemTasks = (set) => set.tasks.filter((t) => t.rows.some((r) => /^Field `/.test(r.label)) && t.pageKey === "main");
-  const fieldRows = (set) => itemTasks(set).flatMap((t) => t.rows.filter((r) => /^Field `/.test(r.label)));
+  const isFieldRow = (r) => r.label.startsWith("Field `");
+  const itemTasks = (set) => set.tasks.filter((t) => t.rows.some(isFieldRow) && t.pageKey === "main");
+  const fieldRows = (set) => itemTasks(set).flatMap((t) => t.rows.filter(isFieldRow));
   check("weight: a page's per-field rows pack as the one aggregate row did — the bulk page's field rows sit in ONE task, and one more field adds no task",
     () => fieldRows(SET5).length >= 40 && itemTasks(SET5).length === 1 && SET5.tasks.length === SET6.tasks.length,
     () => ({ fieldRows: fieldRows(SET5).length, tasks: itemTasks(SET5).map((t) => [t.id, t.rows.length]), set5: SET5.tasks.length, set6: SET6.tasks.length }));
   check("weight (anti-vacuity): the bulk fixture really carries 40+ per-field rows, each with an item check, in the plan and in the cut",
-    () => SET5.tasks.flatMap((t) => t.rows).filter((r) => /^Field `/.test(r.label)).length >= 40
+    () => SET5.tasks.flatMap((t) => t.rows).filter(isFieldRow).length >= 40
       && checklistGroups(RUN5, OPTS5).flatMap((g) => g.rows).filter((r) => r.vk?.item).length >= 40);
 }
 
@@ -8046,6 +8047,7 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: false }, R2D: { entity: "C2", columns: ["Number"], editPage: false } }, childPageSchemas: {},
     signals: { ...manifestOf().signals, printables: PRINTABLE }, deliverableStatus, ...extra });
   const DEC = new Map([["D3", "not carried over"], ["D6", "replaced by the portal"]]);
+  const DEC_MD = "## D3 — not carried over\n\n## D6 — replaced by the portal\n";
   const WONT = (d) => ({ status: "wont-do", decision: d });
   const T1_STATUS = { "main#field:MainG": WONT("D3"), "main#related-list:R2D": WONT("D3"), "main#method:onB": WONT("D6"), "main#card-action:Print": WONT("D6") };
   const LABELS = { "main#field:MainG": "Field `MainG`", "main#related-list:R2D": "Related list `R2D`",
@@ -8119,7 +8121,7 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
       () => planGaps(gapRun).some((g) => /deliverableStatus INVALID/.test(g) && g.includes("main#field:Nope") && g.includes("main#method:onA")),
       () => planGaps(gapRun));
     const base = tmp("status-cli");
-    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n\n## D6 — replaced by the portal\n");
+    fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
     fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(M1));
     const plan = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--plan", "--out", path.join(base, "plan.md")], { encoding: "utf8" });
     const planText = fs.existsSync(path.join(base, "plan.md")) ? fs.readFileSync(path.join(base, "plan.md"), "utf8") : "";
@@ -8129,6 +8131,24 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
       () => !/deliverableStatus INVALID/.test(plan.stdout + plan.stderr + planText) && /D6: replaced by the portal/.test(planText) && refused.status === 2
         && /NOTHING WRITTEN/.test(refused.stdout) && /D9/.test(refused.stdout) && !fs.existsSync(path.join(base, "build-tasks")),
       () => ({ plan: plan.status, planErr: plan.stderr.slice(0, 300), refused: refused.status, out: refused.stdout.slice(0, 400) }));
+    // Each mode runs twice from a folder with no decisions.md: once with the statuses, once with none.
+    const cliRuns = (status) => {
+      const dir = tmp("status-cli-no-decisions");
+      const m = stManifest(status);
+      fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ ...m, signals: { ...m.signals, dashboards: manifestOf().signals.dcm } }));
+      fs.writeFileSync(path.join(dir, "built.json"), JSON.stringify({ pages: {} }));
+      const cliOf = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(dir, "manifest.json"), ...args], { encoding: "utf8" });
+      const runs = { reads: cliOf("--reads", dir), verify: cliOf("--verify", "--built", path.join(dir, "built.json")), checklist: cliOf("--checklist"), plan: cliOf("--plan") };
+      fs.rmSync(dir, { recursive: true, force: true });
+      return runs;
+    };
+    const withStatus = cliRuns(T1_STATUS), without = cliRuns(undefined);
+    const statusGap = (r) => /deliverableStatus INVALID|no decisions\.md was read/.test(r.stdout + r.stderr);
+    const READ_ONLY = ["reads", "verify", "checklist"];
+    check("`--reads`, `--verify --built` and `--checklist` exit as they do without statuses and raise no deliverable-status gap when no decisions.md is read; `--plan` still raises it",
+      () => READ_ONLY.every((k) => !statusGap(withStatus[k]) && withStatus[k].status === without[k].status)
+        && withStatus.plan.status === 2 && statusGap(withStatus.plan) && !statusGap(without.plan),
+      () => Object.fromEntries(Object.keys(withStatus).map((k) => [k, { status: withStatus[k].status, baseline: without[k].status, gap: statusGap(withStatus[k]), err: withStatus[k].stderr.slice(0, 300) }])));
     const stale = cut("status-cut-unknown", RUN_ST, { ...optsOf(M1), decisions: new Map([["D3", "not carried over"]]) });
     check("T5: a cut against a decisions.md that lacks a status's D<N> is refused and writes nothing",
       () => stale.set.refused && stale.set.refusal === "deliverable-status" && stale.set.problems.some((p) => /D6/.test(p)) && !fs.existsSync(stale.dir),
@@ -8153,14 +8173,36 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     const answer = set.refused ? null : startableTasks(set, dir);
     const again = set.refused ? null : syncTaskDir(dir, run, opts, split);
     const answer2 = again ? startableTasks(again, dir) : null;
-    const SETTLED_WORDS = ["done", "wont-do", "not-applicable"];
+    const SETTLED_WORDS = new Set(["done", "wont-do", "not-applicable"]);
     check("T6: a task whose rows are all closed (a `not-applicable` stand-check row and `wont-do` statuses) is settled on the pass that cuts it, is not offered by `--next`, and fails no dispatch audit",
-      () => !set.refused && SETTLED_WORDS.includes(closed?.status) && closed.rows.some((r) => r.na)
+      () => !set.refused && SETTLED_WORDS.has(closed?.status) && closed.rows.some((r) => r.na)
         && answer.verdict !== NEXT_LEDGER && !answer.startable.some((t) => t.id === "closed") && answer.dispatch.failing.length === 0
-        && SETTLED_WORDS.includes(again.tasks.find((t) => t.id === "closed")?.status) && answer2.verdict !== NEXT_LEDGER && !answer2.startable.some((t) => t.id === "closed"),
+        && SETTLED_WORDS.has(again.tasks.find((t) => t.id === "closed")?.status) && answer2.verdict !== NEXT_LEDGER && !answer2.startable.some((t) => t.id === "closed"),
       () => ({ refused: set.problems, status: closed?.status, rows: closed?.rows?.map((r) => [r.label, r.outcomeKind, r.na]),
         verdict: answer?.verdict, failing: answer?.dispatch?.failing?.map((t) => t.id), reread: again?.tasks?.find((t) => t.id === "closed")?.status }));
     fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = cut("status-revoke", RUN_ST, OPTS_ST);
+    const rev = revokeDecision(dir, RUN_ST, { ...OPTS_ST, decision: "D6" });
+    syncTaskDir(dir, RUN_ST, OPTS_ST);
+    const rowOf = (label) => readTaskDir(dir).flatMap((t) => t.rows).find((r) => r.label === label);
+    const bornKeys = ["main#method:onB", "main#card-action:Print"];
+    check("`--revoke` skips a row whose manifest status cites that D<N>, naming the `manifest.deliverableStatus` entry to remove; the next cut leaves it as it was",
+      () => !rev.refused && rev.cleared.length === 0 && rev.skipped.length === 2
+        && bornKeys.every((k) => rev.skipped.some((s) => s.why.includes(`\`${k}\``) && s.why.includes("manifest.deliverableStatus")))
+        && bornKeys.every((k) => rowOf(LABELS[k])?.outcomeKind === "wont-do"),
+      () => ({ cleared: rev.cleared?.map((c) => [c.task.file, c.n]), skipped: rev.skipped?.map((s) => s.why), rows: bornKeys.map((k) => rowOf(LABELS[k])?.outcome) }));
+    fs.rmSync(base, { recursive: true, force: true });
+    // The CLI slices with the default budget, so its folder is cut with the CLI's own opts.
+    const onCli = cut("status-revoke-cli", RUN_ST, { ...checklistOpts(M1), decisions: DEC });
+    fs.writeFileSync(path.join(onCli.base, "decisions.md"), DEC_MD);
+    fs.writeFileSync(path.join(onCli.base, "manifest.json"), JSON.stringify(M1));
+    const cli = spawnSync(process.execPath, [MIGRATE, path.join(onCli.base, "manifest.json"), "--tasks", onCli.dir, "--revoke", "D6"], { encoding: "utf8" });
+    check("`--revoke` of a D<N> only manifest statuses cite prints each skipped row with the entry to remove",
+      () => cli.status === 0 && bornKeys.every((k) => cli.stdout.includes(`\`${k}\``)) && /skipped/.test(cli.stdout),
+      () => ({ status: cli.status, out: cli.stdout.slice(0, 900), err: cli.stderr.slice(0, 300) }));
+    fs.rmSync(onCli.base, { recursive: true, force: true });
   }
   {
     const plain = checklistGroups(runMigration(stManifest(undefined)), optsOf(stManifest(undefined))).flatMap((g) => g.rows.map((r) => ({ ...r, page: g.pageKey })));
@@ -8171,8 +8213,8 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
       () => plain.length === withSt.length && untouched.every((r) => plain.some((p) => shape(p) === shape(r))) && withSt.filter((r) => r.status).length === 4,
       () => ({ plain: plain.length, withSt: withSt.length, changed: untouched.filter((r) => !plain.some((p) => shape(p) === shape(r))).map(shape) }));
     const { base, set } = cut("status-one-task", RUN_ST, OPTS_ST);
-    const planRows = withSt.map((r) => `${r.page} ${r.label}`).sort();
-    const taskRows = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS).flatMap((t) => t.rows.map((r) => `${r.pageKey || t.pageKey} ${r.label}`)).sort();
+    const planRows = withSt.map((r) => `${r.page} ${r.label}`).sort((a, b) => a.localeCompare(b));
+    const taskRows = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS).flatMap((t) => t.rows.map((r) => `${r.pageKey || t.pageKey} ${r.label}`)).sort((a, b) => a.localeCompare(b));
     check("T7: every deliverable, closed or not, still lands in exactly one task",
       () => JSON.stringify(planRows) === JSON.stringify(taskRows), () => ({ plan: planRows.length, tasks: taskRows.length }));
     fs.rmSync(base, { recursive: true, force: true });

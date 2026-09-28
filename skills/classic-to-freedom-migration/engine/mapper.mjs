@@ -251,7 +251,9 @@ function control(dataType, contentType, ref) {
 // must never be able to read `Text` for one of these.
 // The Type labels of a hashed / encrypted column: the plan's "(not migrated)" verdict, read by the field's
 // deliverable status too.
-export const SECRET_TYPE_LABELS = new Set(["Hashed text (not migrated)", "Encrypted text (not migrated)"]);
+const HASHED_TYPE_LABEL = "Hashed text (not migrated)";
+const ENCRYPTED_TYPE_LABEL = "Encrypted text (not migrated)";
+export const SECRET_TYPE_LABELS = new Set([HASHED_TYPE_LABEL, ENCRYPTED_TYPE_LABEL]);
 const TYPE_LABEL = {
   phone: "Phone",
   email: "Email",
@@ -259,8 +261,8 @@ const TYPE_LABEL = {
   boolean: "Boolean",
   datetime: "Date/time",
   date: "Date",
-  hashtext: [...SECRET_TYPE_LABELS][0],
-  securetext: [...SECRET_TYPE_LABELS][1],
+  hashtext: HASHED_TYPE_LABEL,
+  securetext: ENCRYPTED_TYPE_LABEL,
   integer: "Integer",
   decimal: "Decimal",
   float: "Decimal",

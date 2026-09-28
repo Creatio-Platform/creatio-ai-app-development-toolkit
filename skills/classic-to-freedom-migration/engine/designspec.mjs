@@ -2387,7 +2387,8 @@ function relatedListItemRows(cs, expDetails) {
     const n = (seen.get(key) || 0) + 1;
     seen.set(key, n);
     const id = n === 1 ? key : `${key}@${entity || n}`;
-    return { deliverableId: `related-list:${id}`, label: `Related list \`${esc(id)}\`${caption ? ` — ${esc(caption)}` : ""}`,
+    const captionPart = caption ? " — " + esc(caption) : "";
+    return { deliverableId: `related-list:${id}`, label: `Related list \`${esc(id)}\`${captionPart}`,
       vk: { type: "details", n: expDetails, item: true } };
   });
 }
@@ -4644,7 +4645,8 @@ export function planGaps(result) {
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.
 function statusIssueText(x) {
-  const ids = (x.valid || []).length ? ` — ${/subject/.test(x.problem) ? "needs a status" : "valid ids"}: ${x.valid.join(", ")}` : "";
+  const idsLabel = /subject/.test(x.problem) ? "needs a status" : "valid ids";
+  const ids = (x.valid || []).length ? ` — ${idsLabel}: ${x.valid.join(", ")}` : "";
   return `\`${x.key}\` ${x.problem}${ids}`;
 }
 // THE VERDICT SPEAKS FOR THE WHOLE RUN, because it is the one sanctioned status line and is read as the answer.

@@ -825,10 +825,11 @@ function entryProblems(key, entry, byKey, rows, opts) {
   const closedBy = row.na || engineStatusReason(row, opts);
   if (closedBy) return [{ key, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
   if (e.status === STATUS_BUILD) return [];
-  return decisionProblems(key, e.decision, opts.decisions);
+  return decisionProblems(key, e.decision, opts);
 }
-function decisionProblems(key, decision, decisions) {
+function decisionProblems(key, decision, { decisions, decisionsOptional }) {
   if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
+  if (!decisions && decisionsOptional) return [];
   if (!decisions) return [{ key, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
   if (!decisions.has(decision)) return [{ key, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
   return [];
@@ -998,6 +999,7 @@ export function checklistOpts(manifest, opts = {}) {
     // Planning decisions are recorded once on the root manifest and reach every folded page, like `signals`.
     deliverableStatus: { ...plainObject(opts.inheritedDeliverableStatus), ...plainObject(manifest.deliverableStatus) },
     decisions: opts.decisions instanceof Map ? opts.decisions : null,
+    decisionsOptional: opts.decisionsOptional === true,
     template: manifest.template,
     targetPackage: manifest.targetPackage,
     planMeta: pm,
@@ -3081,7 +3083,8 @@ function splitDriftLines(set) {
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
 // The decisions.md a deliverable status resolves against: the migration folder the plan is written into (`--out`)
-// or the one above the task folder. Null when the run names neither.
+// or the one above the task folder. Null when the run names neither. Only `--plan` and `--tasks` require it; any
+// other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
 function planDecisions(outFile, tasksDir) {
   if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
   if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
@@ -3559,7 +3562,9 @@ function runRevokeMode(result, dir, opts) {
   // a silent skip reads exactly like a successful revoke to the person who ran the command.
   const skipLines = (res.skipped || []).map((s) => `  ⚠ skipped ${s.task.file} row ${s.n}: ${s.why}`);
   if (!res.cleared.length) {
-    const head = `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
+    const head = skipLines.length
+      ? `migrate.mjs: nothing revoked — every cell in ${dir} written under ${opts.decision} was skipped:`
+      : `migrate.mjs: nothing to revoke — no cell in ${dir} was written under ${opts.decision}.`;
     return { note: [head, ...skipLines].join("\n") + "\n", ok: true };
   }
   const lines = [`migrate.mjs: revoked ${opts.decision} — cleared ${res.cleared.length} cell(s).`];
@@ -3764,7 +3769,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions: planDecisions(outFile, tasksDir) }); }
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions: planDecisions(outFile, tasksDir), decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];

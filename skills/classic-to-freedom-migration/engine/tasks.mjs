@@ -3977,9 +3977,13 @@ export function applyDecision(dir, result, opts = {}) {
 // every re-slice, but an adopted file or a hand edit can still leave an entry on a row it was not written for,
 // and blanking that row unconditionally destroys whatever sits there, including an agent's own `built` record,
 // the one mark this codebase cannot recover. So the cell must prove it is the one this decision wrote before it
-// is touched.
-function revokeSkipReason(row, decision) {
+// is touched. A cell the cut wrote from a `manifest.deliverableStatus` entry is not revocable: the next cut would
+// write it again, so the entry itself is removed and the plan re-run.
+function revokeSkipReason(row, decision, pageKey) {
   if (!row) return "that row no longer exists in this task";
+  if (row.status?.kind === O_WONT_DO && row.status.decision === decision) {
+    return `its status comes from \`manifest.deliverableStatus\` \`${row.pageKey || pageKey}#${row.deliverableId}\` — remove that entry and re-run \`--plan\`; the next cut writes the cell again otherwise`;
+  }
   const decided = row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED;
   if (decided && String(row.outcome || "").includes(`(${decision})`)) return null;
   return `its Outcome cell reads \`${row.outcomeKind || "blank"}\` and does not carry (${decision}) — the map entry no longer matches the cell`;
@@ -4010,7 +4014,7 @@ function revokeInTask(t, decision, cleared, skipped) {
     // then stands and re-opens what still needs work. Leaving the entry in the map keeps that record.
     if (isCascadeDecision(d)) { skipped.push({ task: t, n, why: `closed by the cascade of ${decision}, not addressed directly — a cascade closure is not revived; the next \`--verify\` re-opens what still needs work` }); continue; }
     const idx = n - 1;
-    const why = revokeSkipReason(t.rows?.[idx], decision);
+    const why = revokeSkipReason(t.rows?.[idx], decision, t.pageKey);
     if (why) { skipped.push({ task: t, n, why }); continue; }
     clearDecidedCell(t, idx);
     map.delete(n);
@@ -4044,7 +4048,8 @@ export function revokeDecision(dir, result, opts = {}) {
 }
 
 // The blank engine-task rows a `wont-do` planning status closes. A row that already carries an Outcome keeps it, so
-// a second cut writes nothing and a built or revoked row is never overwritten by the cut alone.
+// a second cut writes nothing and a built row is never overwritten. `--revoke` leaves these cells alone
+// (revokeSkipReason), so a blank row with a status is one the cut has not written yet.
 function pendingStatuses(tasks) {
   const out = [];
   for (const t of tasks) {

@@ -162,8 +162,8 @@ const groupClaim = (label) => {
 // re-took the first five rows because the key still had capacity. Marking the row object settles it: `byPage` and
 // `byGroup` hold the same objects, so a row claimed by name is visibly gone from its group and the other way round.
 const exactLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-// A split written against a plan that carried one `Fields — N expected` / `Related lists — N expected` row: the plan
-// now has one row per field and per related list, so the old row names nothing. Says what replaced it.
+// A `Fields — N expected` / `Related lists — N expected` claim names no row; the refusal names the per-item rows
+// that replace it.
 const RETIRED_AGGREGATE = /^\s*(Fields|Related lists)\s+—\s+\d+\s+expected\s*$/i;
 function retiredAggregate(label) {
   const m = RETIRED_AGGREGATE.exec(String(label));
