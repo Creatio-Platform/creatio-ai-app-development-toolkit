@@ -3454,7 +3454,24 @@ function columnFormsOf(token) {
   if (pds) out.push(pds[1]);
   return out;
 }
-function builtRuleTokens(built) {
+// A built element NAME -> the one column it binds (`RequestField` -> `InternalRequest`), from the page's own ops. A
+// rule names the ELEMENT it acts on, and `columnFormsOf` is a string rule that can only strip what a token already
+// spells (`<Col>Field`, `PDS_<Col>_<hash>`) — it cannot know that `RequestField` governs `InternalRequest`; the
+// element's binding can. A name bound to two DIFFERENT columns on one page is ambiguous, so it maps to nothing:
+// picking either would let a rule on one column close a row that expects the other. Such a rule still matches
+// through `columnFormsOf`, exactly as it would with no map at all.
+export function elementColumnsOf(ops) {
+  const seen = new Map();
+  for (const o of ops || []) {
+    if (!o?.name || !o.bound) continue;
+    if (!seen.has(o.name)) seen.set(o.name, new Set());
+    seen.get(o.name).add(o.bound);
+  }
+  const out = new Map();
+  for (const [name, cols] of seen) if (cols.size === 1) out.set(name, [...cols][0]);
+  return out;
+}
+function builtRuleTokens(built, elementColumn) {
   let rules = null;
   if (Array.isArray(built)) rules = built;
   else if (Array.isArray(built?.rules)) rules = built.rules;
@@ -3467,7 +3484,9 @@ function builtRuleTokens(built) {
     else if (r && typeof r === "object") governed = Object.fromEntries(Object.entries(r).filter(([k]) => k !== "caption" && k !== "name"));
     else governed = r;
     const raw = String(JSON.stringify(governed)).match(/[A-Za-z_]\w*/g) || [];
-    return new Set(raw.flatMap(columnFormsOf));
+    const forms = raw.flatMap(columnFormsOf);
+    for (const t of raw) { const col = elementColumn?.get(t); if (col) forms.push(col); }
+    return new Set(forms);
   });
 }
 export function resolveRuleVk(vk, ctx) {
@@ -3479,7 +3498,7 @@ export function resolveRuleVk(vk, ctx) {
   // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
   if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
-  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules);
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules, elementColumnsOf(ctx.ops));
   if (tokenSets == null) return ["⚠ verify",
     `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
   const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
@@ -4095,14 +4114,21 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // see that function for why the name alone was not enough. Returns null for anything that is not a `$` binding.
 // `PDS_<Column>_<hash>` is the attribute name the Interface Designer mints (a page built in the Designer, or one
 // whose fields were added there after the build): the column sits between the prefix and the hash, so it is
-// unwrapped to the bare column here. Deliberately NOT unwrapped: a name with no `PDS_` prefix — the builder chose
-// it, and it is compared as written.
+// unwrapped to the bare column here.
+//
+// `PDS_<Column>` with NO hash unwraps to `<Column>` too. It is the shape a page built by an agent carries — every
+// binding in `fixtures/applicants-recorded/` is `$PDS_<Column>` or `$<Column>`, none hashed — and for a field whose
+// element name does not carry its column (`RoleInCompanyField` bound `$PDS_Job`) the binding is its only identity.
+//
+// A name with no `PDS_` prefix is compared as written — the builder chose it.
 export function boundAttributeOf(node) {
   const b = [node.control, node.value, node.checked].find((v) => typeof v === "string" && v.startsWith("$"));
   if (!b) return null;
   const attr = b.slice(1);
-  const m = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
-  return m ? m[1] : attr;
+  const hashed = /^PDS_(.+)_[0-9a-z]{6,}$/i.exec(attr);
+  if (hashed) return hashed[1];
+  const bare = /^PDS_(.+)$/i.exec(attr);
+  return bare ? bare[1] : attr;
 }
 // One node flattened into the op list. `{name, type}` is the whole flattening for every other check; a COLLECTION
 // component keeps `columns` (grid data a name/type walk goes past) and the `items` BINDING (a string like `"$Items"`,

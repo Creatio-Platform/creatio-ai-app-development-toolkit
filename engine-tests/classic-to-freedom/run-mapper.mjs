@@ -6,13 +6,14 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseSchema, mergeHierarchy, resourceKey, __setVendorIntegrityForTest,
   VIEW_ITEM_TYPE, CONTENT_TYPE, DATA_VALUE_TYPE, enumDriftIssues } from "../../skills/classic-to-freedom-migration/engine/engine.mjs";
+import { LIST_GRID } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemRoleOf, ITEM_ROLES,
   LIST_DECISION_KINDS } from "../../skills/classic-to-freedom-migration/engine/mapper.mjs";
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
 import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
-import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
+import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
 import { spawnSync } from "node:child_process";
@@ -13191,6 +13192,206 @@ check("every rendered read row is ONE table row — four cells, no embedded newl
     .every((l) => l.split("|").length === 6),
   () => ({ bad: renderReadPlan(readPlan(lpRun, checklistOpts({})), "./mig").split("\n")
     .filter((l) => /^\| /.test(l) && !/^\| ---/.test(l) && l.split("|").length !== 6).slice(0, 2) }));
+
+/* ---- Field and rule identity, against pages real runs recorded ----------------------------------------------
+   Two recorded main-page payloads of the same section and plan, checked against one `expected.json` (19 field
+   columns, 5 rule targets). Provenance and what was trimmed: each fixture's README.
+     · `applicants-recorded`   — five elements whose NAME drops the column, every binding an unhashed `$PDS_<Col>`,
+                                 so the binding is the only identity those five have;
+     · `applicants-post-rename` — every element named for its column, bindings kept, five bindings that DIFFER from
+                                 the name (`MobilePhone` bound `$PDS_ContactMobilePhone`), so the name decides. */
+const REC_DIR = path.join(FIX, "applicants-recorded");
+const recBuilt = JSON.parse(fs.readFileSync(path.join(REC_DIR, "built-main.json"), "utf8"));
+const postBuilt = JSON.parse(fs.readFileSync(path.join(FIX, "applicants-post-rename", "built-main.json"), "utf8"));
+const recExp = JSON.parse(fs.readFileSync(path.join(REC_DIR, "expected.json"), "utf8"));
+const recCtxOf = (b) => verifyCtx({ pages: { main: b } }, "main");
+const recFieldsOf = (b) => resolveVk({ type: "fields", n: recExp.fields.length, names: recExp.fields }, recCtxOf(b));
+const recRulesOf = (b) => resolveRuleVk({ type: "rule", n: recExp.rules.length, names: recExp.rules }, recCtxOf(b));
+const clone = (x) => JSON.parse(JSON.stringify(x));
+// Every node of a JSON tree, reached through every object-valued key — the same reach as the engine's own walk, so
+// a fixture self-check cannot see a different set of nodes from the one the gate reads.
+const eachNode = (tree, fn) => (function walk(n) {
+  if (Array.isArray(n)) return n.forEach(walk);
+  if (!n || typeof n !== "object") return;
+  fn(n);
+  for (const v of Object.values(n)) if (v && typeof v === "object") walk(v);
+})(tree);
+const rawBindingOf = (n) => [n.control, n.value, n.checked].find((x) => typeof x === "string" && x.startsWith("$"));
+// Components only (a node with a `name` or `type`), the engine's own test: a button's `clicked.params.defaultValues`
+// entries also carry `value: "$Id"`, and they are request parameters, not fields.
+const rawBindings = (b) => { const out = []; eachNode(b.viewConfig, (n) => { const v = rawBindingOf(n); if (v && (n.name != null || n.type != null)) out.push(v); }); return out; };
+const rulesOf = (b) => b.businessRules?.rules || b.businessRules;
+// The unbound post-rename shape: every bound element renamed to its bare column, its binding removed.
+const recRenamedUnbound = () => {
+  const b = clone(recBuilt);
+  eachNode(b.viewConfig, (n) => {
+    const v = rawBindingOf(n);
+    if (v && n.name) { n.name = v.slice(1).replace(/^PDS_/i, ""); delete n.control; delete n.value; delete n.checked; }
+  });
+  return b;
+};
+// One field moved to a column the plan does not expect.
+const recWrongColumn = () => {
+  const b = clone(recBuilt);
+  eachNode(b.viewConfig, (n) => { if (n.name === "ContactField") { n.name = "SomethingElse"; n.control = "$PDS_NotAColumnWeExpect"; } });
+  return b;
+};
+// Every rule that targeted `RejectReason` re-pointed at an element that is not on the page.
+const recGhostRule = () => {
+  const b = clone(recBuilt);
+  const rules = rulesOf(b);
+  for (let i = 0; i < rules.length; i++) rules[i] = JSON.parse(JSON.stringify(rules[i]).replace(/RejectReason/g, "GhostElement"));
+  return b;
+};
+
+// Fixture self-checks: if these drift, the goldens below stop meaning what they say.
+check("identity fixture: the first recorded payload carries no `viewModelConfig` — its bindings are resolved off the"
+  + " node itself",
+  () => recBuilt.viewModelConfig === undefined,
+  () => ({ keys: Object.keys(recBuilt) }));
+// The predicate is the IMPLEMENTATION's hashed-unwrap shape, not a loose "ends in _word": `PDS_CurrentWageLevel` ends
+// in `_CurrentWageLevel` and would trip a naive test, while the real pattern needs a SECOND `_` before the hash.
+check("identity fixture: the first payload's 19 bindings are exactly the gate's bound ops, and none of them is the"
+  + " Designer's hashed `PDS_<Col>_<hash>` — the unhashed leg is the one that decides",
+  () => rawBindings(recBuilt).length === 19
+    && recCtxOf(recBuilt).ops.filter((o) => o.bound).length === 19
+    && !rawBindings(recBuilt).some((x) => /^PDS_(.+)_[0-9a-z]{6,}$/i.test(x.slice(1))),
+  () => ({ raw: rawBindings(recBuilt).length, ops: recCtxOf(recBuilt).ops.filter((o) => o.bound).length }));
+check("identity fixture: the post-rename payload names every bound element for its column and keeps its binding,"
+  + " with five bindings that differ from the name",
+  () => {
+    const pairs = recCtxOf(postBuilt).ops.filter((o) => o.name && o.bound);
+    const differ = pairs.filter((o) => o.name !== o.bound);
+    return pairs.length === 19 && pairs.every((o) => recExp.fields.includes(o.name)) && differ.length === 5;
+  },
+  () => recCtxOf(postBuilt).ops.filter((o) => o.name && o.bound).map((o) => `${o.name}->${o.bound}`));
+
+// T1 / T1b — the recorded payload whose names drop the column, with nothing renamed.
+check("identity T1: the recorded payload reports 19/19 fields — `Job`, `Market`, `Segment`, `InternalRequest` and"
+  + " `Owner` sit on elements whose name drops the column, and close through their unhashed `$PDS_<Col>` binding",
+  () => recFieldsOf(recBuilt)[2] === "ok",
+  () => recFieldsOf(recBuilt).slice(0, 2));
+check("identity T1b: the same payload reports 5/5 business rules — a rule targeting `RequestField` or"
+  + " `RoleInCompanyField` reaches `InternalRequest` / `Job` through that element's binding",
+  () => recRulesOf(recBuilt)[2] === "ok",
+  () => recRulesOf(recBuilt).slice(0, 2));
+
+// T2 — the post-rename shapes. The binding leg only ADDS a way to close a row; the name leg must stand unchanged.
+check("identity T2: the recorded POST-RENAME payload reports 19/19 fields and 5/5 rules — elements named for their"
+  + " column, bindings kept, five of them bound through a related record under a different attribute name",
+  () => recFieldsOf(postBuilt)[2] === "ok" && recRulesOf(postBuilt)[2] === "ok",
+  () => ({ fields: recFieldsOf(postBuilt).slice(0, 2), rules: recRulesOf(postBuilt).slice(0, 2) }));
+check("identity T2b: the same page with every binding REMOVED still reports 19/19 — element-name matching closes"
+  + " the row on its own",
+  () => recFieldsOf(recRenamedUnbound())[2] === "ok",
+  () => recFieldsOf(recRenamedUnbound()).slice(0, 2));
+
+// T3 / T3b — anti-vacuity. A widened matcher must not close a row it cannot evidence.
+check("identity T3: a field bound to the WRONG column is not counted and is named in the shortfall — and the"
+  + " verdict stays ⚠ unverified, never a hard ❌ (a by-identity shortfall is deliberately soft)",
+  () => {
+    const [status, text, kind] = recFieldsOf(recWrongColumn());
+    return kind === "unverified" && status === "⚠ verify" && /\bContact\b/.test(text) && /18\/19/.test(text);
+  },
+  () => recFieldsOf(recWrongColumn()).slice(0, 2));
+check("identity T3b: a rule whose target element is not on the page leaves its expected column in the shortfall —"
+  + " the element map cannot close a rule it cannot follow",
+  () => { const [, text, kind] = recRulesOf(recGhostRule()); return kind === "unverified" && /RejectReason/.test(text); },
+  () => recRulesOf(recGhostRule()).slice(0, 2));
+
+// T4 — `boundAttributeOf`, each leg pinned independently of any fixture.
+check("identity T4: `boundAttributeOf` unwraps a Designer-minted `PDS_<Col>_<hash>` to the bare column",
+  () => boundAttributeOf({ control: "$PDS_Contact_a1b2c3" }) === "Contact");
+check("identity T4: it unwraps a hash-less `PDS_<Col>` too — the shape an agent-built page carries",
+  () => boundAttributeOf({ control: "$PDS_Job" }) === "Job");
+check("identity T4: a binding with no `PDS_` prefix is compared as written — the builder chose that name",
+  () => boundAttributeOf({ control: "$StaffUnit" }) === "StaffUnit");
+check("identity T4: a node with no `$` binding resolves to null rather than to a spurious column",
+  () => boundAttributeOf({ name: "SomeContainer" }) === null);
+
+// T5 — `elementColumnsOf`, the rules check's element -> column map, on hand-built ops.
+check("identity T5: each named, bound op maps its element to the column it binds",
+  () => {
+    const m = elementColumnsOf([{ name: "RequestField", bound: "InternalRequest" }, { name: "Contact", bound: "Contact" }]);
+    return m.size === 2 && m.get("RequestField") === "InternalRequest" && m.get("Contact") === "Contact";
+  });
+check("identity T5: an element name bound to two DIFFERENT columns maps to nothing — ambiguous is not evidence,"
+  + " so neither column can be credited to a rule that names it",
+  () => {
+    const m = elementColumnsOf([{ name: "Twin", bound: "Job" }, { name: "Twin", bound: "Owner" }, { name: "Solo", bound: "Office" }]);
+    return !m.has("Twin") && m.get("Solo") === "Office";
+  });
+check("identity T5: a name repeated with the SAME column still maps (a duplicate op is not a conflict), and an op"
+  + " with no name or no binding contributes nothing",
+  () => {
+    const m = elementColumnsOf([{ name: "Twin", bound: "Job" }, { name: "Twin", bound: "Job" }, { name: "NoBind" }, { bound: "Orphan" }, null]);
+    return m.size === 1 && m.get("Twin") === "Job";
+  });
+check("identity T5b: through the resolver, a rule on an element whose name is bound to two columns does NOT close"
+  + " a row expecting either column",
+  () => {
+    const page = { viewConfig: { items: [
+      { name: "Twin", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: "Twin", type: "crt.ComboBox", control: "$PDS_Owner" },
+    ] }, businessRules: { rules: [{ name: "R1", actions: [{ type: "make-required", items: ["Twin"] }] }] } };
+    // Both columns, because a last-write-wins map credits exactly one of them — asking about one could pass by luck.
+    return ["Job", "Owner"].every((col) => resolveRuleVk({ type: "rule", n: 1, names: [col] }, recCtxOf(page))[2] === "unverified");
+  });
+
+// T6 — the unhashed unwrap on the smallest page, and its isolation from the list-column code match.
+check("identity T6: a single expected field closes on an element whose name drops the column, through a hash-less"
+  + " `$PDS_<Col>` binding",
+  () => {
+    const page = { viewConfig: { items: [{ name: "RoleInCompanyField", type: "crt.ComboBox", control: "$PDS_Job" }] } };
+    return resolveVk({ type: "fields", n: 1, names: ["Job"] }, recCtxOf(page))[2] === "ok";
+  });
+check("identity T6b: the list-column verdict is untouched by the unwrap — a grid column is matched by its exact"
+  + " `PDS_<Col>` code, so a bound `$PDS_Job` field never stands in for a missing column code",
+  () => {
+    const listPage = (codes) => ({ viewConfig: { items: [
+      { name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: LIST_GRID, type: "crt.DataGrid", columns: codes.map((code) => ({ id: code, code })) },
+    ] } });
+    const vk = { type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] };
+    const ok = resolveVk(vk, recCtxOf(listPage(["PDS_Job"])));
+    const miss = resolveVk(vk, recCtxOf(listPage(["PDS_Owner"])));
+    return ok[2] === "ok" && miss[2] === "missing" && /PDS_Job/.test(miss[1]);
+  },
+  () => ["PDS_Job", "PDS_Owner"].map((c) => resolveVk({ type: "listcolumns", n: 1, columns: [{ name: "Job", code: "PDS_Job" }] },
+    recCtxOf({ viewConfig: { items: [{ name: "JobField", type: "crt.ComboBox", control: "$PDS_Job" },
+      { name: LIST_GRID, type: "crt.DataGrid", columns: [{ id: c, code: c }] }] } })).slice(0, 2)));
+
+// T7 — the same two legs end to end through `migrate.mjs --verify`, on the gate-clean SupportUnit manifest. Its
+// expected names are read from the plan it produces, and every built element is named so that it CANNOT match by
+// name: only the unhashed binding and the element map can close these rows.
+{
+  const suManifest = JSON.parse(verifyManifest);
+  const suRows = checklistGroups(runMigration(suManifest), checklistOpts(suManifest)).flatMap((g) => g.rows);
+  const suFields = suRows.find((r) => r.vk?.type === "fields")?.vk.names || [];
+  const suRules = suRows.find((r) => r.vk?.type === "rule")?.vk.names || [];
+  const elementFor = (col) => `W${suFields.indexOf(col)}Widget`;
+  const cliPage = (withBinding) => ({
+    viewConfig: { items: suFields.map((c) => ({ name: elementFor(c), type: "crt.Input", ...(withBinding ? { control: `$PDS_${c}` } : {}) })) },
+    parentSchemaName: "SupportUnitPage", schemaUId: "11111111-1111-4111-8111-111111111111",
+    businessRules: { rules: suRules.map((c, i) => ({ name: `BusinessRule_${i}`, caption: "rule", actions: [{ type: "make-required", items: [elementFor(c)] }] })) },
+  });
+  const cliVerify = (page) => {
+    const p = path.join(os.tmpdir(), `c2f_identity_cli_${process.pid}.json`);
+    fs.writeFileSync(p, JSON.stringify({ pages: { main: page } }));
+    try { return spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), "-", "--verify", "--built", p], { input: verifyManifest, encoding: "utf8" }).stdout || ""; }
+    finally { fs.rmSync(p, { force: true }); }
+  };
+  const rowOf = (out, re) => out.split("\n").find((l) => re.test(l)) || "";
+  const FIELDS_ROW = /^\| \d+ \| Fields — /, RULES_ROW = /^\| \d+ \| Business rules/;
+  const bound = cliVerify(cliPage(true)), unbound = cliVerify(cliPage(false));
+  check("identity T7: through `migrate.mjs --verify`, the Fields and Business-rules rows close on unhashed"
+    + " `$PDS_<Col>` bindings alone, every element named so it cannot match by name",
+    suFields.length > 0 && suRules.length > 0 && /✅ Done/.test(rowOf(bound, FIELDS_ROW)) && /✅ Done/.test(rowOf(bound, RULES_ROW)),
+    () => ({ fields: suFields, rules: suRules, fieldsRow: rowOf(bound, FIELDS_ROW), rulesRow: rowOf(bound, RULES_ROW) }));
+  check("identity T7: the same page with the bindings removed does NOT close either row — the binding is what closed them",
+    !/✅ Done/.test(rowOf(unbound, FIELDS_ROW)) && !/✅ Done/.test(rowOf(unbound, RULES_ROW)),
+    () => ({ fieldsRow: rowOf(unbound, FIELDS_ROW), rulesRow: rowOf(unbound, RULES_ROW) }));
+}
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

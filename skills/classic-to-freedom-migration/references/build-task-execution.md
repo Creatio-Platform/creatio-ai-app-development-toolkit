@@ -95,8 +95,33 @@ your task names: (a) the plan's `⚠ Confirm` list is your worklist — every it
 running its on-stand query and recording the answer (DCM `SysSchema ManagerName='DcmSchemaManager'`,
 `ProcessInModules`, `SysModuleReport`, `get-component-info`), not deferred as "probably N/A"; (b)
 you build the plan's layout/components exactly — every island, tab, group, and both halves of a
-two-part component. Any simplification is a proposal to the user, not a silent change. → the mapping
+two-part component. Any simplification is a proposal to the user, not a silent change; (c) every
+element carries the identity `--verify` matches it by — see (c) in full below. → the mapping
 reference's build recipes.
+
+**(c) in full — the identity each row kind is matched by.** `--verify` closes these rows by
+identity, and each kind reads a different thing, so build to the one your row's `Closed by` cell
+names:
+
+- **Fields.** Name the element for the column it shows — `Contact` or `ContactField` — and bind it
+  to that column, `$PDS_Contact`. Either the name or the binding closes the row; the binding is
+  what closes it when the name does not carry the column (`RoleInCompanyField` bound `$PDS_Job`).
+  A shortfall reads ⚠, and names the missing column.
+- **Business rules.** The rule's `condition` / `actions` target the field element — `Contact` or
+  `ContactField` — and the gate reads that element's binding to find the column it governs. A
+  rule's caption is a label and is never matched.
+- **List columns.** Each column in the list grid's `columns` carries **exactly** the
+  `PDS_<Column>` code the plan names for it. Only the code is read — never an element name or a
+  `$` binding — and a missing code reads ❌ MISSING.
+- **Quick filters and table elements.** The element carries **exactly** the name the plan gives
+  it, with the plan's component type (`crt.QuickFilter` for a filter). A component of the right
+  type under another name does not count.
+
+> Naming for the column keeps the built page legible against the plan, and the binding is what the
+> field and rule rows resolve through — so a page whose elements are all named `<Something>Field`
+> passes, and its rows say which columns they satisfied. **Do not rename elements on an
+> already-built page to satisfy the gate.** An open row on an element bound to the right column is
+> a finding for `## Notes`, not work.
 
 > The `⚠ Confirm` rows you must resolve are the ones in YOUR task. A page's questions are the FIRST
 > rows of that page's own build task, so the sub-agent that answers them is the one that builds

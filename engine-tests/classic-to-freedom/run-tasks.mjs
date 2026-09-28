@@ -8362,5 +8362,77 @@ for (const flag of ["--plan", "--spec", "--checklist", "--stubs"]) {
   fs.rmSync(d, { recursive: true, force: true });
 }
 
+/* ---- The identity each row kind is matched by, stated on the row that depends on it --------------
+   Five vk kinds are closed by identity, and each verifier reads a DIFFERENT thing — a field or rule by element name
+   or `$` binding, a list column by its exact `PDS_*` code only, a quick filter or table element by exact name plus
+   component type. The task file IS the prompt the building sub-agent reads, so each row must state its own rule:
+   one sentence for every kind is true for some and sends a builder to change what the verifier never reads. */
+const OWN_RULE = {
+  fields: /`ContactField`\) and bind it to that column \(`\$PDS_Contact`\) — either one closes the row/,
+  rule: /target the field ELEMENT .* the caption is never read/,
+  listcolumns: /EXACTLY the `PDS_<Column>` code the plan names — only the code is matched, never an element name or a `\$` binding, and a missing code is ❌ MISSING/,
+  listfilter: /EXACTLY the name the plan gives it and is a `crt\.QuickFilter`/,
+  element: /EXACTLY the name the plan gives it and the plan's component type/,
+};
+const IDENTITY_KINDS = Object.keys(OWN_RULE);
+// A rule that belongs to one kind only, so its presence on another kind's row is the bug this block guards.
+const BINDING_LEG = /`\$PDS_Contact`|bind it to that column|follows that element's binding/;
+const cellOf = (text, label) => text.split("\n").find((l) => l.includes("| " + label + " |")) || "";
+// One task per kind is rendered from the standard run's own task, only its rows swapped, so every kind is covered
+// even though the standard fixture plans no rule, quick filter or table element.
+const renderWithRow = (vk) => renderTaskFile({ ...SAMPLE, rows: [{ label: `probe-${vk}`, group: "Probe", vk }] }, SET);
+
+check("identity: every identity-matched row kind states ITS OWN rule in the `Closed by` cell — `fields`, `rule`,"
+  + " `listcolumns`, `listfilter` and `element` each render the sentence for what their verifier actually reads",
+  () => IDENTITY_KINDS.every((vk) => OWN_RULE[vk].test(cellOf(renderWithRow(vk), `probe-${vk}`))),
+  () => IDENTITY_KINDS.map((vk) => [vk, cellOf(renderWithRow(vk), `probe-${vk}`).slice(0, 140)]));
+
+check("identity: no row kind carries ANOTHER kind's rule — a `listcolumns`, `listfilter` or `element` row never"
+  + " tells the builder to bind anything (their verifiers read no binding), and only a `fields` row names `$PDS_Contact`",
+  () => IDENTITY_KINDS.every((vk) => {
+    const cell = cellOf(renderWithRow(vk), `probe-${vk}`);
+    const others = IDENTITY_KINDS.filter((k) => k !== vk);
+    const bindingOk = ["listcolumns", "listfilter", "element"].includes(vk) ? !BINDING_LEG.test(cell) : true;
+    return bindingOk && others.every((k) => !OWN_RULE[k].test(cell));
+  }),
+  () => IDENTITY_KINDS.map((vk) => [vk, cellOf(renderWithRow(vk), `probe-${vk}`).slice(0, 140)]));
+
+check("identity: on the standard run's REAL task files, the `fields` and `listcolumns` rows carry their own rule —"
+  + " the plumbing holds on a planned task set, not only on a synthesized row",
+  () => {
+    const seen = new Set();
+    for (const t of SET.tasks) {
+      const text = renderTaskFile(t, SET);
+      for (const r of t.rows.filter((x) => x.vk === "fields" || x.vk === "listcolumns")) {
+        if (!OWN_RULE[r.vk].test(cellOf(text, r.label))) return false;
+        seen.add(r.vk);
+      }
+    }
+    return seen.has("fields") && seen.has("listcolumns");
+  });
+
+check("identity: every other machine-checked row keeps the plain `--verify (<kind>)` cell — no identity sentence"
+  + " on a `template`, `formpage`, `details` or evidence row",
+  () => SET.tasks.every((t) => {
+    const text = renderTaskFile(t, SET);
+    return t.rows.filter((r) => r.vk && !IDENTITY_KINDS.includes(r.vk))
+      .every((r) => IDENTITY_KINDS.every((k) => !OWN_RULE[k].test(cellOf(text, r.label))));
+  }));
+
+// RISK1 — the digest guard. `closedByOf` renders the cell; `rowsDigest` hashes the SOURCE rows. A `done` task
+// that reads as drifted is RE-DISPATCHED into a live migration, so improving a cell's wording must never move it.
+// The values are PINNED, captured from the base branch before this change. Recomputing the set twice inside one
+// run would be trivially equal and prove nothing; a literal is what actually catches a future edit that lets the
+// rendered cell leak into the digest.
+const ROWS_DIGESTS_BASE = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "applicants-recorded", "rows-digests.base.json"), "utf8"));
+check("identity digest guard: rendering the identity condition does NOT move any task's `rowsDigest` — the digest reads"
+  + " the SOURCE rows, so a `done` task cannot read as drifted (and be re-dispatched into a live migration)"
+  + " because a cell's wording improved. Pinned to the values the base branch produced.",
+  () => {
+    const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
+    return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
+  },
+  () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
