@@ -128,3 +128,21 @@ answer. Two guard-rails: this is the USER's line to draw, never yours to declare
 stands — "big / shared / view-only / follow-on" are still not skip reasons), and if the child entity
 already ships a Freedom form, `reuseFreedomPage` is the better answer and wins. Widening the scope
 later is just dropping the key and supplying the schema — a re-plan, not a defect.
+
+## warningDispositions — a remove of a name nothing in the supplied chain defines
+
+A `remove` of a name nothing in the supplied chain defines (no layer and no seed inserts, patches,
+moves, sets, parents under or aliases it; typically a stray or mistyped name) is `fidelity`, not
+`correctness`: the Classic runtime ignores a remove of a name it does not have, so schema order (F1)
+cannot clear it and it does not block. Its hint says "no effect in Classic **unless the chain is
+incomplete**": absence from the SUPPLIED chain proves absence in Classic only if the seed is the
+full parent-template chain, so confirm the base seed when it is partial (F2) — the hint says so
+outright when the seed is absent or `possiblyPartial` — then close it with `n/a`. The same applies
+to a layer that removes and re-inserts the same name (its hint says "re-inserted by the same
+layer"), even when a later layer customises the re-inserted element. A seed layer's own no-op remove
+arrives already CLOSED by the engine when the seed looks complete (the plan lists it as "CLOSED by
+the engine" — nothing to record). Otherwise, if ANY layer references that name (lower, the same
+without re-inserting it, or later — the hint says which), it stays `correctness`: a later one means
+schema order (F1), a lower or same-layer one means the base element is missing from the seed (F2).
+A `remove` that carries `properties` is not this case: it patches an element, like a `merge`, so on
+a name nothing in the supplied chain defines it stays `correctness` and blocks.
