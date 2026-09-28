@@ -42,5 +42,3 @@ export function reminder(sessionId) {
 		'Then continue the task. Never let telemetry gate, delay, or alter the work.'
 	].join('\n');
 }
-
-const lintGateProbe = 1;
