@@ -8,6 +8,35 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ---
 
+## 1.13.0 (2026-09-28)
+
+**Building an approved Classic → Freedom migration plan no longer depends on one long agent session.** Step 7 now cuts the plan into a folder of task files and walks it one task at a time, each in its own build sub-agent: progress survives a killed session, the chat shows what is running and how long it should take, and "done" is decided by the engine's verify table instead of by the agent that did the work. The same release teaches mobile conversion to handle pages a converted page opens that do not exist on mobile yet.
+
+### 🗂️ Migration build as a task folder
+
+- **The approved plan becomes a folder of tasks** ([#175](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/175)). `migrate.mjs --tasks <dir>` writes one file per task plus a derived `index.md`, built from the same rows `--checklist` and `--verify` use. Each task names the artifact it writes (`writesTo:`) and the tasks it waits for (`dependsOn:`), so two sub-agents never write the same page body. A small run is one build task and one separate review.
+- **You see progress while the work runs.** `--start <id>` marks a task in progress before it is dispatched, and every run prints a `--- progress ---` block with the running task, its elapsed time, a measured time range and what is left. Durations are kept in `timings.json` and replace the default estimate once four tasks have closed.
+- **Repair is a task, not an improvised loop.** `--verify --built b.json --tasks <dir>` prints the step 8 table and writes the open rows back as repair tasks, grouped by page and cause. A cause that fails three repair rounds is parked instead of retried again, and a row whose inputs have not changed since the last round is reported as DISPUTED or STALLED instead of spending a round ([#205](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/205)).
+- **Your scope decisions go through the engine** ([#197](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/197), [#207](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/207), [#209](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/209)). `--decide` / `--revoke` record `wont-do` or `postponed` on a row instead of hand-editing task files, and decided deliverables are listed before the first dispatch. A task waiting on another task's open decision is held back by `--next` and refused by `--start` with the source row named.
+- **Each deliverable reaches exactly one sub-agent** ([#175](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/175), [#207](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/207)). Every task carries an `agentNonce:`; the engine reports a nonce repeated across tasks and a `done` task without one. A task with nothing left to build is not dispatched.
+
+### ✅ A green verify means the page works
+
+- **A page that cannot render no longer passes** ([#175](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/175)). `crt.FileList` and `crt.DataGrid` are checked for `columns` and `items`, not only for their type.
+- **A review verdict closes a row only when its write-up is reachable and belongs to that row** ([#202](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/202)).
+- **Correctly built pages are no longer reported as missing** ([#203](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/203)). Five verify-side false negatives from a live run are fixed, among them decisions written as a table, controls nested under menus, and phone and email inputs.
+- **Virtual attributes are declared before the handlers that write them** ([#206](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/206)), and Feed / Attachments merge-vs-insert is left to the builder, which sees the page ([#200](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/200)).
+- **Every refusal exits non-zero** across `--tasks`, `--next`, `--route` and `--start` ([#199](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/199)), and the CLI refuses an unknown flag instead of ignoring it.
+- **A new app is placed on an existing object in one `create-app` call** through `optional-template-data-json`, instead of `create-app` plus `create-app-section` leaving duplicate pages.
+
+### 📱 Mobile conversion: pages that do not exist on mobile yet
+
+- **Missing target pages are reported and can be converted** ([#183](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/183)). Before converting, the skill checks for an existing mobile page to reuse. Pages a converted page opens but that have no mobile version are listed in the plan and the final report; the skill offers once to convert them, one page at a time, each through its own gate, then points the blanked binding at the new page. The engine side is [clio#1562](https://github.com/Advance-Technologies-Foundation/clio/pull/1562), merged after clio 8.1.0.134 — the flow needs a clio release that includes it.
+
+### 🛠️ Developer tooling
+
+- **Sonar gate, the Sonar exclusion check and gitleaks run on pull requests into any branch**, not only into `main` ([#210](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/pull/210)). Repository CI only — not part of the installable release asset.
+
 ## 1.12.0 (2026-09-17)
 
 **Your Classic section's dashboards now reach Freedom UI instead of quietly disappearing.** A section's dashboards live in stand data, not in schema code, so migration never saw them and dropped them without a word. The toolkit now discovers them, puts them in the plan you approve, installs the Dashboards Migrator through clio, hands the migration over and verifies the result. The same release stops a section's own declared elements from being dropped, rewrites the migration plan for the human who approves it, and repairs mobile conversion against the converter's new response shape.
