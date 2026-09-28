@@ -68,7 +68,7 @@ jobs:
         run: npm ci --ignore-scripts
       # Blocking: any finding fails the job. Scope and ignores live in eslint.config.mjs, not on this command line.
       - name: ESLint
-        run: npx eslint .
+        run: npm run lint
 
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})

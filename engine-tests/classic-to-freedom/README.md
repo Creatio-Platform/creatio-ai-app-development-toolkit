@@ -44,7 +44,7 @@ engine's own `package.json` above keeps zero dependencies. Install it once from 
 npm ci --ignore-scripts
 ```
 
-**Lint.** From the repo root, `npx eslint .` (or `npm run lint`). The config is `eslint.config.mjs`: the
+**Lint.** From the repo root, `npm run lint`. The config is `eslint.config.mjs`: the
 recommended rule set over `skills/**/*.mjs`, `hooks/**/*.mjs` and `scripts/*.mjs`, ignoring the vendored parser,
 the generated component registry, the generated `*.workflow.js` files and these goldens (fixtures and baselines
 included). The CI job **ESLint (skills, hooks, scripts)** runs the same command and fails on any finding.
@@ -53,6 +53,7 @@ included). The CI job **ESLint (skills, hooks, scripts)** runs the same command 
 directory, so the gate is measured without changing how any runner is invoked. From the repo root, in bash:
 
 ```
+rm -rf coverage
 export NODE_V8_COVERAGE="$PWD/coverage/tmp"
 (cd skills/classic-to-freedom-migration/engine && npm test)
 unset NODE_V8_COVERAGE
