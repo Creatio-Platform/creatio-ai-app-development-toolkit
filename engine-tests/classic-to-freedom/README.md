@@ -66,3 +66,24 @@ every `.mjs` file in the lint scope, including ones no runner loads, which there
 enforced. In CI the ubuntu leg of **Classic→Freedom engine goldens** collects coverage across all of its steps,
 publishes the table in the job summary and uploads the report as the `engine-coverage` artifact; the windows leg
 runs without coverage.
+
+**Baseline.** The first CI measurement, taken before any threshold existed
+([run 36423655995](https://github.com/Creatio-Platform/creatio-ai-app-development-toolkit/actions/runs/36423655995),
+ubuntu leg, commit `0a79fda`):
+
+| Scope | Statements / lines | Branches | Functions |
+|---|---|---|---|
+| All files | 90.64% | 87.94% | 97.87% |
+| `skills/classic-to-freedom-migration/engine` | 98.58% | 88.53% | 98.85% |
+| `skills/_workflow-core` | 98.54% | 80.14% | 100% |
+| `skills/_workflow-core/adapters` | 100% | 80.64% | 100% |
+| `skills/_workflow-core/behaviour-analysis` | 98.97% | 84.50% | 98.11% |
+| `scripts` | 52.62% | 71.42% | 77.77% |
+| `hooks` | 0% | 0% | 0% |
+
+Per engine module (lines / branches): `tasks.mjs` 99.40 / 87.37, `assemble.mjs` 100 / 95.21, `report.mjs`
+99.28 / 82.83, `split.mjs` 100 / 90.47, `designspec.mjs` 98.56 / 90.26, `engine.mjs` 98.72 / 87.51, `mapper.mjs`
+99.80 / 89.10, `migrate.mjs` 97.60 / 87.92, `reads.mjs` 90.36 / 78.87, `verify-vendor-upstream.mjs` 61.68 / 76.00
+(its network path runs only in the separate upstream-authenticity job). `hooks/` reads 0% because its tests are
+the pytest suite, which runs in its own job without coverage; `scripts/` is low because two of its four `.mjs`
+scripts are never started by this job. V8 line coverage over-counts slightly, so branches are the stricter number.
