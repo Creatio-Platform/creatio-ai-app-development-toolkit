@@ -240,9 +240,9 @@ NOTHING to Creatio. Persistence happens only after **Gate M** (step 6).
    page is the original page the developer asked to convert (not itself a step-8a follow-up) and its
    step 8 report's "Missing pages" list is non-empty. Ask the developer once, **after** the complete
    step 8 report (a separate question, never bundled into the same prompt as the Gate S question from
-   step 7b), whether to convert them now — asked in the same terms the list shows them: no Freedom UI
-   mobile page for these targets, convert them now? If they decline or give no answer, stop here — do
-   not re-offer later in the same run.
+   step 7b), whether to convert them now — asked in the same terms the list shows them, and claiming no
+   more than it does: these targets have no converted Freedom UI mobile page yet, convert them now? If
+   they decline or give no answer, stop here — do not re-offer later in the same run.
    - **A follow-up page never gets its own step 8a.** A page converted through this step runs the full
      flow from step 1 through its own step 8 report, but that report's own "Missing pages" list is
      reported ONLY — never offered for further sequential conversion, no matter how many candidates it
@@ -378,10 +378,12 @@ Show a SHORT, plain-language plan — no JSON, no page body, no per-property det
 - **Missing target pages** — from `guide.requestConversions.missingTargetPages`: clio deduplicates this
   list itself across BOTH `web-page` and `entity-default-mobile-page` targets, so list it as reported, one
   row per distinct target with the buttons/requests that reference it (`references[]`). Head the
-  section the developer SEES **"No Freedom UI mobile pages found"** — name Freedom UI explicitly, so it
-  cannot be read as "no mobile page of any kind" — and do NOT repeat that in every row, the heading
-  already carries it. Word each row `<target> — <kind> (referenced by: <elementName>, …)`, taking
-  `<kind>` from `targetKind` and stating what that kind actually CLAIMS, because the two differ in claim
+  section the developer SEES **"No converted Freedom UI mobile page"** — name Freedom UI explicitly, so
+  it cannot be read as "no mobile page of any kind", and never say "found": for a `web-page` target no
+  search ran, so a heading claiming one contradicts the rows under it and the step 2a caveat — and do
+  NOT repeat the heading's claim in every row, it already carries it. Word each row
+  `<target> — <kind> (referenced by: <elementName>, …)`, taking `<kind>` from `targetKind` and stating
+  what that kind actually CLAIMS, because the two differ in claim
   and in remedy: `web-page` → *"web page target, binding blanked"* — flagged structurally, nothing was
   searched, so this states what THIS run has and not that no such page exists anywhere (see the
   `web-page` caveat in step 2a); `entity-default-mobile-page` → *"entity default page not found by the
@@ -453,7 +455,7 @@ one followed by a later summary):
   action. A `crt.Button` whose request is unsupported was **dropped entirely** (a `guide.droppedElements`
   entry whose coded reason names the request) — list those removed action components for the developer.
 - **Missing pages:** the same deduplicated `missingTargetPages` list from the plan, shown under the
-  same developer-facing heading **"No Freedom UI mobile pages found"** and the same per-row
+  same developer-facing heading **"No converted Freedom UI mobile page"** and the same per-row
   `<target> — <kind> (referenced by: …)` wording. On
   the ORIGINAL page's report, state whether the developer accepted the step 8a offer to convert them,
   and for each accepted target: queued / converted (its own report lands when its turn finishes) /
