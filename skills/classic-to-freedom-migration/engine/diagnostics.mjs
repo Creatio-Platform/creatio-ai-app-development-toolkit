@@ -128,14 +128,20 @@ export function collect({ environment, root = PLUGIN_ROOT, run = defaultRun } = 
 
 const tick = (v) => (v.startsWith("unknown (") ? v : `\`${v}\``);
 
+function gitRef(git) {
+  if (!git) return "";
+  const branch = git.branch ? tick(git.branch) : "detached";
+  return ` · branch ${branch} · commit ${tick(git.commit)}`;
+}
+
 export function render(d) {
-  const ref = d.git ? ` · branch ${d.git.branch ? tick(d.git.branch) : "detached"} · commit ${tick(d.git.commit)}` : "";
+  const uri = d.uri ? " · " + tick(d.uri) : "";
   const lines = [
     "### Run diagnostics",
     "",
-    `- **Skill:** classic-to-freedom-migration ${tick(d.skillVersion)}${ref}`,
+    `- **Skill:** classic-to-freedom-migration ${tick(d.skillVersion)}${gitRef(d.git)}`,
     `- **clio:** ${tick(d.clioVersion)} (CLI on PATH) · bundled cliogate ${tick(d.gateVersion)}`,
-    `- **Environment:** ${tick(d.environment)}${d.uri ? ` · ${tick(d.uri)}` : ""}`,
+    `- **Environment:** ${tick(d.environment)}${uri}`,
   ];
   if (d.stand?.error) {
     lines.push(`- **Stand:** ${unknown(d.stand.error)}`);
