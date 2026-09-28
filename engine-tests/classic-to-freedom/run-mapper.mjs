@@ -5066,6 +5066,49 @@ check("the blocked list page still RENDERS its partial reading, with the verdict
 check("a healthy section leaves the list gate open — the gate exists to report a real gap, not to flag every section",
   () => svRun.listGate?.blocked === false, () => svRun.listGate);
 
+/* --- the section path's attribution and counts ------------------------------------------
+   A button's package is the layer that declares it, not a later layer that only hides it. `activeRowActions` is the
+   slot the row actions sit in, so it is not unmodelled grid config. The command-bar count line is split by source.
+   A parse failure names only the layers that failed, and the others are still read. --- */
+const svHideLayer = { pkg: "WorkSalesBase", body: `define("XSection",[],function(){return{entitySchemaName:"X",methods:{},diff:[`
+  + `{"operation":"merge","name":"CreateOrderFromOpportunityButton","values":{"visible":false}},`
+  + `{"operation":"merge","name":"DataGrid","values":{"activeRowActions":[],"showPrimaryDisplayColumn":true}}`
+  + `]};});` };
+const svHideRun = runMigration({ ...svManifest(), section: { ...svManifest().section, schemas: [...svSection, svHideLayer] } },
+  { baseDir: FIX });
+const svHideBtn = (svHideRun.listChangeSet?.commandBarActions || []).find((a) => a.name === "CreateOrderFromOpportunityButton");
+check("a button's package is the layer that DECLARES it (`OrderInSales`), not a later layer that only hides it — the hiding is still visible as `staticVisible: false`",
+  () => svHideBtn?.package === "OrderInSales" && svHideBtn?.staticVisible === false,
+  () => svHideBtn);
+check("a base-owned grid a client layer reconfigures reports that FIRST client layer, not the seed package that defined the grid",
+  () => { const g = (svHideRun.section?.sectionView?.gridConfig || []).find((x) => x.name === "DataGrid");
+    return g?.package === "OrderInSales"; },
+  () => svHideRun.section?.sectionView?.gridConfig);
+check("`activeRowActions` is NOT raised as unmodelled grid config — it is the slot the row actions sit in, and they are read as `rowActions` — while a genuinely unmodelled key beside it still is",
+  () => { const g = (svHideRun.section?.sectionView?.gridConfig || []).find((x) => x.name === "DataGrid");
+    return !!g && !g.props.includes("activeRowActions") && g.props.includes("showPrimaryDisplayColumn"); },
+  () => svHideRun.section?.sectionView?.gridConfig);
+check("the command-bar count line splits the actions by SOURCE and does not say a view-`diff` button is uncaptured",
+  () => { const line = renderPlan(svRun, {}).split(String.fromCodePoint(10)).find((l) => l.startsWith("- **Command-bar actions:**")) || "";
+    return /1 found — 0 via `getSectionActions\(\)`, 1 declared in the section's view `diff`/.test(line) && !/not captured/.test(line); },
+  () => renderPlan(svRun, {}).split(String.fromCodePoint(10)).filter((l) => l.includes("Command-bar actions")));
+const svPartialRun = runMigration({ ...svManifest(), section: { ...svManifest().section,
+  schemas: [...svSection, { pkg: "WorkSalesBase", body: svBadSection[0].body }] } }, { baseDir: FIX });
+check("with ONE broken layer the list gate names that layer and says the others are still read — the other layer's button really is still in the plan",
+  () => { const r = (svPartialRun.listGate?.reasons || []).join(" ");
+    return svPartialRun.listGate?.blocked === true && /1 of 2 section layer/.test(r) && /WorkSalesBase/.test(r)
+      && !/every element/.test(r) && !/method-body signals alone/.test(r)
+      && (svPartialRun.listChangeSet?.commandBarActions || []).some((a) => a.name === "CreateOrderFromOpportunityButton"); },
+  () => ({ gate: svPartialRun.listGate, actions: svPartialRun.listChangeSet?.commandBarActions?.map((a) => a.name) }));
+check("the empty command-bar line on an incomplete section reading does not claim the view `diff` declares no button",
+  () => { const line = renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).find((l) => l.startsWith("- **Command-bar actions:**")) || "";
+    return /none found in what could be read/.test(line) && !/nor the section's view `diff` declares one/.test(line); },
+  () => renderPlan(svBadRun, {}).split(String.fromCodePoint(10)).filter((l) => l.includes("Command-bar actions")));
+check("when EVERY section layer is broken the gate still says the list rests on the method-body signals alone",
+  () => /failed to parse in every layer/.test((svBadRun.listGate?.reasons || []).join(" "))
+    && /method-body signals alone/.test((svBadRun.listGate?.reasons || []).join(" ")),
+  () => svBadRun.listGate);
+
 /* --- the list gate has to be CONSUMED, and all four of its arms have to be pinned ------
    The gate was prose: `renderListPageBlock` printed the ⛔ paragraph and nothing else read `listGate`, so the CLI
    exited 0 next to a banner saying the list page is not approvable — and the build executor, which reads the exit

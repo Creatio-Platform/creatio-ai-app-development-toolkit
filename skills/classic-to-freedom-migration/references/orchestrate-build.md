@@ -7,6 +7,49 @@ mean. No sub-agent is handed this file — each gets the briefs its task kind na
 
 ## Step 7 — slice the plan, then orchestrate one task at a time
 
+**Why it is not built in this context.** The build is hundreds of steps — the `⚠ Confirm` worklist,
+a page tree built leaf-first, the `creatio-ui-guidelines` gate twice per page, the re-bind, every
+ported handler — and held in one context it had one machine check, at the very end. A session that
+hit a usage limit lost the progress, and "done" was prose written by the same agent that did the
+work. Sliced, a lost session costs one task.
+
+**7.0 The dispatch route — resolve it in ONE turn, before the first `--start`.** Every rule below
+says "sub-agent"; this names what dispatches one on each host. Pick by what the host actually
+allows, write it into `worklog.md` as a `Route:` line before the first dispatch (`Route: agent` ·
+`codex` · `copilot` · `inline`), and name it again in the step-8 handoff — the `--verify` table does
+not carry it.
+
+1. **Claude Code — the `Agent` tool.** One call per task; its prompt carries the task's `--start`
+   token and the 7.3 hand-off.
+2. **Codex — its own sub-agent.** Ask Codex to spawn ONE agent for the task — the built-in `default`
+   agent, or a custom one from `~/.codex/agents/*.toml` / `.codex/agents/` — with the same prompt. A
+   skill instruction is one of the triggers Codex spawns on, so this step is the request.
+3. **GitHub Copilot CLI — a sub-agent with its own context.** The built-in `general-purpose` agent,
+   or a custom one from `~/.copilot/agents/` / `.github/agents/` (`*.agent.md`), with the same
+   prompt. A custom agent does not read the repository's instructions unless its front matter sets
+   `include-custom-instructions: true`, so hand it the 7.3 paths either way.
+4. **Inline — this session builds the tasks itself.** Reachable ONLY through the route gate below,
+   never a choice you make silently.
+
+> **ROUTE GATE.** A Claude Code session can carry a host instruction ("do not call the Agent tool
+> unless the user requested it") that sits ABOVE this file, and no sentence here can grant a
+> permission it withholds. When it forbids `Agent`, do not dispatch against it and do not start
+> building. Issue exactly ONE `AskUserQuestion` — *"The Agent tool is blocked by this session's
+> settings. Grant `Agent` for this build (each task in its own fresh context), or build in this
+> session (inline: every task in this one context — it costs this session's context and drops rule
+> 2's independent-context guarantee)?"* — and stop until it is answered. A grant in chat is an
+> explicit user request and satisfies the host rule. **Never mention the option in passing and keep
+> going** — an aside is not a question.
+> **The inline route covers the WHOLE run** — choose it before the first `--start`, never switch
+> mid-run. Everything else in 7.1–7.6 holds unchanged: `--next` picks the task, `--start` opens each
+> one and prints its token, the task file is the record, and the dispatch gate still fails a task
+> closed without the token issued for it. The one difference: no sub-agent receives the token, so
+> YOU copy it into that task's `agentNonce:` when you close it — the explicit exception to rules 2
+> and 3 and to "never write it into the file yourself", valid only under `Route: inline`.
+> Close one task, re-run `--tasks`, then `--start` the next; never hold two tasks open. The same
+> holds for the non-building contexts of 7.4 (the read-back and the judge): they run here too, and
+> the step-8 report says so.
+
 **7.1 Record the approval, then slice the plan.**
 
 1. Record the approval in `decisions.md`, naming the **plan version** string `plan.md` prints
@@ -147,7 +190,8 @@ sub-agents before this, one of them caching material nobody else read.
    task, it is deliberately NOT written into the task file, and the sub-agent copies it into
    `agentNonce:` before it finishes. A task closed carrying a different token — or none — fails the
    same gate. Never write it into the file yourself: what the token establishes is that a context
-   you dispatched closed the task, and you cannot attest to that on its behalf.
+   you dispatched closed the task, and you cannot attest to that on its behalf. (`Route: inline` is
+   the one exception — 7.0.)
 
    The mode prints a `--- progress ---` block: **paste it into the chat verbatim** after every
    dispatch and every status change, so the user sees which task is running, how long it has been
@@ -162,7 +206,8 @@ sub-agents before this, one of them caching material nobody else read.
    rule names, not a way of keeping the page coherent. Each sub-agent echoes the dispatch token you
    handed it into `agentNonce:` before it finishes. You hand the token over and the engine checks
    it; you are the wrong party to prove this rule held, which is why the check is neither yours nor
-   the sub-agent's to make.
+   the sub-agent's to make. Which mechanism dispatches the sub-agent is 7.0's route; `Route: inline`
+   is the one run this rule does not bind, and only the route gate opens it.
 3. **The task file is the record — the sub-agent writes its own status into it.** You do not
    transcribe a status the sub-agent reported to you: the file is what survives your own session
    ending. A task whose sub-agent died without writing stays `todo`/`in-progress` and is

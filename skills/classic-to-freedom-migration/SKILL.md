@@ -139,13 +139,14 @@ Every migration is tracked through a persisted document set — the shared sourc
 
 Initial request: `$ARGUMENTS`
 
-Decide the scope from "Migration Scope" above. For **whole-package** scope, build the inventory + dependency graph first: `list-packages` / `list-apps` / `get-app-info` / `list-app-sections` to enumerate every section, page, detail, entity, and owning app; classify each schema as own vs replacing/extension; record which pages depend on which entities/details/backend; persist it in `discovery.md`. For **single-section**, skip the full inventory and resolve only the named target plus its direct dependencies.
+Decide the scope from "Migration Scope" above. For **whole-package** scope, build the inventory + dependency graph first: `list-packages` / `list-apps` / `get-app-info` / `list-app-sections` to enumerate every section, page, detail, entity, and owning app; classify each schema as own vs replacing/extension; record which pages depend on which entities/details/backend; persist it in `discovery.md`. For **single-section**, skip the full inventory and resolve only the named target plus its direct dependencies. At both scopes the **run diagnostics** (step 1.2a) come before the first discovery call — so the environment is resolved (step 1.2) first, and the inventory waits for it.
 
 ### 1. Resolve The Target
 
 1. Parse the input: a URL → host, route, section/page hints, record Ids, page/designer UIds; a name → possible section caption/code, entity/page/package/app name, or schema prefix. Whole-package → the set of sections from the step-0 inventory.
 2. Resolve the environment: `list-environments`, match the URL host AND the application path — a host match with a different path is a DIFFERENT stand, not the target. If no entry matches, do NOT stop and do NOT hand-edit `appsettings.json`: register the stand through clio MCP, then re-run `list-environments` to confirm.
    > **Registration must go through `clio-run` → `reg-web-app`.** The clio MCP server reads `appsettings.json` once at process start and holds that snapshot for its whole lifetime, so an entry written to the file by any other means — a Bash edit, or `clio reg-web-app` run in a separate CLI process — is invisible to every MCP tool (including `list-environments`, which also answers from the snapshot) until the MCP server restarts. `reg-web-app` invoked in-process is the only path that updates the running server's view. Call: `clio-run` `{ "command": "reg-web-app", "args": { "environment-name": …, "uri": …, "login": …, "password": …, "developer-mode-enabled": true } }`. Ask the user for the environment name and credentials; use credentials copied from another registered stand only when the user explicitly says to. Symptom that you skipped this: `Environment with key '<name>' not found` from a tool while `clio ping -e <name>` in the shell succeeds.
+2a. **Print the run diagnostics — before any discovery call.** Run `node engine/diagnostics.mjs --environment <name>` (the `engine/` dir beside this SKILL.md) and show its `### Run diagnostics` block in chat verbatim, then copy it into the first `worklog.md` entry. It names this skill's version (plus the git branch and commit of the installed copy, when it is a checkout), the clio version, and the stand's URL, Creatio version, product, DB engine and framework — so a transcript or a worklog alone says what the run was made with. A value it cannot read shows as `unknown (<reason>)`; that never stops the run — an unreachable stand is handled by the usual connectivity path in the next calls.
 3. Resolve the target inventory: section schema + code, edit pages, mini pages, details/related schemas, entity schema, the Classic parent/template chain per page, existing Freedom pages for the same entity/app, package/app ownership, and whether the owning package is editable or needs a new/replacing package.
 
 ### 2. Discover Runtime Metadata
@@ -464,15 +465,15 @@ A batch of lettered items ending in "confirm A2 and A8" is the defect this repla
 Step 6 ends with an approved plan. This step does **not** build it here. It cuts the plan into a folder of
 one-task files and then walks that folder, handing **one task at a time** to its own sub-agent.
 
-**Why it is not built in this context.** The build is hundreds of steps — the `⚠ Confirm` worklist, a page tree
-built leaf-first, the `creatio-ui-guidelines` gate twice per page, the re-bind, every ported handler — and held
-in one context it had one machine check, at the very end. A session that hit a usage limit lost the progress, and
-"done" was prose written by the same agent that did the work. Sliced, a lost session costs one task.
-
 **When the plan is approved, read `./references/orchestrate-build.md` ONCE, before you slice.** It holds this step
-in full — 7.1 recording the approval and slicing the plan, 7.2 the orchestrator contract, 7.3 what each sub-agent
-is handed (the task-kind → brief table), 7.4 the read-back and the judge, 7.5 repair, 7.6 whole-package scope —
-and step 8's driver side. What follows is the part you keep in view while the build runs; it does not replace it.
+in full — 7.0 the dispatch route, 7.1 recording the approval and slicing the plan, 7.2 the orchestrator contract,
+7.3 what each sub-agent is handed (the task-kind → brief table), 7.4 the read-back and the judge, 7.5 repair, 7.6
+whole-package scope — and step 8's driver side. What follows is the part you keep in view while the build runs; it
+does not replace it.
+
+**7.0 Resolve the dispatch route before the first `--start`** and write it into `worklog.md` as a `Route:` line
+(`agent` · `codex` · `copilot` · `inline`). `inline` is reachable only through 7.0's ROUTE GATE — one
+`AskUserQuestion`, then stop until it is answered.
 
 **7.2 The orchestrator contract** — six rules, each stated in full in the reference:
 
@@ -498,7 +499,7 @@ Validate narrowest-reliable-first, then broaden: page schema validation → pack
 
 **How to do the browser check: `./references/freedom-ui-browser-check.md`.** Read it BEFORE opening a page, not after it misbehaves. Console first, error boundary second, component census last — and **one `Request timed out` from a tab that was answering is the diagnosis, not a reason to retry**: `execute_javascript` runs on the page's main thread, so a blocked page can never answer anything, including `document.title`. A measured run spent 8 of its 18.6 browser minutes re-probing a frozen tab.
 
-Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
+Report what passed, what could not run, and what stays risky (missing runtime, permissions, or coverage). Name the step-7 dispatch route the build ran on (the `Route:` line in `worklog.md` — 7.0); an `inline` run says so, because its tasks were closed in one context. Move a task to `VALIDATED` only after the Definition of Done in `./references/migration-documentation.md` is met and the evidence is in `worklog.md`; otherwise leave it `DONE` and log the gap.
 
 **On an orchestrated run the final gate is the MIGRATION RESULT REPORT, and the command that writes it is:**
 `node engine/migrate.mjs <manifest> --verify --from <migration-folder> --tasks <migration-folder>/build-tasks`.
@@ -517,17 +518,13 @@ close report (the Plan-vs-Done rows, per-AC evidence, gate-toggle safety, the `Q
 Read each only when the step that names it says so:
 
 - `./references/classic-to-freedom-mapping.md` — classification categories, package placement, template/control/data/logic mapping, and the standard-features / widgets / actions table (Approvals, Activities/Emails, DCM, Run process). The single source of truth for *how to map a component*.
-- `./references/build-task-execution.md` — the five rules every step-7 sub-agent that writes the stand is bound by, and the preflight, `creatio-ui-guidelines` gate and clio-safety rules of every write. Handed to the sub-agent, not read by the orchestrator.
 - `./references/migration-plan-template.md` — what the generated `--plan` output contains, and the hand-authoring fallback for when Node is unavailable.
 - `./references/page-design-spec.md` — the per-page design-spec format the engine emits with `--spec`.
 - `./references/analysis-summary.md` — the format rules for the plan's user-facing `Overview`/`What it does`/`Main scope` header.
 - `./references/migration-documentation.md` — the document set layout, status vocabulary, task IDs, Definition of Done, and update rules.
 - `./references/existing-freedom-reconcile.md` — the reconcile procedure when the entity already has a Freedom page.
-- `./references/orchestrate-build.md` — step 7 in full (7.1–7.6: slicing, the orchestrator contract, the task-kind → brief table, read-back and judge, repair, whole-package scope) and step 8's driver side. Read ONCE, when the plan is approved.
-- `./references/build-page.md` — the per-page build procedure, what a builder owes the step-8 close report, and the build-time Known Traps. Handed to page-build and repair sub-agents.
-- `./references/build-scaffolding.md` — the `new-app` one-call scaffold, the package-composition rule and the re-template sequence. Handed to the Scaffolding sub-agent.
-- `./references/build-dashboards.md` — step 7.7: installing the Dashboards Migrator and running `MigrateDashboardsProcess`. Handed to the list page's build task when it carries the section-dashboard rows.
-- `./references/read-back-brief.md` / `./references/judge-brief.md` / `./references/reference-cache-brief.md` — the briefs of the step-7.4 read-back, the judge (`Quality gates`) and the `Reference cache` sub-agents.
+- `./references/orchestrate-build.md` — step 7 in full (7.0–7.7) and step 8's driver side. Read ONCE, when the plan is approved.
+- The sub-agent briefs — `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-scaffolding.md`, `./references/build-dashboards.md`, `./references/read-back-brief.md`, `./references/judge-brief.md`, `./references/reference-cache-brief.md`. Handed to sub-agents, never read by the orchestrator; which task kind gets which is `orchestrate-build.md` → 7.3.
 - `./references/behaviour-analysis-run.md` — how to run the step-5.1 behaviour analysis. Read only when step 5.1's condition holds.
 - `./references/manifest-conditional-inputs.md` — the step-4.2 manifest inputs that apply only when a surface signal exists (profile cards, the add-record mini page, dashboard delivery, typed pages, a section boundary).
 

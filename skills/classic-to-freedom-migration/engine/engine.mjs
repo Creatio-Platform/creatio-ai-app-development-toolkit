@@ -1522,6 +1522,11 @@ function makeItem(op, seed, pkg) {
     valueBindTo: op.valueBindTo, optionValue: op.optionValue, // nested `value.bindTo` / a literal option value
     itemTypeUnresolved: !!op.itemTypeUnresolved, // the body named a kind this engine's table could not resolve
     templateOwned: seed, // the DEFINING insert's origin — never overwritten by a later merge/move
+    // The FIRST CLIENT layer that defined or touched this element — set once, never overwritten. Not the tail of
+    // `provenance`: a later layer that only HIDES an element (`merge visible:false`) is not the one that declares it
+    // and owns its handler, and on a base element the head of `provenance` is the seed, which the client never
+    // changed. Null while only seed layers have touched it.
+    declaringPackage: seed ? null : pkg,
     // Declared-but-unmodelled `values` keys, accumulated across every op that touches this item (see
     // `unmodelledValueKeys`). A Set inside the fold; the projection emits a SORTED array so output stays
     // deterministic (the plan hash is over content, and a Set's iteration order is insertion order).
@@ -1623,6 +1628,15 @@ function applyMergeContentFields(op, cur) {
   }
 }
 
+// A CLIENT layer reconfigured an existing element. `schemaTouched` and `declaringPackage` move together: the section
+// mapper reads a section-declared element's package off `declaringPackage`, so an arm that set one without the other
+// would publish `package: null` for an element a client layer changed.
+function markClientTouch(cur, seed, pkg) {
+  if (seed) return;
+  cur.schemaTouched = true;
+  cur.declaringPackage ??= pkg;
+}
+
 // patch in place; carry contentType/itemType too — a later schema can introduce a control hint
 // (e.g. mark a text field as lookup, contentType 5); dropping it made control selection wrong.
 function replayMerge(op, cur, items, { seed, pkg }, warnings) {
@@ -1667,7 +1681,7 @@ function replayMerge(op, cur, items, { seed, pkg }, warnings) {
   // restating the ones already bound) — overwriting the map wholesale would drop the lower layer's trigger.
   if (op.handlers && Object.keys(op.handlers).length) cur.handlers = { ...cur.handlers, ...op.handlers };
   cur.provenance.push(pkg);
-  if (!seed) cur.schemaTouched = true; // a CLIENT schema reconfigured this (possibly base-owned) element
+  markClientTouch(cur, seed, pkg); // a CLIENT schema reconfigured this (possibly base-owned) element
 }
 
 // classic idiom: `remove` then `move` = reposition — the element ends up PRESENT at the new
@@ -1692,7 +1706,7 @@ function replayMove(op, cur, { seed, pkg }, warnings) {
   mergeIdentityProps(op, cur, pkg, warnings, "move");
   if (cur.removed) { cur.removed = false; cur.removedBy = null; cur.removedBySeed = false; }
   cur.provenance.push(pkg);
-  if (!seed) cur.schemaTouched = true; // a CLIENT schema repositioned this (possibly base-owned) element
+  markClientTouch(cur, seed, pkg); // a CLIENT schema repositioned this (possibly base-owned) element
 }
 
 // removedBySeed: a template-internal remove (base template dropping a base element) is context,
@@ -1704,7 +1718,7 @@ function replayRemove(op, cur, items, { seed, pkg }, warnings) {
   // remove-then-restate idiom) — which reaches `cur.unmodelledProps.add(...)` and would throw on a stub without
   // the field. Every item record in this fold carries the same shape, exactly as `makeItem`'s own comment requires.
   items.set(op.name, { name: op.name, removed: true, removedBy: pkg, removedBySeed: seed, provenance: [pkg],
-    unmodelledProps: new Set() });
+    declaringPackage: seed ? null : pkg, unmodelledProps: new Set() });
   warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: "remove of an item no lower schema defined — recorded as tombstone; check base seed / schema order" });
 }
 
@@ -1767,7 +1781,7 @@ function replayRemoveOneProperty(k, cur) {
 function replayRemoveProperties(op, cur, { seed, pkg }, warnings) {
   const unmodelled = op.properties.filter((k) => replayRemoveOneProperty(k, cur));
   cur.provenance.push(pkg);
-  if (!seed) cur.schemaTouched = true;
+  markClientTouch(cur, seed, pkg);
   if (unmodelled.length) {
     warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.FIDELITY,
       hint: `this remove deletes propert(ies) the engine does not model on an item: ${unmodelled.join(", ")}. The element is KEPT (correct), but the effect of clearing those keys is not represented — read the classic body if the plan depends on them.` });
@@ -1808,6 +1822,7 @@ function replaySet(op, cur, items, { seed, pkg }, warnings) {
     // position is recovered from the item being replaced, not from the op
     parent: cur.parent, propertyName: cur.propertyName, order: cur.order,
     templateOwned: cur.templateOwned, provenance: [...cur.provenance, pkg],
+    declaringPackage: cur.declaringPackage ?? fresh.declaringPackage,
     schemaTouched: seed ? cur.schemaTouched : true });
   // The child clause is named rather than nested inside the hint: one template per string, so the sentence stays
   // readable and the optional half is not a second template inside the first.
@@ -2140,6 +2155,7 @@ export function mergeHierarchy(schemas /* base->top */, opts = {}) {
       visible: i.visible ?? null, enabled: i.enabled ?? null,
       caption: i.caption || i.labelCaption || null, labelCaption: i.labelCaption || null,
       provenance: i.provenance, templateOwned: !!i.templateOwned, schemaTouched: !!i.schemaTouched,
+      declaringPackage: i.declaringPackage || null,
       // The CONTROL end of a method's trigger, and the per-kind value capture. All three were read inside the fold
       // and then dropped here, so the mapper could not build a tier-B element's handler wiring or a radio group's
       // control/options at all — `item.handlers` is what the table's tier B is defined in terms of.
