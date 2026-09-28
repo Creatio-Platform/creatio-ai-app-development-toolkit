@@ -175,6 +175,107 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
       && g.filter((r) => r.label.startsWith("Card actions — native")).every((r) => r.vk?.type === "cardnative"),
     () => g.filter((r) => /^(Side profile|Tab · |Header|Handler|Card actions — native)/.test(r.label)).map((r) => [r.label, r.vk?.type]));
   {
+    // A custom getActions item is not a template control: it gets its own row, and only the table's own controls
+    // fold into the native row — else a page whose template ships every native control reads as missing one.
+    const acts = checklistGroups({ entity: "X", changeSet: { cardActions: ["PrintButton", "ViewOptionsButton", "ReloadDataButton", "TagButton", "calculateSaaSMetrics", "RunProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
+    const native = acts.find((r) => r.label.startsWith("Card actions — native"));
+    check("checklist: a custom card action (calculateSaaSMetrics) gets its own `card` row; the native row holds only the template's controls",
+      () => native?.vk?.type === "cardnative" && native.vk.names.join() === "ViewOptions,ReloadData,Tag"
+        && acts.some((r) => r.label === "Card action — calculateSaaSMetrics" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — RunProcess" && r.vk?.type === "card")
+        && acts.some((r) => r.label === "Card action — Print" && r.vk?.type === "card"),
+      () => acts.map((r) => [r.label, r.vk]));
+    check("cardnative: the Contract native row (ViewOptions / ReloadData / Tag) closes ✅ against a page carrying the template's controls",
+      () => st(resolveVk(native.vk, ctx)) === "✅ Done", () => resolveVk(native.vk, ctx));
+    const custom = acts.find((r) => r.label === "Card action — calculateSaaSMetrics").vk;
+    const withItem = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", name: "CalculateSaaSMetricsMenuItem" }] }] } } } }, "main");
+    check("card: a custom action closes ✅ only on an element named for it — the template's own Actions button alone reads ⚠ verify",
+      () => st(resolveVk(custom, ctx)) === "⚠ verify" && /calculateSaaSMetrics/.test(ev(resolveVk(custom, ctx)))
+        && st(resolveVk(custom, withItem)) === "✅ Done",
+      () => [resolveVk(custom, ctx), resolveVk(custom, withItem)]);
+    const builtWith = (item) => verifyCtx({ pages: { main: { ...page(), resources: { MenuItem_calc_caption: "Calculate SaaS metrics" }, viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", ...item }] }] } } } }, "main");
+    const variants = [{ name: "CalculateSaasMetricsMenuItem" }, { name: "CalculateSAASMetricsMenuItem" },
+      { name: "MenuItem_calc", caption: "Calculate SaaS metrics" },
+      { name: "MenuItem_calc", caption: "#ResourceString(MenuItem_calc_caption)#" },
+      { name: "MenuItem_calc", clicked: { request: "usr.CalculateSaaSMetricsRequest" } }];
+    check("card: a custom action closes ✅ whatever the casing of the element name, or on a caption / clicked.request that names it",
+      () => variants.every((v) => st(resolveVk(custom, builtWith(v))) === "✅ Done")
+        && st(resolveVk(custom, builtWith({ name: "MenuItem_other", caption: "Recalculate totals" }))) === "⚠ verify",
+      () => variants.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    // The name must sit on word boundaries: a verb-prefixed neighbour ("Recalculate SaaS metrics") is another action.
+    const lookalikes = [{ name: "RecalculateSaaSMetricsMenuItem" }, { name: "MenuItem_other", caption: "Recalculate SaaS Metrics" },
+      { name: "MenuItem_other", clicked: { request: "usr.RecalculateSaaSMetricsRequest" } }];
+    check("card: an element whose name, caption or request only contains the action name inside a longer word does not close it",
+      () => lookalikes.every((v) => st(resolveVk(custom, builtWith(v))) === "⚠ verify"),
+      () => lookalikes.map((v) => [v, resolveVk(custom, builtWith(v))]));
+    check("card: a whole-word match followed by more words closes the action when none of the card's other hints starts with this one (`CalculateSaaSMetricsDailyMenuItem` for `calculateSaaSMetrics`)",
+      () => st(resolveVk(custom, builtWith({ name: "CalculateSaaSMetricsDailyMenuItem" }))) === "✅ Done",
+      () => resolveVk(custom, builtWith({ name: "CalculateSaaSMetricsDailyMenuItem" })));
+    // Sibling hints: a text that spells the longer hint closes only that one.
+    const pair = checklistGroups({ entity: "X", changeSet: { cardActions: ["approve", "approveAll"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action — "));
+    const approve = pair.find((r) => r.label === "Card action — approve")?.vk;
+    const approveAll = pair.find((r) => r.label === "Card action — approveAll")?.vk;
+    const onlyAll = [{ name: "ApproveAllMenuItem" }, { name: "MenuItem_x", caption: "Approve all" }, { name: "MenuItem_x", clicked: { request: "usr.ApproveAllRequest" } }];
+    check("card: with sibling hints `approve` / `approveAll`, an element built only for `approveAll` (by name, caption or request) closes `approveAll` and leaves `approve` ⚠ verify",
+      () => approve?.siblings?.includes("approveAll") && onlyAll.every((v) => st(resolveVk(approveAll, builtWith(v))) === "✅ Done"
+        && st(resolveVk(approve, builtWith(v))) === "⚠ verify") && /approve/.test(ev(resolveVk(approve, builtWith(onlyAll[0])))),
+      () => onlyAll.map((v) => [v, resolveVk(approve, builtWith(v)), resolveVk(approveAll, builtWith(v))]));
+    const bothBuilt = verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton",
+      menuItems: [{ type: "crt.MenuItem", name: "ApproveMenuItem" }, { type: "crt.MenuItem", name: "ApproveAllMenuItem" }] }] } } } }, "main");
+    check("card: with sibling hints `approve` / `approveAll`, a page carrying an element for each closes both",
+      () => st(resolveVk(approve, bothBuilt)) === "✅ Done" && st(resolveVk(approveAll, bothBuilt)) === "✅ Done",
+      () => [resolveVk(approve, bothBuilt), resolveVk(approveAll, bothBuilt)]);
+    // A longer sibling that contains the key later in the word also suppresses it.
+    const trio = checklistGroups({ entity: "X", changeSet: { cardActions: ["approve", "massApprove"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action — "));
+    const approveT = trio.find((r) => r.label === "Card action — approve")?.vk;
+    const massApprove = trio.find((r) => r.label === "Card action — massApprove")?.vk;
+    const onlyMass = [{ name: "MassApproveMenuItem" }, { name: "MenuItem_x", caption: "Mass approve" }];
+    check("card: with sibling hints `approve` / `massApprove`, an element built only for `massApprove` closes `massApprove` and leaves `approve` ⚠ verify",
+      () => onlyMass.every((v) => st(resolveVk(massApprove, builtWith(v))) === "✅ Done" && st(resolveVk(approveT, builtWith(v))) === "⚠ verify"),
+      () => onlyMass.map((v) => [v, resolveVk(approveT, builtWith(v)), resolveVk(massApprove, builtWith(v))]));
+    // Only an element that can trigger an action is evidence: a field named after the action is not.
+    const postVk = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
+      .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
+    const withField = (field) => verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton" }, field] } } } }, "main");
+    const fieldsOnly = [{ type: "crt.DateTimePicker", name: "PostDate" }, { type: "crt.TabContainer", name: "Tab_x", caption: "Post" }];
+    check("card: a field or tab named or captioned after the action (`PostDate` crt.DateTimePicker for `post`) does not close it; a crt.Button named for it does",
+      () => fieldsOnly.every((f) => st(resolveVk(postVk, withField(f))) === "⚠ verify")
+        && st(resolveVk(postVk, withField({ type: "crt.Button", name: "PostButton" }))) === "✅ Done",
+      () => fieldsOnly.map((f) => [f, resolveVk(postVk, withField(f))]));
+    // The raw `ops` payload (no viewConfig): caption and request under `values`, and a `remove` op is not evidence.
+    const opsPage = (ops) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", ops } } }, "main");
+    const opsDone = [
+      [{ operation: "insert", name: "MenuItem_calc", values: { type: "crt.MenuItem", caption: "Calculate SaaS metrics" } }],
+      [{ operation: "insert", name: "MenuItem_calc", values: { type: "crt.MenuItem", clicked: { request: "usr.CalculateSaaSMetricsRequest" } } }],
+      [{ operation: "insert", name: "CalculateSaaSMetricsMenuItem", type: "crt.MenuItem" }],
+    ];
+    check("card (ops payload): a caption in `values`, a request in `values.clicked` or a plain named crt.MenuItem op closes the custom action",
+      () => opsDone.every((ops) => st(resolveVk(custom, opsPage(ops))) === "✅ Done"),
+      () => opsDone.map((ops) => resolveVk(custom, opsPage(ops))));
+    const removed = opsPage([{ operation: "remove", name: "CalculateSaaSMetricsMenuItem" }]);
+    check("card (ops payload): a `remove` op named for the action does not close it",
+      () => st(resolveVk(custom, removed)) === "⚠ verify", () => resolveVk(custom, removed));
+    const short = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
+      .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
+    check("card: a short action name (`post`) closes on a whole word (`PostMenuItem`, caption \"Post\") but not inside another (`RepostMenuItem`, `PostponeMenuItem`)",
+      () => st(resolveVk(short, builtWith({ name: "PostMenuItem" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "MenuItem_x", caption: "Post" }))) === "✅ Done"
+        && st(resolveVk(short, builtWith({ name: "RepostMenuItem" }))) === "⚠ verify"
+        && st(resolveVk(short, builtWith({ name: "PostponeMenuItem" }))) === "⚠ verify",
+      () => [short, ...["PostMenuItem", "RepostMenuItem", "PostponeMenuItem"].map((n) => resolveVk(short, builtWith({ name: n })))]);
+    const hinted = checklistGroups({ entity: "X", changeSet: { cardActions: ["printContract", "runApprovalProcess"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action"));
+    check("checklist: a custom hint containing `print` / `process` still needs an element named for it — the template's Actions button alone reads ⚠ verify",
+      () => hinted.length === 2 && hinted.every((r) => r.vk?.type === "card" && r.vk.names?.length === 1)
+        && hinted.every((r) => st(resolveVk(r.vk, ctx)) === "⚠ verify"),
+      () => hinted.map((r) => [r.label, r.vk, resolveVk(r.vk, ctx)]));
+  }
+  {
     const tabResult = { entity: "X", changeSet: { resources: { BasicTabCaption: "Basic information" }, viewConfigDiff: [
       { name: "Name", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },
       { name: "Name_2", parentName: "BasicGroup", values: { control: "$Name", type: "crt.Input" } },

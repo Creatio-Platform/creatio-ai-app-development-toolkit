@@ -1307,10 +1307,10 @@ function mapDetails(ctx, containers, profileRegion) {
   }
   // A standard Creatio feature is recognised by the detail SCHEMA name, OR (when auto-named SchemaNDetail hides
   // it) by its file-storage ENTITY (*File → Attachments) / ContactCommunication. Own fn for Sonar CC 15.
-  const matchDetailFeature = (d, dentity) => {
+  const matchDetailFeature = (d, dentity, dinfo) => {
     // ONE resolution, in the table's own documented order: exact schema name, then longest suffix, then the
     // ENTITY fallbacks. `meta.byEntity` is what tells the plan the match was inferred rather than named.
-    const r = resolveFeatureRow(d.schemaName, dentity);
+    const r = resolveFeatureRow(d.schemaName, dentity, { detailColumn: d.detailColumn, columns: dinfo?.columns ?? null });
     return { feat: r ? featureView(r) : null, featByEntity: !!r?.meta?.byEntity };
   };
   // A standard feature → its Freedom analog (A3), NOT a rebuilt detail. Records the feature + a decision.
@@ -1365,7 +1365,7 @@ function mapDetails(ctx, containers, profileRegion) {
     if (own?.kind === "tab") ensureTab(own.tab, own.tabTemplateOwned, needsDecision, accountedFor);
     const dinfo = detailSchemas[d.schemaName];       // #11(ii)/B2 — real child entity + list columns, when supplied
     const dentity = d.entitySchemaName || dinfo?.entity || null;
-    const { feat, featByEntity } = matchDetailFeature(d, dentity);
+    const { feat, featByEntity } = matchDetailFeature(d, dentity, dinfo);
     if (feat) { emitStandardFeature(d, dentity, tab, feat, featByEntity); return; }
     // detail TITLE: resolved page-caption resource → the detail's own title → a plain caption → null.
     const resolvedDcap = d.caption ? resolveText(d.caption) : null;
