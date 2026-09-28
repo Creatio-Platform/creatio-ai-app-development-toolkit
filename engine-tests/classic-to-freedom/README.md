@@ -33,3 +33,35 @@ node run.mjs            # merge-engine goldens
 node run-mapper.mjs     # mapper / design-spec / plan / migrate.mjs goldens
 node run-infra.mjs      # infra parsers + the shipped pure-decision block
 ```
+
+## Lint and coverage
+
+Both use contributor-only tooling declared in the repo-root `package.json` (ESLint, c8). None of it ships: that
+file is outside `.release-manifest.json` `plugin_runtime`, nothing under `skills/` or `hooks/` imports it, and the
+engine's own `package.json` above keeps zero dependencies. Install it once from the repo root:
+
+```
+npm ci --ignore-scripts
+```
+
+**Lint.** From the repo root, `npx eslint .` (or `npm run lint`). The config is `eslint.config.mjs`: the
+recommended rule set over `skills/**/*.mjs`, `hooks/**/*.mjs` and `scripts/*.mjs`, ignoring the vendored parser,
+the generated component registry, the generated `*.workflow.js` files and these goldens (fixtures and baselines
+included). The CI job **ESLint (skills, hooks, scripts)** runs the same command and fails on any finding.
+
+**Coverage.** Node writes raw V8 coverage for every process started while `NODE_V8_COVERAGE` points at a
+directory, so the gate is measured without changing how any runner is invoked. From the repo root, in bash:
+
+```
+export NODE_V8_COVERAGE="$PWD/coverage/tmp"
+(cd skills/classic-to-freedom-migration/engine && npm test)
+unset NODE_V8_COVERAGE
+npm run coverage:report
+```
+
+`coverage:report` prints the per-file table (statements, branches, functions, lines; `All files` is the overall
+total) and writes `coverage/lcov.info`, `coverage/index.html` and `coverage/coverage-summary.json`. It reports
+every `.mjs` file in the lint scope, including ones no runner loads, which therefore show 0%. No threshold is
+enforced. In CI the ubuntu leg of **Classic→Freedom engine goldens** collects coverage across all of its steps,
+publishes the table in the job summary and uploads the report as the `engine-coverage` artifact; the windows leg
+runs without coverage.
