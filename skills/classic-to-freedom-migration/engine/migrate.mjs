@@ -55,7 +55,7 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -210,6 +210,7 @@ function applyWarningDispositions(warnings, manifest) {
   const declared = plainObject(manifest?.warningDispositions);
   if (!Object.keys(declared).length) return (warnings || []).map((w) => ({ ...w }));
   return (warnings || []).map((w) => {
+    if (w.fromTemplate) return { ...w }; // closed by the engine already — an operator answer must not overwrite it
     const dec = plainObject(warningKeys(w).map((k) => declared[k]).find((v) => v != null));
     const valid = dec.resolved === true && WARNING_DISPOSITIONS.has(dec.disposition);
     if (!valid) return { ...w };
@@ -2368,7 +2369,7 @@ function resolveRunEntity(manifest, eff) {
 // isChildPage/isMiniPage but NOT formOnly). A record page (none of these) renders with the plain specOpts. Module-
 // level so its branching does not count against runMigration's cognitive complexity (Sonar S3776 — review Rita).
 function subPageSpecOpts(specOpts, opts) {
-  if (!(opts.isChildPage || opts.isMiniPage || opts.formOnly)) return specOpts;
+  if (!isNestedFold(opts)) return specOpts;
   return { ...specOpts, embedded: true, ...(opts.formOnly ? { formOnly: true } : {}) };
 }
 // Count needsDecision entries by kind → { kind: n }. Module-level so its loop doesn't count against runMigration.
@@ -2399,7 +2400,13 @@ export function runMigration(manifest, opts = {}) {
   const seedTemplate = parse(manifest.seed);
   // section-schema schemas (optional) — the *Section chain. Analyzed for list-page concerns the page
   // migration does not cover: add-record mini page, section actions (#8b), list columns (#2).
-  const sectionData = sectionInput(manifest.section, manifest);
+  // A NESTED fold (mini page, per-type typed form, child edit page — the three `foldSubPage` call
+  // sites, flagged `isMiniPage` / `formOnly` / `isChildPage`) is NEVER a section scope: the ROOT run owns the section
+  // and its list page. `get-classic-page-sources --schema-name <X>` still writes the module's `section` into the
+  // sub-bundle, and reading it here would make the nested run demand an add-record mini page OF the sub-page — "its OWN
+  // structure is incomplete" (mini) / "typed page 'X': its OWN structure is incomplete" (typed), with nothing the
+  // operator could supply to clear it short of `addRecordMiniPage: false` in every sub-bundle.
+  const sectionData = sectionInput(isNestedFold(opts) ? undefined : manifest.section, manifest);
   const sectionSchemas = parse(sectionData.schemas);
   // the section folded over its own template seed, computed ONCE and read by both the step-5.1 stub
   // digest below and the list-page mapping further down. See `foldSectionView`.
@@ -2409,7 +2416,7 @@ export function runMigration(manifest, opts = {}) {
   // guard, the never-null schema label, and why it is a function rather than inline here.
   const sectionChangeSet = sectionChangeSetOf(manifest, opts, sectionEff);
   const sectionScopes = sectionStubScopes(manifest, opts, sectionChangeSet);
-  const eff = mergeHierarchy(schemas, { seedTemplate }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
+  const eff = mergeHierarchy(schemas, { seedTemplate, noParentTemplate: manifest.noParentTemplate === true }); // isMiniPage is consumed downstream (mapToFreedom / renderDesignSpec), NOT by mergeHierarchy — don't pass an inert arg here
   // #11(ii)/B2 — parse each supplied detail-schema body to recover its child entity + list columns + add mode.
   const detailSchemas = parseDetailSchemas(manifest, bodyOf);
   // the embedded profile schemas a profile card renders (profiled entity + displayed columns).
