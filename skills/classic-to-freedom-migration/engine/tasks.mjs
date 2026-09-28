@@ -79,6 +79,8 @@ export const REFUSED_CUT = "engine-cut";
 // `timings.json` is present but does not parse. It holds the dispatch evidence, so reading it as empty would
 // report every closed task as never dispatched and the next write would replace the samples for good.
 export const REFUSED_TIMINGS = "timings-unreadable";
+// A `wont-do` deliverable status whose D<N> decisions.md does not hold: the cut has no title to write for it.
+export const REFUSED_STATUS = "deliverable-status";
 
 // WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
 // frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
@@ -262,6 +264,9 @@ const budgetOf = (opts) => ({ ...TASK_BUDGET, ...opts.taskBudget });
 // 10-handler page look like the same amount of work.
 function rowWeight(row, baseTitle, B) {
   if (row.na) return 0;                                   // an approved boundary is recorded, not built
+  // A per-field / per-related-list check: the Layout row that places the item already carries its build weight,
+  // so a page's item rows pack as the one aggregate row did and never cut a page into many small tasks.
+  if (row.vk?.item) return 0;
   if (row.vk?.type === "rule") return (Number(row.vk.n) || 1) * B.rule;
   const label = String(row.label || "");
   const fields = /—\s*(\d+)\s+fields?\b/.exec(label);
@@ -371,7 +376,7 @@ function foldRoots(rows) {
 
 // THE DECISION SUBJECT of each row: its card, else its confirm evidence id, else its fold-chain root. A row with
 // none never waits on a decision.
-function rowSubjects(rows) {
+export function rowSubjects(rows) {
   const roots = foldRoots(rows);
   return rows.map((r, i) => {
     if (r.card) return `card:${r.card}`;
@@ -473,6 +478,9 @@ export const taskFileName = (task) => {
   return `task-${slug}-${task.id}.md`;
 };
 
+// The deliverable id and its planning status ride beside `vk`, never inside it: the row digest reads `vk`, and a
+// status is recorded by the cell it writes and its `decisions:` entry.
+const statusFields = (r) => ({ ...(r.deliverableId ? { deliverableId: r.deliverableId } : {}), ...(r.status ? { status: r.status } : {}) });
 // ONE task per artifact chunk. The rows are `checklistGroups`' rows verbatim, carrying the group they came from so
 // the file still says which part of the plan each deliverable belongs to: a task carries what the plan says and
 // adds nothing of its own, so nothing can be in a task that `--verify` will not later ask about.
@@ -488,6 +496,7 @@ function taskOf(chunk, order) {
     vk: r.vk ? String(r.vk.type) : null,   // a machine-checked row: `--verify` resolves it, no prose closes it
     na: r.na || null,                      // not a deliverable of this plan (an approved boundary) — not work
     ...(r.subject ? { subject: r.subject } : {}),
+    ...statusFields(r),
   }));
   const task = {
     id: taskId(identityKey, artifact, anchor),
@@ -2314,7 +2323,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
   const subjectOf = splitSubjects(resolved.items);
   const tasks = resolved.items.map((it, i) => {
     const srcRows = it.rows.map((r) => ({
-      label: r.label, groupTitle: r.group, vk: r.vk, na: r.na,
+      label: r.label, groupTitle: r.group, vk: r.vk, na: r.na, ...statusFields(r),
       // The row's OWN page, not the item's: an item may claim a `Quality gates` row from another page, and it is
       // that page the review then has to wait for.
       rowPageKey: r.pageKey,
@@ -2341,7 +2350,7 @@ export function buildTaskSetFromSplit(result, split, opts = {}) {
       origin: TASK_ORIGIN_ENGINE,
       status: S_TODO,
       rows: srcRows.map((r) => ({ label: r.label, group: r.groupTitle, vk: r.vk ? String(r.vk.type) : null, na: r.na || null,
-        ...(r.subject ? { subject: r.subject } : {}) })),
+        ...(r.subject ? { subject: r.subject } : {}), ...statusFields(r) })),
       weight: srcRows.reduce((a, r) => a + r.weight, 0),
       gatedRows: srcRows.filter((r) => r.vk).length,
       naRows: srcRows.filter((r) => r.na).length,
@@ -2405,7 +2414,7 @@ const capKey = (pageKey, cause) => `${pageKey} ${String(cause || "").split(":").
 // Ordered: the FIRST pattern that matches names the cause, so a row reading both ways (a related list counted in
 // a coverage row, say) lands on the more specific kind rather than on whichever test happened to run last.
 const CAUSE_KINDS = [
-  [/—\s*\d+\s+fields?\b|^Fields?\s+—/, "fields"],
+  [/—\s*\d+\s+fields?\b|^Fields?\s+[—`]/, "fields"],
   [/^Handler\s+—/, "handlers"],
   [/business rules/i, "rules"],
   [/related list/i, "related-lists"],
@@ -3360,11 +3369,11 @@ function isDecidedDescope(t) {
   const rows = t.rows || [];
   if (!rows.length) return false;
   const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
-  if (!map?.size) return false;
   return rows.every((r, i) => {
     if (r.outcomeKind === O_BUILT) return false;
-    if (r.outcomeKind === O_NOT_APPLICABLE && r.na) return true;
-    return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && map.has(i + 1);
+    // A plan-boundary row closes on its pre-fill, read back from the file or not yet.
+    if (r.na && (!r.outcomeKind || r.outcomeKind === O_NOT_APPLICABLE)) return true;
+    return (r.outcomeKind === O_WONT_DO || r.outcomeKind === O_POSTPONED) && !!map?.has(i + 1);
   });
 }
 
@@ -3873,50 +3882,47 @@ function recomputeDecidedStatuses(tasks, carriedOf = (t) => t.status || S_TODO, 
     const keys = rowKeys(t.rows.map((r) => r.label));
     const outcomes = new Map();
     t.rows.forEach((r, i) => {
-      const parsed = parseOutcome(r.outcome || "");
+      // A plan-boundary row reads the pre-fill its file holds.
+      const parsed = parseOutcome(boundaryOutcome(r));
       if (parsed) outcomes.set(keys[i], parsed);
     });
     t.status = computeStatus({ rows: t.rows }, t.declared || "", outcomes, carriedOf(t), editedOf(t));
   }
 }
-// The OPEN rows, in any task including the decided row's own, that share a decision subject with a row this
-// decision addressed: not built, not decided, not a plan boundary. A row this run wrote carries its new outcome,
-// so it is not open. Listed for the person, never written.
-function openSubjectSiblings(tasks, placedRows) {
-  const subjects = new Set(placedRows.map((x) => x.task.rows[x.n - 1]?.subject).filter(Boolean));
-  const out = [];
-  if (!subjects.size) return out;
-  for (const t of tasks) {
-    if (t.unread) continue;
-    (t.rows || []).forEach((r, i) => {
-      if (!subjects.has(r.subject) || !isOpenRow(r) || hasDecision(t, i + 1)) return;
-      out.push({ task: t, n: i + 1, subject: r.subject });
-    });
-  }
-  return out;
+// What one decision writes into a row: the Outcome cell, its kind and reason, and the `decisions:` entry.
+function decidedCellOf({ mode, decision, title, destination }) {
+  return {
+    decision,
+    text: decideCellText({ mode, decision, title, destination }),
+    kind: mode === "postponed" ? O_POSTPONED : O_WONT_DO,
+    reason: mode === "postponed"
+      ? `${title || ""} (${decision}) → ${collapseWs(destination)}`.trim()
+      : `${title || ""} (${decision})`.trim(),
+  };
 }
-// The `D<N>` entries of `decisions` (the Map from readDecisions) that no task's `decisions:` line cites, as
-// `{ id, title }` in file order. `Adjustment N` keys are not `--decide` targets and are never returned.
-export function unappliedDecisions(tasks, decisions) {
-  const cited = new Set();
-  for (const t of tasks || []) {
-    if (t.unread) continue;
-    const map = t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions);
-    for (const d of map?.values() || []) cited.add(decisionOf(d));
-  }
-  return [...(decisions || new Map()).entries()]
-    .filter(([id]) => /^D\d+$/.test(id) && !cited.has(id))
-    .map(([id, title]) => ({ id, title }));
-}
-// Whether the folder has had no dispatch yet: no task with a `built` row or an `agentNonce`, no closed timing
-// sample, and no open clock except `startedId`'s. Rows closed by `--decide` are not a dispatch. A timings file
-// that exists but does not parse counts as a dispatch: the file is written only when a clock starts.
-const showsDispatch = (t) => !!String(t.agentNonce || "").trim() || (t.rows || []).some((r) => r.outcomeKind === O_BUILT);
-export function firstDispatchPending(dir, startedId = null, tasks = []) {
-  if (tasks.some(showsDispatch)) return false;
-  const { running, samples, malformed } = readTimingsFile(dir);
-  if (malformed) return false;
-  return !samples.length && Object.keys(running).every((id) => id === startedId);
+// THE ONE WRITER of a decided row, for `--decide` and for a planning status at the cut. Returns why the row was
+// left alone, or null once it is written.
+function writeDecidedRow(task, idx, cell, cascade = false) {
+  const row = task.rows[idx];
+  // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
+  // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
+  if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) return "plan-boundary row (engine-owned Outcome)";
+  if (row.outcomeKind === O_BUILT) return "already built — closing a built row as a decision would lie about it";
+  row.outcome = cell.text;
+  row.outcomeKind = cell.kind;
+  row.outcomeCause = null;
+  row.outcomeReason = cell.reason;
+  row.naNoReason = false;
+  task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
+  // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
+  // round measures the page as it then stands and re-opens what still needs work.
+  task.decisions.set(idx + 1, cascade ? markCascade(cell.decision) : cell.decision);
+  // A dirty flag for `persistTaskSet` — plan tasks are fully re-rendered from `task.rows`, so nothing extra
+  // is needed for them. Adopted (repair / orchestrator) tasks keep their bodies byte-for-byte, so the
+  // in-place cell writer in `persistTaskSet` picks these indices up.
+  task.dirtyRows = task.dirtyRows instanceof Set ? task.dirtyRows : new Set();
+  task.dirtyRows.add(idx);
+  return null;
 }
 export function applyDecision(dir, result, opts = {}) {
   const { decision, mode, destination, decisions } = opts;
@@ -3928,42 +3934,14 @@ export function applyDecision(dir, result, opts = {}) {
   const picked = pickDecideTargets(merged.tasks, opts);
   if (picked.problems?.length) return { refused: true, problems: picked.problems };
 
-  const title = decisions.get(decision);
-  const cellText = decideCellText({ mode, decision, title, destination });
-  const outcomeKind = mode === "postponed" ? O_POSTPONED : O_WONT_DO;
-  const outcomeReason = mode === "postponed"
-    ? `${title || ""} (${decision}) → ${collapseWs(destination)}`.trim()
-    : `${title || ""} (${decision})`.trim();
+  const cell = decidedCellOf({ mode, decision, title: decisions.get(decision), destination });
 
   const touched = [];
   const skipped = [];
   const writeCell = (task, idx, cascade = false) => {
-    const row = task.rows[idx];
-    // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
-    // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
-    if (row.na && (!row.outcome || row.outcomeKind === O_NOT_APPLICABLE)) {
-      skipped.push({ task, n: idx + 1, why: "plan-boundary row (engine-owned Outcome)" });
-      return false;
-    }
-    if (row.outcomeKind === O_BUILT) {
-      skipped.push({ task, n: idx + 1, why: "already built — closing a built row as a decision would lie about it" });
-      return false;
-    }
-    row.outcome = cellText;
-    row.outcomeKind = outcomeKind;
-    row.outcomeCause = null;
-    row.outcomeReason = outcomeReason;
-    row.naNoReason = false;
-    task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
-    // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
-    // round measures the page as it then stands and re-opens what still needs work.
-    task.decisions.set(idx + 1, cascade ? markCascade(decision) : decision);
-    // A dirty flag for `persistTaskSet` — plan tasks are fully re-rendered from `task.rows`, so nothing extra
-    // is needed for them. Adopted (repair / orchestrator) tasks keep their bodies byte-for-byte, so the
-    // in-place cell writer in `persistTaskSet` picks these indices up.
-    task.dirtyRows = task.dirtyRows instanceof Set ? task.dirtyRows : new Set();
-    task.dirtyRows.add(idx);
-    return true;
+    const why = writeDecidedRow(task, idx, cell, cascade);
+    if (why) skipped.push({ task, n: idx + 1, why });
+    return !why;
   };
 
   for (const { task, rowIndices } of picked.targets) {
@@ -3985,8 +3963,7 @@ export function applyDecision(dir, result, opts = {}) {
   const unplaced = persisted?.unplaced || [];
   const placed = (list) => list.filter((x) => !unplaced.some((u) => u.task === x.task && u.n === x.n));
   return { refused: false, decision, mode, destination: destination || null,
-    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged,
-    siblings: openSubjectSiblings(merged.tasks, placed(touched)) };
+    touched: placed(touched), cascaded: placed(cascaded), skipped, unplaced, set: merged };
 }
 
 // Reverse `--decide D<N>`: remove the cells that decision wrote, and only those. Cells the ENGINE wrote are
@@ -4066,12 +4043,45 @@ export function revokeDecision(dir, result, opts = {}) {
   return { refused: false, decision, cleared, skipped, set: merged };
 }
 
+// The blank engine-task rows a `wont-do` planning status closes. A row that already carries an Outcome keeps it, so
+// a second cut writes nothing and a built or revoked row is never overwritten by the cut alone.
+function pendingStatuses(tasks) {
+  const out = [];
+  for (const t of tasks) {
+    if (t.unread || t.origin !== TASK_ORIGIN_ENGINE) continue;
+    (t.rows || []).forEach((r, i) => {
+      if (r.status?.kind === "wont-do" && !r.na && !r.outcomeKind && !String(r.outcome || "").trim()) out.push({ task: t, idx: i });
+    });
+  }
+  return out;
+}
+// The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
+// with a `decisions:` entry. Every status must resolve against decisions.md before any is written. Every engine
+// task with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
+// statuses is never offered as `todo`.
+function applyPlanStatuses(merged, decisions) {
+  const pending = pendingStatuses(merged.tasks);
+  const problems = pending.flatMap(({ task, idx }) => {
+    const d = task.rows[idx].status.decision;
+    return decisions?.has?.(d) ? [] : [`${task.file} row ${idx + 1} (${task.rows[idx].label}) — status \`wont-do\` cites \`${d}\`, which does not resolve in decisions.md`];
+  });
+  if (problems.length) return problems;
+  for (const { task, idx } of pending) {
+    const d = task.rows[idx].status.decision;
+    writeDecidedRow(task, idx, decidedCellOf({ mode: "wont-do", decision: d, title: decisions.get(d) }));
+  }
+  recomputeDecidedStatuses(merged.tasks.filter((t) => !t.unread && t.origin === TASK_ORIGIN_ENGINE && (t.rows || []).length
+    && t.rows.every((r) => r.na || r.outcomeKind)));
+  return [];
+}
 export function syncTaskDir(dir, result, opts = {}, split = null) {
   const fresh = taskSetFor(dir, result, opts, split);
   // A refused split writes NOTHING. Half a folder schedules half a plan and silently drops the rest, which is the
   // failure the coverage check exists to prevent.
   if (fresh.refused) return { ...fresh, tasks: [], stale: [], blocked: [] };
   const merged = mergeTaskSet(fresh, readExisting(dir));
+  const problems = applyPlanStatuses(merged, opts.decisions);
+  if (problems.length) return { ...fresh, refused: true, refusal: REFUSED_STATUS, problems, tasks: [], stale: [], blocked: [] };
   fs.mkdirSync(dir, { recursive: true });
   // Close the clocks of everything that finished since the last pass, before the files are written.
   closeClocks(dir, merged.tasks, opts.now || new Date().toISOString());

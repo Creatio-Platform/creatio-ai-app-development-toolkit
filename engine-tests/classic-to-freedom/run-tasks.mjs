@@ -511,11 +511,11 @@ check("ids: the anchor really is digit-masked (anti-vacuity) — the chunk that 
     return la !== lb && a.map((t) => t.anchor).join(",") === b.map((t) => t.anchor).join(",")
       && a.some((t) => /\d/.test(t.rows[0].label)) && a.every((t) => !/\d/.test(t.anchor.replace(/#\d+$/, "")));
   }, () => ({ e: tasksOn(SET5, "page:main").map((t) => t.rows[0].label), anchors: tasksOn(SET5, "page:main").map((t) => t.anchor) }));
-check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the caption and the count are both untouched by a rename, so digesting labels alone reported no drift on exactly the change a built page has to be re-checked against",
+check("ids: a RENAMED field moves the `rowsDigest` while the id stands still — the renamed field is its own deliverable row, so the task that carries it reads as changed and its id is kept",
   () => {
     const a = taskAt(SET, "main", DRIFT_GROUP), d = taskAt(SET4, "main", DRIFT_GROUP);
-    const sameLabels = a.rows.map((r) => r.label).join("|") === d.rows.map((r) => r.label).join("|");
-    return a.id === d.id && sameLabels && a.rowsDigest !== d.rowsDigest;
+    const renamed = a.rows.some((r) => r.label === "Field `MainF`") && d.rows.some((r) => r.label === "Field `MainRenamed`");
+    return a.id === d.id && renamed && a.rowsDigest !== d.rowsDigest;
   }, () => ({ a: taskAt(SET, "main", DRIFT_GROUP)?.rowsDigest, d: taskAt(SET4, "main", DRIFT_GROUP)?.rowsDigest,
     labelsEqual: taskAt(SET, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|")
       === taskAt(SET4, "main", DRIFT_GROUP)?.rows.map((r) => r.label).join("|") }));
@@ -1070,10 +1070,13 @@ check("split: a complete cut builds a task per ITEM — the seams are the file's
       && build.every((t, i) => t.id === FULL_SPLIT.items[i].id);
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems
     || buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).tasks.map((t) => `${t.order}:${t.id}`));
+// The same cut, with each page's rows claimed by GROUP: a plan that gains a deliverable row stays covered.
+const GROUP_SPLIT = { planVersion: RUN.planVersion, items: keysOf(SET).map((k) =>
+  splitItem(`build-${slugKey(k)}`, k, k === "main" ? "main" : k, [...new Set(GROUPS.filter((g) => g.pageKey === k).map((g) => `@${g.baseTitle}`))])) };
 check("split: the item's `id` IS the task's identity — a frozen cut does not move, so the slug someone chose survives any change to the rows inside it (the mechanical slicer had to hash content because it re-decided the cut every run)",
   () => {
-    const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
-    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // manifest C: one task's rows changed
+    const set = buildTaskSetFromSplit(RUN, GROUP_SPLIT, OPTS);
+    const set3 = buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3);   // manifest C: one task's rows changed
     const a = set.tasks.find((t) => t.id === "build-main");
     const c = set3.tasks.find((t) => t.id === "build-main");
     return a && c && a.id === c.id && a.rowsDigest !== c.rowsDigest;
@@ -1107,12 +1110,20 @@ check("split (anti-vacuity): the SAME split with that row restored resolves and 
     const set = buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS);
     return !set.refused && set.tasks.length > 0;
   }, () => buildTaskSetFromSplit(RUN, FULL_SPLIT, OPTS).problems);
-check("split: matching MASKS DIGITS, so a plan that gains a field does not stop the split resolving — the counts are exactly what a growing plan moves, and a cut that needed re-deciding on every added field would not be worth freezing",
+check("split: matching MASKS DIGITS in counts, and a plan that gains a field keeps a split that claims by GROUP resolving — a split that names rows one by one refuses, naming the new field row to place",
   () => {
-    const set3 = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);   // C: `Fields — 1 expected` became `2 expected`
-    return !set3.refused && set3.problems.length === 0
-      && rowKey("Fields — 19 expected") === rowKey("Fields — 20 expected");
-  }, () => buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems);
+    const byGroup = buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3);   // C: one more field
+    const byRow = buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3);
+    return !byGroup.refused && byGroup.problems.length === 0 && byRow.refused
+      && byRow.problems.some((p) => /Field `MainF2`/.test(p) && /is in NO item/.test(p))
+      && rowKey("Side profile — 19 fields") === rowKey("Side profile — 20 fields");
+  }, () => ({ byGroup: buildTaskSetFromSplit(RUN3, GROUP_SPLIT, OPTS3).problems, byRow: buildTaskSetFromSplit(RUN3, FULL_SPLIT, OPTS3).problems }));
+check("split: a split written when the plan had ONE `Fields — N expected` / `Related lists — N expected` row refuses with the remedy — the row is now one per item, claim them by group or by their own text",
+  () => {
+    const old = mapMain((i) => ({ ...i, rows: [...i.rows.filter((r) => !/^(Field|Related list) `/.test(r)), "Fields — 1 expected", "Related lists — 1 expected"] }));
+    const set = buildTaskSetFromSplit(RUN, old, OPTS);
+    return set.refused && ["Fields — 1 expected", "Related lists — 1 expected"].every((l) => set.problems.some((p) => p.includes(l) && /now one row per item/.test(p) && /@Form — Coverage \(verified\)/.test(p)));
+  }, () => buildTaskSetFromSplit(RUN, mapMain((i) => ({ ...i, rows: [...i.rows.filter((r) => !/^(Field|Related list) `/.test(r)), "Fields — 1 expected", "Related lists — 1 expected"] })), OPTS).problems);
 check("split: an item left with NO rows by a changed plan is reported and KEPT, never deleted — its file may hold the only record of work already done on a stand",
   () => {
     const extra = { ...FULL_SPLIT, items: [...FULL_SPLIT.items, splitItem("gone-from-plan", "main", "main", [])] };
@@ -1749,7 +1760,9 @@ console.log("\n===== a run too small to split: ONE build task plus ONE review ==
   {
     const SMALL = checklistOpts(MANIFEST);
     const whole = small.tasks.find((t) => t.artifact === ARTIFACT_WHOLE);
-    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === "Fields — 1 expected"
+    const onPage = (k) => new Set(whole.rows.filter((r) => r.pageKey === k && !r.na).map((r) => r.label));
+    const shared = [...onPage("main")].find((l) => onPage("child:C1").has(l));
+    const twins = whole.rows.map((r, i) => ({ n: i + 1, r })).filter((x) => x.r.label === shared
       && (x.r.pageKey === "main" || x.r.pageKey === "child:C1"));
     const d = tmp("collapsed-route");
     syncTaskDir(d, RUN, SMALL);
@@ -7667,7 +7680,7 @@ console.log("\n===== split: a virtual attribute is never placed after a handler 
     }, () => rowNamed(WRITER));
   // Digests of this plan's handler tasks under a per-artifact cut, pinned as literals. A handler row's write list
   // never reaches its digest, so a folder recorded against these must not read as "deliverables changed".
-  const PINNED_HANDLER_DIGESTS = { "14759d13": "042a43b1", "3ea0cd8a": "271f6b9d" };
+  const PINNED_HANDLER_DIGESTS = { "77da7908": "ef8fd090", "3ea0cd8a": "271f6b9d" };
   const chunked = buildTaskSet(wRun, { ...wOpts, taskBudget: { run: 0, chunk: 6 } });
   check("row digest: the handler tasks of an existing plan keep their recorded digest",
     () => Object.entries(PINNED_HANDLER_DIGESTS).every(([id, digest]) => chunked.tasks.find((t) => t.id === id)?.rowsDigest === digest),
@@ -7836,428 +7849,6 @@ console.log("\n===== build order: a unit holding a handler follows the standalon
     () => shape(mixedCut));
 }
 
-// `--decide` names the open rows on other tasks that share a subject with a row it decided, and closes none of them.
-{
-  const split = cardSplit("sib", "sib-other");
-  const opts = optsOf(CARD_MANIFEST);
-  const D4 = new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]]);
-  const fixture = (label) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    const set = syncTaskDir(dir, CARD_RUN, opts);
-    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n");
-    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
-    return { base, dir, set };
-  };
-  const rowOf = (set, id, label) => (set.tasks.find((t) => t.id === id)?.rows || []).findIndex((r) => r.label === label) + 1;
-  const decide = (dir, id, n, decision = "D4") => applyDecision(dir, CARD_RUN, { ...opts, decision, mode: "wont-do",
-    rowRef: { taskId: id, n: String(n) }, decisions: D4 });
-  const cellOf = (dir, id, n) => readTaskDir(dir).find((t) => t.id === id)?.rows?.[n - 1];
-  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
-
-  {
-    const { base, dir, set } = fixture("siblings-listed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const res = decide(dir, "sib-source", n);
-    check("--decide: an open row on another task sharing the decided row's subject is listed",
-      () => !res.refused && named(res).join(",") === "sib-other:1", () => ({ refused: res.problems, named: named(res) }));
-    check("--decide: a listed sibling row is not written",
-      () => !cellOf(dir, "sib-other", 1)?.outcomeKind && !/^decisions: \S/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
-      () => cellOf(dir, "sib-other", 1));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  // The printed command, run as printed, closes exactly the listed rows.
-  {
-    const { base, dir, set } = fixture("siblings-cli");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const manifestPath = path.join(base, "manifest.json");
-    const out = spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, "--decide", "D4", "--wont-do",
-      "--row", `sib-source:${n}`], { encoding: "utf8" });
-    const cmds = (out.stdout || "").split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
-    const decidedRows = () => readTaskDir(dir).flatMap((t) => (t.rows || [])
-      .map((r, i) => (r.outcomeKind === "wont-do" ? `${t.id}:${i + 1}` : null)).filter(Boolean)).sort((a, b) => a.localeCompare(b));
-    const before = decidedRows();
-    const runs = cmds.map((c) => spawnSync(c, { encoding: "utf8", shell: true }));
-    const after = decidedRows();
-    check("--decide (CLI): prints one ready-to-run command per open sibling row",
-      () => out.status === 0 && cmds.length === 1 && cmds[0].includes("sib-other:1") && /--wont-do/.test(cmds[0]),
-      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
-    check("--decide (CLI): the printed command closes exactly the listed rows",
-      () => runs.every((r) => r.status === 0) && after.join(",") === [...before, "sib-other:1"].sort((a, b) => a.localeCompare(b)).join(",")
-        && /^decisions: 1:D4$/m.test(fs.readFileSync(taskFilePath(dir, "sib-other"), "utf8")),
-      () => ({ before, after, runs: runs.map((r) => `${r.status} ${r.stderr}`) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-no-subject");
-    const src = set.tasks.find((t) => t.id === "sib-source");
-    const n = src.rows.findIndex((r) => !r.subject && !r.na) + 1;
-    const res = decide(dir, "sib-source", n);
-    check("--decide: a decided row with no subject lists no siblings",
-      () => n > 0 && !res.refused && named(res).length === 0, () => ({ n, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-closed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    decide(dir, "sib-other", 1, "D5");
-    const decided = decide(dir, "sib-source", n);
-    const f = taskFilePath(dir, "sib-other");
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), 1, "built").replace(/^decisions:.*$/m, "decisions: "));
-    const built = decide(dir, "sib-source", n, "D5");
-    check("--decide: a sibling row already decided is not listed",
-      () => !decided.refused && named(decided).length === 0, () => named(decided));
-    check("--decide: a sibling row already built is not listed",
-      () => !built.refused && named(built).length === 0, () => named(built));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, set } = fixture("siblings-postponed");
-    const n = rowOf(set, "sib-source", cardLabel("onBulk0"));
-    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
-      "--postponed", "--to", "ENG-12345", "--row", `sib-source:${n}`], { encoding: "utf8" });
-    const cmd = (out.stdout || "").split("\n").find((l) => l.includes("--row") && l.includes("sib-other:1")) || "";
-    check("--decide --postponed (CLI): the sibling command carries the same mode and destination",
-      () => out.status === 0 && /--postponed --to "?'?ENG-12345/.test(cmd) && !/--wont-do/.test(cmd),
-      () => ({ status: out.status, stdout: out.stdout, stderr: out.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-// `--decide` also names the open rows of the SAME task that share a subject with a row it decided.
-{
-  const SAME_SRC = "same-source";
-  const split = cardSplit("same", "same-unused", { waiting: null });
-  const opts = optsOf(CARD_MANIFEST);
-  const decisions = new Map([["D4", "handled elsewhere"]]);
-  const fixture = (label) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    const set = syncTaskDir(dir, CARD_RUN, opts);
-    fs.writeFileSync(path.join(base, "decisions.md"), "## D4 — handled elsewhere\n");
-    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(CARD_MANIFEST));
-    const src = set.tasks.find((t) => t.id === SAME_SRC);
-    const rowOf = (m) => (src?.rows || []).findIndex((r) => r.label === cardLabel(m)) + 1;
-    return { base, dir, n0: rowOf("onBulk0"), n5: rowOf("onBulk5") };
-  };
-  const named = (res) => (res.siblings || []).map((x) => `${x.task.id}:${x.n}`);
-  const rawOf = (dir) => fs.readFileSync(taskFilePath(dir, SAME_SRC), "utf8");
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-task");
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
-      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
-    const row5 = readTaskDir(dir).find((t) => t.id === SAME_SRC)?.rows?.[n5 - 1];
-    check("--decide: an open row of the SAME task sharing the decided row's subject is listed",
-      () => n0 > 0 && n5 > 0 && !res.refused && named(res).join(",") === `${SAME_SRC}:${n5}`,
-      () => ({ n0, n5, refused: res.problems, named: named(res) }));
-    check("--decide: the decided row itself is never listed as its own sibling",
-      () => !res.refused && !named(res).includes(`${SAME_SRC}:${n0}`) && named(res).includes(`${SAME_SRC}:${n5}`),
-      () => ({ n0, named: named(res) }));
-    check("--decide: a listed same-task row keeps its cell blank and gets no `decisions:` entry",
-      () => !row5?.outcomeKind && new RegExp(`^decisions: ${n0}:D4$`, "m").test(rawOf(dir)),
-      () => ({ row5, decisions: /^decisions:.*$/m.exec(rawOf(dir))?.[0] }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-task-cli");
-    const out = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", dir, "--decide", "D4",
-      "--wont-do", "--row", `${SAME_SRC}:${n0}`], { encoding: "utf8" });
-    const stdout = out.stdout || "";
-    const cmds = stdout.split("\n").map((l) => l.trim()).filter((l) => l.includes("--decide") && l.includes("--row"));
-    check("--decide (CLI): a same-task sibling gets a ready-to-run command, and the heading does not say `other tasks`",
-      () => out.status === 0 && cmds.length === 1 && cmds[0].includes(`${SAME_SRC}:${n5}`) && !/on other tasks/.test(stdout),
-      () => ({ status: out.status, stdout, stderr: out.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir } = fixture("siblings-same-run");
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do", taskId: SAME_SRC, decisions });
-    check("--decide: rows decided in the same run are not listed as siblings of each other",
-      () => !res.refused && res.touched.length > 1 && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, n0, n5 } = fixture("siblings-same-built");
-    const f = taskFilePath(dir, SAME_SRC);
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n5, "built"));
-    const res = applyDecision(dir, CARD_RUN, { ...opts, decision: "D4", mode: "wont-do",
-      rowRef: { taskId: SAME_SRC, n: String(n0) }, decisions });
-    check("--decide: a built same-task row is not listed",
-      () => !res.refused && named(res).length === 0, () => ({ refused: res.problems, named: named(res) }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-// Before the first dispatch, `--tasks`, `--next` and `--start` list every decision no task's `decisions:` line cites.
-{
-  const UNDEC_SRC = "undec-source";
-  const split = cardSplit("undec", "undec-other");
-  const opts = optsOf(CARD_MANIFEST);
-  const DECISIONS_MD = "## D4 — handled elsewhere\n\n## D5 — covered by the portal\n";
-  const PLAN_MD = "# Plan\n\n### Adjustments\n\n1. **Print is not migrated**\n";
-  const BLOCK = /decision\(s\) in decisions\.md are applied to no row/;
-  const listed = (out) => [...String(out || "").matchAll(/^ {2}· (D\d+) — /gm)].map((m) => m[1]);
-  const fixture = (label, { md = DECISIONS_MD } = {}) => {
-    const base = tmp(label);
-    const dir = path.join(base, "build-tasks");
-    freezeSplit(dir, JSON.stringify(split));
-    if (md) fs.writeFileSync(path.join(base, "decisions.md"), md);
-    fs.writeFileSync(path.join(base, "plan.md"), PLAN_MD);
-    const manifestPath = path.join(base, "manifest.json");
-    fs.writeFileSync(manifestPath, JSON.stringify(CARD_MANIFEST));
-    const cli = (...args) => spawnSync(process.execPath, [MIGRATE, manifestPath, "--tasks", dir, ...args], { encoding: "utf8" });
-    return { base, dir, cli };
-  };
-  const startableIds = (dir) => startableTasks(syncTaskDir(dir, CARD_RUN, opts), dir).startable.map((t) => t.id);
-
-  {
-    const { base, cli } = fixture("undecided-cut");
-    const cut = cli();
-    check("first dispatch: the cut lists every decision no row cites, with the `--decide` before dispatch line",
-      () => BLOCK.test(cut.stdout) && listed(cut.stdout).join(",") === "D4,D5" && /--decide.*before dispatch/.test(cut.stdout),
-      () => ({ status: cut.status, stdout: cut.stdout, stderr: cut.stderr }));
-    check("first dispatch: the `--decide` line names the outcome flags and the row addressing `--decide` requires",
-      () => /--decide D<N> --wont-do \| --postponed --to <destination>`, addressed by `--pages <keys>`, `--task <task-id>` or `--row <task-id>:<n>`, before dispatch/.test(cut.stdout || ""),
-      () => cut.stdout);
-    check("first dispatch: a plan `Adjustment N` is never listed",
-      () => !/Adjustment/.test(cut.stdout || ""), () => cut.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-next");
-    cli();
-    const before = cli("--next");
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    const after = cli("--next");
-    check("first dispatch: `--next` lists an uncited decision",
-      () => before.status === 0 && listed(before.stdout).join(",") === "D4,D5",
-      () => ({ status: before.status, stdout: before.stdout }));
-    check("first dispatch: a decision `--decide` applied to a row is left out of `--next`",
-      () => n > 0 && decided.status === 0 && after.status === 0 && listed(after.stdout).join(",") === "D5",
-      () => ({ n, decided: decided.stderr, stdout: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-dispatched");
-    cli();
-    const [first] = startableIds(dir);
-    const started = cli("--start", first);
-    const inFlight = cli("--next");
-    check("first dispatch: `--start` of the first task lists the uncited decisions",
-      () => started.status === 0 && listed(started.stdout).join(",") === "D4,D5",
-      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
-    check("first dispatch: while the first task is in flight, `--next` prints no block",
-      () => inFlight.status === 0 && !BLOCK.test(inFlight.stdout), () => inFlight.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-closed");
-    cli();
-    clearDepsOf(dir, UNDEC_SRC, CARD_RUN, opts);
-    const next = cli("--next");
-    const later = cli("--start", UNDEC_SRC);
-    check("first dispatch: once a dispatched task has closed, `--next` and a later `--start` print no block",
-      () => next.status === 0 && !BLOCK.test(next.stdout) && later.status === 0 && !BLOCK.test(later.stdout),
-      () => ({ next: next.stdout, later: later.stdout, stderr: later.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const withMd = fixture("undecided-with");
-    const without = fixture("undecided-without", { md: null });
-    const runs = (f) => [f.cli(), f.cli("--next"), f.cli()];
-    const a = runs(withMd);
-    const b = runs(without);
-    const snapshot = (dir) => fs.readdirSync(dir).sort((x, y) => x.localeCompare(y))
-      .map((f) => `${f}\n${fs.readFileSync(path.join(dir, f), "utf8").replaceAll(withMd.dir, "<dir>").replaceAll(without.dir, "<dir>")}`);
-    check("first dispatch: exit codes are identical with and without uncited decisions",
-      () => a.map((r) => r.status).join(",") === b.map((r) => r.status).join(","),
-      () => ({ with: a.map((r) => r.status), without: b.map((r) => r.status) }));
-    check("first dispatch: no decisions.md prints no block",
-      () => b.every((r) => !BLOCK.test(r.stdout)) && a.every((r) => BLOCK.test(r.stdout)),
-      () => ({ with: a.map((r) => r.stdout), without: b.map((r) => r.stdout) }));
-    check("first dispatch: the listing writes nothing into the task folder",
-      () => JSON.stringify(snapshot(withMd.dir)) === JSON.stringify(snapshot(without.dir)),
-      () => ({ with: snapshot(withMd.dir).map((s) => s.split("\n")[0]), without: snapshot(without.dir).map((s) => s.split("\n")[0]) }));
-    fs.rmSync(withMd.base, { recursive: true, force: true });
-    fs.rmSync(without.base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-all-cited", { md: "## D4 — handled elsewhere\n" });
-    cli();
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    const next = cli("--next");
-    check("first dispatch: when every decision is cited, nothing is printed",
-      () => n > 0 && next.status === 0 && !BLOCK.test(next.stdout), () => next.stdout);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-table-row", { md: "| D4 | **handled elsewhere** | 2026-09-25 |\n" });
-    const cut = cli();
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    const decided = cli("--decide", "D4", "--wont-do", "--row", `${UNDEC_SRC}:${n}`);
-    check("first dispatch: a table-row `D<N>` is listed, and `--decide` accepts that id",
-      () => listed(cut.stdout).join(",") === "D4" && n > 0 && decided.status === 0,
-      () => ({ cut: cut.stdout, status: decided.status, stderr: decided.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  check("first dispatch: a cascade citation `D4+` counts as citing D4",
-    () => TASKS_MODULE.unappliedDecisions([{ decisions: new Map([[1, "D4+"]]) }],
-      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D5");
-
-  {
-    const base = tmp("first-dispatch-timings");
-    const pending = (state, startedId) => {
-      const file = path.join(base, TIMINGS_FILE);
-      if (state === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, typeof state === "string" ? state : JSON.stringify(state));
-      return TASKS_MODULE.firstDispatchPending(base, startedId);
-    };
-    const running = { running: { mine: "2026-09-25T10:00:00Z" }, samples: [] };
-    check("firstDispatchPending: no timings file is pending", () => pending(null) === true);
-    check("firstDispatchPending: a zero-minute sample is a dispatch",
-      () => pending({ running: {}, samples: [{ id: "mine", weight: 1, minutes: 0 }] }) === false);
-    check("firstDispatchPending: another task's open clock is a dispatch; the started task's own clock is not",
-      () => pending(running, "other") === false && pending(running, "mine") === true && pending(running) === false);
-    check("firstDispatchPending: a timings file that does not parse is a dispatch", () => pending("{ not json") === false);
-    const mark = (state) => {
-      const file = path.join(base, TIMINGS_FILE);
-      if (state === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, state);
-      return readTimingsFile(base).malformed;
-    };
-    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
-      () => typeof mark("{ not json") === "string" && !!mark("{ not json") && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
-      () => ({ bad: mark("{ not json"), absent: mark(null) }));
-    fs.rmSync(path.join(base, TIMINGS_FILE), { force: true });
-    const pendingWith = (tasks) => TASKS_MODULE.firstDispatchPending(base, null, tasks);
-    check("firstDispatchPending: a task with a `built` row is a dispatch, with no timings file",
-      () => pendingWith([{ rows: [{ outcomeKind: "built" }] }]) === false);
-    check("firstDispatchPending: a task with an `agentNonce` is a dispatch, with no timings file",
-      () => pendingWith([{ rows: [], agentNonce: "tok-1" }]) === false && pendingWith([{ rows: [], agentNonce: "  " }]) === true);
-    check("firstDispatchPending: rows closed only by `--decide` are not a dispatch",
-      () => pendingWith([{ rows: [{ outcomeKind: "wont-do" }, { outcomeKind: "postponed" }], decisions: new Map([[1, "D4"], [2, "D5"]]) }]) === true);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const base = tmp("timings-malformed-start");
-    const d = path.join(base, "build-tasks");
-    freezeSplit(d, JSON.stringify(split));
-    syncTaskDir(d, CARD_RUN, opts);
-    const [first] = startableIds(d);
-    fs.writeFileSync(path.join(d, TIMINGS_FILE), "{ not json");
-    try { startTask(d, first, CARD_RUN, { ...opts, dispatchToken: "tok-m" }); } catch { /* a refusal is the expected answer */ }
-    const written = fs.readFileSync(path.join(d, TIMINGS_FILE), "utf8");
-    check("readTimingsFile: `--start` over a malformed timings file leaves it byte-identical",
-      () => !!first && written === "{ not json", () => written);
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  check("unappliedDecisions: a citation on an unread task is not counted",
-    () => TASKS_MODULE.unappliedDecisions([{ unread: true, decisions: new Map([[1, "D4"]]) }],
-      new Map([["D4", "handled elsewhere"], ["D5", "covered by the portal"]])).map((d) => d.id).join(",") === "D4,D5");
-
-  {
-    const { base, dir, cli } = fixture("undecided-built-row");
-    cli();
-    const before = cli("--next");
-    const f = taskFilePath(dir, UNDEC_SRC);
-    const n = (syncTaskDir(dir, CARD_RUN, opts).tasks.find((t) => t.id === UNDEC_SRC)?.rows || [])
-      .findIndex((r) => r.label === cardLabel("onBulk0")) + 1;
-    fs.writeFileSync(f, setOutcome(fs.readFileSync(f, "utf8"), n, "built"));
-    const after = cli("--next");
-    check("first dispatch: a row recorded `built` with no timings file ends the listing",
-      () => BLOCK.test(before.stdout) && n > 0 && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
-      () => ({ n, before: before.stdout, after: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-nonce");
-    cli();
-    const before = cli("--next");
-    editFrontMatter(dir, UNDEC_SRC, "agentNonce", "tok-agent");
-    const after = cli("--next");
-    check("first dispatch: a task carrying an `agentNonce` with no timings file ends the listing",
-      () => BLOCK.test(before.stdout) && !fs.existsSync(path.join(dir, TIMINGS_FILE)) && !BLOCK.test(after.stdout),
-      () => ({ before: before.stdout, after: after.stdout }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-
-  {
-    const STUCK = /NOTHING STARTABLE AND NOTHING IN FLIGHT/;
-    const stuckNext = (label, md) => {
-      const f = fixture(label, { md });
-      f.cli();
-      for (const id of startableIds(f.dir)) editFrontMatter(f.dir, id, "status", "blocked");
-      const r = f.cli("--next");
-      const scrub = (s) => String(s || "").replaceAll(f.base, "<base>");
-      fs.rmSync(f.base, { recursive: true, force: true });
-      return { status: r.status, stdout: scrub(r.stdout), stderr: scrub(r.stderr) };
-    };
-    const a = stuckNext("undecided-stuck-with", DECISIONS_MD);
-    const b = stuckNext("undecided-stuck-without", null);
-    const verdictOf = (s) => {
-      const at = s.search(/\n\n\d+ decision\(s\) in decisions\.md/);
-      return (at < 0 ? s : s.slice(0, at)).trimEnd();
-    };
-    check("first dispatch (anti-vacuity): both folders answer `stuck`, and only the one with decisions.md prints the block",
-      () => a.status === 2 && STUCK.test(a.stdout) && STUCK.test(b.stdout) && BLOCK.test(a.stdout) && !BLOCK.test(b.stdout),
-      () => ({ a, b }));
-    check("first dispatch: a `stuck` `--next` has the same exit code, verdict and stderr with and without uncited decisions",
-      () => a.status === b.status && verdictOf(a.stdout) === b.stdout.trimEnd() && a.stderr === b.stderr,
-      () => ({ status: [a.status, b.status], with: verdictOf(a.stdout), without: b.stdout, stderr: [a.stderr, b.stderr] }));
-    check("first dispatch: on a `stuck` `--next` the block follows the verdict text",
-      () => a.stdout.search(BLOCK) > a.stdout.search(STUCK), () => a.stdout);
-  }
-
-  {
-    const { base, dir, cli } = fixture("undecided-second-start");
-    cli();
-    const [first] = startableIds(dir);
-    fs.writeFileSync(path.join(dir, TIMINGS_FILE), JSON.stringify({ running: { "another-task": "2026-09-25T10:00:00Z" }, samples: [] }));
-    const started = cli("--start", first);
-    check("first dispatch: `--start` while another task's clock is open prints no block",
-      () => !!first && started.status === 0 && !BLOCK.test(started.stdout),
-      () => ({ first, status: started.status, stdout: started.stdout, stderr: started.stderr }));
-    fs.rmSync(base, { recursive: true, force: true });
-  }
-}
-
-{
-  const { base, dir, decisions, src, rep } = repairMirrorFixture("siblings-cascaded", "D13", "descope", 2);
-  const res = src && rep ? applyDecision(dir, RUN, { ...OPTS, decision: "D13", mode: "wont-do",
-    rowRef: { taskId: src.id, n: 1 }, decisions }) : null;
-  const key = (x) => `${x.task.id}:${x.n}`;
-  const siblings = new Set((res?.siblings || []).map(key));
-  check("--decide: a row the decision cascaded into is reported on `cascaded` and not listed as a sibling",
-    () => !!res && !res.refused && res.cascaded.length > 0 && res.cascaded.every((x) => !siblings.has(key(x))),
-    () => ({ refused: res?.problems, cascaded: (res?.cascaded || []).map(key), siblings: [...siblings] }));
-  fs.rmSync(base, { recursive: true, force: true });
-}
-
 console.log("\n===== review follow-ups: stop-gate, one-line cells, boundary drift, adopted-file writes, mode exclusion =====");
 {
   // `stopGate` travels from the split into the task file and the index — the orchestrator reads it before it
@@ -8421,18 +8012,182 @@ check("identity: every other machine-checked row keeps the plain `--verify (<kin
 
 // RISK1 — the digest guard. `closedByOf` renders the cell; `rowsDigest` hashes the SOURCE rows. A `done` task
 // that reads as drifted is RE-DISPATCHED into a live migration, so improving a cell's wording must never move it.
-// The values are PINNED, captured from the base branch before this change. Recomputing the set twice inside one
+// The values are PINNED literals. They moved once, when coverage became one row per field and per related list
+// (the three page-build tasks carrying those rows). Recomputing the set twice inside one
 // run would be trivially equal and prove nothing; a literal is what actually catches a future edit that lets the
 // rendered cell leak into the digest.
 const ROWS_DIGESTS_BASE = JSON.parse(fs.readFileSync(path.join(DIR, "fixtures", "applicants-recorded", "rows-digests.base.json"), "utf8"));
 check("identity digest guard: rendering the identity condition does NOT move any task's `rowsDigest` — the digest reads"
   + " the SOURCE rows, so a `done` task cannot read as drifted (and be re-dispatched into a live migration)"
-  + " because a cell's wording improved. Pinned to the values the base branch produced.",
+  + " because a cell's wording improved. Pinned as literals.",
   () => {
     const now = SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`);
     return now.length === ROWS_DIGESTS_BASE.length && now.every((d, i) => d === ROWS_DIGESTS_BASE[i]);
   },
   () => ({ now: SET.tasks.map((t) => `${t.id}:${t.rowsDigest}`).slice(0, 4), pinned: ROWS_DIGESTS_BASE.slice(0, 4) }));
+
+// Per-item field / related-list rows weigh nothing: the Layout row that places an item carries its build weight.
+{
+  const itemTasks = (set) => set.tasks.filter((t) => t.rows.some((r) => /^Field `/.test(r.label)) && t.pageKey === "main");
+  const fieldRows = (set) => itemTasks(set).flatMap((t) => t.rows.filter((r) => /^Field `/.test(r.label)));
+  check("weight: a page's per-field rows pack as the one aggregate row did — the bulk page's field rows sit in ONE task, and one more field adds no task",
+    () => fieldRows(SET5).length >= 40 && itemTasks(SET5).length === 1 && SET5.tasks.length === SET6.tasks.length,
+    () => ({ fieldRows: fieldRows(SET5).length, tasks: itemTasks(SET5).map((t) => [t.id, t.rows.length]), set5: SET5.tasks.length, set6: SET6.tasks.length }));
+  check("weight (anti-vacuity): the bulk fixture really carries 40+ per-field rows, each with an item check, in the plan and in the cut",
+    () => SET5.tasks.flatMap((t) => t.rows).filter((r) => /^Field `/.test(r.label)).length >= 40
+      && checklistGroups(RUN5, OPTS5).flatMap((g) => g.rows).filter((r) => r.vk?.item).length >= 40);
+}
+
+console.log("\n===== deliverable status: a planning decision closes its row before dispatch =====");
+{
+  const stBody = `define("MPage",[],function(){return{entitySchemaName:"M",attributes:{"Dept":{dataValueType:Terrasoft.DataValueType.LOOKUP,type:Terrasoft.ViewModelColumnType.VIRTUAL_COLUMN}},details:{R1:{schemaName:"R1D",entitySchemaName:"C1",filter:{detailColumn:"m",masterColumn:"Id"}},R2:{schemaName:"R2D",entitySchemaName:"C2",filter:{detailColumn:"m",masterColumn:"Id"}}},diff:[{operation:"insert",name:"T",parentName:"Tabs",values:{itemType:15,isTab:true}},{operation:"insert",name:"R1",parentName:"T",values:{itemType:2}},{operation:"insert",name:"R2",parentName:"T",values:{itemType:2}},{operation:"insert",name:"MainF",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainF"}},{operation:"insert",name:"MainG",parentName:"ProfileContainer",propertyName:"items",values:{bindTo:"MainG"}},{operation:"insert",name:"PrintButton",parentName:"ProfileContainer",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"ProfileContainer",propertyName:"items",values:{}}],methods:{onA:function(){return this.get("x");},onB:function(){return this.get("y");}}};});`;
+  const PRINTABLE = { resolved: true, present: true, names: ["Invoice"] };
+  const stManifest = (deliverableStatus, extra = {}) => ({ ...manifestOf(), schemas: [{ pkg: "P", body: stBody }],
+    detailSchemas: { R1D: { entity: "C1", columns: ["Number"], editPage: false }, R2D: { entity: "C2", columns: ["Number"], editPage: false } }, childPageSchemas: {},
+    signals: { ...manifestOf().signals, printables: PRINTABLE }, deliverableStatus, ...extra });
+  const DEC = new Map([["D3", "not carried over"], ["D6", "replaced by the portal"]]);
+  const WONT = (d) => ({ status: "wont-do", decision: d });
+  const T1_STATUS = { "main#field:MainG": WONT("D3"), "main#related-list:R2D": WONT("D3"), "main#method:onB": WONT("D6"), "main#card-action:Print": WONT("D6") };
+  const LABELS = { "main#field:MainG": "Field `MainG`", "main#related-list:R2D": "Related list `R2D`",
+    "main#method:onB": "Handler — `onB`", "main#card-action:Print": "Card action — Print" };
+  const M1 = stManifest(T1_STATUS);
+  const RUN_ST = runMigration(M1, { decisions: DEC });
+  const OPTS_ST = { ...optsOf(M1), decisions: DEC };
+  const cut = (label, run, opts, split = null) => {
+    const base = tmp(label);
+    const dir = path.join(base, "build-tasks");
+    const set = syncTaskDir(dir, run, opts, split);
+    return { base, dir, set };
+  };
+  {
+    const { base, dir, set } = cut("status-cut", RUN_ST, OPTS_ST);
+    const disk = readTaskDir(dir);
+    const find = (label) => { for (const t of disk) { const i = t.rows.findIndex((r) => r.label === label && t.pageKey === "main"); if (i >= 0) return { t, i, r: t.rows[i] }; } return null; };
+    const mapOf = (x) => (x?.t?.decisions instanceof Map ? x.t.decisions : parseDecisionsMap(x?.t?.decisions));
+    const got = Object.entries(T1_STATUS).map(([k, st]) => ({ k, st, x: find(LABELS[k]) }));
+    check("T1: a manifest status closes a field, a related-list, a method and a card-action row at the cut — `wont-do — <title> (D<N>)` with its `decisions:` entry",
+      () => RUN_ST.statusIssues.length === 0 && !set.refused && got.every(({ st, x }) => x?.r.outcomeKind === "wont-do"
+        && x.r.outcome === `wont-do — ${DEC.get(st.decision)} (${st.decision})` && mapOf(x).get(x.i + 1) === st.decision),
+      () => ({ issues: RUN_ST.statusIssues, refused: set.problems, got: got.map(({ k, x }) => [k, x?.r?.outcome, x && mapOf(x).get(x.i + 1)]) }));
+    const onA = find("Handler — `onA`"), proc = find("Card action — Process");
+    const mainF = find("Field `MainF`"), r1 = find("Related list `R1D`");
+    check("T1: the dropped field's and related list's siblings stay open, as does an unaddressed method; the Process row the stand check found nothing behind arrives `not-applicable`",
+      () => onA && !onA.r.outcomeKind && mainF && !mainF.r.outcomeKind && r1 && !r1.r.outcomeKind && proc?.r.outcomeKind === "not-applicable",
+      () => ({ onA: onA?.r, mainF: mainF?.r, r1: r1?.r, proc: proc?.r }));
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const first = snap();
+    syncTaskDir(dir, RUN_ST, OPTS_ST);
+    check("T1: a second cut over the same folder writes nothing new", () => JSON.stringify(first) === JSON.stringify(snap()));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const plan = RUN_ST.plan;
+    const lineOf = (re) => plan.split("\n").find((l) => re.test(l)) || "";
+    const end = plan.slice(plan.indexOf("### Won't do"));
+    check("T4: the status is printed on the deliverable's own plan line — the method row and the card-action Layout row read `**Won't do** — D6: <title>`",
+      () => /\*\*Won't do\*\* — D6: replaced by the portal/.test(lineOf(/^\| onB \|/)) && /\*\*Won't do\*\* — D6: replaced by the portal/.test(lineOf(/^\| Card actions \| Print \|/))
+        && /\*\*Won't do\*\* — no process connected/.test(lineOf(/^\| Card actions \| Process \|/)) && !/Won't do/.test(lineOf(/^\| onA \|/)),
+      () => [lineOf(/^\| onB \|/), lineOf(/^\| Card actions \| Print \|/), lineOf(/^\| Card actions \| Process \|/)]);
+    check("T4: a closed deliverable with no line of its own is listed under `### Won't do` at the end of the plan; one printed on its line is not repeated",
+      () => plan.includes("### Won't do") && end.includes("`main#field:MainG`") && end.includes("`main#related-list:R2D`") && !end.includes("`main#field:MainF`")
+        && !end.includes("`main#method:onB`") && !end.includes("`main#card-action:Print`"),
+      () => end.slice(0, 900));
+  }
+  {
+    const issueOf = (status, extra = {}, decisions = DEC) => runMigration(stManifest(status, extra), decisions ? { decisions } : {}).statusIssues || [];
+    const unknownId = issueOf({ "main#field:Nope": WONT("D3") });
+    check("T5: an unknown id is refused, listing the valid ids for that page",
+      () => /names no deliverable/.test(unknownId[0]?.problem || "") && unknownId[0].valid.includes("main#method:onA") && unknownId[0].valid.includes("main#field:MainF"),
+      () => unknownId);
+    const unknownD = issueOf({ "main#method:onB": WONT("D9") });
+    const noFile = issueOf({ "main#method:onB": WONT("D6") }, {}, null);
+    check("T5: a D<N> decisions.md does not hold is refused, and so is any wont-do when no decisions.md was read",
+      () => /D9.*does not resolve/.test(unknownD[0]?.problem || "") && /no decisions\.md was read/.test(noFile[0]?.problem || ""),
+      () => ({ unknownD, noFile }));
+    const engineClosed = issueOf({ "main#card-action:Process": WONT("D6") });
+    check("T5: a status on a deliverable the engine already closed is refused, naming the engine's reason",
+      () => /already closed by the engine: no process connected/.test(engineClosed[0]?.problem || ""), () => engineClosed);
+    const CARD = { behaviourIndex: { "attribute-virtual:Dept": { card: "C7" }, onA: { card: "C7" } } };
+    const related = issueOf({ "main#attribute-virtual:Dept": WONT("D3") }, CARD);
+    const answered = issueOf({ "main#attribute-virtual:Dept": WONT("D3"), "main#method:onA": { status: "build" } }, CARD);
+    check("T5: a wont-do whose behaviour card an unanswered deliverable shares is refused, naming that deliverable; an explicit `build` answers it",
+      () => /card:C7/.test(related[0]?.problem || "") && related[0].valid.includes("main#method:onA") && !related[0].valid.includes("main#method:onB")
+        && answered.length === 0,
+      () => ({ related, answered }));
+    const gapRun = runMigration(stManifest({ "main#field:Nope": WONT("D3") }), { decisions: DEC });
+    check("T5: the refusal is a plan gap naming the key and the valid ids",
+      () => planGaps(gapRun).some((g) => /deliverableStatus INVALID/.test(g) && g.includes("main#field:Nope") && g.includes("main#method:onA")),
+      () => planGaps(gapRun));
+    const base = tmp("status-cli");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n\n## D6 — replaced by the portal\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(M1));
+    const plan = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--plan", "--out", path.join(base, "plan.md")], { encoding: "utf8" });
+    const planText = fs.existsSync(path.join(base, "plan.md")) ? fs.readFileSync(path.join(base, "plan.md"), "utf8") : "";
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(stManifest({ "main#method:onB": WONT("D9") })));
+    const refused = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks")], { encoding: "utf8" });
+    check("T5: `--plan --out` resolves D<N> against the decisions.md beside the plan; `--tasks` refuses an unresolved one and writes nothing",
+      () => !/deliverableStatus INVALID/.test(plan.stdout + plan.stderr + planText) && /D6: replaced by the portal/.test(planText) && refused.status === 2
+        && /NOTHING WRITTEN/.test(refused.stdout) && /D9/.test(refused.stdout) && !fs.existsSync(path.join(base, "build-tasks")),
+      () => ({ plan: plan.status, planErr: plan.stderr.slice(0, 300), refused: refused.status, out: refused.stdout.slice(0, 400) }));
+    const stale = cut("status-cut-unknown", RUN_ST, { ...optsOf(M1), decisions: new Map([["D3", "not carried over"]]) });
+    check("T5: a cut against a decisions.md that lacks a status's D<N> is refused and writes nothing",
+      () => stale.set.refused && stale.set.refusal === "deliverable-status" && stale.set.problems.some((p) => /D6/.test(p)) && !fs.existsSync(stale.dir),
+      () => stale.set.problems);
+    fs.rmSync(stale.base, { recursive: true, force: true });
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const status = { "main#card-action:Print": WONT("D6"), "main#method:onA": WONT("D3"), "main#method:onB": WONT("D3") };
+    const m = stManifest(status);
+    const run = runMigration(m, { decisions: DEC });
+    const opts = { ...optsOf(m), decisions: DEC };
+    const groups = checklistGroups(run, opts);
+    const CLOSED = new Set(["Card actions", "Form — Custom methods"]);
+    const entry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+    const split = parseSplit(JSON.stringify({ items: [
+      { id: "closed", title: "Closed", pageKey: "main", writesTo: "main", rows: groups.filter((g) => g.pageKey === "main" && CLOSED.has(g.baseTitle)).map(entry) },
+      { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.filter((g) => !(g.pageKey === "main" && CLOSED.has(g.baseTitle))).map(entry) },
+    ] })).split;
+    const { base, dir, set } = cut("status-closed-task", run, opts, split);
+    const closed = set.tasks?.find((t) => t.id === "closed");
+    const answer = set.refused ? null : startableTasks(set, dir);
+    const again = set.refused ? null : syncTaskDir(dir, run, opts, split);
+    const answer2 = again ? startableTasks(again, dir) : null;
+    const SETTLED_WORDS = ["done", "wont-do", "not-applicable"];
+    check("T6: a task whose rows are all closed (a `not-applicable` stand-check row and `wont-do` statuses) is settled on the pass that cuts it, is not offered by `--next`, and fails no dispatch audit",
+      () => !set.refused && SETTLED_WORDS.includes(closed?.status) && closed.rows.some((r) => r.na)
+        && answer.verdict !== NEXT_LEDGER && !answer.startable.some((t) => t.id === "closed") && answer.dispatch.failing.length === 0
+        && SETTLED_WORDS.includes(again.tasks.find((t) => t.id === "closed")?.status) && answer2.verdict !== NEXT_LEDGER && !answer2.startable.some((t) => t.id === "closed"),
+      () => ({ refused: set.problems, status: closed?.status, rows: closed?.rows?.map((r) => [r.label, r.outcomeKind, r.na]),
+        verdict: answer?.verdict, failing: answer?.dispatch?.failing?.map((t) => t.id), reread: again?.tasks?.find((t) => t.id === "closed")?.status }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const plain = checklistGroups(runMigration(stManifest(undefined)), optsOf(stManifest(undefined))).flatMap((g) => g.rows.map((r) => ({ ...r, page: g.pageKey })));
+    const withSt = checklistGroups(RUN_ST, OPTS_ST).flatMap((g) => g.rows.map((r) => ({ ...r, page: g.pageKey })));
+    const shape = (r) => JSON.stringify([r.page, r.label, r.vk ?? null, r.na ?? null, r.deliverableId]);
+    const untouched = withSt.filter((r) => !r.status);
+    check("T7: rows without a status are unchanged by the statuses of others — same labels, verifiers, boundaries and ids",
+      () => plain.length === withSt.length && untouched.every((r) => plain.some((p) => shape(p) === shape(r))) && withSt.filter((r) => r.status).length === 4,
+      () => ({ plain: plain.length, withSt: withSt.length, changed: untouched.filter((r) => !plain.some((p) => shape(p) === shape(r))).map(shape) }));
+    const { base, set } = cut("status-one-task", RUN_ST, OPTS_ST);
+    const planRows = withSt.map((r) => `${r.page} ${r.label}`).sort();
+    const taskRows = set.tasks.filter((t) => t.artifact !== ARTIFACT_REFS).flatMap((t) => t.rows.map((r) => `${r.pageKey || t.pageKey} ${r.label}`)).sort();
+    check("T7: every deliverable, closed or not, still lands in exactly one task",
+      () => JSON.stringify(planRows) === JSON.stringify(taskRows), () => ({ plan: planRows.length, tasks: taskRows.length }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const pages = [...new Set(checklistGroups(RUN, OPTS).map((g) => g.pageKey))];
+    const grand = pages.find((k) => /G1/.test(k));
+    const m = { ...manifestOf(), deliverableStatus: { [`${grand}#page:form`]: WONT("D3") } };
+    const run = runMigration(m, { decisions: DEC });
+    const row = checklistGroups(run, optsOf(m)).find((g) => g.pageKey === grand)?.rows.find((r) => r.deliverableId === "page:form");
+    check("status reaches a grandchild page: a status on a depth-2 page's row is applied there",
+      () => !!grand && row?.status?.kind === "wont-do" && row.status.decision === "D3" && (run.statusIssues || []).length === 0,
+      () => ({ pages, row, issues: run.statusIssues }));
+  }
+}
 
 console.log(`\n=================\nTASK-SLICING GOLDEN: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

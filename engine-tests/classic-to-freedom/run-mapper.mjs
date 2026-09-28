@@ -12,7 +12,7 @@ import { mapToFreedom, FEATURE_CATALOG, isScaffoldingMethod, itemKindName, itemR
 import { MAPPING_ROWS, MATCH, TIER, OWNER, SOURCE, GATE_KIND, resolveRow, rowForItem, rowForItemType, resolveFeatureRow, featureVerifyType,
   widgetsByMatch, profileCardsByEntity, knownCardActions, analogsOf, satisfiedLegacyTypes, gateForComponentType, gateConflicts, gateShapeIssues, rowComponentType } from "../../skills/classic-to-freedom-migration/engine/mapping-table.mjs";
 import { validateTable, validateRow, vendoredIndex, isAdvisory, resolveRunIndex, validateRun, indexFromRegistryExport, runTypes } from "../../skills/classic-to-freedom-migration/engine/mapping-registry.mjs";
-import { runMigration, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
+import { runMigration as runMigrationRaw, buildCoverage, detectAddMode, checklistOpts, attachDetailAddModes, mergeRowActions, registrySettleGuidance, mergeSectionActions, reportRegistryFindings, buildCompositeOnlyDecisions, dedupeStubScopes } from "../../skills/classic-to-freedom-migration/engine/migrate.mjs";
 import { renderDesignSpec, renderVerify, renderChecklist, renderPlan, captionGroupLabel, checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, scopeGroups, subPageNodes, HANDOFF_MEMBER_KINDS, IMPERATIVE_MEMBER_KINDS, resolveVk, resolveRuleVk, resolveComponentVk, verifyCtx, boundAttributeOf, elementColumnsOf, componentAnalogsOf, CHILD_PAGE_ANSWERS, planGaps, MEMBER_WORKLIST_KINDS } from "../../skills/classic-to-freedom-migration/engine/designspec.mjs";
 import { readPlan, renderReadPlan, slugKey, pageKeyDescription, writeEvidenceSkeletons, READS_DIR, READS_INDEX_FILE } from "../../skills/classic-to-freedom-migration/engine/reads.mjs";
 import { assembleBuilt, entityOfBundle } from "../../skills/classic-to-freedom-migration/engine/assemble.mjs";
@@ -20,6 +20,13 @@ import { spawnSync } from "node:child_process";
 import { makeSchema as L, makeOp as di } from "./_testkit.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+// Every root run this runner makes, so the deliverable sweeps at the end cover all of them.
+const RUNS = [];
+const runMigration = (manifest, opts) => {
+  const result = runMigrationRaw(manifest, opts);
+  RUNS.push({ manifest, result });
+  return result;
+};
 const ENGINE_DIR = path.join(DIR, "..", "..", "skills", "classic-to-freedom-migration", "engine");
 const FIX = path.join(DIR, "fixtures");
 // A manifest piped to `migrate.mjs -` resolves its schema `file`s against the CWD, and a path outside it is
@@ -1158,15 +1165,16 @@ check("*Visa-entity detail → Approvals feature (component, inferred), NOT a re
   && !visacs.details.some(d => d.entity === "UsrContractVisa") && visacs.details.some(d => d.entity === "UsrContractItem"),
   () => ({ features: visacs.standardFeatures.map(s => s.feature), details: visacs.details.map(d => d.entity) }));
 const visaChecklist = renderChecklist({ entity: "X", changeSet: visacs }, {});
-check("*Visa-entity detail: the checklist expects 1 related list and gates the approval list on its own Approvals row",
-  /Related lists — 1 expected/.test(visaChecklist) && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
+check("*Visa-entity detail: the checklist expects 1 related list (its own row) and gates the approval list on its own Approvals row",
+  visaChecklist.split("\n").filter((l) => /\| Related list `/.test(l)).length === 1 && /Approvals \(`crt\.ApprovalList`\)/.test(visaChecklist),
   () => visaChecklist.split("\n").filter(l => /Related lists|Approvals/.test(l)));
-const visaRows = checklistGroups({ entity: "X", changeSet: visacs }, {}).flatMap(g => g.rows).filter(r => r.vk && /^(Approvals|Related lists)/.test(r.label));
+const visaRows = checklistGroups({ entity: "X", changeSet: visacs }, {}).flatMap(g => g.rows).filter(r => r.vk && /^(Approvals|Related list)/.test(r.label));
 const visaPage = (items) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", viewConfig: { items } } } }, "main");
 const visaBuilt = visaPage([{ type: "crt.Approval", name: "AW" }, { type: "crt.ApprovalList", name: "AL" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
 const visaAsGrid = visaPage([{ type: "crt.DataGrid", name: "VisasGrid" }, { type: "crt.DataGrid", name: "ItemsGrid" }]);
 check("*Visa-entity detail: every Approvals / Related-lists row closes ✅ on a page with crt.Approval + crt.ApprovalList + one grid; the Approvals rows read ❌ when the visas ship as a crt.DataGrid",
-  visaRows.map(r => r.label).join(" | ") === "Related lists — 1 expected | Approvals (`crt.ApprovalList`) | Approvals — second required component (`crt.Approval`)"
+  visaRows.length === 3 && visaRows[0].label.startsWith("Related list `")
+  && visaRows.slice(1).map(r => r.label).join(" | ") === "Approvals (`crt.ApprovalList`) | Approvals — second required component (`crt.Approval`)"
   && visaRows.every(r => resolveVk(r.vk, visaBuilt)[0] === "✅ Done")
   && visaRows.filter(r => r.label.startsWith("Approvals")).every(r => resolveVk(r.vk, visaAsGrid)[0] === "❌ MISSING"),
   () => visaRows.map(r => [r.label, resolveVk(r.vk, visaBuilt), resolveVk(r.vk, visaAsGrid)]));
@@ -2648,8 +2656,8 @@ check("#8c: the process-launch decision tells to READ THE BINDING and place it a
 // Tag is template-provided, and Print/Process migrate ONLY if reports/processes exist (with HOW to check).
 const caCs = runMigration({ entity: "X",
   schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"PrintButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ViewOptionsButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"TagButton",parentName:"Header",propertyName:"items",values:{}},{operation:"insert",name:"ProcessButton",parentName:"Header",propertyName:"items",values:{}}]};});` }] }, { baseDir: FIX });
-check("card-actions: ViewOptions NOT migrated; Tag template-provided (Type '—', clear disposition)",
-  /\| ViewOptions \| — \|.*Not migrated/.test(caCs.designSpec)
+check("card-actions: ViewOptions is native (the template ships it); Tag template-provided (Type '—', clear disposition)",
+  /\| ViewOptions \| — \|.*Native — the template ships/.test(caCs.designSpec) && !/\| ViewOptions \|.*Not migrated/.test(caCs.designSpec)
   && /\| Tag \| — \|.*default Freedom template/.test(caCs.designSpec));
 check("card-actions: Print migrates only if reports exist + shows how to check (SysModuleReport)",
   /\| Print \| Action \|.*Migrate ONLY if printables\/reports exist.*SysModuleReport/.test(caCs.designSpec));
@@ -3215,7 +3223,7 @@ const QG_EVIDENCE = {
 const rvOddResult = { changeSet: { viewConfigDiff: [{ name: "Notes", values: { control: "$Notes", type: "crt.RichTextEdit" } }], images: [], standardFeatures: [], details: [], cardActions: [] }, signals: {} };
 const rvOdd = renderVerify(rvOddResult, {}, { ops: [{ name: "Notes", type: "crt.RichTextEdit" }], ...QG_EVIDENCE });
 check("#verify fields: a control-bound field whose built type is OUTSIDE FIELD_RE (crt.RichTextEdit) still COUNTS by name — no spurious 'fewer than expected'",
-  rvOdd.missing === 0 && rvOdd.unverified === 0 && /Fields[\s\S]*?✅ Done/.test(rvOdd.markdown),
+  rvOdd.missing === 0 && rvOdd.unverified === 0 && /Field `Notes` \| ✅ Done/.test(rvOdd.markdown),
   () => ({ missing: rvOdd.missing, unverified: rvOdd.unverified, row: rvOdd.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
 // a page where SEVERAL classic items bind the SAME column is a pattern the mapper
 // deliberately emits (resolveFieldControl → `col`, `col_2`, `col_3`, all sharing `control: "$col"`). The verify
@@ -3232,7 +3240,7 @@ const rvDup = renderVerify(rvDupResult, {}, { ops: [
   { name: "Amount", type: "crt.Input" }, { name: "Amount_2", type: "crt.Input" }, { name: "Amount_3", type: "crt.Input" },
 ], ...QG_EVIDENCE });
 check("#verify fields: duplicate-column-bound page (col/col_2/col_3 all bind $col) reaches ✅ — expected identities key on the element NAME, not the collapsing stripped control",
-  rvDup.missing === 0 && rvDup.unverified === 0 && /Fields — 3 expected[\s\S]*?✅ Done/.test(rvDup.markdown),
+  rvDup.missing === 0 && rvDup.unverified === 0 && ["Amount", "Amount_2", "Amount_3"].every((n) => new RegExp(`Field \`${n}\` \\| ✅ Done`).test(rvDup.markdown)),
   () => ({ missing: rvDup.missing, unverified: rvDup.unverified, row: rvDup.markdown.split("\n").filter((l) => /Field/.test(l)).join(" | ") }));
 // REPLACES the old "#verify feature drift" pin, and it had to be replaced rather than kept: that check
 // compared mapper's `FEATURE_CATALOG` against designspec's `FEATURE_TYPE`, two copies of one mapping. Now that both
@@ -3965,8 +3973,8 @@ check("`--verify` renders that same row N/A too — and tallies it as neither mi
   () => ({ missing: xsVerify.missing, row: (/^\| \d+ \| Cross-section boundaries.*$/m.exec(xsVerify.markdown) || [])[0] }));
 
 // (4) THE PLAN STATES IT, in the user's terms, in both places a reader looks: the Main-scope row and the child section.
-check("the Main-scope row calls it `Reuse (Classic)` and names the page + the section it belongs to",
-  /\| InternalRequest — opened by detail "VacDetail" \| Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
+check("the Main-scope row calls it `Reuse (Classic)`, names the page + the section it belongs to, and states it is not built here",
+  /\| InternalRequest — opened by detail "VacDetail" \| \*\*Won't do\*\* — Classic `InternalRequestHRPage` stays Classic — InternalRequest belongs to the `Internal requests` section \| Reuse \(Classic\) \|/.test(xsBoundary.plan),
   () => (xsBoundary.plan.match(/^\| InternalRequest .*$/m) || [])[0]);
 check("the child section states the boundary concisely — the page, the owning section, and that migrating it is out of scope",
   /Reuse \(Classic\) — cross-section boundary \(approved\)/.test(xsBoundary.plan)
@@ -7726,8 +7734,8 @@ check("#7 the TOP-LEVEL record page (not a child) never gets the small-form reco
 // these; none → NOT migrated), and the full 'go check on-stand' how-to is kept ONLY for the unresolved fallback.
 const paResolved = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] },
   signals: { printables: { resolved: true, present: false }, processes: { resolved: true, present: true, names: ["Approve order"] } } }, {});
-check("#8 Print, signals resolved present:false → concrete 'Not migrated', drops the SysModuleReport how-to",
-  /Not migrated.*no printables/.test(paResolved) && !/SysModuleReport filtered/.test(paResolved));
+check("#8 Print, signals resolved present:false → concrete **Won't do** with the stand check's reason, drops the SysModuleReport how-to",
+  /\*\*Won't do\*\* — no printables/.test(paResolved) && !/SysModuleReport filtered/.test(paResolved));
 check("#8 Process, signals resolved present:true → names the process + 'Run process', drops the how-to",
   /Approve order/.test(paResolved) && /Run process/.test(paResolved) && !/Check on-stand with/.test(paResolved));
 const paUnres = renderDesignSpec({ entity: "X", changeSet: { cardActions: ["PrintButton"] }, signals: {} }, {});
@@ -8570,8 +8578,8 @@ check("--checklist: the group key set is EXACTLY the LITERAL key set this fixtur
 
 /* ---- THE CORE DEFECT, both directions: one page's components must never close another page's row ---- */
 const pgChildKey = pgUnitKeys.find((k) => k.startsWith("child:C1@"));
-const pgFieldsRow = (v, key) => {          // this page's `Fields — N expected` row, read off its own tally + text
-  const lines = v.markdown.split("\n").filter((l) => /Fields — \d+ expected/.test(l));
+const pgFieldsRow = (v, key) => {          // the per-field rows, read off their own tally + text
+  const lines = v.markdown.split("\n").filter((l) => /^\| \d+ \| Field `/.test(l));
   return { lines, page: v.pages[key] };
 };
 // (i) the PARENT is over-built: its merged bundle carries every field name in the whole tree. The children's rows
@@ -8594,7 +8602,7 @@ const pgParentHoardsAll = renderVerify(pgRun, pgOpts, { pages: {
 check("CORE: a CHILD page's fields are NOT counted from the PARENT's components — the parent's bundle carrying `C1F`/`G1F` leaves both child pages short (the exact false green this ticket closes)",
   () => pgParentHoardsAll.pages.main.missing === 0
   && pgParentHoardsAll.pages[pgChildKey].complete === false && pgParentHoardsAll.pages["child:G1"].complete === false
-  && pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.filter((l) => /0\/1 expected fields present/.test(l)).length === 2
+  && pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.filter((l) => /Field `(C1F|G1F)`.*0\/1 expected fields present/.test(l)).length === 2
   && pgParentHoardsAll.complete === false,
   () => ({ pages: pgParentHoardsAll.pages, fieldRows: pgFieldsRow(pgParentHoardsAll, pgChildKey).lines.map((l) => l.slice(0, 120)) }));
 // (ii) the mirror image: the CHILD is over-built and the PARENT is empty. `main`'s row must not be closed by a
@@ -8605,7 +8613,7 @@ const pgChildHoardsAll = renderVerify(pgRun, pgOpts, { pages: {
     { name: "MainF", type: "crt.Input" }, { name: "C1F", type: "crt.Input" }, { name: "DG", type: "crt.DataGrid" }] } },
 } });
 // Groups render main FIRST, then the deduped sub-page walk — so row 0 of the Fields rows is the main page's.
-const pgMirrorFieldRows = pgChildHoardsAll.markdown.split("\n").filter((l) => /Fields — \d+ expected/.test(l));
+const pgMirrorFieldRows = pgChildHoardsAll.markdown.split("\n").filter((l) => /^\| \d+ \| Field `(MainF|C1F)`/.test(l));
 check("CORE (mirror): the MAIN page's fields are NOT counted from a CHILD's components — isolation is symmetric, not a one-way filter",
   () => pgChildHoardsAll.pages.main.complete === false && pgChildHoardsAll.pages[pgChildKey].missing === 0
   && /⚠ verify \| 0\/1 expected fields present/.test(pgMirrorFieldRows[0])   // main: its `MainF` sits in the CHILD's bundle → still short
@@ -9384,8 +9392,8 @@ const rcNewApp = renderVerify(rcRes, { ...rcOpts, sectionHostMode: "new-app" }, 
 // `☐ confirm on-stand` — outcome `skip`, which is tallied into neither `missing` nor `unverified`. That is what
 // makes the mode usable: the executor loops on `--verify` until green, and a machine-gated row for a deliverable
 // the plan deliberately dropped would never close.
-check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but un-gated — it adds nothing to missing/unverified, so `--verify` can still reach green",
-  allEq(marksFor(rcPagesOnly.markdown, SECTION_RE), "☐ confirm on-stand") && /deliberately NOT built/.test(rcPagesOnly.markdown)
+check("placement verify: an approved 'pages-only-no-menu' run keeps the section row VISIBLE but closed (`N/A` with the host-mode reason) — it adds nothing to missing/unverified, so `--verify` can still reach green",
+  rcPagesOnly.markdown.split("\n").some((l) => SECTION_RE.test(l) && /N\/A — .*pages-only-no-menu/.test(l)) && /deliberately NOT built/.test(rcPagesOnly.markdown)
   && rcPagesOnly.missing === rcNewApp.missing && rcPagesOnly.unverified === rcNewApp.unverified - 1,
   () => ({ marks: marksFor(rcPagesOnly.markdown, SECTION_RE), pagesOnly: { missing: rcPagesOnly.missing, unverified: rcPagesOnly.unverified }, newApp: { missing: rcNewApp.missing, unverified: rcNewApp.unverified } }));
 check("placement verify (control): the SAME payload under 'new-app' still leaves the section row OPEN — the drop is the approved mode's doing, not a hole in the gate",
@@ -9634,11 +9642,11 @@ check("preconditions: `main` really emits a `fields` vk WITH expected names AND 
    performed. Now: no names on the built page ⇒ `unverified`, and the text says why. ---- */
 const m1Nameless = renderVerify(m12Run, m12Opts, m12Built(m12Page(M12_NAMELESS)));
 check("a built page carrying the right COUNT of the right TYPE but NO element names cannot close a `fields` row that expects NAMES — ⚠ unverified, and the text never claims an identity match it did not perform (pre-fix: ✅ Done + exit 0)",
-  () => /Fields — 1 expected \| ⚠ verify/.test(m1Nameless.markdown)
-  && /identity NOT checked/.test(m12Row(m1Nameless, "Fields — 1 expected"))
-  && !/expected fields (present on the built page|matched BY NAME)/.test(m12Row(m1Nameless, "Fields — 1 expected"))
+  () => /Field `MainF` \| ⚠ verify/.test(m1Nameless.markdown)
+  && /identity NOT checked/.test(m12Row(m1Nameless, "Field `MainF`"))
+  && !/expected fields (present on the built page|matched BY NAME)/.test(m12Row(m1Nameless, "Field `MainF`"))
   && m1Nameless.unverified >= 1 && m1Nameless.pages.main.complete === false && m1Nameless.complete === false,
-  () => ({ row: m12Row(m1Nameless, "Fields — 1 expected").slice(0, 220), pages: m1Nameless.pages, complete: m1Nameless.complete }));
+  () => ({ row: m12Row(m1Nameless, "Field `MainF`").slice(0, 220), pages: m1Nameless.pages, complete: m1Nameless.complete }));
 // The complement — the fix must not make ✅ unreachable. The SAME components, now carrying names, with the one
 // expected name present, close the row. (`n` and `names` come from the same `fieldOps` array at the emission site,
 // so `n === names.length` and a fully built page always can reach ✅.)
@@ -9695,19 +9703,19 @@ check("entity: an entry that reports NO entity is ⚠ unverified, never ❌ MISS
   () => m12Row(renderVerify(m12Run, m12Opts, m12Built({ parentSchemaName: "FormPageTemplate", packageName: "UsrX", viewConfig: { items: M12_NAMED } })), "Bound to the EXISTING object"));
 
 check("fields: the identity path still CLOSES — a build with element names, the expected `MainF` among them, is ✅ Done and the whole page is complete (the fix removes a false green, it does not make ✅ unreachable)",
-  () => /Fields — 1 expected \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Fields — 1 expected"))
+  () => /Field `MainF` \| ✅ Done/.test(m1Named.markdown) && /matched BY NAME/.test(m12Row(m1Named, "Field `MainF`"))
   && m1Named.pages.main.missing === 0 && m1Named.pages.main.unverified === 0 && m1Named.complete === true,
-  () => ({ row: m12Row(m1Named, "Fields — 1 expected").slice(0, 200), pages: m1Named.pages }));
+  () => ({ row: m12Row(m1Named, "Field `MainF`").slice(0, 200), pages: m1Named.pages }));
 // And the three inputs stay DISTINGUISHABLE. A page that was fetched and returned NOTHING is not "nameless" — it
 // is empty, and the honest report names the field it is short of. A page never fetched is neither (D6 tri-state).
 const m1Empty = renderVerify(m12Run, m12Opts, m12Built(m12Page([])));
 const m1NoEntry = renderVerify(m12Run, m12Opts, m12Built(undefined));
 check("the fields row tells the three inputs APART — fetched-and-empty reports the missing NAME, never-fetched reports the missing ENTRY, and neither borrows the nameless wording (a false statement about a page that returned no components at all)",
-  () => /0\/1 expected fields present — missing: MainF/.test(m12Row(m1Empty, "Fields — 1 expected"))
-  && !/identity NOT checked/.test(m12Row(m1Empty, "Fields — 1 expected"))
-  && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, "Fields — 1 expected"))
-  && !/identity NOT checked/.test(m12Row(m1NoEntry, "Fields — 1 expected")),
-  () => ({ empty: m12Row(m1Empty, "Fields — 1 expected").slice(0, 200), noEntry: m12Row(m1NoEntry, "Fields — 1 expected").slice(0, 200) }));
+  () => /0\/1 expected fields present — missing: MainF/.test(m12Row(m1Empty, "Field `MainF`"))
+  && !/identity NOT checked/.test(m12Row(m1Empty, "Field `MainF`"))
+  && /no .--built\.pages\["main"\]. entry/.test(m12Row(m1NoEntry, "Field `MainF`"))
+  && !/identity NOT checked/.test(m12Row(m1NoEntry, "Field `MainF`")),
+  () => ({ empty: m12Row(m1Empty, "Field `MainF`").slice(0, 200), noEntry: m12Row(m1NoEntry, "Field `MainF`").slice(0, 200) }));
 
 /* ---- WHAT COUNTS AS THE SAME FIELD. Measured on the Applicants run (2026-09-17): all 19 expected
    fields on the stand, each element named `<Column>Field` and bound `control: "$<Column>"`, and the row read
@@ -9716,7 +9724,7 @@ check("the fields row tells the three inputs APART — fetched-and-empty reports
    the Interface Designer binds `$PDS_<Column>_<hash>`. All three are the same field. ---- */
 {
   const named = (name, control) => [{ name, type: "crt.Input", ...(control ? { control } : {}) }, ...M12_NAMED.slice(1)];
-  const rowOf = (items) => m12Row(renderVerify(m12Run, m12Opts, m12Built(m12Page(items))), "Fields — 1 expected");
+  const rowOf = (items) => m12Row(renderVerify(m12Run, m12Opts, m12Built(m12Page(items))), "Field `MainF`");
   check("fields: an element named `<Column>Field` (the builder convention) satisfies the expected bare column name — ✅, not `0/1 present` (the measured false negative)",
     () => /\| ✅ Done \|/.test(rowOf(named("MainFField"))) && /matched BY NAME/.test(rowOf(named("MainFField"))),
     () => rowOf(named("MainFField")));
@@ -11062,6 +11070,12 @@ try {
   // an editable cleartext input, and the only reader-facing surface must not call it ordinary text. Both were true
   // before this: `scalarControl` withheld the control on purpose and the caller undid that one line later with
   // `ctl || { type: "crt.Input" }`, while `fieldTypeLabel` had no arm for either type.
+  const secRows = checklistGroups(secRun, checklistOpts({ entity: "X" })).flatMap((g) => g.rows);
+  const secRow = (n) => secRows.find((r) => r.deliverableId === `field:${n}`);
+  check("T2: a hashed / encrypted field — the plan's `(not migrated)` type — is its own row, closed `na` with that type label; an ordinary field beside it stays open",
+    () => /^Hashed text \(not migrated\) — /.test(secRow("H")?.na || "") && /^Encrypted text \(not migrated\) — /.test(secRow("S")?.na || "")
+      && secRow("I") && !secRow("I").na && secRow("I").vk?.type === "fields",
+    () => ["H", "S", "I"].map((n) => [n, secRow(n)?.na, secRow(n)?.vk]));
   const secOwn = secRun.changeSet.needsDecision.find((d) => d.kind === "secret-column");
   check("a HASH_TEXT / SECURE_TEXT column is NOT emitted as an editable cleartext input — it is read-only in the ChangeSet, which is the technical control the aggregated decision row could not be",
     secVals("H")?.readOnly === true && secVals("S")?.readOnly === true,
@@ -11482,7 +11496,7 @@ const n2TreeManifest = (titleA, titleB) => ({
   check("a built tab/grid with NO bound datasource (0 of 4 crt.DataGrid) is flagged on BOTH axes — not skip, not pass",
     () => { const p = pageOf({ pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE });
       return p.complete === false && p.buildComplete === false && p.missing >= 1
-        && p.openRows.some((r) => /Related lists/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)); },
+        && p.openRows.some((r) => /^Related list `/.test(r.deliverable) && /no crt\.DataGrid built/.test(r.evidence)); },
     () => pageOf({ pages: { main: { viewConfig: a3Body(0), businessRules: a3Rules } }, ...QG_EVIDENCE }).openRows);
   // The BUILDER-OWNED `unverified` class: `resolveCountVk` maps a PARTIAL count to `unverified`
   // and `resolveFieldsByIdentity` maps every short field set — `0/N` included — to `unverified`, so the label axis
@@ -11523,7 +11537,7 @@ const n2TreeManifest = (titleA, titleB) => ({
       const openText = p.openRows.map((r) => r.deliverable + " :: " + r.evidence).join(" | ");
       return p.complete === false
         && /Communication options/.test(openText) && /crt\.CommunicationOptions/.test(openText)
-        && /Related lists/.test(openText) && /3\/4 crt\.DataGrid built/.test(openText); },
+        && /Related list `/.test(openText) && /3\/4 crt\.DataGrid built/.test(openText); },
     () => pageOf({ pages: { main: { viewConfig: a3Body(3, { comm: false }), businessRules: a3Rules } }, ...QG_EVIDENCE }).openRows);
   // The boundary the axis exists for: a genuinely complete build whose ONLY open row is the unfiled quality-gates
   // record (evidence the builder is contractually forbidden to file itself) is `buildComplete: true`, while the
@@ -13560,7 +13574,7 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
 {
   const suManifest = JSON.parse(verifyManifest);
   const suRows = checklistGroups(runMigration(suManifest), checklistOpts(suManifest)).flatMap((g) => g.rows);
-  const suFields = suRows.find((r) => r.vk?.type === "fields")?.vk.names || [];
+  const suFields = suRows.filter((r) => r.vk?.type === "fields").flatMap((r) => r.vk.names);
   const suRules = suRows.find((r) => r.vk?.type === "rule")?.vk.names || [];
   const elementFor = (col) => `W${suFields.indexOf(col)}Widget`;
   const cliPage = (withBinding) => ({
@@ -13575,15 +13589,129 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
     finally { fs.rmSync(p, { force: true }); }
   };
   const rowOf = (out, re) => out.split("\n").find((l) => re.test(l)) || "";
-  const FIELDS_ROW = /^\| \d+ \| Fields — /, RULES_ROW = /^\| \d+ \| Business rules/;
+  const FIELDS_ROW = /^\| \d+ \| Field `/, RULES_ROW = /^\| \d+ \| Business rules/;
   const bound = cliVerify(cliPage(true)), unbound = cliVerify(cliPage(false));
   check("identity T7: through `migrate.mjs --verify`, the Fields and Business-rules rows close on unhashed"
     + " `$PDS_<Col>` bindings alone, every element named so it cannot match by name",
-    suFields.length > 0 && suRules.length > 0 && /✅ Done/.test(rowOf(bound, FIELDS_ROW)) && /✅ Done/.test(rowOf(bound, RULES_ROW)),
+    suFields.length > 1 && suRules.length > 0 && bound.split("\n").filter((l) => FIELDS_ROW.test(l)).length === suFields.length
+      && bound.split("\n").filter((l) => FIELDS_ROW.test(l)).every((l) => /✅ Done/.test(l)) && /✅ Done/.test(rowOf(bound, RULES_ROW)),
     () => ({ fields: suFields, rules: suRules, fieldsRow: rowOf(bound, FIELDS_ROW), rulesRow: rowOf(bound, RULES_ROW) }));
   check("identity T7: the same page with the bindings removed does NOT close either row — the binding is what closed them",
-    !/✅ Done/.test(rowOf(unbound, FIELDS_ROW)) && !/✅ Done/.test(rowOf(unbound, RULES_ROW)),
+    unbound.split("\n").filter((l) => FIELDS_ROW.test(l)).every((l) => !/✅ Done/.test(l)) && !/✅ Done/.test(rowOf(unbound, RULES_ROW)),
     () => ({ fieldsRow: rowOf(unbound, FIELDS_ROW), rulesRow: rowOf(unbound, RULES_ROW) }));
+}
+
+/* ---- deliverable status: the engine's own "nothing to build" conclusions ---- */
+{
+  const ABSENT = { resolved: true, present: false };
+  const PRESENT = { resolved: true, present: true, names: ["Contract"] };
+  const rowsOf = (result, opts = {}) => checklistGroups(result, opts).flatMap((g) => g.rows);
+  const byId = (rows, deliverableId) => rows.find((r) => r.deliverableId === deliverableId);
+  const acts = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "printContract"] },
+    signals: { printables: ABSENT, processes: ABSENT } });
+  check("T2: a Print / Process row the on-stand check found nothing behind arrives `na` with that reason; RunProcess and a custom `printContract` stay open",
+    () => /no printables/.test(byId(acts, "card-action:Print")?.na || "") && /no process connected/.test(byId(acts, "card-action:Process")?.na || "")
+      && !byId(acts, "card-action:RunProcess").na && byId(acts, "card-action:RunProcess").vk?.type === "card"
+      && !byId(acts, "card-action:printContract").na && byId(acts, "card-action:printContract").vk?.type === "card",
+    () => acts);
+  const open = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton"] }, signals: { printables: PRESENT } });
+  check("T2: an unresolved or present signal leaves Print / Process open",
+    () => open.filter((r) => r.deliverableId?.startsWith("card-action:")).every((r) => !r.na && r.vk?.type === "card"), () => open);
+  const child = rowsOf({ entity: "X", changeSet: { cardActions: ["PrintButton", "ProcessButton", "RunProcess", "ViewOptionsButton"] }, signals: { printables: PRESENT } },
+    { isChildPage: true, pageKey: "child:X" });
+  check("T2: the standard card actions on a child page (Print, Process, the native row) arrive `na`; RunProcess stays open",
+    () => ["card-action:Print", "card-action:Process", "card-actions:native"].every((d) => /child edit page/.test(byId(child, d)?.na || ""))
+      && !byId(child, "card-action:RunProcess").na, () => child);
+  const kids = rowsOf({ entity: "X", changeSet: {}, childPages: [
+    { entity: "C1", via: "D1", editPage: false }, { entity: "C2", via: "D2", cyclic: true },
+    { entity: "C3", via: "D3", opensClassicPage: "C3Page" }, { entity: "C4", via: "D4" }] });
+  check("T2: the `separate page?` row of a child with no edit page, a cyclic child and a child that keeps its Classic card arrives `na`; an unresolved child stays open",
+    () => ["child-page:D1", "child-page:D2", "child-page:D3"].every((d) => !!byId(kids, d)?.na) && byId(kids, "child-page:D4") && !byId(kids, "child-page:D4").na,
+    () => kids.filter((r) => r.deliverableId?.startsWith("child-page:")));
+  const pagesOnly = checklistGroups({ entity: "X", changeSet: {}, section: {}, listChangeSet: { columns: [{ name: "Name", code: "PDS_Name" }] } },
+    { sectionHostMode: "pages-only-no-menu", planMeta: { sectionSchema: "XSection", listTemplate: "ListPageV3Template" } }).flatMap((g) => g.rows);
+  check("T2: the deliberately-NOT-built rows of a pages-only-no-menu run (section entry, list page rows) arrive `na` with the host-mode reason",
+    () => ["page:section", "list-columns", "page:list-not-built"].every((d) => /pages-only-no-menu/.test(byId(pagesOnly, d)?.na || "")),
+    () => pagesOnly.map((r) => [r.deliverableId, r.na]));
+}
+
+// Per-item rows keep the aggregate's strength: one one-to-one field match and one grid count per page, over the
+// page's OPEN rows only.
+{
+  const res = (details = []) => ({ changeSet: { viewConfigDiff: [
+    { name: "Amount", values: { control: "$Amount", type: "crt.Input" } },
+    { name: "AmountField", values: { control: "$AmountField", type: "crt.Input" } }], images: [], standardFeatures: [], details, cardActions: [] }, signals: {} });
+  const line = (v, label) => v.markdown.split("\n").find((l) => l.includes(`| ${label} |`)) || "";
+  const shared = renderVerify(res(), {}, { ops: [{ name: "AmountField", type: "crt.Input" }], ...QG_EVIDENCE });
+  const okRows = ["Field `Amount`", "Field `AmountField`"].filter((l) => /✅ Done/.test(line(shared, l)));
+  check("per-item verify: two expected fields and ONE built element that matches both — exactly one row passes and the other fails, and the page stays open",
+    () => okRows.length === 1 && ["Field `Amount`", "Field `AmountField`"].some((l) => /⚠ verify.*0\/1 expected fields present/.test(line(shared, l)))
+      && shared.unverified >= 1 && shared.complete === false,
+    () => ({ a: line(shared, "Field `Amount`"), b: line(shared, "Field `AmountField`"), unverified: shared.unverified }));
+  const dropOpts = { deliverableStatus: { "main#field:AmountField": { status: "wont-do", decision: "D3" } } };
+  const dropped = renderVerify(res(), dropOpts, { ops: [{ name: "AmountField", type: "crt.Input" }], ...QG_EVIDENCE });
+  check("per-item verify: a won't-do field is not expected by the page-level match — its sibling closes and the dropped row reads Won't do",
+    () => /✅ Done/.test(line(dropped, "Field `Amount`")) && /Won't do — D3/.test(line(dropped, "Field `AmountField`")) && dropped.complete === true,
+    () => ({ a: line(dropped, "Field `Amount`"), b: line(dropped, "Field `AmountField`"), complete: dropped.complete, unverified: dropped.unverified }));
+  const LISTS = [{ detailSchema: "D1", entity: "E1" }, { detailSchema: "D2", entity: "E2" }];
+  const both = { ops: [{ name: "Amount", type: "crt.Input" }, { name: "AmountField", type: "crt.Input" }] };
+  const oneGrid = renderVerify(res(LISTS), {}, { ops: [...both.ops, { name: "G1", type: "crt.DataGrid" }], ...QG_EVIDENCE });
+  const noGrid = renderVerify(res(LISTS), {}, { ops: both.ops, ...QG_EVIDENCE });
+  check("per-item verify: a related-list shortfall still fails the page — 1 grid for 2 lists reads unverified on both rows saying which one is missing cannot be told; 0 grids reads MISSING",
+    () => ["D1", "D2"].every((d) => /⚠ verify.*1\/2 crt\.DataGrid built.*cannot be told/.test(line(oneGrid, `Related list \`${d}\``)))
+      && oneGrid.complete === false && ["D1", "D2"].every((d) => /❌ MISSING/.test(line(noGrid, `Related list \`${d}\``))) && noGrid.missing >= 1,
+    () => ({ one: ["D1", "D2"].map((d) => line(oneGrid, `Related list \`${d}\``)), none: ["D1", "D2"].map((d) => line(noGrid, `Related list \`${d}\``)) }));
+  const listDropped = renderVerify(res(LISTS), { deliverableStatus: { "main#related-list:D2": { status: "wont-do", decision: "D3" } } },
+    { ops: [...both.ops, { name: "G1", type: "crt.DataGrid" }], ...QG_EVIDENCE });
+  check("per-item verify: a won't-do related list is not expected by the page-level count — one grid closes the remaining list",
+    () => /✅ Done/.test(line(listDropped, "Related list `D1`")) && /Won't do — D3/.test(line(listDropped, "Related list `D2`")) && listDropped.complete === true,
+    () => ({ d1: line(listDropped, "Related list `D1`"), d2: line(listDropped, "Related list `D2`"), complete: listDropped.complete }));
+}
+
+// Every deliverable of every run above has an id, unique on its page.
+{
+  const missing = [], dupes = [];
+  for (const { manifest, result } of RUNS) {
+    if (!result?.plan) continue;
+    for (const g of checklistGroups(result, checklistOpts(manifest))) for (const r of g.rows) if (!r.deliverableId) missing.push({ page: g.pageKey, group: g.baseTitle, label: r.label.slice(0, 80) });
+    const seen = new Map();
+    for (const g of checklistGroups(result, checklistOpts(manifest))) for (const r of g.rows) {
+      const k = `${g.pageKey}#${r.deliverableId}`;
+      if (seen.has(k) && seen.get(k) !== r.label) dupes.push({ key: k, a: seen.get(k).slice(0, 60), b: r.label.slice(0, 60) });
+      seen.set(k, r.label);
+    }
+  }
+  check(`ids: every deliverable of all ${RUNS.length} runs has a \`deliverableId\`, and no two different deliverables of one page share one`,
+    () => RUNS.length > 50 && missing.length === 0 && dupes.length === 0,
+    () => ({ missing: missing.slice(0, 8), dupes: dupes.slice(0, 8) }));
+}
+
+// T3 — across every run above, a plan table line that says there is nothing to build has a closed row behind it.
+{
+  const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const named = (name, label) => new RegExp(`(^|[^A-Za-z0-9_])${escRe(name)}([^A-Za-z0-9_]|$)`).test(label.replace(/`/g, ""));
+  const NOTHING = /\*\*Won't do\*\*|\*\*Not migrated\*\*|Not migrated —|\(not migrated\)/;
+  const lines = (plan) => String(plan || "").split("\n").filter((l) => l.startsWith("| ") && NOTHING.test(l));
+  const itemsOf = (line) => line.split("|").slice(1, 3).map((c) => c.trim().split(" — ")[0].replace(/`/g, "").trim())
+    .filter((c) => c && c !== "—" && !/\s/.test(c) && c !== "Header");
+  const drift = [];
+  let cells = 0;
+  for (const { manifest, result } of RUNS) {
+    if (!result?.plan) continue;
+    const rows = checklistGroups(result, checklistOpts(manifest)).flatMap((g) => g.rows.map((r) => ({ page: g.pageKey, r })));
+    for (const line of lines(result.plan)) {
+      cells++;
+      for (const item of itemsOf(line)) for (const { page, r } of rows) {
+        if (!r.na && r.status?.kind !== "wont-do" && named(item, r.label)) drift.push({ entity: manifest?.entity, page, planLine: line.slice(0, 160), label: r.label.slice(0, 100) });
+      }
+    }
+  }
+  check(`T3: across all ${RUNS.length} runs, no plan line saying there is nothing to build (${cells} of them) has an open row behind it`,
+    () => cells > 0 && drift.length === 0, () => ({ cells, drift: drift.slice(0, 10) }));
+  check("T3 (anti-vacuity): the matcher ties a closed plan line to the row it names, and not to a longer name",
+    () => lines("| Card actions | Print | Action | — | — | **Won't do** — none |").length === 1
+      && itemsOf("| Card actions | Print | Action | — | — | **Won't do** — none |").includes("Print")
+      && named("Print", "Card action — Print") && !named("Print", "Card action — printContract"));
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
