@@ -102,8 +102,9 @@ Reconstructing the effective page from 9 layers — which an LLM subagent estima
     fallback needs a LIVE alias target; without one the literal record is kept, so the move-resurrect idiom (`remove X`
     → `move X`) lands on its tombstone when no LIVE alias target exists (with one, the move lands on the alias target
     and X stays removed, matching Classic's lookup across layers). A move that resurrects a tombstone clears `neverDefined` / `noOpRemove`,
-    so the resurrected element is not treated as absent afterwards. Found on BlythecoDev `OpportunityPageV2` (`remove "e"` amid the BANT removes; no layer of 16 nor seed body of
-    26 defines `e`).
+    so the resurrected element is not treated as absent afterwards. With no literal record at all the op lands on the
+    alias target's record, live or dead; a dead one makes it a repeated remove (the runtime's `findItemInfo` finds
+    neither name and does nothing), so no new tombstone and no warning appear.
   - **Nested folds ignore `manifest.section`.** A mini-page, typed-page or child-page fold
     (`isMiniPage` / `formOnly` / `isChildPage`, one helper `isNestedFold` in designspec.mjs shared with migrate.mjs) is
     never a section scope — the root run owns the section and its list page. `get-classic-page-sources --schema-name

@@ -139,7 +139,7 @@ check("that warning is FIDELITY (advisory) and its hint says it has no effect in
 check("with no seed supplied, the no-op hint says the unchecked parent chain may define the name (F2) and never rules F2 out",
   /No base seed was supplied/.test(removedGhost.warnings[0].hint) && /may define 'Zombie' \(F2\)/.test(removedGhost.warnings[0].hint)
   && !/Not a schema-order \(F1\) or seed \(F2\) problem/.test(removedGhost.warnings[0].hint), () => removedGhost.warnings[0].hint);
-// The BlythecoDev shape: a stray `remove "e"` inside a run of real removes. The real removes are unaffected.
+// A stray `remove "e"` inside a run of real removes. The real removes are unaffected.
 const stray = mergeHierarchy([
   synth("Base", [{ operation: "insert", name: "BantGroup", itemType: 15 }, { operation: "insert", name: "Budget", parentName: "BantGroup", propertyName: "items", bindTo: "Budget" }]),
   synth("Top", [{ operation: "remove", name: "Budget" }, { operation: "remove", name: "e" }, { operation: "remove", name: "BantGroup" }]),
@@ -171,7 +171,7 @@ const seedWith = (n, diff = []) => makeSchema("Seed", { entity: "X", diff, metho
 const psX = (pkg, diff) => parseSchema(`define("${pkg}",[],function(){return{entitySchemaName:"X",diff:${JSON.stringify(diff)}};});`, pkg);
 const warnOf = (r, name) => r.warnings.find((w) => w.op === "remove" && w.name === name);
 
-// (1) An alias registration IS a reference: in the right order the remove resolves the alias and removes `Real`.
+// An alias registration IS a reference: in the right order the remove resolves the alias and removes `Real`.
 const aliasLater = mergeHierarchy([psX("Early", [{ operation: "remove", name: "Old" }]),
   psX("Later", [{ operation: "insert", name: "Real", parentName: "Header", propertyName: "items", values: { bindTo: "Name" }, alias: { name: "Old" } }])]);
 check("alias: remove of a name a LATER layer registers as an ALIAS stays CORRECTNESS and names that layer — in schema order the remove would reach `Real` through the alias (F1)",
@@ -186,7 +186,7 @@ check("alias: a never-defined tombstone does not shadow a real alias target — 
   && warnOf(aliasShadow, "Old")?.severity === "correctness",
   () => ({ items: aliasShadow.items.map((i) => i.name), removed: aliasShadow.removed, warnings: aliasShadow.warnings }));
 
-// (2) A `remove` carrying `parentName` places nothing, so it is no reference — nothing ever existed here.
+// A `remove` carrying `parentName` places nothing, so it is no reference — nothing ever existed here.
 const rmParent = mergeHierarchy([synth("T", [{ operation: "remove", name: "Ghost" }, { operation: "remove", name: "Kid", parentName: "Ghost" }])]);
 check("a `remove` carrying `parentName` does not count as a reference — both removes are FIDELITY and nothing lands in removed[]",
   rmParent.warnings.length === 2 && rmParent.warnings.every((w) => w.severity === "fidelity") && !rmParent.removed.length,
@@ -218,19 +218,19 @@ check("an alias registration whose `excludeOperations` contains `remove` is no r
   && warnOf(aliasRmNotExcluded, "Old")?.severity === "correctness" && /referenced by L \(alias, a later layer\)/.test(warnOf(aliasRmNotExcluded, "Old").hint),
   () => ({ excluded: aliasRmExcluded.warnings, notExcluded: aliasRmNotExcluded.warnings }));
 
-// (6e) A referenced (correctness) tombstone is still reported: removed[] and unresolvedParents both name it.
+// A referenced (correctness) tombstone is still reported: removed[] and unresolvedParents both name it.
 const rmKid = mergeHierarchy([synth("Early", [{ operation: "remove", name: "Late" }]),
   synth("Later", [{ operation: "insert", name: "Kid", parentName: "Late", propertyName: "items", bindTo: "Kid" }])]);
 check("a remove whose name a later child is parented under keeps its tombstone in removed[] AND the name in unresolvedParents",
   warnOf(rmKid, "Late")?.severity === "correctness" && rmKid.removed.some((r) => r.name === "Late") && rmKid.unresolvedParents.includes("Late"),
   () => ({ removed: rmKid.removed, unresolvedParents: rmKid.unresolvedParents, warnings: rmKid.warnings }));
-// (6f) Three removes, then a later insert: one warning (the 2nd/3rd hit the tombstone), correctness, naming the definer.
+// Three removes, then a later insert: one warning (the 2nd/3rd hit the tombstone), correctness, naming the definer.
 const rmThrice = mergeHierarchy([synth("A", [{ operation: "remove", name: "X" }]), synth("B", [{ operation: "remove", name: "X" }]),
   synth("C", [{ operation: "remove", name: "X" }]), synth("D", [{ operation: "insert", name: "X", parentName: "Header", propertyName: "items", bindTo: "X" }])]);
 check("three removes then a later insert stay CORRECTNESS and the hint names the DEFINING layer (D), not another remover",
   rmThrice.warnings.filter((w) => w.op === "remove").length === 1 && warnOf(rmThrice, "X")?.severity === "correctness"
   && /referenced by D \(insert, a later layer\)/.test(warnOf(rmThrice, "X").hint), () => rmThrice.warnings);
-// (7) A LOWER reference that gave the remove nothing to hit (a `move` onto nothing) says so — and a later definer wins.
+// A LOWER reference that gave the remove nothing to hit (a `move` onto nothing) says so — and a later definer wins.
 const rmLower = mergeHierarchy([synth("A", [{ operation: "move", name: "G", parentName: "Header" }]), synth("B", [{ operation: "remove", name: "G" }])]);
 check("a reference from a LOWER layer is named as such and points at the seed (F2), not only at order",
   warnOf(rmLower, "G")?.severity === "correctness" && /referenced by A \(move, a lower layer\)/.test(warnOf(rmLower, "G").hint)
@@ -240,7 +240,7 @@ const rmPrefer = mergeHierarchy([synth("A", [{ operation: "move", name: "G", par
 check("with both a lower and a later reference, the hint prefers the LATER one (the F1 ordering signal)",
   /referenced by C \(insert, a later layer\)/.test(warnOf(rmPrefer, "G")?.hint || ""), () => rmPrefer.warnings);
 
-// (4) Same-layer `remove X` + `insert X` on a never-defined name: removes run before inserts within a layer, so the
+// Same-layer `remove X` + `insert X` on a never-defined name: removes run before inserts within a layer, so the
 // remove hits nothing and the insert defines X. Reordering schemas cannot change that — not a schema-order signal.
 const restate = mergeHierarchy([synth("L", [{ operation: "remove", name: "X" }, { operation: "insert", name: "X", parentName: "Header", propertyName: "items", bindTo: "X" }])],
   { seedTemplate: [seedWith(200, [{ operation: "insert", name: "Header", itemType: 15 }])] });
@@ -254,7 +254,7 @@ const sameKid = mergeHierarchy([synth("L", [{ operation: "remove", name: "X" }, 
 check("a same-layer child under X with no insert of X is NOT the idiom — CORRECTNESS, named as the same layer",
   warnOf(sameKid, "X")?.severity === "correctness" && /referenced by L \(parentName, the same layer\)/.test(warnOf(sameKid, "X").hint), () => sameKid.warnings);
 
-// (3) Seed completeness shapes the no-op hint. A PARTIAL seed (5..149 methods) says outright that it may lack the name.
+// Seed completeness shapes the no-op hint. A PARTIAL seed (5..149 methods) says outright that it may lack the name.
 const rmPartial = mergeHierarchy([synth("P", [{ operation: "remove", name: "e" }])], { seedTemplate: [seedWith(20)] });
 check("a no-op remove folded over a possiblyPartial seed is FIDELITY and its hint says the PARTIAL seed may lack the name",
   rmPartial.seedQuality.possiblyPartial === true && warnOf(rmPartial, "e")?.severity === "fidelity"
@@ -266,7 +266,7 @@ check("over a complete-looking seed the hint keeps the completeness caveat but a
   warnOf(rmFull, "e")?.severity === "fidelity" && /unless the chain is incomplete/.test(warnOf(rmFull, "e").hint)
   && !/PARTIAL|No base seed/.test(warnOf(rmFull, "e").hint) && !warnOf(rmFull, "e").accepted, () => warnOf(rmFull, "e"));
 
-// (6a / opus #9) A stray remove inside a SEED layer: fidelity, kept out of removed[], and — being the base
+// A stray remove inside a SEED layer: fidelity, kept out of removed[], and — being the base
 // template's own no-op, not a client decision — recorded CLOSED so the plan demands no disposition for it.
 const rmInSeed = mergeHierarchy([synth("P", [])], { seedTemplate: [seedWith(200, [{ operation: "remove", name: "tplStray" }])] });
 const rmInSeedW = warnOf(rmInSeed, "tplStray");
@@ -277,6 +277,24 @@ check("a stray remove inside a SEED layer is FIDELITY, not in removed[], and pre
 const rmInPartialSeed = mergeHierarchy([synth("P", [])], { seedTemplate: [seedWith(20, [{ operation: "remove", name: "tplStray" }])] });
 check("a SEED-layer no-op over a partial seed is NOT pre-closed — the partial-seed caveat must reach the reader",
   warnOf(rmInPartialSeed, "tplStray")?.severity === "fidelity" && !warnOf(rmInPartialSeed, "tplStray").accepted, () => warnOf(rmInPartialSeed, "tplStray"));
+// A `remove` carrying `properties` on a name nothing defines is judged like a merge onto nothing: CORRECTNESS, and
+// no record at all — no tombstone, no removed[] entry, no property removal.
+const ghostProps = mergeHierarchy([psX("P", [{ operation: "remove", name: "Ghost", properties: ["labelConfig"] }])], { seedTemplate: [seedWith(200)] });
+check("`remove … properties` on a never-defined name: CORRECTNESS, never settled to fidelity, and no Ghost record or removed[] entry",
+  warnOf(ghostProps, "Ghost")?.severity === "correctness" && /remove of properties \(labelConfig\)/.test(warnOf(ghostProps, "Ghost").hint)
+  && !ghostProps.items.some((i) => i.name === "Ghost") && !ghostProps.removed.some((r) => r.name === "Ghost"),
+  () => ({ warnings: ghostProps.warnings, removed: ghostProps.removed }));
+// A SKELETAL seed (< 5 methods) blocks the gate on its own, and it cannot vouch for absence: a client-layer stray's
+// hint says the skeletal seed may lack the name, and a seed-layer stray is NOT pre-closed as template-owned.
+const rmSkeletal = mergeHierarchy([synth("P", [{ operation: "remove", name: "e" }])],
+  { seedTemplate: [seedWith(2, [{ operation: "remove", name: "tplStray" }])] });
+const rmSkeletalClient = warnOf(rmSkeletal, "e");
+const rmSkeletalSeed = warnOf(rmSkeletal, "tplStray");
+check("over a SKELETAL seed a client-layer stray is FIDELITY with the SKELETAL sentence, and a seed-layer stray stays OPEN (not fromTemplate/accepted)",
+  rmSkeletal.seedQuality.looksSkeletal === true
+  && rmSkeletalClient?.severity === "fidelity" && /base seed looks SKELETAL \(seedQuality\.looksSkeletal\), so it may lack 'e' \(F2\)/.test(rmSkeletalClient.hint)
+  && rmSkeletalSeed?.severity === "fidelity" && !rmSkeletalSeed.fromTemplate && !rmSkeletalSeed.accepted
+  && /SKELETAL/.test(rmSkeletalSeed.hint), () => ({ client: rmSkeletalClient, seed: rmSkeletalSeed }));
 // The remove-and-restate idiom inside a SEED layer is the template's own no-op too: pre-closed over a complete seed,
 // left open over a partial one.
 const seedRestate = (n) => mergeHierarchy([synth("P", [])], { seedTemplate: [seedWith(n, [{ operation: "insert", name: "Header", itemType: 15 },
@@ -339,6 +357,29 @@ const aliasOverStub = mergeHierarchy([
 check("alias over an engine-only stub: Top's `remove \"Old\"` resolves through the alias and removes `Real`",
   !aliasOverStub.items.some((i) => i.name === "Real") && aliasOverStub.removed.some((r) => r.name === "Real" && r.removedBy === "Top"),
   () => ({ items: aliasOverStub.items.map((i) => i.name), removed: aliasOverStub.removed.map((r) => [r.name, r.removedBy]) }));
+// Both the literal record and the alias target are runtime-absent: with no LIVE alias target the literal record is
+// kept, so Top's remove lands on the `Old` tombstone and `Real` keeps the removal its own layer made.
+const bothAbsent = mergeHierarchy([
+  psX("Early", [{ operation: "remove", name: "Old" }]),
+  psX("Later", [{ operation: "insert", name: "Real", parentName: "Header", propertyName: "items", values: { bindTo: "Name" }, alias: { name: "Old" } }]),
+  psX("Mid", [{ operation: "remove", name: "Real" }]),
+  psX("Top", [{ operation: "remove", name: "Old" }])]);
+check("literal tombstone + dead alias target: Top's `remove \"Old\"` stays on the literal `Old`, and `Real` stays removed by Mid",
+  !bothAbsent.items.some((i) => i.name === "Real" || i.name === "Old")
+  && bothAbsent.removed.some((r) => r.name === "Real" && r.removedBy === "Mid")
+  && !bothAbsent.removed.some((r) => r.name === "Real" && r.removedBy === "Top"),
+  () => ({ items: bothAbsent.items.map((i) => i.name), removed: bothAbsent.removed.map((r) => [r.name, r.removedBy]) }));
+// No literal record at all and a dead alias target: the op lands on the alias target's tombstone, a repeated remove
+// of an element already gone. The runtime finds neither name in the tree and does nothing, so no new tombstone and
+// no new warning appear for `Old`.
+const noLiteralDeadTarget = mergeHierarchy([
+  psX("L1", [{ operation: "insert", name: "Real", parentName: "Header", propertyName: "items", values: { bindTo: "Name" }, alias: { name: "Old" } }]),
+  psX("L2", [{ operation: "remove", name: "Real" }]),
+  psX("L3", [{ operation: "remove", name: "Old" }])]);
+check("no literal record + dead alias target: `remove \"Old\"` re-hits Real's tombstone — no `Old` record, no warning for `Old`",
+  !noLiteralDeadTarget.items.some((i) => i.name === "Real" || i.name === "Old")
+  && !noLiteralDeadTarget.removed.some((r) => r.name === "Old") && !warnOf(noLiteralDeadTarget, "Old"),
+  () => ({ removed: noLiteralDeadTarget.removed.map((r) => [r.name, r.removedBy]), warnings: noLiteralDeadTarget.warnings }));
 // …and the move-resurrect idiom (no alias) still lands on its tombstone and resurrects it.
 const moveResurrect = mergeHierarchy([
   psX("Early", [{ operation: "insert", name: "Old", parentName: "Header", propertyName: "items", values: { bindTo: "A" } }]),
@@ -346,7 +387,7 @@ const moveResurrect = mergeHierarchy([
 check("control: remove → move with no alias still resurrects the tombstone",
   moveResurrect.items.some((i) => i.name === "Old") && !moveResurrect.removed.some((r) => r.name === "Old"), () => moveResurrect.items);
 // …but with a LIVE alias target registered for the name, the move after the remove lands on the alias target
-// (Classic's lookup across layers): Old stays removed and Real is moved. HEAD resurrected Old here.
+// (Classic's lookup across layers): Old stays removed and Real is moved; the removed Old is not resurrected.
 const moveViaAlias = mergeHierarchy([
   psX("E", [{ operation: "insert", name: "Old", parentName: "Header", propertyName: "items", values: { bindTo: "A" } },
     { operation: "insert", name: "Box", parentName: "Header", propertyName: "items", values: { itemType: 7 } }]),

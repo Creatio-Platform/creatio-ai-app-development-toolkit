@@ -1556,9 +1556,9 @@ function makeItem(op, seed, pkg) {
 // in Classic only when the supplied chain is the whole chain, and nothing here can prove that: `looksSkeletal`
 // (< 5 methods / all stubs) blocks, but `possiblyPartial` (5..149 methods) is advisory only, `noParentTemplate: true`
 // disables the no-seed gate reason (migrate.mjs `computeGate`), and even a 150+-method seed can be missing a parent
-// layer. So the demotion to `fidelity` keeps the gate open (a stray `remove "e"` on BlythecoDev OpportunityPageV2 is
-// the founding case), but the hint never claims "not a seed problem": it says "no effect in Classic unless the chain
-// is incomplete", and when the seed is partial or absent it says outright that the seed may lack the name.
+// layer. So the demotion to `fidelity` keeps the gate open, but the hint never claims "not a seed problem": it says
+// "no effect in Classic unless the chain is incomplete", and when the seed is partial or absent it says outright that
+// the seed may lack the name.
 // A name some applicable op DOES reference keeps `correctness` — that is the genuine ordering / seed signal — with ONE
 // exception, the remove-and-restate idiom: the remove's OWN layer also inserts the name and no LOWER layer references
 // it. A layer's removes run before its inserts, so the remove hits nothing and the insert defines the element;
@@ -1594,6 +1594,9 @@ function aliasFor(aliases, name) { return aliases.get(name) || null; }
 // the alias. The fallback needs a LIVE alias target: with no alias (or a dead target) the literal record is kept, so
 // the move-resurrect idiom (`remove X` → `move X`) lands on its tombstone and resurrects it only when no LIVE alias
 // target exists; with one, the move lands on the alias target and X stays removed (Classic's lookup across layers).
+// With NO literal record at all there is nothing to keep, so the op lands on the alias target's record, live or dead.
+// A dead one makes the op a repeated remove of an element already gone: the runtime's `findItemInfo` matches
+// neither name in the live tree and does nothing; the engine only re-marks that tombstone — no new record, no warning.
 function isRuntimeAbsent(item) {
   return !!(item.neverDefined || item.removed || item.engineOnlyStub);
 }
@@ -1628,8 +1631,10 @@ function replayDiffOp(op, items, { seed, pkg, aliases, undefinedRemoves, layer }
   if (op.operation === "merge") return replayMerge(op, cur, items, { seed, pkg }, warnings);
   if (op.operation === "move") return replayMove(op, cur, { seed, pkg }, warnings);
   if (op.operation === "remove") {
-    // the `properties` form is a different operation wearing the same name — and only when the item exists
-    if (cur && op.properties?.length) return replayRemoveProperties(op, cur, { seed, pkg }, warnings);
+    // the `properties` form is a different operation wearing the same name: it patches an element, like a merge
+    if (op.properties?.length) {
+      return cur ? replayRemoveProperties(op, cur, { seed, pkg }, warnings) : replayRemovePropertiesOfMissing(op, pkg, warnings);
+    }
     return replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, warnings);
   }
 }
@@ -1776,6 +1781,13 @@ function replayRemove(op, cur, items, { seed, pkg, undefinedRemoves, layer }, wa
     declaringPackage: seed ? null : pkg, unmodelledProps: new Set(), neverDefined: true };
   items.set(op.name, tomb);
   recordUndefinedRemove(tomb, { seed, pkg, undefinedRemoves, layer }, warnings);
+}
+// A `remove` carrying `properties` on a name no lower schema defined. It patches an element rather than dropping one,
+// so it is judged like a merge onto nothing: the op expects the element to exist, which points at the seed (F2) or
+// schema order (F1), and it stays `correctness`. It never enters `undefinedRemoves`, so `settleUndefinedRemoves`
+// cannot demote it, and it leaves no item record: nothing is removed, and no property removal is recorded.
+function replayRemovePropertiesOfMissing(op, pkg, warnings) {
+  warnings.push({ op: "remove", name: op.name, schema: pkg, severity: SEVERITY.CORRECTNESS, hint: `remove of properties (${op.properties.join(", ")}) on an item no lower schema defined — base-template element not seeded (F2) or schemas out of order (F1). The runtime silently does nothing here, exactly as for a merge onto nothing.` });
 }
 // Provisional: `settleUndefinedRemoves` re-decides the severity once the whole fold is known. `seed` is
 // captured HERE, at replay time: the tombstone's own `removedBySeed` is overwritten by any later remove of the name,

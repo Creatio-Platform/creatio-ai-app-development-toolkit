@@ -11410,7 +11410,7 @@ const n2TreeManifest = (titleA, titleB) => ({
     && !(refused.effective.warnings || [])[0].accepted && /REFUSED/.test(refused.plan),
     () => ({ warning: (refused.effective.warnings || [])[0], blocked: refused.gate.blocked }));
 
-  // A `remove` of a name NO layer and NO seed ever defines (BlythecoDev OpportunityPageV2's stray
+  // A `remove` of a name NO layer and NO seed ever defines (a stray
   // `remove "e"`). Classic ignores it, and neither F1 nor F2 can clear it, so it must not block the plan: it renders
   // as a ⚠ fidelity advisory that says it has no effect, and `warningDispositions` can close it.
   const noOpDiff = [
@@ -11430,6 +11430,22 @@ const n2TreeManifest = (titleA, titleB) => ({
   check("`warningDispositions` CLOSES the no-op remove note (it is fidelity, so the hatch is open to it)",
     noOpDisp.gate.blocked === false && noOpDispWarn?.accepted === true && !noOpDispWarn.dispositionRefused
     && /CLOSED by a recorded disposition/.test(noOpDisp.plan), () => noOpDispWarn);
+  // A real remove next to the stray one: the plan's removal count carries the real element only.
+  const noOpWithReal = runMigration({ entity: "E", noParentTemplate: true, schemas: [
+    { pkg: "P1", body: `define("P1",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(noOpDiff.slice(0, 2))}};});` },
+    { pkg: "P2", body: `define("P2",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "F" }, { operation: "remove", name: "e" }])}};});` },
+  ] }, { baseDir: FIX });
+  check("the removal count carries the real remove (F) and omits the no-op name (e)",
+    noOpWithReal.gate.blocked === false && noOpWithReal.effective.removed === 1,
+    () => ({ removed: noOpWithReal.effective.removed, reasons: noOpWithReal.gate.reasons }));
+  // A `remove` carrying `properties` patches an element, like a merge, so on a name nothing defines it keeps blocking.
+  const ghostProps = mkRun([{ operation: "remove", name: "Ghost", properties: ["labelConfig"] }]);
+  const ghostPropsW = (ghostProps.effective.warnings || []).find((w) => w.op === "remove" && w.name === "Ghost");
+  check("a `remove … properties` on a never-defined name stays CORRECTNESS and blocks, and counts as no removal",
+    ghostProps.gate.blocked === true && ghostPropsW?.severity === "correctness" && !ghostPropsW.accepted
+    && (ghostProps.gate.reasons || []).some((r) => /remove 'Ghost' @P/.test(r))
+    && ghostProps.effective.removed === 0,
+    () => ({ w: ghostPropsW, reasons: ghostProps.gate.reasons }));
   // …while a remove whose name a LATER layer defines is still the ordering signal, and still blocks.
   const late = runMigration({ entity: "E", noParentTemplate: true, schemas: [
     { pkg: "Early", body: `define("Early",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify([{ operation: "remove", name: "Late" }])}};});` },
@@ -11450,9 +11466,18 @@ const n2TreeManifest = (titleA, titleB) => ({
   const noOpPartialW = (noOpPartial.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
   check("over a possiblyPartial seed the no-op remove stays advisory but its plan line says the PARTIAL seed may lack the name",
     noOpPartial.effective.seedQuality.possiblyPartial === true && noOpPartialW?.severity === "fidelity"
-    && !(noOpPartial.gate.reasons || []).some((r) => /remove 'e'/.test(r))
+    && noOpPartial.gate.blocked === false && !(noOpPartial.gate.reasons || []).some((r) => /remove 'e'/.test(r))
     && /\*\*e\*\* @`P` — .*base seed looks PARTIAL \(seedQuality\.possiblyPartial\), so it may lack 'e' \(F2\)/.test(noOpPartial.plan),
     () => ({ w: noOpPartialW, reasons: noOpPartial.gate.reasons }));
+  // With NO seed and no `noParentTemplate`, the gate blocks for the missing seed — never for the no-op remove itself.
+  const noOpNoSeed = runMigration({ entity: "E", schemas: [
+    { pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"E",diff:${JSON.stringify(noOpDiff)}};});` }] }, { baseDir: FIX });
+  const noOpNoSeedW = (noOpNoSeed.effective.warnings || []).find((w) => w.op === "remove" && w.name === "e");
+  check("with no seed the gate blocks on the missing seed only; the no-op remove stays fidelity and adds no gate reason",
+    noOpNoSeed.gate.blocked === true && noOpNoSeedW?.severity === "fidelity"
+    && (noOpNoSeed.gate.reasons || []).some((r) => /no parent-template seed/.test(r))
+    && !(noOpNoSeed.gate.reasons || []).some((r) => /remove 'e'/.test(r)),
+    () => ({ w: noOpNoSeedW, reasons: noOpNoSeed.gate.reasons }));
   // A stray remove inside a COMPLETE seed is pre-closed by the ENGINE as the base
   // template's own no-op (`fromTemplate`). No operator recorded anything, so the plan must not say "CLOSED by a
   // recorded disposition": it has its own "CLOSED by the engine" line. 150 real-bodied methods = not possiblyPartial.
