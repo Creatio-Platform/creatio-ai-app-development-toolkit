@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # GitHub Copilot's skill loader drops any skill whose `description` exceeds this
-# limit; Claude Code / Codex do not enforce it. ENG-92957: the
+# limit; Claude Code / Codex do not enforce it. The
 # creatio-ui-guidelines description silently grew past the cap and Copilot
 # stopped loading the skill. Pin the invariant so a future edit fails CI here
 # rather than shipping green and breaking Copilot discovery.
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # code-point count still looks safe. Always compare against
 # len(description.encode("utf-8")).
 #
-# PROVISIONAL VALUE. 1024 is inferred, not documented by Copilot: ENG-92957
+# PROVISIONAL VALUE. 1024 is inferred, not documented by Copilot:
 # measured ~1084-byte description dropped, ~646 loaded, and ~1024 is the working
 # estimate of the threshold. The inclusive-vs-exclusive boundary is likewise
 # unconfirmed. Keep real headroom below this number (do not tune a description
@@ -29,14 +29,13 @@ MAX_SKILL_DESCRIPTION_BYTES = 1024
 # Exact substrings a skill's description MUST keep so keyword/substring routers
 # (some agents) still auto-load it. This pins the LOWER bound the byte cap does
 # not: trimming under the cap must not silently drop a load-bearing trigger.
-# ENG-92957 dropped these during trimming and they were caught by hand, not CI.
 LOAD_BEARING_DESCRIPTION_SUBSTRINGS = {
     # The orchestrator is the ENTRYPOINT, so its description is the only thing that can attract a
-    # cold "create an app" request. It previously named only the toolkit's own artifacts ("Business
+    # cold "create an app" request. Naming only the toolkit's own artifacts ("Business
     # Plans", "approved plan"); a live run on the plain prompt "Create Verrify1 app. It should
     # have..." never selected the skill and fell through to clio MCP alone, so none of the toolkit's
     # gates applied. These substrings are the user-intent triggers that recovery depends on — a
-    # future trim must not drop them the way ENG-92957 dropped the ui-guidelines ones.
+    # future trim must not drop them the way a cap-driven trim drops the ui-guidelines ones.
     "creatio-app-orchestrator": [
         "Creatio app", "create", "generate", "scaffold", "add", "section", "Apply proactively",
     ],
@@ -56,7 +55,7 @@ def read_json(relative_path):
 def _git_tracked_skill_md():
     """SKILL.md paths git tracks under skills/, or None if git is unavailable.
 
-    Used to scope the structural tests to SHIPPED skills only — an untracked
+    Scopes the structural tests to SHIPPED skills only — an untracked
     work-in-progress skill directory in the working tree is not part of any
     release and must not turn the suite red.
     """
@@ -340,7 +339,7 @@ class ReleaseStructureTests(unittest.TestCase):
             description = (data.get("description") or "").strip()
             self.assertTrue(description,
                             f"{skill_dir.name}: empty or missing description:")
-            # Upper bound — pin the Copilot description-byte cap (ENG-92957): a
+            # Upper bound — pin the Copilot description-byte cap: a
             # description over the limit parses fine everywhere but is silently
             # dropped by Copilot, so it must fail here rather than ship green.
             description_bytes = len(description.encode("utf-8"))
@@ -350,7 +349,7 @@ class ReleaseStructureTests(unittest.TestCase):
                 f"exceeds Copilot cap of {MAX_SKILL_DESCRIPTION_BYTES}",
             )
             # Lower bound — a trim that stays under the cap must not drop a
-            # load-bearing trigger substring (the recurring ENG-92957 failure).
+            # load-bearing trigger substring (the recurring cap-driven failure).
             for phrase in LOAD_BEARING_DESCRIPTION_SUBSTRINGS.get(skill_dir.name, []):
                 self.assertIn(
                     phrase, description,
@@ -628,7 +627,7 @@ class ReleaseStructureTests(unittest.TestCase):
         )
 
     def test_gh_steps_set_gh_host_for_custom_hosts(self):
-        """Regression: gh CLI on non-github.com hosts refuses commands when it
+        """gh CLI on non-github.com hosts refuses commands when it
         cannot identify the API host. `GH_TOKEN` alone is not enough — gh only
         auto-detects github.com from git remotes; custom hostnames require
         GH_HOST to be set explicitly. Derive it from GITHUB_SERVER_URL so the

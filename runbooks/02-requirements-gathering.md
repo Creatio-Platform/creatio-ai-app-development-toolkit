@@ -160,7 +160,7 @@ Do not show the draft to the developer if any of the following is true:
 - `## 3. Object Model` does not contain the required field tables
 - a section object or supporting object is described only in prose or bullets without its own field table
 - the object model is rendered as prose-only summary instead of the required `## 3. Object Model` structure
-- a wrapper such as `<proposed_plan>` is being used to justify a shortened, summarized, or freely rewritten body instead of the exact BA-style structure
+- a wrapper such as `<proposed_plan>` is invoked to justify a shortened, summarized, or freely rewritten body instead of the exact BA-style structure
 
 Rules for the output:
 
@@ -291,7 +291,7 @@ Describe each surface with these labels (colon included), as applicable — the 
 - `list filters:` — the filter field Titles, e.g. `list filters: Status`
 - `form groups:` — the full-record-page field groups, e.g. `form groups: Details (Title, Description), Assignment (Status, Assignee)`
 - `form fields:` — the fields, in order, on a quick-add **mini page**, e.g. `form fields: Title, Start time, Responsible, Hall`
-- `add page:` / `edit page:` — the pages used to add vs open a record, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. Use these only for real pages (never with the inline option).
+- `add page:` / `edit page:` — the pages for adding vs opening a record, e.g. `add page: mini page (Title, Due date, Stage)` and `edit page: full record page`. Use these only for real pages (never with the inline option).
 
 Also include when applicable:
 

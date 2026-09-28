@@ -52,7 +52,7 @@ def write_bundled_workflow(source_root, skill_dir_name, script_stem, meta_name, 
     """Write a `skills/<skill>/<stem>.workflow.js` and its entry in the generated manifest.
 
     The manifest is what the installer reads: the script's own `meta.name` is still written so the
-    fixture looks like the real artifact, but no consumer parses it any more (PR #147 review).
+    fixture looks like the real artifact, but no consumer parses it.
     """
     skill_dir = source_root / "skills" / skill_dir_name
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +131,6 @@ class ConstantsTests(unittest.TestCase):
             "register_claude_known_marketplace",
             "register_claude_installed_plugin",
             "prune_directory_entries",
-            # ENG-90514 removed these along with the file-copy install path.
             "write_codex_marketplace_catalog",
             "merge_codex_marketplace_config",
             "merge_personal_marketplace_catalog",
@@ -417,7 +416,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_tolerates_codex_not_configured_or_installed(self):
-        # Regression for 0.1.2 smoke-test finding: Codex CLI on Windows reports
+        # Guard: Codex CLI on Windows reports
         # the "no such marketplace" condition as
         #   `Error: marketplace `creatio` is not configured or installed`
         # — backticks around the name and "is not configured or installed"
@@ -453,7 +452,7 @@ class RegisterRemoteMarketplaceTests(unittest.TestCase):
         )
 
     def test_pre_remove_marketplace_propagates_non_not_found_remove_failure(self):
-        # Regression for PR #73 RC-1: swallowing every RuntimeError on the
+        # Guard: swallowing every RuntimeError on the
         # pre-remove step would hide real failures (permissions, broken CLI,
         # I/O errors) behind a misleading downstream `marketplace add` error.
         installer = load_installer()
@@ -519,7 +518,7 @@ class InstallClaudeTests(unittest.TestCase):
             self.assertFalse((home / ".agents" / "skills").exists())
 
     def test_install_claude_always_removes_marketplace_first_and_tolerates_not_found(self):
-        # Regression for ENG-90475 comments 448799 (Windows) and 449177 (macOS):
+        # Guard for the Windows and macOS install paths:
         # users upgrading from the old file-copy install carry a directory-source
         # `creatio` marketplace whose absolute `installLocation` survives in
         # known_marketplaces.json. Claude CLI silently "updates in place" on a
@@ -687,7 +686,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
                 installer.provision_named_workflows(source_root, claude_home)
 
     def test_reads_the_name_from_the_manifest_not_from_the_script_text(self):
-        # PR #147 review — the identity comes from the generated manifest, so a line beginning
+        # the identity comes from the generated manifest, so a line beginning
         # `name:` anywhere in the inlined prompt text or core modules cannot supply the destination
         # filename, and no JavaScript is parsed to find out. The script here declares one name in
         # its own `meta` and a decoy further down; only the manifest decides.
@@ -836,7 +835,7 @@ class ProvisionNamedWorkflowsTests(unittest.TestCase):
             )
 
     def test_a_script_the_generator_never_declared_is_a_hard_error(self):
-        # Was "a script with no `meta.name`". The identity no longer lives in the script, so the
+        # The identity does not live in the script, so the
         # equivalent failure is a script the generator's `TARGETS` table never declared.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:
@@ -922,7 +921,7 @@ class RemoveTomlTableBlockTests(unittest.TestCase):
             self.assertIn('network = "restricted"', body)
 
     def test_preserves_multiline_array_in_sibling_table(self):
-        # Regression: a generous next-header detector ("any line starting with [")
+        # Guard: a generous next-header detector ("any line starting with [")
         # would treat the closing `]` of a multi-line array literal as a new
         # table header and leak the rest of the sibling block as orphans.
         installer = load_installer()
@@ -1080,7 +1079,7 @@ class EnableClaudeAutoUpdateTests(unittest.TestCase):
 
 
 class InstallCodexTests(unittest.TestCase):
-    """ENG-90514: Codex registers the remote marketplace via its CLI.
+    """Codex registers the remote marketplace via its CLI.
 
     Codex CLI has no non-interactive plugin-install subcommand, so the
     installer performs the two steps the interactive `/plugins` browser does —
@@ -1225,7 +1224,7 @@ class InstallCodexTests(unittest.TestCase):
     def test_failure_after_the_cache_wipe_leaves_no_dangling_enabled_block(self):
         # A previous install is on disk (cache + enabled block). If materialization fails
         # after install_codex has wiped the cache, the enabled block must be gone too —
-        # otherwise config.toml would point Codex at a version directory that no longer
+        # otherwise config.toml would point Codex at a version directory that does not
         # exists. The block comes back only when a later run materializes successfully.
         installer = load_installer()
         with tempfile.TemporaryDirectory() as temp:

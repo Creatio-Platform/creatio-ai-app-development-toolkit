@@ -1,4 +1,4 @@
-"""Contract tests for the navigation placement and audience requirement (ENG-88474).
+"""Contract tests for the navigation placement and audience requirement.
 
 A Creatio section that exists is not a section a user can reach. `create-app` places the new
 section in the `My applications` workplace, which is granted to `System administrators` only, and a
@@ -139,7 +139,7 @@ class FirstTurnDiscoveryContractTests(unittest.TestCase):
 class OrchestratorTriggerContractTests(unittest.TestCase):
     """The entrypoint skill must be selectable from a plain user request.
 
-    Its description previously named only the toolkit's own artifacts — "Business Plans", "technical
+    A description naming only the toolkit's own artifacts — "Business Plans", "technical
     implementation handoffs", "the approved plan". A live run on "Create Verrify1 app. It should
     have..." never selected the skill (transcript: zero Skill invocations, no toolkit file read) and
     fell straight through to clio MCP, so every gate in this toolkit was inert. Every sibling skill is
@@ -280,7 +280,7 @@ class PlacementRuleConsistencyTests(unittest.TestCase):
     """The rule is deliberately written twice, and each file's own test pins only its own wording.
 
     `AGENTS.md` carries it into the first discovery batch; `context/business-checklist.md` carries the
-    reference version that is read afterwards. Nothing previously compared the two, so they could drift
+    reference version that is read afterwards. With nothing comparing the two, they can drift
     apart while both files' individual substring assertions still passed — and they had already drifted on
     trigger scope before this test existed.
     """

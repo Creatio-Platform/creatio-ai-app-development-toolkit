@@ -93,7 +93,7 @@ HOME_PAGE_MIN_WIDGETS = 10
 # silently inventing a narrower/other grant. (The role a dashboard is for drives
 # its CONTENT — which metrics/charts — not its access rights.)
 DASHBOARD_ACCESS_RIGHTS_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:[ \t]*All Employees[ \t]*$")
-# Any `access rights:` label (any value) — used to REJECT access rights under §7.2,
+# Any `access rights:` label (any value) — REJECTS access rights under §7.2,
 # where the home page has no per-page grant (its audience is the workplace).
 ACCESS_RIGHTS_LABEL_RE = re.compile(r"(?im)^[\s\-*>#`]*access rights:")
 # §7.2 Workplace analytics is the app's single home page (a `BaseHomePage`) — one

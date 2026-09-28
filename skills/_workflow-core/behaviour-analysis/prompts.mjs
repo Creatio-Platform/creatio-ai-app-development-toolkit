@@ -3,7 +3,7 @@
 // Prompts are DATA in the work-item protocol, so they are built here and carried
 // on the item rather than passed to a host API. Keeping them pure is also what
 // lets the suite assert the text a phase actually receives — a prompt that lost
-// its read-only clause is a safety regression no coverage arithmetic would catch.
+// its read-only clause is a safety hole no coverage arithmetic would catch.
 
 // Shared preamble. Embedded so no phase depends on another skill's files being
 // loaded in its context — except `classic-ui-expert` itself, which every Describe
@@ -42,7 +42,7 @@ Return the schema. The cards live in the FILE; the return carries the inventory,
 }
 
 export function describePrompt({ RULES, batch, sharedCardList, sharedCorePath, partPath, roundNote, round = 1 }) {
-  // PR #147 review — the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
+  // the card id namespace carries the ROUND for the same reason `partFile` does. The prompt names
   // the collision hazard itself two clauses later ("bare `C01` ids collide across parts and the migration plan
   // would then point at two different cards"), and a repair round numbering from `C01` off the same scope label
   // reproduced exactly that between round 1's part and its own. Round 1 keeps the historical spelling.
@@ -76,8 +76,8 @@ Your member ledger proves completeness for YOUR scopes only — say so; the surf
 
 export function repairNote(toRepair, batch, critiqueNotes) {
   const mine = toRepair.filter((k) => batch.scopes.some((s) => [...s.methodKeys, ...s.memberKeys].includes(k)))
-  // PR #147 review — the round's part file is its OWN, and the agent is told so. Nothing here used to mention the
-  // file at all, so an agent handed round 1's path (the defect `partFile`'s round marker fixes) had no reason to
+  // the round's part file is its OWN, and the agent is told so. A prompt that mentioned the
+  // file nowhere would leave an agent handed round 1's path with no reason to
   // suspect it was overwriting a first pass. Saying the first pass is KEPT is also what stops this round paying to
   // restate cards that are already in the deliverable.
   return `\nTHIS IS A REPAIR ROUND. A first pass already ran on these scopes and left these rows with no card — or, for a body-elsewhere row, no \`bodyCard\`: ${mine.join(', ')}\nDescribe THOSE rows. If a row genuinely cannot be described, return it as a \`gap\` with the settling query — a second silent omission is worse than a stated gap. Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it, so describe only the rows named here and do not restate cards it already carries.\nCritique notes: ${critiqueNotes || '(none)'}\n`

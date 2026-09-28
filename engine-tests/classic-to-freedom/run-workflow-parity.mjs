@@ -59,7 +59,7 @@ function logExcerpt(logs) {
 
 // Evaluate a workflow script the way the host does. The body becomes a real ES module under the OS temp dir and is
 // imported — no `new Function`, no eval, matching the sibling runners' decision to keep these files free of a
-// dynamic-code construct a reviewer then has to reason about.
+// dynamic-code construct a reader then has to reason about.
 // A RUNAWAY CEILING on the dispatch count, so a script that does not TERMINATE fails as a divergence instead of
 // hanging the suite. Every termination guarantee this workflow has — the describe fan-out cap, the single repair
 // round, the one Critique retry — is a bound on how many agents a run may ask for, and the failure mode when one is
@@ -129,7 +129,7 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // the agent the same spelling the coverage arithmetic counts, which is the point of the change.
       baseline: "    methods: initMini",
       shipped: "    methods: DealMini::initMini",
-      why: "method keys are qualified with their scope so two scopes declaring the same name are two rows, not one (ENG-96529)",
+      why: "method keys are qualified with their scope so two scopes declaring the same name are two rows, not one",
     },
     {
       // The SAME change, seen from the Critique prompt: it is handed `allKeys`, so the qualified spelling shows
@@ -137,19 +137,19 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // and a change to one must not be waved through by a rule written for the other.
       baseline: "onSaved, reload, mixin:LeadMixin, initMini",
       shipped: "onSaved, reload, mixin:LeadMixin, DealMini::initMini",
-      why: "the critique's key list carries the same qualified inventory keys (ENG-96529)",
+      why: "the critique's key list carries the same qualified inventory keys",
     },
     {
       // And once more in the critique's uncovered list, for the same reason as the two entries above.
       baseline: "ROWS THIS RUN COMPUTED AS UNCOVERED (no index entry): mixin:LeadMixin, initMini",
       shipped: "ROWS THIS RUN COMPUTED AS UNCOVERED (no index entry): mixin:LeadMixin, DealMini::initMini",
-      why: "the uncovered list is the same qualified inventory keys (ENG-96529)",
+      why: "the uncovered list is the same qualified inventory keys",
     },
     {
       // And in the repair round's own row list — the last place the inventory keys are spelled out to an agent.
       baseline: "no `bodyCard`: mixin:LeadMixin, initMini",
       shipped: "no `bodyCard`: mixin:LeadMixin, DealMini::initMini",
-      why: "the repair round targets the same qualified inventory keys (ENG-96529)",
+      why: "the repair round targets the same qualified inventory keys",
     },
     {
       // The repair round now writes its OWN part file and numbers its cards in its own namespace. Both rounds
@@ -159,18 +159,18 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // BOTH halves of the line, so a change to only the path or only the ids does not ride in on the other.
       baseline: "written to `out/customizations-part-main-page.md` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id `<scope>/C01`, `<scope>/C02`",
       shipped: "written to `out/customizations-part-main-page-round2.md` — the skill's card contract, each card closing with numbered acceptance criteria. Namespace every card id `<scope>/R2-C01`, `<scope>/R2-C02`",
-      why: "the repair round gets its own part file and card id namespace, so it cannot overwrite or collide with the first pass (PR #147 review)",
+      why: "the repair round gets its own part file and card id namespace, so it cannot overwrite or collide with the first pass",
     },
     {
       // The BATCH INDEX, the second collision axis on the same path. `packBatches` partitions SCOPES, not labels,
       // and `label` is `schema || role`, so two scopes returned under one `schema` are separate batch members
-      // carrying one label — measured by the reviewer as `describe.1.UsrPage` and `describe.2.UsrPage` both being
+// carrying one label — `describe.1.UsrPage` and `describe.2.UsrPage` both being
       // handed `customizations-part-UsrPage.md`, with `acceptParts` blind to it (both items are ASKED for that
       // path and both return it). Only batches after the first move, which is why this fires on the fan-out
       // scenario alone: the single-batch case every other scenario exercises keeps the historical filename.
       baseline: "written to `out/customizations-part-DealMini.md`",
       shipped: "written to `out/customizations-part-DealMini-2.md`",
-      why: "the batch index is in the part path, so two scopes sharing a `schema` cannot be handed one file (PR #147 review)",
+      why: "the batch index is in the part path, so two scopes sharing a `schema` cannot be handed one file",
     },
     {
       // The repair round's part path, seen from MERGE's list of files to fold in. Now that the Describe fixture
@@ -179,7 +179,7 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // itself, from the consumer's end.
       baseline: "- out/customizations-part-main-page.md",
       shipped: "- out/customizations-part-main-page-round2.md",
-      why: "Merge folds in the repair round's OWN part file; the baseline listed round 1's file twice (PR #147 review)",
+      why: "Merge folds in the repair round's OWN part file, never the first pass's file twice",
     },
     {
       // The batch index once more, from MERGE's list of files to fold in — the third and last place a part path
@@ -187,14 +187,14 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // different contracts, and a change to one must not be waved through by a rule written for another.
       baseline: "- out/customizations-part-DealMini.md",
       shipped: "- out/customizations-part-DealMini-2.md",
-      why: "Merge folds in the batch-indexed part file the second describe agent actually wrote (PR #147 review)",
+      why: "Merge folds in the batch-indexed part file the second describe agent actually wrote",
     },
     {
       // And the batch index, seen from CRITIQUE's JSON of what the Describe agents returned. Same single change
       // as the Describe-prompt entry above, echoed by the phase that is handed the returns.
       baseline: '"reportPart":"out/customizations-part-DealMini.md"',
       shipped: '"reportPart":"out/customizations-part-DealMini-2.md"',
-      why: "the critique is handed the batch-indexed part path the second describe agent actually wrote (PR #147 review)",
+      why: "the critique is handed the batch-indexed part path the second describe agent actually wrote",
     },
     {
       // The other half of the same fix: nothing in the repair prompt mentioned the part file at all, so an agent
@@ -202,7 +202,7 @@ const ALLOWED_PROMPT_DIVERGENCES = {
       // KEPT is also what stops this round paying to restate cards already in the deliverable.
       baseline: "a second silent omission is worse than a stated gap.",
       shipped: "Your part file above is this round's own, empty file: the first pass's part is KEPT and merged alongside it",
-      why: "the repair round is told its part file is its own and that the first pass is kept (PR #147 review)",
+      why: "the repair round is told its part file is its own and that the first pass is kept",
     },
   ],
 }
@@ -219,28 +219,28 @@ const ALLOWED_FINGERPRINT_DIVERGENCES = {
       field: "result",
       from: '"initMini"',
       to: '"DealMini::initMini"',
-      why: "the uncovered row is reported under the qualified key the inventory now carries (ENG-96529)",
+      why: "the uncovered row is reported under the qualified key the inventory carries",
     },
     {
       scenario: "dead Merge — coverage stands, run not complete",
       field: "calls",
       from: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath",
       to: "Merge/merge:report+index/general-purpose/cardCount+indexPath+reportPath | Merge/merge:report+index-retry/general-purpose/cardCount+indexPath+reportPath",
-      why: "Merge is retried once on death: it is the only phase whose failure leaves the run with full coverage and no deliverable (ENG-96529)",
+      why: "Merge is retried once on death: it is the only phase whose failure leaves the run with full coverage and no deliverable",
     },
     {
       scenario: "dead Merge — coverage stands, run not complete",
       field: "result",
       from: "merge indexPath into manifest.behaviourIndex, then re-run `node engine/migrate.mjs <manifest> --plan --out <plan-file>`",
       to: "NOTHING to fold in: the Merge phase died and wrote neither indexPath nor reportPath. Re-run this analysis — the coverage numbers above stand, but there is no deliverable.",
-      why: "`next` is conditional on `mergeOk`: an unconditional instruction told the operator to fold in an index file a dead Merge never wrote (PR #147 review)",
+      why: "`next` is conditional on `mergeOk`: an unconditional instruction would tell the operator to fold in an index file a dead Merge never wrote",
     },
   ],
 }
 
-// PR #147 review — EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
+// EVERY entry is accounted for, and each rewrites EXACTLY the occurrences it declares.
 // `split(from).join(to)` rewrote every occurrence of `from` in the field, not the one the rule describes, so a
-// genuine regression at a second site carrying the same token was normalised in lockstep and passed the gate — and
+// genuine change at a second site carrying the same token would be normalised in lockstep and pass the gate — and
 // a key-qualification change is precisely what makes a repeated token likely. An entry may declare `count` when it
 // deliberately covers more than one occurrence; the default is 1, and a mismatch fails with the scenario and field
 // named. Firing is recorded so an entry whose `from` string stopped occurring cannot sit there as a permanent
@@ -318,7 +318,7 @@ function behaviourScenarios() {
     censusNote: "census proven via ExtendParent query",
     refusals: ["could not read DealTyped layer"],
   };
-  // PR #147 review — A DESCRIBE ANSWER WRITES WHERE THE PROMPT TOLD IT TO. `reportPart` was the literal
+  // A DESCRIBE ANSWER WRITES WHERE THE PROMPT TOLD IT TO. `reportPart` was the literal
   // `out/part.md`, which no agent following the prompt would ever return, so the scenarios did not exercise the
   // part-path contract at all — and once `partFile` gained its round and batch suffixes, the core's new
   // returned-versus-asked check fired on every scenario as a log-only warning (4 → 8) that nothing could act on.
@@ -434,7 +434,7 @@ function promptDiff(a, b, pairName, scenario) {
   for (let i = 0; i < n; i++) {
     const pa = a.calls[i]?.prompt, pb = b.calls[i]?.prompt;
     if (pa === pb) continue;
-    // PR #147 review — the extra dispatch is CONSUMED, not skipped in place: `continue` left the two sides
+    // the extra dispatch is CONSUMED, not skipped in place: `continue` left the two sides
     // one index apart for the rest of the loop, and that was inert only because today's retry dispatch happens
     // to be last in its phase. Splicing it out of the shipped side keeps the remaining calls aligned whatever
     // position the extra one takes.
