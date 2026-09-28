@@ -3454,12 +3454,23 @@ function columnFormsOf(token) {
   if (pds) out.push(pds[1]);
   return out;
 }
-// `elementColumn` maps a built element NAME to the column it binds (`RequestField` → `InternalRequest`),
-// taken from the page's own ops. `columnFormsOf` is a string rule and can only strip what the token already spells
-// (`<Col>Field`, `PDS_<Col>_<hash>`); it cannot know that the element named `RequestField` governs `InternalRequest`.
-// On the recorded Applicants payload that gap left the rules row at `3/5` — missing `InternalRequest` and `Job`, the two
-// whose element name does not carry the column — on a page carrying all 11 built rules. A rule names the ELEMENT it
-// acts on, so resolving that element through its binding is the only thing that closes those two.
+// A built element NAME -> the one column it binds (`RequestField` -> `InternalRequest`), from the page's own ops. A
+// rule names the ELEMENT it acts on, and `columnFormsOf` is a string rule that can only strip what a token already
+// spells (`<Col>Field`, `PDS_<Col>_<hash>`) — it cannot know that `RequestField` governs `InternalRequest`; the
+// element's binding can. A name bound to two DIFFERENT columns on one page is ambiguous, so it maps to nothing:
+// picking either would let a rule on one column close a row that expects the other. Such a rule still matches
+// through `columnFormsOf`, exactly as it would with no map at all.
+export function elementColumnsOf(ops) {
+  const seen = new Map();
+  for (const o of ops || []) {
+    if (!o?.name || !o.bound) continue;
+    if (!seen.has(o.name)) seen.set(o.name, new Set());
+    seen.get(o.name).add(o.bound);
+  }
+  const out = new Map();
+  for (const [name, cols] of seen) if (cols.size === 1) out.set(name, [...cols][0]);
+  return out;
+}
 function builtRuleTokens(built, elementColumn) {
   let rules = null;
   if (Array.isArray(built)) rules = built;
@@ -3487,9 +3498,7 @@ export function resolveRuleVk(vk, ctx) {
   // said so, distinct from MISSING), the case this ticket adds so a rule the payload cannot see is never a false ❌.
   if (ctx.entryAbsent) return absentEntry(ctx, `the ${want.length} expected business rule(s)`);
   if (ctx.page === false) return ["❌ MISSING", `the page is reported as NOT BUILT, so none of the ${want.length} expected business rule(s) exist`, "missing"];
-  // The page's own element -> bound-column map, so a rule targeting `RequestField` is matched on `InternalRequest`.
-  const elementColumn = new Map((ctx.ops || []).filter((o) => o.name && o.bound).map((o) => [o.name, o.bound]));
-  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules, elementColumn);
+  const tokenSets = builtRuleTokens(entryObject(ctx.page)?.businessRules, elementColumnsOf(ctx.ops));
   if (tokenSets == null) return ["⚠ verify",
     `business rules NOT checkable — this page entry carries no \`businessRules\` slot; run \`read-page-business-rules\` for the page (or record \`businessRules: []\` once you have confirmed it genuinely has none), so the ${want.length} expected rule(s) can be matched`, "unverified"];
   const missing = want.filter((name) => !tokenSets.some((toks) => toks.has(name)));
@@ -4107,15 +4116,11 @@ const entryObject = (e) => (e && typeof e === "object" ? e : null);
 // whose fields were added there after the build): the column sits between the prefix and the hash, so it is
 // unwrapped to the bare column here.
 //
-// `PDS_<Column>` with NO hash is unwrapped too, and it is the shape a page built by an AGENT actually
-// carries. Measured on the recorded Applicants payload (`fixtures/eng98487-applicants/`): every one of its 19
-// fields binds `$PDS_<Column>` or `$<Column>`, not one carries a hash, and the hash-only rule left five of them
-// — `Job`, `Market`, `Segment`, `InternalRequest`, `Owner` — compared as `PDS_Job` against `Job` and reported
-// missing on a page where all 19 were built. Those five are exactly the fields whose ELEMENT name does not carry
-// the column either (`RoleInCompanyField` binds `$PDS_Job`), so the binding was their only identity and the row
-// read `14/19` with no way for a builder to act on it.
+// `PDS_<Column>` with NO hash unwraps to `<Column>` too. It is the shape a page built by an agent carries — every
+// binding in `fixtures/applicants-recorded/` is `$PDS_<Column>` or `$<Column>`, none hashed — and for a field whose
+// element name does not carry its column (`RoleInCompanyField` bound `$PDS_Job`) the binding is its only identity.
 //
-// Still NOT unwrapped: a name with no `PDS_` prefix at all — the builder chose it, and it is compared as written.
+// A name with no `PDS_` prefix is compared as written — the builder chose it.
 export function boundAttributeOf(node) {
   const b = [node.control, node.value, node.checked].find((v) => typeof v === "string" && v.startsWith("$"));
   if (!b) return null;

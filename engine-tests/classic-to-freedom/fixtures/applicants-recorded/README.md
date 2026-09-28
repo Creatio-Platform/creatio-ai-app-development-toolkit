@@ -1,79 +1,57 @@
-# `applicants-recorded` — the payload a real run recorded, and the identity match failed on
+# `applicants-recorded` — a recorded page whose element names drop their columns
 
-Not synthesized. `built-main.json` is the **`main` page entry of the `built.json` an
-orchestrated Applicants migration actually recorded** (`migration-applicants/built.json`
-inside the run archive `14-sept-migration.zip`, captured by r.ivanov on 2026-09-14), trimmed
-to what a
-`--verify` field/rule check reads: `viewConfig` verbatim, `businessRules` verbatim, the
-page's identity keys, and `modelConfig` cut down to its page-scope `PDS` data source. No
-node, name, binding or rule was edited — the whole point of the fixture is that the payload
-is the one the gate got wrong.
+Not synthesized. `built-main.json` is the `main` page entry of the `built.json` an orchestrated
+Applicants migration recorded (run archive `14-sept-migration.zip`,
+`migration-applicants/built.json`), trimmed to what a `--verify` field or rule check reads:
+`viewConfig` and `businessRules` verbatim, the page's identity keys, and `modelConfig` cut down
+to its page-scope `PDS` data source. No node, name, binding or rule is edited.
 
-`expected.json` is the **plan side** of the same run: the 19 expected field columns and the
-5 distinct expected business-rule target attributes, read off `migration-applicants/plan.md`
-(the element table's `PDS.<Column>` source column, and the Logic table's behaviour column —
-`Employee` appears on two rows and is one identity).
+`expected.json` is the plan side of the same run: the 19 expected field columns and the 5
+distinct business-rule target attributes, read off its `plan.md` (the element table's
+`PDS.<Column>` source column, and the Logic table's behaviour column — `Employee` appears on two
+rows and is one identity). [`applicants-post-rename`](../applicants-post-rename/) is checked
+against the same file.
 
 `rows-digests.base.json` is unrelated to the payload: it pins `<task id>:<rowsDigest>` for the
-ten tasks of `run-tasks.mjs`'s standard run, captured on the base branch, so the `Closed by`
-wording change can be proven not to reach the digest. See RISK1 in `run-tasks.mjs`.
+ten tasks of `run-tasks.mjs`'s standard run, so rendering a `Closed by` cell is proven not to
+reach the digest.
 
-## Why this fixture still earns its place
+## What it checks
 
-The migration-result-report work already closed most of this. Its matcher accepts an element
-named `<Col>`
-**or** `<Col>Field`, and resolves a binding through `boundAttributeOf`, which unwraps the
-Designer-minted `PDS_<Col>_<hash>`. Against this recorded payload that gets **14 of 19 fields
-and 3 of 5 rules** — a large improvement on the `0/19` and `2/5` the run itself reported, and
-still not a pass on a page where every one of the 19 was built.
+Every expected column is built and bound on this page, and **five of the elements carry a name
+that does not contain their column**, so their binding is their only identity:
 
-The five that remain are the ones where **both** identity legs miss:
+| built element | binding | column |
+| --- | --- | --- |
+| `RoleInCompanyField` | `$PDS_Job` | `Job` |
+| `ManagerMarketField` | `$PDS_Market` | `Market` |
+| `ManagerSegmentField` | `$PDS_Segment` | `Segment` |
+| `RequestField` | `$PDS_InternalRequest` | `InternalRequest` |
+| `ResponsibleField` | `$PDS_Owner` | `Owner` |
 
-| built element | binding | column | why each earlier leg misses |
-| --- | --- | --- | --- |
-| `RoleInCompanyField` | `$PDS_Job` | `Job` | name drops the column; `PDS_Job` has no `_<hash>`, so the unwrap leaves `PDS_Job` |
-| `ManagerMarketField` | `$PDS_Market` | `Market` | same |
-| `ManagerSegmentField` | `$PDS_Segment` | `Segment` | same |
-| `RequestField` | `$PDS_InternalRequest` | `InternalRequest` | same |
-| `ResponsibleField` | `$PDS_Owner` | `Owner` | same |
+Two properties of the payload make that binding the deciding leg:
 
-Two facts about this payload make that gap structural rather than incidental, and neither is
-visible in a synthesized fixture:
-
-1. **Not one of its 19 bindings carries a hash.** `$PDS_Contact`, `$PDS_Job`, `$PDS_Owner` —
-   the hashed `PDS_<Col>_<hash>` shape is what the *Interface Designer* mints, and this page
-   was built by an **agent**, which writes the bare prefix. So the hash-only unwrap reached
-   none of them; the 14 that passed did so on the `<Col>Field` name leg alone.
+1. **No binding carries a hash.** An agent writes the bare `$PDS_<Column>`; the hashed
+   `PDS_<Column>_<hash>` is what the Interface Designer mints. So an unwrap that recognises only
+   the hashed form resolves none of these five.
 2. **Bindings are not uniformly prefixed.** `$PDS_Contact` sits beside `$Email`, `$Skype`,
-   `$Department` and `$StaffUnit`, so the prefix has to be *optional* — stripping it cannot be
-   a precondition for resolving a binding at all.
+   `$Department` and `$StaffUnit`, so the prefix is optional — a binding without it is compared as
+   written. `JobTitleField` → `$StaffUnit` is the case that shows it: the name drops the column
+   and the unprefixed binding resolves on its own.
 
-`JobTitleField` → `$StaffUnit` is the instructive near-miss: its name drops the column too,
-but its binding carries no `PDS_` prefix, so it already resolved. It is why the fix strips a
-bare `PDS_` rather than doing anything cleverer with names.
+The business rules target those same element names (`actions[].items: ["RequestField"]`). A string
+rule over the token cannot know `RequestField` governs `InternalRequest`; only the page's
+element → bound-column map can, which is what `elementColumnsOf` supplies to the rules check.
 
-## The rules row needs the page, not a string rule
+Expected verdict: 19/19 fields, 5/5 rules.
 
-`columnFormsOf` indexes a rule token under its column forms (`<Col>Field` → `<Col>`,
-`PDS_<Col>_<hash>` → `<Col>`). That is a *string* transform, and it cannot know that the
-element named `RequestField` governs `InternalRequest` — nothing in the token spells it. A
-page rule names the **element** it acts on (`actions[].items: ["RejectReasonField"]`), so the
-only thing that closes those two is resolving that element through the page's own
-element → bound-column map. Hence the `elementColumn` argument to `builtRuleTokens`.
+## What it does not carry
 
-## `viewModelConfig` is NOT in this payload
-
-The recorded entry carries `modelConfig` and **no `viewModelConfig`**, and its page-scope
-`PDS` data source declares `entitySchemaName: "Applicant"` with **no `attributes` map**. That
-matters for anyone extending this: there is nothing in this payload to resolve a binding
-*through*, so every identity leg exercised here reads the node's own binding. A payload that
-does carry `viewModelConfig` — it is an optional `--built` key, and the engine will assemble
-it once it builds the payload itself — takes the richer path; this fixture proves the poorer
-one still works.
+No `viewModelConfig`: the page-scope `PDS` data source declares `entitySchemaName: "Applicant"`
+with no `attributes` map. Every identity leg exercised here therefore reads the node's own
+binding. A payload that carries `viewModelConfig` takes the richer path.
 
 ## Derived variants
 
-The post-rename (AC 3) and wrong-column / wrong-target (AC 4) payloads are **derived from
-this file in `run-mapper.mjs`** rather than committed as near-duplicate 30 KB copies: a
-second recorded copy that drifts from this one would be worse evidence than a transform whose
-one edit is visible in the test.
+The unbound post-rename shape and the wrong-column / wrong-target shapes are derived from this file
+in `run-mapper.mjs`, each by one visible edit, rather than committed as near-duplicate copies.
