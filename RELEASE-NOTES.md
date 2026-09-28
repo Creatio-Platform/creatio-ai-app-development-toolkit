@@ -10,6 +10,8 @@ To cut a release: open a release preparation PR that adds a new `## X.Y.Z (date)
 
 ## 1.13.0 (2026-09-28)
 
+![An approved plan cut into tasks, each built by its own sub-agent, and the Freedom page verified](https://raw.githubusercontent.com/Creatio-Platform/creatio-ai-app-development-toolkit/main/docs/assets/release-1.13.0-banner.png)
+
 **Building an approved Classic → Freedom migration plan no longer depends on one long agent session.** Step 7 now cuts the plan into a folder of task files and walks it one task at a time, each in its own build sub-agent: progress survives a killed session, the chat shows what is running and how long it should take, and "done" is decided by the engine's verify table instead of by the agent that did the work. The same release teaches mobile conversion to handle pages a converted page opens that do not exist on mobile yet.
 
 ### 🗂️ Migration build as a task folder
