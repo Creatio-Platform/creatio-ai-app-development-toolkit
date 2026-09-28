@@ -863,8 +863,32 @@ function renderFrontMatter(task, set) {
   return ["---", ...keys.map((k) => `${k}: ${oneLine(v[k])}`), "---"];
 }
 
+// The identity each vk's verifier matches a built element by, stated on the row. The task file IS the prompt the
+// building sub-agent reads, so a rule that lives only in the engine never reaches the builder. Each vk reads a
+// different thing, so each gets its own sentence — one sentence for every kind would be true for some and send a
+// builder to change what the verifier never looks at:
+//   · `fields` / `rule` match an element name OR its `$` binding (`fieldMatches`, `builtRuleTokens`);
+//   · `listcolumns` matches the grid column's exact `PDS_*` CODE and nothing else (`resolveListColumnsVk`);
+//   · `listfilter` / `element` match an exact element name together with its component type.
+// GENERIC on purpose — one worked example, never this row's own column list: the plan's names are already in the
+// `Deliverable` column, and `closedByOf` reads only the vk TYPE of the RENDERED row. That keeps this text out of
+// `rowsDigest`, which hashes the SOURCE rows — a `done` task must never read as drifted (and be re-dispatched
+// into a live migration) because a cell's wording changed.
+const IDENTITY_BY_VK = new Map(Object.entries({
+  fields: "name the element for its column (`Contact` or `ContactField`) and bind it to that column"
+    + " (`$PDS_Contact`) — either one closes the row, so an element whose name drops the column"
+    + " (`RoleInCompanyField`) closes on its binding",
+  rule: "target the field ELEMENT (`Contact` or `ContactField`) in the rule's `condition` / `actions` — the gate"
+    + " follows that element's binding to the column; the caption is never read",
+  listcolumns: "each grid column carries EXACTLY the `PDS_<Column>` code the plan names — only the code is"
+    + " matched, never an element name or a `$` binding, and a missing code is ❌ MISSING",
+  listfilter: "the filter element carries EXACTLY the name the plan gives it and is a `crt.QuickFilter`",
+  element: "the element carries EXACTLY the name the plan gives it and the plan's component type — another"
+    + " component of that type under a different name does not count",
+}));
+
 function closedByOf(row) {
-  if (row.vk) return "`--verify` (`" + row.vk + "`)";
+  if (row.vk) return "`--verify` (`" + row.vk + "`)" + (IDENTITY_BY_VK.has(row.vk) ? " — " + IDENTITY_BY_VK.get(row.vk) : "");
   // A plan boundary is the plan's fact, not the agent's decision. The engine pre-fills the Outcome cell for
   // it with `not-applicable — <reason>`, so this column names WHY there is nothing to build; the outcome cell
   // is not the agent's to write.
