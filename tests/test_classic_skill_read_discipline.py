@@ -89,6 +89,23 @@ class ReadDisciplineBlockTests(unittest.TestCase):
         missing = [what for what, phrase in required.items() if phrase not in text]
         self.assertFalse(missing, f"read-discipline block lacks: {missing}")
 
+    def test_the_block_says_a_reference_is_not_a_brief(self):
+        # The whole-read exception covers briefs only. The mapping reference, the
+        # creatio-ui-guidelines references and the clio guidance articles are each
+        # larger than a brief and are needed one section at a time, and a file read
+        # without an offset or limit costs a whole read whichever tool issues it.
+        text = flat(block(read(REFERENCES / CARRIERS[0]), CARRIERS[0]))
+        required = {
+            "references are not briefs": "A reference is not a brief",
+            "the mapping reference is one": "classic-to-freedom-mapping.md",
+            "the guidelines references are": "creatio-ui-guidelines",
+            "guidance articles are": "guidance articles",
+            "looked up by heading": "look it up by heading",
+            "an unbounded Read is a whole read": "with no offset or limit is a whole read",
+        }
+        missing = [what for what, phrase in required.items() if phrase not in text]
+        self.assertFalse(missing, f"read-discipline block lacks: {missing}")
+
     def test_skill_body_points_at_the_block_within_budget(self):
         lines = [line for line in read(SKILL).splitlines() if "**Read discipline**" in line]
         self.assertEqual(len(lines), 1, "SKILL.md must carry exactly one read-discipline pointer")
@@ -116,6 +133,91 @@ class BuilderReadTests(unittest.TestCase):
     def test_builder_reads_cited_cards_by_id(self):
         self.assertIn("by its id", self.text)
         self.assertIn("customizations-", self.text)
+
+    def test_repair_builder_re_files_one_record_in_place(self):
+        # A repair round changes one key of evidence.json; printing that file and
+        # judge.json to do it carries every other record into the conversation.
+        for phrase in (
+            "Re-filing one evidence record",
+            "read-modify-write",
+            "your own id in `judge.json`",
+            "never `cat` `evidence.json` or `judge.json`",
+        ):
+            self.assertIn(phrase, self.text)
+        self.assertRegex(self.text, r"node -e \"[^\"]*writeFileSync\('evidence\.json'")
+
+
+def headings(path):
+    return [line.lstrip("#").strip() for line in read(path).splitlines() if line.startswith("#")]
+
+
+class ReferenceLookupTests(unittest.TestCase):
+    """Reference docs are looked up by heading; only briefs are read whole."""
+
+    def dispatch_rows(self):
+        text = read(REFERENCES / "orchestrate-build.md")
+        begin = text.find("**7.3 What each sub-agent is handed.**")
+        self.assertGreaterEqual(begin, 0, "7.3 anchor not found")
+        stop = text.find("**7.4 ", begin)
+        rows = []
+        for line in text[begin:stop].splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if line.lstrip().startswith("|") and not set(cells[0]) <= set("-: "):
+                rows.append(cells)
+        return rows
+
+    def test_dispatch_table_separates_briefs_from_references(self):
+        header, *rows = self.dispatch_rows()
+        self.assertEqual(len(header), 4, f"dispatch table header: {header}")
+        self.assertIn("read whole", header[2])
+        self.assertIn("look up by heading", header[3])
+        mapping_rows = [row for row in rows if "classic-to-freedom-mapping.md" in " ".join(row)]
+        self.assertTrue(mapping_rows, "no task kind is pointed at the mapping reference")
+        for row in mapping_rows:
+            self.assertNotIn("classic-to-freedom-mapping.md", row[2], f"mapping listed as a brief: {row[0]}")
+            self.assertIn("classic-to-freedom-mapping.md", row[3], row[0])
+
+    def test_build_page_calls_the_mapping_a_reference_to_look_up(self):
+        text = read(REFERENCES / "build-page.md")
+        header = flat(text[: text.find("\n## ")])
+        self.assertIn("look up by heading", header)
+        self.assertIn("never read whole", header)
+
+    def test_every_mapping_pointer_names_a_real_heading(self):
+        text = flat(read(REFERENCES / "build-page.md"))
+        known = headings(REFERENCES / "classic-to-freedom-mapping.md")
+        pointers = re.findall(r"the mapping reference(?:'s)?(.{0,90})", text)
+        self.assertTrue(pointers, "build-page.md no longer points at the mapping reference")
+        unnamed = []
+        for tail in pointers:
+            named = re.match(r"\s*→\s*\*([^*]+)\*", tail)
+            if not named or not any(h.startswith(named.group(1).rstrip("…. ")) for h in known):
+                unnamed.append(tail[:60])
+        self.assertFalse(unnamed, f"mapping pointers without a real heading: {unnamed}")
+
+
+class UiGuidelinesPointerTests(unittest.TestCase):
+    """creatio-ui-guidelines is shared with app creation, so its pointers carry the rule too."""
+
+    def setUp(self):
+        self.text = flat(read(ROOT / "skills/creatio-ui-guidelines/SKILL.md"))
+
+    def test_pointers_read_a_section_not_the_file(self):
+        for unqualified in (
+            "read `./references/page-layout-and-controls.md` first",
+            "read `./references/accessibility-and-colors.md` first",
+        ):
+            self.assertNotIn(unqualified, self.text)
+        for reference in ("page-layout-and-controls.md", "accessibility-and-colors.md"):
+            self.assertRegex(
+                self.text,
+                rf"`\./references/{re.escape(reference)}`[^.]*list its headings",
+                reference,
+            )
+        self.assertIn("the section for the element you are placing", self.text)
+
+    def test_review_checklists_is_whole_only_for_a_full_audit(self):
+        self.assertIn("read `./references/review-checklists.md` whole only for a full audit", self.text)
 
 
 class ReadBackAndJudgeTests(unittest.TestCase):

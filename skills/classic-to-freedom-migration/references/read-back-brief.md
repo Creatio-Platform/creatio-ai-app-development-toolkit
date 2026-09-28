@@ -23,6 +23,10 @@ goes into. Run those reads; nothing else.
   `sed -n '120,178p' plan.md` prints your page's section and nothing else.
 - **When a whole read is right:** your own task file, a brief you were handed, and a file your
   instructions tell you to read whole — read those in full, once.
+- **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
+  `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
+  need. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 - **The read-back**: one sub-agent with stand access but NO write access runs the reads that plan

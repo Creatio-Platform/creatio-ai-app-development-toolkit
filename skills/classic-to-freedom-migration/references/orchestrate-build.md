@@ -23,6 +23,10 @@ mean. No sub-agent is handed this file — each gets the briefs its task kind na
   `sed -n '120,178p' plan.md` prints your page's section and nothing else.
 - **When a whole read is right:** your own task file, a brief you were handed, and a file your
   instructions tell you to read whole — read those in full, once.
+- **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
+  `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
+  need. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 ## Step 7 — slice the plan, then orchestrate one task at a time
@@ -277,16 +281,20 @@ cards with their acceptance criteria — a handler is ported against its card's 
 method name. A task with `dependsOn` also reads the `## Notes` of the tasks it names: what they
 answered on the stand is recorded there and is not repeated in its own file.
 
-| Task kind | How to recognise it in the task file | Hand it these briefs (paths) |
-| --- | --- | --- |
-| Reference cache — the run's first task | `group: Reference cache` (read-only, `writesTo:` empty) | `./references/reference-cache-brief.md` |
-| Scaffolding — app, package, section, page shells | `group: Scaffolding`, `writesTo: scaffold` | `./references/build-task-execution.md`, `./references/build-scaffolding.md` |
-| Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows |
-| Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows |
-| Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md`, `./references/classic-to-freedom-mapping.md` — and `./references/build-dashboards.md` when the plan lists dashboards |
-| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md`, `./references/classic-to-freedom-mapping.md` |
-| Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` |
-| Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` |
+| Task kind | How to recognise it in the task file | Hand it these briefs — read whole (paths) | And these references — look up by heading, never read whole (paths) |
+| --- | --- | --- | --- |
+| Reference cache — the run's first task | `group: Reference cache` (read-only, `writesTo:` empty) | `./references/reference-cache-brief.md` | — |
+| Scaffolding — app, package, section, page shells | `group: Scaffolding`, `writesTo: scaffold` | `./references/build-task-execution.md`, `./references/build-scaffolding.md` | — |
+| Page build — one page, or one chunk of it | `group: Page build…`, `writesTo: page:<…>` | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md` |
+| Repair round (7.5) | `kind: repair` in the front matter | `./references/build-task-execution.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when its deliverables carry the section-dashboard rows | `./references/classic-to-freedom-mapping.md` |
+| Whole migration — a run under `TASK_BUDGET.run` | `group: Whole migration`, `writesTo: whole` | `./references/build-task-execution.md`, `./references/build-scaffolding.md`, `./references/build-page.md` — and `./references/build-dashboards.md` when the plan lists dashboards | `./references/classic-to-freedom-mapping.md` |
+| Section dashboards (7.7) — inside the list page's build task, never a task of their own | its deliverables carry the plan's section-dashboard rows (`Dashboards migrated — …`, `Dashboards element on the Freedom list page …`) | `./references/build-task-execution.md`, `./references/build-page.md`, `./references/build-dashboards.md` | `./references/classic-to-freedom-mapping.md` |
+| Quality gates — the review that judges a page | `group: Quality gates` (read-only, `writesTo:` empty) | `./references/judge-brief.md` | — |
+| Read-back (7.4) — not a task file | the driver's own read-back pass over `--reads` | `./references/read-back-brief.md` | — |
+
+**A brief is read whole; a reference is looked up by heading.** Say which is which in the hand-off:
+the mapping reference is several times a brief's size and a builder needs a few of its sections, so
+it is handed as a path to `grep -n '^#'`, never as a file to read.
 
 **A task that matches several rows gets every brief those rows name.** The engine files the
 section-dashboard rows into the list page's own build task, so that task is both a page build and

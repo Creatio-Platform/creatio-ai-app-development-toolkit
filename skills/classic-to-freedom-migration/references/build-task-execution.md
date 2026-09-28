@@ -87,6 +87,10 @@ its `## Deliverables` table is where you say what happened to each one. Nothing 
   `sed -n '120,178p' plan.md` prints your page's section and nothing else.
 - **When a whole read is right:** your own task file, a brief you were handed, and a file your
   instructions tell you to read whole — read those in full, once.
+- **A reference is not a brief — look it up by heading.** `classic-to-freedom-mapping.md`, the
+  `creatio-ui-guidelines` references and the clio guidance articles (from `refs/` or `get-guidance`)
+  are pointed at, not handed: `grep -n '^#'` lists their headings, then read the one section you
+  need. A file read with no offset or limit is a whole read, whichever tool reads it.
 <!-- read-discipline:end -->
 
 ## Before and during every write
@@ -106,6 +110,11 @@ you.
   slice. You do NOT record the approval — the orchestrator did that in `decisions.md` before
   slicing, and a build that finds no approval entry is a stop for the orchestrator, not something
   you work around.
+- **Re-filing one evidence record (a repair round).** `evidence.json` and `judge.json` hold every
+  task's records, so never `cat` `evidence.json` or `judge.json`. Query your own id in `judge.json`
+  to see why the record was refused (the `node -e` query above), then change your one key with a
+  single read-modify-write, leaving every other key as it is:
+  `node -e "const fs=require('fs'); const j=JSON.parse(fs.readFileSync('evidence.json','utf8')); j['<id>'] = { ...j['<id>'], referencePage: '<page>', components: ['<component>'] }; fs.writeFileSync('evidence.json', JSON.stringify(j, null, 2))"`
 - Section sequencing at whole-package scope is the orchestrator's (step 7.6,
   `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
   one starts. Your task belongs to exactly one section — never reach into another.
@@ -120,8 +129,8 @@ running its on-stand query and recording the answer (DCM `SysSchema ManagerName=
 `ProcessInModules`, `SysModuleReport`, `get-component-info`), not deferred as "probably N/A"; (b)
 you build the plan's layout/components exactly — every island, tab, group, and both halves of a
 two-part component. Any simplification is a proposal to the user, not a silent change; (c) every
-element carries the identity `--verify` matches it by — see (c) in full below. → the mapping
-reference's build recipes.
+element carries the identity `--verify` matches it by — see (c) in full below. →
+the mapping reference → *Build recipes for the components agents get wrong*.
 
 **(c) in full — the identity each row kind is matched by.** `--verify` closes these rows by
 identity, and each kind reads a different thing, so build to the one your row's `Closed by` cell
