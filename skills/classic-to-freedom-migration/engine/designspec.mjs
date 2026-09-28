@@ -3445,8 +3445,8 @@ export function resolveComponentVk(vk, ctx) {
 // all match `calculateSaaSMetrics`). The match must start AND end on a word boundary of the built text, so an
 // element that only contains the name inside a longer word does not close it: "Recalculate SaaS metrics" is not
 // `calculateSaaSMetrics`, `PostData` is `post` but `RepostData` is not. When the card also declares a longer hint
-// that starts with this one (`approve` / `approveAll`), a text spelling the longer hint closes only that one. A
-// `remove` op is not evidence. Only ASCII letters and digits are compared, so a Cyrillic or German caption cannot
+// that contains this one (`approve` / `approveAll` / `massApprove`), a text spelling the longer hint closes only
+// that one. A `remove` op is not evidence, and neither is an element that cannot trigger an action (see `canCarryAction`). Only ASCII letters and digits are compared, so a Cyrillic or German caption cannot
 // close the row — the element name or `clicked.request` must carry the action name. Any crt.Button is not evidence —
 // the template's Actions button is one — so no match reads ⚠ verify, never ✅.
 function customActionTexts(o, resources) {
@@ -3478,27 +3478,44 @@ function wordBounds(text) {
   bounds.add(norm.length);
   return { norm, bounds };
 }
-// `key` occurs in the text starting and ending on word boundaries, and that occurrence is not the start of a longer
-// sibling key that also ends on a boundary there: with hints `approve` and `approveAll`, `ApproveAllMenuItem` spells
-// `approveAll` only.
+// `key` occurs in the text starting and ending on word boundaries, and that occurrence is not part of a longer
+// sibling key that the text spells on word boundaries: with hints `approve` / `approveAll` / `massApprove`,
+// `ApproveAllMenuItem` spells `approveAll` only and `MassApproveMenuItem` spells `massApprove` only.
+function insideLongerSibling(norm, bounds, i, key, longer) {
+  return longer.some((k) => {
+    for (let o = k.indexOf(key); o !== -1; o = k.indexOf(key, o + 1)) {
+      const j = i - o;
+      if (j >= 0 && norm.startsWith(k, j) && bounds.has(j) && bounds.has(j + k.length)) return true;
+    }
+    return false;
+  });
+}
 function containsAsWords(text, key, longer = []) {
   const { norm, bounds } = wordBounds(text);
   for (let i = norm.indexOf(key); i !== -1; i = norm.indexOf(key, i + 1)) {
     if (!bounds.has(i) || !bounds.has(i + key.length)) continue;
-    if (!longer.some((k) => norm.startsWith(k, i) && bounds.has(i + k.length))) return true;
+    if (!insideLongerSibling(norm, bounds, i, key, longer)) return true;
   }
   return false;
 }
 function builtElementNamesAction(texts, name, siblings = []) {
   const key = normId(name);
   if (key === "") return false;
-  const longer = siblings.map(normId).filter((k) => k.length > key.length && k.startsWith(key));
+  const longer = siblings.map(normId).filter((k) => k.length > key.length && k.includes(key));
   return texts.some((t) => containsAsWords(t, key, longer));
+}
+// Only an element that can trigger an action is evidence for one: a crt.Button, a crt.MenuItem, or any element with a
+// `clicked` request. A field, tab or label named or captioned after the action (`PostDate` for `post`) is not. An op
+// that carries no type at all (a raw `merge` of an inherited element) is kept, since nothing says what it is.
+const ACTION_CARRIER_TYPES = new Set(["crt.Button", "crt.MenuItem"]);
+function canCarryAction(o) {
+  const type = o.type || o.values?.type;
+  return !type || ACTION_CARRIER_TYPES.has(type) || opRequest(o) != null;
 }
 function resolveCustomCardActionVk(vk, ctx) {
   const resources = entryObject(ctx.page)?.resources;
   // A removed element is evidence the action is absent, never that it is built.
-  const builtTexts = ctx.ops.filter((o) => !isRemove(o)).map((o) => customActionTexts(o, resources));
+  const builtTexts = ctx.ops.filter((o) => !isRemove(o) && canCarryAction(o)).map((o) => customActionTexts(o, resources));
   const missing = vk.names.filter((n) => !builtTexts.some((texts) => builtElementNamesAction(texts, n, vk.siblings)));
   if (!missing.length) return ["✅ Done", `an element named or captioned for ${vk.names.map(esc).join(", ")} is present — confirm it triggers the action`, "ok"];
   return ["⚠ verify", `no built element's name, caption or request contains ${missing.map(esc).join(", ")} — name the element or its \`clicked.request\` after the action (a caption counts only in ASCII letters, so a localized one cannot match), or confirm it is built`, "unverified"];

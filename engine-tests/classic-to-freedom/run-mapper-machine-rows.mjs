@@ -229,6 +229,24 @@ export function runMachineRowChecks({ check, verifyCtx, resolveVk, renderVerify,
     check("card: with sibling hints `approve` / `approveAll`, a page carrying an element for each closes both",
       () => st(resolveVk(approve, bothBuilt)) === "✅ Done" && st(resolveVk(approveAll, bothBuilt)) === "✅ Done",
       () => [resolveVk(approve, bothBuilt), resolveVk(approveAll, bothBuilt)]);
+    // A longer sibling that contains the key later in the word also suppresses it.
+    const trio = checklistGroups({ entity: "X", changeSet: { cardActions: ["approve", "massApprove"] } }, {})
+      .flatMap((x) => x.rows).filter((r) => r.label.startsWith("Card action — "));
+    const approveT = trio.find((r) => r.label === "Card action — approve")?.vk;
+    const massApprove = trio.find((r) => r.label === "Card action — massApprove")?.vk;
+    const onlyMass = [{ name: "MassApproveMenuItem" }, { name: "MenuItem_x", caption: "Mass approve" }];
+    check("card: with sibling hints `approve` / `massApprove`, an element built only for `massApprove` closes `massApprove` and leaves `approve` ⚠ verify",
+      () => onlyMass.every((v) => st(resolveVk(massApprove, builtWith(v))) === "✅ Done" && st(resolveVk(approveT, builtWith(v))) === "⚠ verify"),
+      () => onlyMass.map((v) => [v, resolveVk(approveT, builtWith(v)), resolveVk(massApprove, builtWith(v))]));
+    // Only an element that can trigger an action is evidence: a field named after the action is not.
+    const postVk = checklistGroups({ entity: "X", changeSet: { cardActions: ["post"] } }, {})
+      .flatMap((x) => x.rows).find((r) => r.label === "Card action — post").vk;
+    const withField = (field) => verifyCtx({ pages: { main: { ...page(), viewConfig: { items: [{ type: "crt.Button", name: "ActionButton" }, field] } } } }, "main");
+    const fieldsOnly = [{ type: "crt.DateTimePicker", name: "PostDate" }, { type: "crt.TabContainer", name: "Tab_x", caption: "Post" }];
+    check("card: a field or tab named or captioned after the action (`PostDate` crt.DateTimePicker for `post`) does not close it; a crt.Button named for it does",
+      () => fieldsOnly.every((f) => st(resolveVk(postVk, withField(f))) === "⚠ verify")
+        && st(resolveVk(postVk, withField({ type: "crt.Button", name: "PostButton" }))) === "✅ Done",
+      () => fieldsOnly.map((f) => [f, resolveVk(postVk, withField(f))]));
     // The raw `ops` payload (no viewConfig): caption and request under `values`, and a `remove` op is not evidence.
     const opsPage = (ops) => verifyCtx({ pages: { main: { parentSchemaName: "FormPageTemplate", entitySchemaName: "X", ops } } }, "main");
     const opsDone = [
