@@ -51,6 +51,14 @@ subject *is* the history — `RELEASE-NOTES.md`, the decision records under `doc
 If you add such a record, add its path to that test's `EXEMPT_PATHS`.
 
 
+## Cutting a Release
+
+Maintainers cut a release with one release preparation PR: the `RELEASE-NOTES.md` section, a banner under
+`docs/assets/` and the manifest bump from `node scripts/bump-version.js X.Y.Z`. Merging it runs the `Release`
+workflow. The step-by-step procedure is the repository skill
+[`.claude/skills/toolkit-release/SKILL.md`](.claude/skills/toolkit-release/SKILL.md): Claude Code loads it in
+this repository on "cut a release", and any other agent or person can follow the same file.
+
 ## Code of Conduct
 
 This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating you agree to uphold it. Report unacceptable behavior to **support@creatio.com**.
