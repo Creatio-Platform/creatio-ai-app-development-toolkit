@@ -46,7 +46,7 @@ three sub-agents have failed at it, so the plan, the stand or the expectation is
 is engine-authored but NOT derived from the plan, so a later plain `--tasks` re-slice adopts it: never rewritten,
 never reported stale.
 
-**`--reads <dir>` — WHICH reads the verify gate needs, and WHERE each response goes (SKILL.md step 7.4).** The
+**`--reads <dir>` — WHICH reads the verify gate needs, and WHERE each response goes (step 7.4, `../references/orchestrate-build.md`).** The
 list is DERIVED from the same `checklistGroups` walk `--checklist` and `--verify` use, so a page key the checklist
 gates can never be a key nobody was told to read. Four kinds: **two files per published page key** (`meta.json`
 for identity, `bundle.json` for the merged view), a **business-rules** read for the keys carrying a gated rule row
