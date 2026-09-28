@@ -13666,6 +13666,15 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   check("per-item verify: a won't-do related list is not expected by the page-level count — one grid closes the remaining list",
     () => /✅ Done/.test(line(listDropped, "Related list `D1`")) && /Won't do — D3/.test(line(listDropped, "Related list `D2`")) && listDropped.complete === true,
     () => ({ d1: line(listDropped, "Related list `D1`"), d2: line(listDropped, "Related list `D2`"), complete: listDropped.complete }));
+  const SAME = [1, 2, 3].map(() => ({ detailSchema: "D1", entity: "E1" }));
+  const IDS = ["D1", "D1@E1", "D1@E1#3"];
+  const threeGrids = { ops: [...both.ops, ...[1, 2].map((i) => ({ name: `G${i}`, type: "crt.DataGrid" }))], ...QG_EVIDENCE };
+  const sameDropped = renderVerify(res(SAME), { deliverableStatus: { "main#related-list:D1@E1": { status: "wont-do", decision: "D3" } } }, threeGrids);
+  check("per-item verify: three related lists with the same detail schema and entity get three distinct ids — a won't-do on one closes only that one",
+    () => IDS.every((id) => line(sameDropped, `Related list \`${id}\``))
+      && /Won't do — D3/.test(line(sameDropped, "Related list `D1@E1`"))
+      && ["D1", "D1@E1#3"].every((id) => /✅ Done/.test(line(sameDropped, `Related list \`${id}\``))) && sameDropped.complete === true,
+    () => IDS.map((id) => line(sameDropped, `Related list \`${id}\``)));
 }
 
 // Every deliverable of every run above has an id, unique on its page.

@@ -2237,7 +2237,9 @@ function renderPlanWith(result, opts) {
   // NB: the Plan-vs-Done checklist is NOT emitted here — the plan is what the user approves BEFORE building, and
   // a control table there is premature. It is produced separately by `renderChecklist` (CLI `--checklist`) and
   // presented AFTER implementation. See renderChecklist below.
-  P.push(...renderChildMappings(childs), ...renderWontDoList(result, opts), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
+  P.push(...renderChildMappings(childs));
+  // Last of the generated sections: the list names only the closed deliverables no line above printed.
+  P.push(...renderWontDoList(result, opts), "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
 
@@ -2383,10 +2385,14 @@ function relatedListItemRows(cs, expDetails) {
   const keys = [...(cs.details || []).map((d) => ({ key: d.detailSchema || d.entity || "detail", entity: d.entity, caption: d.caption })),
     ...(cs.standardFeatures || []).filter((s) => s.uiShape === "list").map((s) => ({ key: s.feature || s.caption || "list", entity: null, caption: s.caption }))];
   const seen = new Map();
+  const used = new Set();
   return keys.map(({ key, entity, caption }) => {
     const n = (seen.get(key) || 0) + 1;
     seen.set(key, n);
-    const id = n === 1 ? key : `${key}@${entity || n}`;
+    const base = n === 1 ? key : `${key}@${entity || n}`;
+    // Unique on the page: an id already taken takes the occurrence number.
+    const id = used.has(base) ? `${base}#${n}` : base;
+    used.add(id);
     const captionPart = caption ? " — " + esc(caption) : "";
     return { deliverableId: `related-list:${id}`, label: `Related list \`${esc(id)}\`${captionPart}`,
       vk: { type: "details", n: expDetails, item: true } };
@@ -2778,7 +2784,7 @@ function withStatus(r, pageKey, ctx) {
 // "Won't do" at the end of the plan: every closed deliverable whose own line did not already say so.
 function renderWontDoList(result, opts) {
   const printed = opts.printedStatus || new Set();
-  const rows = checklistGroups(result, opts).flatMap((g) => g.rows
+  const rows = (opts.planGroups || checklistGroups(result, opts)).flatMap((g) => g.rows
     .filter((r) => (r.na || r.status?.kind === STATUS_WONT_DO) && !printed.has(statusKey(g.pageKey, r.deliverableId)))
     .map((r) => `- \`${esc(statusKey(g.pageKey, r.deliverableId))}\` ${r.label.split(" — ")[0]} — ${statusText(r.na ? { kind: "not-applicable", reason: r.na } : r.status, opts)}`));
   return rows.length ? ["", "### Won't do", "", ...rows, ""] : [];

@@ -62,7 +62,7 @@ import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAP
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
   NEXT_LEDGER, NEXT_FINISHED, NEXT_WAITING, NEXT_STUCK,
   applyDecision, revokeDecision, decidedRowKeys, rowSubjects, REFUSED_STATUS,
-  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
+  REFUSED_UNREADABLE, REFUSED_UNRESOLVED, REFUSED_COVERAGE, REFUSED_CUT, REFUSED_TIMINGS, REFUSED_RETIRED, TIMINGS_FILE, SPLIT_HANDED } from "./tasks.mjs";
 import { parseSplit, SPLIT_FILE, SPLIT_SHAPE } from "./split.mjs";
 import { readPlan, renderReadPlan, writeReadIndex, writeEvidenceSkeletons, READS_DIR as READS_DIR_NAME } from "./reads.mjs";
 import { assembleBuilt, writeBuilt, problemLines, problemBanner, BUILT_FILE, VERIFY_FILE, REPORT_FILE, GUID_RE } from "./assemble.mjs";
@@ -799,6 +799,10 @@ function unmatchedIndexKeys(index, stubIndex) {
 // through the repair round. They are separate functions on purpose — the workflow script is evaluated as a
 // function body and may not `import`, which is pinned by the `workflow sandbox: … imports nothing` test — so a
 // change to the membership or the strength of either leg has to be applied to both by hand.
+// The page tree's groups, built only when the run carries a deliverable status to validate.
+function rootStatusGroups(out, specOpts) {
+  return Object.keys(plainObject(specOpts.deliverableStatus)).length ? checklistGroups(out, specOpts) : null;
+}
 // Every `manifest.deliverableStatus` entry that cannot stand, as `{ key, problem, valid }`: an address that names
 // no deliverable (with the page's valid ids), a status other than wont-do / build, a wont-do without a D<N> that
 // decisions.md holds, an entry on a deliverable the engine already closed, and a wont-do whose subject (behaviour
@@ -2735,14 +2739,15 @@ export function runMigration(manifest, opts = {}) {
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
   // Planning decisions are validated once, at the root, against every deliverable of the whole page tree.
-  if (!opts.scopeSchema) out.statusIssues = deliverableStatusIssues(checklistGroups(out, specOpts), specOpts);
+  const statusGroups = opts.scopeSchema ? null : rootStatusGroups(out, specOpts);
+  if (!opts.scopeSchema) out.statusIssues = statusGroups ? deliverableStatusIssues(statusGroups, specOpts) : [];
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, specOpts);
+  out.plan = renderPlan(out, { ...specOpts, planGroups: statusGroups });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }
@@ -3082,16 +3087,14 @@ function splitDriftLines(set) {
 // A PLAN-LEVEL GAP TOUCHES NOTHING. `gate` / `structure` / `coverage` describe the PLAN and no build round closes
 // one, so every mode that opens a task folder refuses on the same terms — one function, because two copies of a
 // refusal are two chances for one of them to soften.
-// The decisions.md a deliverable status resolves against: the migration folder the plan is written into (`--out`)
-// or the one above the task folder. Null when the run names neither. Only `--plan` and `--tasks` require it; any
-// other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
+// The one decisions.md a run resolves against, read once: the folder above the task folder (`--tasks`), else the
+// migration folder the plan is written into (`--out`). Null when the run names neither. Only `--plan` and `--tasks`
+// require it; any other mode resolves a status's D<N> when decisions.md is read and skips the check when it is not.
 function planDecisions(outFile, tasksDir) {
-  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
   if (tasksDir) return readDecisions(path.join(path.resolve(tasksDir), ".."));
+  if (outFile) return readDecisions(path.dirname(path.resolve(outFile)));
   return null;
 }
-// The decisions.md map the cut writes a status's title from.
-const withDecisions = (opts, dir) => ({ ...opts, decisions: readDecisions(path.join(dir, "..")) });
 function planGapRefusal(result) {
   const gaps = planGaps(result);
   if (!gaps.length) return null;
@@ -3110,6 +3113,7 @@ function refusalCause(set, dir) {
   if (set.refusal === REFUSED_CUT) return "the engine's own cut does not cover this plan";
   if (set.refusal === REFUSED_UNREADABLE) return `the frozen split in ${dir} could not be read`;
   if (set.refusal === REFUSED_TIMINGS) return `the dispatch record in ${dir} could not be read`;
+  if (set.refusal === REFUSED_RETIRED) return `recorded cells in ${dir} sit on an aggregate coverage row, and this plan has one row per item`;
   if (set.refusal === REFUSED_UNRESOLVED) return "the split does not resolve against this plan";
   if (set.refusal === REFUSED_STATUS) return "a deliverable status in `manifest.deliverableStatus` does not resolve against decisions.md";
   if (set.refusal === REFUSED_COVERAGE) {
@@ -3122,6 +3126,10 @@ function refusalCause(set, dir) {
 
 function refusalRemedy(set) {
   if (set.refusal === REFUSED_STATUS) return " Add the decision to decisions.md, or correct the entry, then re-run.";
+  if (set.refusal === REFUSED_RETIRED) {
+    return " Empty each named Outcome cell and its `decisions:` entry, re-run, then record each item on its own row:"
+      + " `built` on each `Field` row once built, `--decide D<N> --wont-do --row <task>:<n>` on each `Related list` row.";
+  }
   if (set.refusal === REFUSED_CUT) {
     return " No file you hold can correct this — it is a defect in the slicer; report it with the manifest that"
       + " produced it.";
@@ -3170,7 +3178,7 @@ function runTaskMode(result, dir, opts, split = null, splitText = null, startId 
   // `--start <id>` marks the task IN PROGRESS and stamps its clock before regenerating, so the index moves when
   // the orchestrator DISPATCHES rather than only when an agent finishes. Without it a run in flight is
   // indistinguishable from a run that has not begun.
-  const set = startId ? startTask(dir, startId, result, withDecisions(opts, dir), split) : syncTaskDir(dir, result, withDecisions(opts, dir), split);
+  const set = startId ? startTask(dir, startId, result, opts, split) : syncTaskDir(dir, result, opts, split);
   if (set.refused) { taskRefusalFailure = true; return splitRefusalText(set, dir); }
   if (startId) {
     const refusal = startRefusalText(set, startId, dir);
@@ -3327,7 +3335,7 @@ function runNextMode(result, dir, opts, cmdFor) {
   if (gapRefusal) { nextRefusalFailure = true; return gapRefusal; }
   const noFolder = nextFolderRefusal(dir);
   if (noFolder) { nextRefusalFailure = true; return noFolder; }
-  const set = syncTaskDir(dir, result, withDecisions(opts, dir));
+  const set = syncTaskDir(dir, result, opts);
   if (set.refused) { nextRefusalFailure = true; return splitRefusalText(set, dir); }
   const answer = startableTasks(set, dir);
   if (answer.verdict === NEXT_LEDGER) dispatchGateFailure = { audit: answer.dispatch, dir, started: true };
@@ -3533,11 +3541,10 @@ function decideTouchedLines(res, opts) {
 }
 function runDecideMode(result, dir, opts) {
   // `dir` is the task folder (usually `<migration-folder>/build-tasks`); decisions.md and plan.md live in
-  // the migration folder, one level up. `readDecisions` is the same reader the final report already uses,
-  // so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
+  // the migration folder, one level up. `opts.decisions` is that decisions.md, read by the same reader the final
+  // report uses, so the citations `--decide` refuses over are the ones the report renders next to a decided cell.
   const migrationDir = path.join(dir, "..");
-  const decisions = readDecisions(migrationDir);
-  const res = applyDecision(dir, result, { ...opts, decisions });
+  const res = applyDecision(dir, result, opts);
   if (res.refused) {
     return { note: decidePrintProblems(`--decide ${opts.decision} was refused`, res.problems,
       decideRefusalHelp(res, opts, migrationDir)), ok: false };
@@ -3769,7 +3776,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     fail("manifest must be an object with a non-empty `schemas` array (see the header of this file for the shape)");
   }
   let result;
-  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions: planDecisions(outFile, tasksDir), decisionsOptional: !planMode && !tasksMode }); }
+  const decisions = planDecisions(outFile, tasksDir);
+  const taskOpts = () => ({ ...checklistOpts(manifest), decisions });
+  try { result = runMigration(manifest, { baseDir: fromFile ? path.dirname(path.resolve(arg)) : process.cwd(), decisions, decisionsOptional: !planMode && !tasksMode }); }
   catch (e) { fail(e.message); } // e.g. a schema `file` that does not exist
   // `--plan` ⇒ the whole plan skeleton; `--spec` ⇒ the design spec alone; default ⇒ full JSON.
   let output, verifyIncomplete = false, verifyRes = null, orphanEvidence = [];
@@ -3828,7 +3837,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { decl = JSON.parse(text); }
     catch (e) { fail(`${ADD_FLAG} '${addFile}' is not valid JSON: ${e.message}. Expected shape: ${DECL_SHAPE}`); }
     let res;
-    try { res = addTasks(tasksDir, result, decl, withDecisions(checklistOpts(manifest), tasksDir)); }
+    try { res = addTasks(tasksDir, result, decl, taskOpts()); }
     catch (e) { fail(`cannot write the declared task(s) to '${tasksDir}': ${e.message}`); }
     if (res.refused) {
       // NOTHING WRITTEN on any problem, as a bad `--split` writes nothing. A CUT that does not resolve is named
@@ -3861,7 +3870,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       return [shellArg(process.execPath), shellArg(process.argv[1]), shellArg(manifestArg),
         TASKS_FLAG, shellArg(tasksDir), START_FLAG, shellArg(id)].join(" ");
     };
-    try { output = runNextMode(result, tasksDir, checklistOpts(manifest), cmdFor); }
+    try { output = runNextMode(result, tasksDir, taskOpts(), cmdFor); }
     catch (e) { fail(`cannot read the task folder '${tasksDir}': ${e.message}`); }
     // …and when the manifest came in on stdin there is no path to print, so the command carries `-` and would
     // BLOCK on a terminal if it were pasted as it stands. Said here rather than left for the reader to discover.
@@ -3877,7 +3886,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // for the same reason `--add` is: they neither re-cut nor re-verify the folder, they fill (or clear) the
   // Outcome cells of the rows a person's decision covers, and then persistTaskSet closes over the result.
   else if (tasksMode && decideMode) {
-    const opts = { ...checklistOpts(manifest), decision: decideArg,
+    const opts = { ...taskOpts(), decision: decideArg,
       mode: wontDoFlag ? "wont-do" : "postponed", destination: toArg || null,
       pages: pagesArg ? pagesArg.split(",").map((s) => s.trim()).filter(Boolean) : null,
       taskId: taskArg || null,
@@ -3917,7 +3926,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       splitText = text;
     }
-    try { output = runTaskMode(result, tasksDir, checklistOpts(manifest), split, splitText, startId); }
+    try { output = runTaskMode(result, tasksDir, taskOpts(), split, splitText, startId); }
     catch (e) { fail(`cannot write task folder '${tasksDir}': ${e.message}`); }
   }
   else if (verifyMode) {

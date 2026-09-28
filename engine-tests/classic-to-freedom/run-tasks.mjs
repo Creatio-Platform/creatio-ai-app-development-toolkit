@@ -1889,6 +1889,25 @@ console.log("\n===== the clock: what has started, what it cost, what the next on
       () => syncTaskDir(d, RUN, OPTS).problems);
   }
 
+  {
+    const d = fresh();
+    const f = path.join(d, TIMINGS_FILE);
+    const mark = (state) => {
+      if (state === null) fs.rmSync(f, { force: true });
+      else fs.writeFileSync(f, state);
+      return readTimingsFile(d).malformed;
+    };
+    check("readTimingsFile: a file that does not parse reads `malformed`; an absent or valid one does not",
+      () => typeof mark("{ not json") === "string" && !!mark("{ not json") && !mark(null) && !mark(JSON.stringify({ running: {}, samples: [] })),
+      () => ({ bad: mark("{ not json"), absent: mark(null) }));
+    const id = idOf(d, (t) => t.artifact === ARTIFACT_SCAFFOLD);
+    fs.writeFileSync(f, "{ not json");
+    try { startTask(d, id, RUN, { ...OPTS, dispatchToken: "tok-m" }, null, at(0)); } catch { /* a refusal is the expected answer */ }
+    const written = fs.readFileSync(f, "utf8");
+    check("readTimingsFile: `--start` over a malformed timings file leaves it byte-identical",
+      () => !!id && written === "{ not json", () => written);
+  }
+
   // 1c — re-opening a closed task by its `status:` line alone cannot hold: the cells outrank it.
   {
     const d = fresh();
@@ -8149,6 +8168,21 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
       () => READ_ONLY.every((k) => !statusGap(withStatus[k]) && withStatus[k].status === without[k].status)
         && withStatus.plan.status === 2 && statusGap(withStatus.plan) && !statusGap(without.plan),
       () => Object.fromEntries(Object.keys(withStatus).map((k) => [k, { status: withStatus[k].status, baseline: without[k].status, gap: statusGap(withStatus[k]), err: withStatus[k].stderr.slice(0, 300) }])));
+    {
+      const a = tmp("status-one-decisions-a"), b = tmp("status-one-decisions-b");
+      fs.writeFileSync(path.join(a, "decisions.md"), DEC_MD);
+      fs.writeFileSync(path.join(a, "manifest.json"), JSON.stringify(M1));
+      fs.writeFileSync(path.join(a, "built.json"), JSON.stringify({ pages: {} }));
+      const cliA = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(a, "manifest.json"), ...args], { encoding: "utf8" });
+      const cutA = cliA("--tasks", path.join(a, "build-tasks"));
+      const verified = cliA("--verify", "--built", path.join(a, "built.json"), "--tasks", path.join(a, "build-tasks"), "--out", path.join(b, "report.md"));
+      const report = fs.existsSync(path.join(b, "report.md")) ? fs.readFileSync(path.join(b, "report.md"), "utf8") : "";
+      check("one decisions.md per run: with `--tasks` and `--out` in different folders, the plan check and the cut both read the one above the task folder",
+        () => cutA.status === 0 && !!report && !/deliverableStatus INVALID|does not resolve/.test(verified.stdout + verified.stderr + report),
+        () => ({ cut: cutA.status, verify: verified.status, out: (verified.stdout + verified.stderr).slice(0, 500) }));
+      fs.rmSync(a, { recursive: true, force: true });
+      fs.rmSync(b, { recursive: true, force: true });
+    }
     const stale = cut("status-cut-unknown", RUN_ST, { ...optsOf(M1), decisions: new Map([["D3", "not carried over"]]) });
     check("T5: a cut against a decisions.md that lacks a status's D<N> is refused and writes nothing",
       () => stale.set.refused && stale.set.refusal === "deliverable-status" && stale.set.problems.some((p) => /D6/.test(p)) && !fs.existsSync(stale.dir),
@@ -8162,24 +8196,50 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     const run = runMigration(m, { decisions: DEC });
     const opts = { ...optsOf(m), decisions: DEC };
     const groups = checklistGroups(run, opts);
-    const CLOSED = new Set(["Card actions", "Form — Custom methods"]);
+    // One all-closed task per computed word: wont-do + not-applicable, wont-do alone, not-applicable alone.
+    const CLOSED = { mixed: ["Card action — Print", "Card action — Process"], wontdo: ["Handler — `onA`", "Handler — `onB`"],
+      na: ["C1 — separate page?", "C2 — separate page?"] };
+    const WORD = { mixed: "done", wontdo: "wont-do", na: "not-applicable" };
+    const claimed = new Set(Object.values(CLOSED).flat());
     const entry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
     const split = parseSplit(JSON.stringify({ items: [
-      { id: "closed", title: "Closed", pageKey: "main", writesTo: "main", rows: groups.filter((g) => g.pageKey === "main" && CLOSED.has(g.baseTitle)).map(entry) },
-      { id: "page", title: "Page", pageKey: "main", writesTo: "main", rows: groups.filter((g) => !(g.pageKey === "main" && CLOSED.has(g.baseTitle))).map(entry) },
+      ...Object.entries(CLOSED).map(([id, rows]) => ({ id, title: id, pageKey: "main", writesTo: "main", rows })),
+      { id: "page", title: "Page", pageKey: "main", writesTo: "main",
+        rows: groups.filter((g) => !(g.pageKey === "main" && g.rows.every((r) => claimed.has(r.label)))).map(entry) },
     ] })).split;
     const { base, dir, set } = cut("status-closed-task", run, opts, split);
-    const closed = set.tasks?.find((t) => t.id === "closed");
+    const fileOf = (id) => path.join(dir, set.tasks.find((t) => t.id === id).file);
+    const metaOf = (id, key) => new RegExp(`^${key}: (.*)$`, "m").exec(fs.readFileSync(fileOf(id), "utf8"))?.[1]?.trim() ?? null;
+    const indexRow = (id) => readIndex(dir).split("\n").find((l) => l.includes(path.basename(fileOf(id)))) || "";
+    const pinned = () => Object.entries(WORD).map(([id, w]) => [id, metaOf(id, "status"), indexRow(id).includes(`| ${TASKS_MODULE.statusMark(w)} |`)]);
+    const pinnedOk = () => pinned().every(([id, st, inIndex]) => st === WORD[id] && inIndex);
+    const offered = (answer) => answer.startable.some((t) => Object.hasOwn(CLOSED, t.id));
     const answer = set.refused ? null : startableTasks(set, dir);
-    const again = set.refused ? null : syncTaskDir(dir, run, opts, split);
-    const answer2 = again ? startableTasks(again, dir) : null;
-    const SETTLED_WORDS = new Set(["done", "wont-do", "not-applicable"]);
-    check("T6: a task whose rows are all closed (a `not-applicable` stand-check row and `wont-do` statuses) is settled on the pass that cuts it, is not offered by `--next`, and fails no dispatch audit",
-      () => !set.refused && SETTLED_WORDS.has(closed?.status) && closed.rows.some((r) => r.na)
-        && answer.verdict !== NEXT_LEDGER && !answer.startable.some((t) => t.id === "closed") && answer.dispatch.failing.length === 0
-        && SETTLED_WORDS.has(again.tasks.find((t) => t.id === "closed")?.status) && answer2.verdict !== NEXT_LEDGER && !answer2.startable.some((t) => t.id === "closed"),
-      () => ({ refused: set.problems, status: closed?.status, rows: closed?.rows?.map((r) => [r.label, r.outcomeKind, r.na]),
-        verdict: answer?.verdict, failing: answer?.dispatch?.failing?.map((t) => t.id), reread: again?.tasks?.find((t) => t.id === "closed")?.status }));
+    const naTask = set.tasks?.find((t) => t.id === "na");
+    check("T6: all-closed tasks compute their word on the pass that cuts them — wont-do + not-applicable reads `done`, wont-do alone `wont-do`, not-applicable alone `not-applicable`, in the task file and in index.md",
+      () => !set.refused && pinnedOk(), () => ({ refused: set.problems, pinned: pinned() }));
+    check("T6: a task whose rows are all engine-closed and that carries no `decisions:` entry is a decided descope — `--next` does not offer it and the dispatch audit fails none",
+      () => naTask.rows.every((r) => r.na) && metaOf("na", "decisions") === "" && answer.verdict !== NEXT_LEDGER
+        && !offered(answer) && answer.dispatch.failing.length === 0,
+      () => ({ rows: naTask?.rows?.map((r) => [r.label, r.outcomeKind, r.na]), decisions: metaOf("na", "decisions"),
+        verdict: answer?.verdict, failing: answer?.dispatch?.failing?.map((t) => t.id) }));
+    const again = syncTaskDir(dir, run, opts, split);
+    const answer2 = startableTasks(again, dir);
+    check("T6: a second sync keeps every word and offers none of them",
+      () => pinnedOk() && answer2.verdict !== NEXT_LEDGER && !offered(answer2) && answer2.dispatch.failing.length === 0,
+      () => ({ pinned: pinned(), verdict: answer2.verdict, failing: answer2.dispatch.failing.map((t) => t.id) }));
+    const cleared = fs.readFileSync(fileOf("na"), "utf8").split("\n")
+      .map((l) => (/^\|\s*\d+\s*\|/.test(l) ? l.replace(/\|[^|]*\|$/, "| |") : l)).join("\n");
+    fs.writeFileSync(fileOf("na"), cleared.replace(/^status: .*$/m, "status: todo").replace(/^statusFrom: .*$/m, "statusFrom: "));
+    const resynced = syncTaskDir(dir, run, opts, split);
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const settledSnap = snap();
+    syncTaskDir(dir, run, opts, split);
+    check("T6: a folder whose engine-closed rows have no Outcome yet settles `not-applicable` on re-sync, is not offered, and a second sync writes nothing",
+      () => !resynced.refused && metaOf("na", "status") === "not-applicable" && !offered(startableTasks(resynced, dir))
+        && JSON.stringify(settledSnap) === JSON.stringify(snap()),
+      () => ({ status: metaOf("na", "status"), offered: startableTasks(resynced, dir).startable.map((t) => t.id),
+        same: JSON.stringify(settledSnap) === JSON.stringify(snap()) }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {
@@ -8228,6 +8288,49 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     check("status reaches a grandchild page: a status on a depth-2 page's row is applied there",
       () => !!grand && row?.status?.kind === "wont-do" && row.status.decision === "D3" && (run.statusIssues || []).length === 0,
       () => ({ pages, row, issues: run.statusIssues }));
+  }
+}
+
+console.log("\n===== a folder cut with one aggregate Fields / Related lists row =====");
+{
+  const FIX = path.join(DIR, "fixtures", "tasks-aggregate-rows");
+  const m = JSON.parse(fs.readFileSync(path.join(FIX, "manifest.json"), "utf8"));
+  const copy = (label) => { const base = tmp(label); fs.cpSync(FIX, base, { recursive: true }); return { base, dir: path.join(base, "build-tasks") }; };
+  const cliIn = (base, ...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--tasks", path.join(base, "build-tasks"), ...args], { encoding: "utf8" });
+  const snapOf = (dir) => fs.readdirSync(dir).sort().map((f) => [f, fs.readFileSync(path.join(dir, f), "utf8")]);
+  const FILE = "task-run-whole-migration-89143b68.md";
+  const edit = (dir, fn) => { const f = path.join(dir, FILE); fs.writeFileSync(f, fn(fs.readFileSync(f, "utf8"))); };
+  const blankAggregates = (text) => setOutcome(setOutcome(text, 35, "—"), 36, "—").replace(/^decisions: .*$/m, "decisions: ");
+  {
+    const { base, dir } = copy("aggregate-recorded");
+    const before = snapOf(dir);
+    const r = cliIn(base);
+    const set = syncTaskDir(dir, runMigration(m), { ...checklistOpts(m), decisions: new Map([["D3", "not carried over"]]) });
+    check("aggregate rows: a recorded `built` on `Fields — N expected` and a decided `Related lists — N expected` refuse the sync — exit 2, NOTHING WRITTEN, both rows named, the folder byte-identical",
+      () => r.status === 2 && /NOTHING WRITTEN/.test(r.stdout) && r.stdout.includes(`${FILE} row 35 (Fields — 2 expected)`)
+        && r.stdout.includes(`${FILE} row 36 (Related lists — 2 expected)`) && set.refused && set.refusal === TASKS_MODULE.REFUSED_RETIRED
+        && JSON.stringify(snapOf(dir)) === JSON.stringify(before),
+      () => ({ status: r.status, out: r.stdout.slice(0, 700), refusal: set.refusal }));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = copy("aggregate-remedy");
+    edit(dir, blankAggregates);
+    const synced = cliIn(base);
+    const task = readTaskDir(dir).find((t) => t.file === FILE);
+    const lists = (task?.rows || []).map((r, i) => [r.label, i + 1]).filter(([l]) => /^Related list `R[12]D`$/.test(l));
+    const decided = lists.map(([, n]) => cliIn(base, "--decide", "D3", "--wont-do", "--row", `${task.id}:${n}`).status);
+    cliIn(base);
+    const after = readTaskDir(dir).find((t) => t.file === FILE);
+    const map = after.decisions instanceof Map ? after.decisions : parseDecisionsMap(after.decisions);
+    const settled = snapOf(dir);
+    cliIn(base);
+    check("aggregate rows: with the aggregate cells emptied the folder syncs onto per-item rows, each related list takes its own `--decide`, and a further sync writes nothing",
+      () => synced.status === 0 && lists.length === 2 && decided.every((s) => s === 0)
+        && lists.every(([, n]) => after.rows[n - 1].outcomeKind === "wont-do" && map.get(n) === "D3")
+        && JSON.stringify(snapOf(dir)) === JSON.stringify(settled),
+      () => ({ synced: synced.status, err: synced.stdout.slice(0, 400), lists, decided, rows: lists.map(([, n]) => [after.rows[n - 1]?.outcome, map.get(n)]) }));
+    fs.rmSync(base, { recursive: true, force: true });
   }
 }
 

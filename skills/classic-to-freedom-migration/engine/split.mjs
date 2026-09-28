@@ -165,6 +165,7 @@ const exactLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, "
 // A `Fields — N expected` / `Related lists — N expected` claim names no row; the refusal names the per-item rows
 // that replace it.
 const RETIRED_AGGREGATE = /^\s*(Fields|Related lists)\s+—\s+\d+\s+expected\s*$/i;
+export const isRetiredAggregate = (label) => RETIRED_AGGREGATE.test(String(label ?? ""));
 function retiredAggregate(label) {
   const m = RETIRED_AGGREGATE.exec(String(label));
   if (!m) return null;

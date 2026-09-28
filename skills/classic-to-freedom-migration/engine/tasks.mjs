@@ -40,7 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
-  slotIndex, takeSlot, coverageProblem } from "./split.mjs";
+  slotIndex, takeSlot, coverageProblem, isRetiredAggregate } from "./split.mjs";
 
 // The status vocabulary is CHECKED, not free text (a mistyped status is a stop, not a silent "not done"): an
 // unrecognised value is reported on the index and on stderr instead of being folded into one of these.
@@ -81,6 +81,10 @@ export const REFUSED_CUT = "engine-cut";
 export const REFUSED_TIMINGS = "timings-unreadable";
 // A `wont-do` deliverable status whose D<N> decisions.md does not hold: the cut has no title to write for it.
 export const REFUSED_STATUS = "deliverable-status";
+// A recorded Outcome cell or `decisions:` entry on a `Fields — N expected` / `Related lists — N expected` row. The
+// plan carries one row per field and per related list instead, so the cell has no row to land on and a sync would
+// drop it.
+export const REFUSED_RETIRED = "retired-aggregate";
 
 // WHICH split a refusal is about. The handed-in file is the operator's own path and no folder exists yet; the
 // frozen one lives in the task folder. Naming the wrong one sends them to edit a file that is not there.
@@ -2787,12 +2791,26 @@ export function cutProblems({ unplaced, surplus }) {
 // The cut this run uses: the one just handed in, else the one frozen in the folder, else none — and none means
 // the mechanical budget slicer, which stays as the degenerate path for a plan small enough that where the seams
 // fall does not matter.
-export function taskSetFor(dir, result, opts = {}, split = null) {
+function retiredAggregateCells(dir) {
+  return readExisting(dir).filter((e) => e.meta?.origin === TASK_ORIGIN_ENGINE && e.meta.kind !== REPAIR_KIND).flatMap((e) => {
+    const decided = parseDecisionsMap(e.meta?.decisions);
+    return (e.table || []).flatMap((r, i) => (isRetiredAggregate(r.label) && (r.mark || decided.has(i + 1))
+      ? [`${e.file} row ${i + 1} (${r.label})`] : []));
+  });
+}
+// The folder's own records that no cut can be merged over: an unreadable `timings.json`, or a recorded cell on an
+// aggregate coverage row.
+function folderRefusal(dir, planVersion) {
   const timings = readTimingsFile(dir);
   if (timings.malformed) {
-    return { refused: true, refusal: REFUSED_TIMINGS, planVersion: result.planVersion || null, tasks: [],
-      problems: [`${TIMINGS_FILE} ${timings.malformed}`] };
+    return { refused: true, refusal: REFUSED_TIMINGS, planVersion, tasks: [], problems: [`${TIMINGS_FILE} ${timings.malformed}`] };
   }
+  const retired = retiredAggregateCells(dir);
+  return retired.length ? { refused: true, refusal: REFUSED_RETIRED, planVersion, tasks: [], problems: retired } : null;
+}
+export function taskSetFor(dir, result, opts = {}, split = null) {
+  const refusal = folderRefusal(dir, result.planVersion || null);
+  if (refusal) return refusal;
   const frozen = split ? null : readFrozenSplit(dir);
   if (frozen?.errors?.length) {
     return { refused: true, refusal: REFUSED_UNREADABLE, planVersion: result.planVersion || null, tasks: [],

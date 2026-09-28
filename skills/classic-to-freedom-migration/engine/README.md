@@ -383,7 +383,8 @@ its id on its page: the item's kind and name, never label text or a count. Ids: 
 `feature:<feature>[:<extra type>]` · `datasource:<name>` · `dcm:bar` · `dcm:next` · `business-rules` ·
 `method:<name>` · `<kind>:<item>` (an imperative member, e.g. `attribute-virtual:Dept`) · `dashboards:<element|migrated|partials|delivery>` ·
 `card-action:<name>` · `card-actions:native` · `confirm:<kind>:<item>` · `child-page:<detail>` (a child with no page of its
-own) · `quality:ran` · `quality:judged`.
+own) · `quality:ran` · `quality:judged`. The `<pageKey>#<deliverableId>` address is a stable manifest contract:
+any manifest key that names one deliverable uses it.
 
 **One row per field and per related list.** Every page's coverage carries one "Field <name>" row per field and
 one "Related list <detail>" row per related list (a rebuilt detail or a list-shaped standard feature). `--verify`
@@ -395,7 +396,10 @@ the plan prints as `(not migrated)` (a hashed or encrypted column) is closed by 
 weigh 0 in the task cut: the Layout row that places an item already carries its build weight, so a page's items pack
 as one aggregate row did. A split that claims a `Fields — N expected` /
 `Related lists — N expected` row names no row: it refuses and says to claim the per-item rows with
-`@Form — Coverage (verified)` or by their own text.
+`@Form — Coverage (verified)` or by their own text. A task folder whose `Fields — N expected` /
+`Related lists — N expected` row carries an Outcome cell or a `decisions:` entry is refused (`retired-aggregate`,
+exit 2, nothing written) and each such row is named: empty the cell and its entry, re-run, then record each item on
+its own row.
 
 A planning decision is one entry: `{ "<pageKey>#<id>": { "status": "wont-do", "decision": "D<N>" } }`, or
 `{ "status": "build" }` as the explicit answer a related deliverable needs. `pageGroup()` sets each row's status in
@@ -407,8 +411,8 @@ the rows a `pages-only-no-menu` run does not build. `RunProcess` and custom acti
 
 The plan prints **Won't do** — `D<N>: <title>` or the engine's reason on the deliverable's own line (the card-action
 Layout row, the method and member tables, the child-scope row) and lists every other closed deliverable under
-`### Won't do` at its end. `--plan --out` reads `decisions.md` from the `--out` folder; `--tasks` from the folder
-above the task folder. Only `--plan` and `--tasks` require it: any other mode (`--reads`, `--verify --built`,
+`### Won't do` at its end. A run reads one `decisions.md`: from the folder above the task folder when `--tasks` is
+given, else from the `--out` folder. Only `--plan` and `--tasks` require it: any other mode (`--reads`, `--verify --built`,
 `--checklist`, `--spec`, `--stubs`) checks a `D<N>` against decisions.md when it reads one and skips that check
 when it does not. A plan gap (`deliverableStatus INVALID`, exit 2, `--tasks` writes nothing) is raised for an
 id that names no deliverable (the page's valid ids are listed), a status other than `wont-do` / `build`, a
@@ -416,7 +420,9 @@ id that names no deliverable (the page's valid ids are listed), a status other t
 `wont-do` whose subject (behaviour card, confirm item, fold chain) other deliverables share without a status of
 their own. The cut writes each `wont-do` through the `--decide` row writer — `wont-do — <title> (D<N>)` with a
 `decisions:` entry — and refuses (`deliverable-status`) when decisions.md does not hold its `D<N>`. A task
-whose rows are all closed computes `wont-do` / `not-applicable` on the pass that cuts it, needs no dispatch
+whose rows are all closed computes its word on the pass that cuts it — `wont-do` when every row is `wont-do`,
+`not-applicable` when every row is `not-applicable`, `done` for any other closed mix; a `postponed` row keeps it
+`partial` — needs no dispatch
 record, and `--next` never offers it. `--revoke D<N>` skips a cell the cut wrote from a status and names the
 `<pageKey>#<id>` entry: the entry is removed from `manifest.deliverableStatus` and the plan re-run instead.
 
