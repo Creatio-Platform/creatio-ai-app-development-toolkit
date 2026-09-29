@@ -2243,7 +2243,7 @@ function templateNameNote(name) {
 
 function buildCoverageRows(cs, pm, result, regionOf, pageKey) {
   const cover = [];
-  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate } });
+  if (pm.formTemplate) cover.push({ label: `Form template → \`${esc(pm.formTemplate)}\`${templateNameNote(pm.formTemplate)}`, vk: { type: "template", exp: pm.formTemplate, reconcile: !!pm.freedomExists } });
   const fieldOps = (cs.viewConfigDiff || []).filter(isField);
   const expFields = fieldOps.length;
   const expTabs = new Set((cs.viewConfigDiff || []).filter(isTabOp).map((o) => o.name)).size;
@@ -3022,6 +3022,11 @@ function resolveTemplateVk(vk, ctx) {
   const gap = primaryDataSourceGap(ctx);
   if (gap) return ["❌ MISSING", gap, "missing"];
   if (tpl === vk.exp) return ["✅ Done", `built on \`${esc(vk.exp)}\``, "ok"];
+  // A reconcile saves a REPLACING schema whose parent is the page's own chain (its parent is the page itself, not
+  // the base template); the real template sits at the chain root and a reconcile never swaps it. So a parent that
+  // is not the expected template is the expected shape here, not a mismatch — the existing page already carries
+  // the template the plan derived `exp` from.
+  if (vk.reconcile) return ["✅ Done", `reconcile onto the existing page — its template \`${esc(vk.exp)}\` is unchanged (a replacing schema's parent is \`${esc(tpl)}\`, not the base template)`, "ok"];
   return ["⚠ verify", `built on \`${esc(tpl)}\` but the plan recommended \`${esc(vk.exp)}\` — confirm the template (top profile island / progress bar)`, "unverified"];
 }
 // THE MINI PAGE, resolved like every other page: from `--built.pages["mini:<Schema>"]`, the key the engine itself
@@ -3102,6 +3107,22 @@ function maxFieldMatch(names, ops) {
   for (let ni = 0; ni < names.length; ni++) if (augment(ni, new Set())) matched.add(ni);
   return { matched, opToName };
 }
+// The field controls that belong to a KEPT "Connected to" connection group — the only standard Freedom component
+// that holds field-typed controls (its connection lookups); Feed / Attachments / Timeline hold none, so no other
+// kept component contributes here. classic-layout keeps the group, so its lookups are not EXTRA controls to remove.
+// The group is identified by its OWN container name/caption (`ConnectedToExpansionPanel`, `ConnectionsTabContainer`,
+// a "Connected to" caption) — never by an ancestor that merely CONTAINS it, because the built container tree
+// aggregates every descendant field into each ancestor, and matching an ancestor would exempt the whole page.
+const CONNECTED_TO_RE = /connected\s*to|connection|связ|подключен/i;
+function keptConnectionFieldNames(ctx) {
+  const names = new Set();
+  for (const c of ctx.containers || []) {
+    if (CONNECTED_TO_RE.test(`${c.name || ""} ${c.caption || ""} ${c.rawCaption || ""}`)) {
+      for (const n of c.fields || []) if (n) names.add(n);
+    }
+  }
+  return names;
+}
 function resolveFieldsByIdentity(vk, names, ctx) {
   const ops = ctx.ops;
   const identified = ops.filter((o) => o.name || o.bound);
@@ -3116,7 +3137,10 @@ function resolveFieldsByIdentity(vk, names, ctx) {
   // (`Input_CallFrom` bound to a planned `CallerId`) from being flagged as extra; a value-add widget is not a
   // field type, so FIELD_RE excludes it and it is never in this set.
   if (ctx.reconcileMode === "classic-layout") {
-    const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "")).map((o) => o.name || o.bound);
+    // A lookup that lives inside a KEPT "Connected to" connection group is part of that component, not a stray base
+    // field, so it is never an EXTRA to remove.
+    const kept = keptConnectionFieldNames(ctx);
+    const extras = identified.filter((o, oi) => opToName[oi] < 0 && ctx.FIELD_RE.test(o.type || "") && !kept.has(o.name)).map((o) => o.name || o.bound);
     if (extras.length) {
       const ov = extras.length > 8 ? "…" : "";
       const alsoMissing = missing.length ? ` · also missing: ${missing.slice(0, 8).map((n) => esc(String(n))).join(", ")}` : "";

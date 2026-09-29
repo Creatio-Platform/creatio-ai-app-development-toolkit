@@ -12096,6 +12096,43 @@ check("RETRACTION (negative control): the pattern matches a derived junction nam
     () => !/❌ EXTRA/.test(renderVerify(rn, { reconcileMode: "classic-layout" }, builtClean).markdown));
 }
 
+/* the classic-layout EXTRA gate does NOT flag a lookup that lives inside a KEPT "Connected to" connection group
+   (identified by the group's own container name/caption) — but a base field OUTSIDE it is still flagged. */
+{
+  const rnC = runMigration({ entity: "X", entityColumns: { A: { type: "Text" }, B: { type: "Text" } },
+    schemas: [{ pkg: "P", body: `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}},{operation:"insert",name:"B",parentName:"Header",propertyName:"items",values:{bindTo:"B"}}]};});` }] }, { baseDir: FIX });
+  const builtConn = { pages: { main: { viewConfig: { items: [
+    { name: "A", type: "crt.Input" }, { name: "B", type: "crt.Input" },
+    { name: "Owner", type: "crt.ComboBox" },
+    { name: "ConnectedToFieldsContainer", type: "crt.GridContainer", items: [{ name: "ComboBox_ConnCase", type: "crt.ComboBox" }] }] } } } };
+  const vC = renderVerify(rnC, { reconcileMode: "classic-layout" }, builtConn);
+  const extraLine = (md) => md.split("\n").find((l) => /❌ EXTRA/.test(l)) || "";
+  check("verify: a lookup inside a kept Connected-to group is NOT flagged EXTRA (its container name matches)",
+    () => /❌ EXTRA/.test(vC.markdown) && !/ConnCase/.test(extraLine(vC.markdown)), () => extraLine(vC.markdown));
+  check("verify: a base field OUTSIDE the Connected-to group is still flagged EXTRA",
+    () => /Owner/.test(extraLine(vC.markdown)), () => extraLine(vC.markdown));
+}
+
+/* G3 — the Form-template row can close on a RECONCILE. A reconcile saves a replacing schema whose parent is the
+   page's own chain, not the base template, so a built parent that is not the expected template is expected here. */
+{
+  const tSchema = `define("P",[],function(){return{entitySchemaName:"X",diff:[{operation:"insert",name:"A",parentName:"Header",propertyName:"items",values:{bindTo:"A"}}]};});`;
+  const builtRecon = { pages: { main: { parentSchemaName: "X_FormPage", viewConfig: { items: [{ name: "A", type: "crt.Input" }] } } } };
+  const tLine = (md) => md.split("\n").find((l) => /Form template →/.test(l)) || "";
+  const pmRecon = { ...FULL_PLANMETA, freedomExists: true, formTemplate: "PageWithTabsFreedomTemplate" };
+  const pmNoRecon = { ...FULL_PLANMETA, freedomExists: false, formTemplate: "PageWithTabsFreedomTemplate" };
+  const rnT = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } }, planMeta: pmRecon,
+    schemas: [{ pkg: "P", body: tSchema }] }, { baseDir: FIX });
+  check("verify G3: on a reconcile the Form-template row reads ✅ when the built parent is the replacing schema, not the base template",
+    () => { const l = tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtRecon).markdown); return /✅/.test(l) && /reconcile onto the existing page/.test(l); },
+    () => tLine(renderVerify(rnT, { planMeta: pmRecon, reconcileMode: "classic-layout" }, builtRecon).markdown));
+  const rnNoRecon = runMigration({ entity: "X", entityColumns: { A: { type: "Text" } }, planMeta: pmNoRecon,
+    schemas: [{ pkg: "P", body: tSchema }] }, { baseDir: FIX });
+  check("verify G3: a NON-reconcile with a non-template parent stays ⚠ (a real mismatch, not auto-passed)",
+    () => /⚠/.test(tLine(renderVerify(rnNoRecon, { planMeta: pmNoRecon }, builtRecon).markdown)),
+    () => tLine(renderVerify(rnNoRecon, { planMeta: pmNoRecon }, builtRecon).markdown));
+}
+
 // ================================================================================================
 // THE READ PLAN. The `--verify` payload was composed by hand, and every failure it paid
 // for was a key that did not get copied: no `modelConfig` (the primary-data-source check never ran),
