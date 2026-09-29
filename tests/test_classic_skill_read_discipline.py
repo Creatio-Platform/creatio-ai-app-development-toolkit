@@ -127,7 +127,7 @@ class ReadDisciplineBlockTests(unittest.TestCase):
         # is where a whole read of plan.md and worklog.md would come back. It shares
         # one line with the pointer: the body has no bytes left for a second one.
         whole_reads = "at the start of every session (single-section: `plan.md` + `worklog.md`)"
-        self.assertFalse(whole_reads in read(SKILL), f"SKILL.md still orders: {whole_reads}")
+        self.assertNotIn(whole_reads, read(SKILL), f"SKILL.md still orders: {whole_reads}")
         line = self.skill_rule_line()
         self.assertTrue(line.startswith("- Cardinal rule:"), "the cardinal rule and the pointer share one line")
         for phrase in ("grep -n '^#'", "the active section", "the tail of `worklog.md`", "never whole"):
