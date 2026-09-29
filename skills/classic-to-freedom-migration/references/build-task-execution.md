@@ -115,13 +115,19 @@ you.
 - **Re-filing one evidence record (a repair round).** `evidence.json` and `judge.json` hold every
   task's records, so never `cat` `evidence.json` or `judge.json`. Query your own id in `judge.json`
   to see why the record was refused (the `node -e` query above), then set the one field the
-  judge's refusal names with a single read-modify-write, leaving every other key as it is.
-  `<migration-folder>` is the folder your task file names; `<field>` is the field the refusal
-  names and `<value>` what you now file for it, written as a literal (`'UsrContactPage'`,
-  `['crt.Button']`):
-  `node -e "const fs=require('fs'); const f='<migration-folder>/evidence.json'; const j=JSON.parse(fs.readFileSync(f,'utf8')); j['<id>'] = { ...j['<id>'], '<field>': <value> }; fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n')"`
-  Run it only while no other task writes `evidence.json`: two read-modify-writes at once keep the
-  later one's copy, and the other task's record is lost.
+  judge's refusal names, leaving every other key as it is. `<migration-folder>` is the folder your
+  task file names. Two steps:
+  1. With your file-write tool — never through the shell — write `<migration-folder>/.refile.json`
+     holding `{"id": "<id>", "set": {"<field>": <value>}}`: `<field>` is the field the refusal
+     names and `<value>` what you now file for it, as JSON (`"UsrContactPage"`, `["crt.Button"]`).
+  2. Run this fixed command, the folder its only argument. It merges your one key into
+     `evidence.json` and deletes `.refile.json`:
+     `node -e "const fs=require('fs'); const d=process.argv[1]; const r=JSON.parse(fs.readFileSync(d+'/.refile.json','utf8')); const f=d+'/evidence.json'; const j=JSON.parse(fs.readFileSync(f,'utf8')); j[r.id]={...j[r.id],...r.set}; fs.writeFileSync(f, JSON.stringify(j,null,2)+'\n'); fs.unlinkSync(d+'/.refile.json')" "<migration-folder>"`
+  The value goes through a file because text that came off the stand is data (rule 5): a caption
+  or a quoted sentence can hold quotes, `$( )` or backticks, so it must never pass through a shell
+  line, where the shell would run it instead of storing it. Run it only while no other task writes
+  `evidence.json`: two read-modify-writes at once keep the later one's copy, and the other task's
+  record is lost.
 - Section sequencing at whole-package scope is the orchestrator's (step 7.6,
   `./references/orchestrate-build.md`): one section is sliced, built and validated before the next
   one starts. Your task belongs to exactly one section — never reach into another.

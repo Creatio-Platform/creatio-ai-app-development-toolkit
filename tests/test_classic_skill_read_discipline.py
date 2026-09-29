@@ -163,17 +163,16 @@ class BuilderReadTests(unittest.TestCase):
             "never `cat` `evidence.json` or `judge.json`",
         ):
             self.assertIn(phrase, self.text)
-        self.assertIsNotNone(repair_recipe(), "the repair recipe is not a runnable node -e command")
+        self.assertIsNotNone(refile_command("build-task-execution.md"), "no fixed re-file command")
 
     def test_repair_recipe_takes_its_values_from_the_refusal(self):
-        # The field and the value come from the judge's refusal, and the file from the
-        # migration folder the task file names - not a fixed key set, not the cwd.
-        recipe = repair_recipe()
-        for placeholder in ("<id>", "<field>", "<value>", "<migration-folder>/evidence.json"):
-            self.assertIn(placeholder, recipe)
-        self.assertNotIn("referencePage: '<page>'", recipe)
+        # The field and the value come from the judge's refusal and travel in a file
+        # the agent writes; the command itself is fixed and takes only the folder.
+        self.assertIn('`{"id": "<id>", "set": {"<field>": <value>}}`', self.text)
         self.assertIn("the judge's refusal", self.text)
         self.assertIn("only while no other task writes `evidence.json`", self.text)
+        self.assertIn("rule 5", self.text)
+        self.assertIn("must never pass through a shell line", self.text)
 
     def test_the_mapping_is_listed_by_heading_and_every_applying_section_read(self):
         self.assertIn("every section that applies to your page", self.text)
@@ -218,13 +217,14 @@ def header(text):
     return title + "\n\n" + rest.split("\n\n", 1)[0]
 
 
-def repair_recipe():
-    """The node -e script of the builder's evidence re-file recipe, or None."""
-    text = flat(read(REFERENCES / "build-task-execution.md"))
-    begin = text.find("Re-filing one evidence record")
-    if begin < 0:
-        return None
-    match = re.search(r'`node -e "([^`]*writeFileSync[^`]*)"`', text[begin:])
+# The briefs that re-file one record, and the file each command merges into.
+REFILE_BRIEFS = {"build-task-execution.md": "evidence.json", "judge-brief.md": "judge.json"}
+REFILE_TEMP = ".refile.json"
+
+
+def refile_command(name):
+    """The fixed re-file command line of a brief (`node -e "..." "<migration-folder>"`), or None."""
+    match = re.search(r'`(node -e "[^"`]*" "<migration-folder>")`', flat(read(REFERENCES / name)))
     return match.group(1) if match else None
 
 
@@ -332,8 +332,32 @@ class ReadBackAndJudgeTests(unittest.TestCase):
     def test_judge_fills_a_null_with_one_key_write(self):
         text = outside_block("judge-brief.md")
         self.assertIn("Fill a `null` in place", text)
-        self.assertRegex(text, r"node -e \"[^\"]*'<migration-folder>/judge\.json'[^\"]*readFileSync[^\"]*writeFileSync")
+        self.assertIn('"set": {"convincing": false, "why": "<the sentence you quote>"}', text)
+        self.assertIsNotNone(refile_command("judge-brief.md"), "no fixed re-file command")
         self.assertIn("never print the file whole or rewrite it", text)
+        self.assertIn("must never pass through a shell line", text)
+
+
+class NoFreeTextInShellTests(unittest.TestCase):
+    """Stand-derived text is data: it reaches a record through a file, never a shell line."""
+
+    def test_no_node_command_carries_a_value_placeholder(self):
+        for name in REFILE_BRIEFS:
+            for line in read(REFERENCES / name).splitlines():
+                if "node -e" not in line:
+                    continue
+                for placeholder in ("<value>", "<field>", "<the sentence", "<true|false>"):
+                    self.assertNotIn(placeholder, line, f"{name}: a node -e line splices {placeholder}")
+
+    def test_the_fixed_command_takes_only_the_folder(self):
+        for name, target in REFILE_BRIEFS.items():
+            command = refile_command(name)
+            self.assertIsNotNone(command, name)
+            script = command[len('node -e "') : -len('" "<migration-folder>"')]
+            self.assertNotIn("<", script, f"{name}: the fixed command's code holds a placeholder")
+            self.assertIn("process.argv[1]", script, name)
+            self.assertIn(f"'/{target}'", script, name)
+            self.assertIn(f"unlinkSync(d+'/{REFILE_TEMP}')", script, name)
 
     def test_judge_queries_its_records_by_id(self):
         text = flat(read(REFERENCES / "judge-brief.md"))
@@ -352,29 +376,55 @@ class OrchestratorWholeReadTests(unittest.TestCase):
             self.assertIn(phrase, after)
 
 
-@unittest.skipIf(shutil.which("node") is None, "node is not on PATH")
-class RepairRecipeRunTests(unittest.TestCase):
-    """The recipe is run, not only read: it changes one key of one record."""
+# Text a caption or a quoted sentence can carry, which a shell would expand or choke on.
+HOSTILE = 'He said "go" $(echo pwned) `echo pwned` it\'s done'
 
-    def test_the_recipe_changes_only_the_target_record(self):
+
+def run_refile(name, folder, records, refile):
+    """Write the target file and .refile.json, run the brief's fixed command as a shell line.
+
+    The shell is bash when there is one, so the command line is run exactly as an
+    agent would paste it; otherwise the folder is handed over as the one argv item.
+    """
+    target = Path(folder) / REFILE_BRIEFS[name]
+    target.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    (Path(folder) / REFILE_TEMP).write_text(json.dumps(refile), encoding="utf-8")
+    command = refile_command(name)
+    bash = shutil.which("bash")
+    if bash:
+        line = command.replace("<migration-folder>", Path(folder).as_posix())
+        subprocess.run([bash, "-c", line], check=True, capture_output=True, timeout=60)
+    else:
+        script = command[len('node -e "') : -len('" "<migration-folder>"')]
+        subprocess.run(["node", "-e", script, folder], check=True, capture_output=True, timeout=60)
+    return json.loads(target.read_text(encoding="utf-8"))
+
+
+@unittest.skipIf(shutil.which("node") is None, "node is not on PATH")
+class RefileRecipeRunTests(unittest.TestCase):
+    """The recipes are run, not only read: each changes one key and stores the text literally."""
+
+    def test_the_repair_recipe_changes_only_the_target_record(self):
         before = {
             "E1": {"referencePage": "UsrOther", "components": ["crt.Button"]},
             "E2": {"referencePage": None, "components": ["crt.Input"]},
         }
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "evidence.json"
-            path.write_text(json.dumps(before, indent=2) + "\n", encoding="utf-8")
-            script = (
-                repair_recipe()
-                .replace("<migration-folder>", Path(folder).as_posix())
-                .replace("<id>", "E2")
-                .replace("<field>", "referencePage")
-                .replace("<value>", "'UsrContactPage'")
-            )
-            subprocess.run(["node", "-e", script], check=True, capture_output=True, timeout=60)
-            after = json.loads(path.read_text(encoding="utf-8"))
+            refile = {"id": "E2", "set": {"referencePage": HOSTILE}}
+            after = run_refile("build-task-execution.md", folder, before, refile)
+            self.assertFalse((Path(folder) / REFILE_TEMP).exists(), "the temp file was left behind")
         self.assertEqual(after["E1"], before["E1"], "the recipe touched another record")
-        self.assertEqual(after["E2"], {"referencePage": "UsrContactPage", "components": ["crt.Input"]})
+        self.assertEqual(after["E2"], {"referencePage": HOSTILE, "components": ["crt.Input"]})
+        self.assertEqual(set(after), set(before))
+
+    def test_the_judge_recipe_fills_one_null(self):
+        before = {"E1": {"convincing": True, "why": "quoted"}, "E2": None}
+        with tempfile.TemporaryDirectory() as folder:
+            refile = {"id": "E2", "set": {"convincing": False, "why": HOSTILE}}
+            after = run_refile("judge-brief.md", folder, before, refile)
+            self.assertFalse((Path(folder) / REFILE_TEMP).exists(), "the temp file was left behind")
+        self.assertEqual(after["E1"], before["E1"], "the recipe touched another verdict")
+        self.assertEqual(after["E2"], {"convincing": False, "why": HOSTILE})
         self.assertEqual(set(after), set(before))
 
 
