@@ -27,7 +27,7 @@ const FIX = path.join(DIR, "fixtures");
 // child must run from DIR.
 const runMigrate = (args, opts = {}) =>
   spawnSync(process.execPath, [path.join(ENGINE_DIR, "migrate.mjs"), ...args], { cwd: DIR, encoding: "utf8", ...opts });
-const load =(dir, order) => order.map(fn =>
+const load = (dir, order) => order.map(fn =>
   parseSchema(fs.readFileSync(path.join(FIX, dir, fn), "utf8"), fn.replace(/\.js$/, "").replace(/_base$|_repl$/, "")));
 
 // SupportUnit entity column types (from get-entity-schema-properties) — lets the mapper pick precise controls.
