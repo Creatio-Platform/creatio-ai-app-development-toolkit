@@ -162,13 +162,24 @@ const groupClaim = (label) => {
 // re-took the first five rows because the key still had capacity. Marking the row object settles it: `byPage` and
 // `byGroup` hold the same objects, so a row claimed by name is visibly gone from its group and the other way round.
 const exactLabel = (s) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+// A `Fields — N expected` / `Related lists — N expected` claim names no row; the refusal names the per-item rows
+// that replace it.
+const RETIRED_AGGREGATE = /^\s*(Fields|Related lists)\s+—\s+\d+\s+expected\s*$/i;
+export const isRetiredAggregate = (label) => RETIRED_AGGREGATE.test(String(label ?? ""));
+function retiredAggregate(label) {
+  const m = RETIRED_AGGREGATE.exec(String(label));
+  if (!m) return null;
+  const one = /^fields$/i.test(m[1]) ? "Field `<name>`" : "Related list `<detail>`";
+  return ` — this row is now one row per item (\`${one}\`): claim them with \`${GROUP_MARK}Form — Coverage (verified)\`,`
+    + " or name each row as `--checklist` prints it, then re-run";
+}
 function claimRow(entry, pageKey, itemId, index) {
   const page = entryPage(entry, pageKey);
   const key = rowKey(entryLabel(entry));
   const found = index.get(page)?.get(key);
   if (!found) {
     return { error: `\`${itemId}\` claims a row the plan does not have on page \`${page}\`: ${JSON.stringify(String(entry).slice(0, 90))}`
-      + ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page` };
+      + (retiredAggregate(entryLabel(entry)) || ` — copy the row text from the plan, or prefix it with \`<pageKey>${PAGE_SEP}\` if it belongs to another page`) };
   }
   // THE ROW THE ITEM NAMED, when it named one exactly. `rowKey` masks digits and truncates, so `Tab 1 — fields`
   // and `Tab 2 — fields` share a key; taking the first free row of the key hands an item the row another item

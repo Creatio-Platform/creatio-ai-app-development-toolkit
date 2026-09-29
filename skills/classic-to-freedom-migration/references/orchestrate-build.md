@@ -194,16 +194,23 @@ sub-agents before this, one of them caching material nobody else read.
    a scope decision ("we will not build this", "not this phase") is the developer's, and it reaches
    the folder only through `migrate.mjs --tasks <dir> --decide D<N> --wont-do|--postponed`, which
    refuses unless `D<N>` already resolves as a heading in `decisions.md`. Never hand-edit a task
-   file to close it. **A build-time adjustment is recorded through `--decide` BEFORE the task it
-   settles is dispatched.** An adjustment written only into `decisions.md` prose leaves its rows
-   open, and the task goes to a sub-agent with nothing to build. A task whose every row is decided
-   settles on its own and `--next` never offers it. Until the first task is dispatched, `--tasks`,
-   `--next` and `--start` list every `D<N>` in `decisions.md` that no task's `decisions:` line cites.
-   For each one that drops or postpones a deliverable, run `--decide` before the first dispatch. The
-   list is printed only: it writes nothing and changes no exit code. `--decide` writes only the rows
-   it is given. It then lists the open rows that share a subject with a decided row, in the same task
-   or another one, each with the `--decide … --row <task>:<n>` command that applies the same answer.
-   Run a command only when the person's answer covers that row.
+   file to close it. A task whose every row is decided settles on its own and `--next` never offers
+   it. `--decide` writes only the rows it is given.
+
+   **A planning decision is recorded only as a deliverable status.** A deliverable the user drops
+   while approving the plan gets one `manifest.deliverableStatus` entry — `"<pageKey>#<id>": {
+   "status": "wont-do", "decision": "D<N>" }`, the id as the plan's `### Won't do` list and
+   `engine/README.md` spell it — and its own `D<N>` in `decisions.md`. It is never an `Adjustments`
+   item, a chat answer, or part of a blanket "Plan approved". Re-run `--plan --out` into the migration
+   folder: the plan prints **Won't do** on the deliverable's line (or in the end list), and the cut
+   writes the row closed before any task is dispatched. The engine also closes what it proves has
+   nothing to build (a Print / Run-process button with nothing behind it on the stand, standard
+   actions on a child page, a child that keeps its Classic card or has no edit page, the rows a
+   `pages-only-no-menu` run does not build). A plan is refused while a status names no deliverable,
+   cites a `D<N>` decisions.md does not hold, or drops a deliverable whose behaviour card, confirm
+   item or fold chain other deliverables share without a status of their own: give each its own
+   (`wont-do`, or `"status": "build"`); nothing is closed on their behalf. A decision taken DURING
+   the build still goes through `--decide`.
 
    **`--start` also enforces the two scheduling rules, so neither is yours to remember.** It refuses
    a task whose `dependsOn` has not closed, naming each one and its status. And it refuses to issue

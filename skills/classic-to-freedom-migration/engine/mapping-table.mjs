@@ -439,9 +439,11 @@ const PROFILE_CARD_ROWS = [
 
 // The standard card actions (the classic ACTIONS menu / toolbar items) -> Freedom card actions (B7). Element NAMES,
 // so they get their own match kind; they are recognised by name because that is what the classic body carries.
-const CARD_ACTION_ROWS = ["PrintButton", "ProcessButton", "ViewOptionsButton", "TagButton", "ReloadDataButton"]
-  .map((name) => row({ match: { by: MATCH.ELEMENT_NAME, elementName: name }, role: ROLE.MAPPED, tier: TIER.VIEW_ONLY,
-    ownedBy: OWNER.WIDGET, verify: { componentType: "crt.Button" }, meta: { cardAction: name } }));
+// `signal` names the on-stand signal that proves whether anything stands behind the action (a printable, a process
+// connected to the section); an action without one is template chrome.
+const CARD_ACTION_ROWS = [["PrintButton", "printables"], ["ProcessButton", "processes"], ["ViewOptionsButton"], ["TagButton"], ["ReloadDataButton"]]
+  .map(([name, signal]) => row({ match: { by: MATCH.ELEMENT_NAME, elementName: name }, role: ROLE.MAPPED, tier: TIER.VIEW_ONLY,
+    ownedBy: OWNER.WIDGET, verify: { componentType: "crt.Button" }, meta: { cardAction: name, ...(signal ? { signal } : {}) } }));
 export const MAPPING_ROWS = Object.freeze([...ITEM_TYPE_ROWS, ...FEATURE_ROWS, ...FEATURE_ENTITY_ROWS,
   ...WIDGET_ROWS, ...PROFILE_CARD_ROWS, ...CARD_ACTION_ROWS]);
 
@@ -640,6 +642,11 @@ export function profileCardsByEntity() {
 }
 export function knownCardActions() {
   return new Set(MAPPING_ROWS.filter((r) => r.meta?.cardAction).map((r) => r.meta.cardAction));
+}
+// Card action name → the on-stand signal key that decides whether it is built (`PrintButton` → `printables`,
+// `ProcessButton` → `processes`).
+export function cardActionSignals() {
+  return new Map(MAPPING_ROWS.filter((r) => r.meta?.cardAction && r.meta.signal).map((r) => [r.meta.cardAction, r.meta.signal]));
 }
 
 // The Freedom types accepted for a PLANNED component type: the type itself, plus any row whose real component
