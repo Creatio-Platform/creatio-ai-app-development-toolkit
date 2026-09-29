@@ -54,6 +54,22 @@ jobs:
       - name: Anchor vendored parser to upstream npm
         run: node skills/classic-to-freedom-migration/engine/verify-vendor-upstream.mjs
 
+  lint:
+    name: ESLint (skills, hooks, scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+      # Dev-only tooling from the root package.json, installed exactly as locked. --ignore-scripts: no package
+      # lifecycle script runs on the runner. None of it ships: the root package.json is outside the release manifest.
+      - name: Install lint tooling
+        run: npm ci --ignore-scripts
+      # Blocking: any finding fails the job. Scope and ignores live in eslint.config.mjs, not on this command line.
+      - name: ESLint
+        run: npm run lint
+
   engine-goldens:
     name: Classic→Freedom engine goldens (${{ matrix.os }})
     strategy:
@@ -66,6 +82,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
+      # COVERAGE, ubuntu leg only. Node itself writes raw V8 coverage for every process started while
+      # NODE_V8_COVERAGE is set — each golden runner and every child process it spawns — so no runner's command
+      # line below changes and coverage cannot alter what the goldens gate. The windows leg never sets it and is the
+      # unchanged control. The report is rendered once, by the last steps of this job.
+      - name: Enable V8 coverage collection (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: echo "NODE_V8_COVERAGE=$GITHUB_WORKSPACE/coverage/tmp" >> "$GITHUB_ENV"
       # supply-chain gate: the vendored acorn parser (the one executable processing untrusted schema-body)
       # must match its pinned upstream SHA-256 — a swapped/drifted bundle fails the build here.
       - name: Verify vendored parser integrity
@@ -117,3 +140,39 @@ jobs:
         if: always()
         working-directory: engine-tests/classic-to-freedom
         run: node run-tasks.mjs
+      # The coverage report for everything the steps above ran, ubuntu leg only. Informational: no threshold is
+      # configured, so a low percentage can never fail this job, and `continue-on-error` keeps a broken report
+      # (registry outage, c8 crash, artifact service) from failing it either — the failed step still shows in the
+      # run, only the goldens decide the check. `always()` so a red golden still gets its report.
+      # NODE_V8_COVERAGE is unset for these tool processes, so npm and c8 do not record themselves.
+      - name: Install coverage tooling (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: env -u NODE_V8_COVERAGE npm ci --ignore-scripts
+      - name: Coverage report (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: |
+          mkdir -p coverage
+          env -u NODE_V8_COVERAGE npm run --silent coverage:report > coverage/summary.txt
+          cat coverage/summary.txt
+          {
+            echo "## Engine coverage (V8, every golden runner above)"
+            echo
+            echo "Per file: statements, branches, functions, lines, over the engine and workflow-core sources under \`skills/\`. \`All files\` is the overall total. No threshold is enforced."
+            echo
+            echo '```text'
+            cat coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report (ubuntu only)
+        if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engine-coverage
+          path: |
+            coverage/
+            !coverage/tmp/
+          if-no-files-found: warn
+          retention-days: 14
