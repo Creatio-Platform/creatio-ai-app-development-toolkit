@@ -4101,7 +4101,7 @@ function clearStaleStatusCells(tasks) {
 }
 // The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
 // with a `D<N>=` entry, after clearing the cells whose status is gone. Every status must resolve against
-// decisions.md before any is written. A task a cell was cleared in derives its status afresh; every engine task
+// decisions.md before any is written. A closed task a cell was cleared in reopens as `todo`; every engine task
 // with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
 // statuses is never offered as `todo`.
 function applyPlanStatuses(merged, decisions) {
@@ -4116,7 +4116,7 @@ function applyPlanStatuses(merged, decisions) {
     const d = task.rows[idx].status.decision;
     writeDecidedRow(task, idx, decidedCellOf({ mode: O_WONT_DO, decision: d, title: decisions.get(d) }), markStatus(d));
   }
-  recomputeDecidedStatuses(reopened, () => S_TODO, () => false);
+  recomputeDecidedStatuses(reopened, (t) => (CLOSED.has(t.status) ? S_TODO : t.status), () => false);
   recomputeDecidedStatuses(merged.tasks.filter((t) => isEngineTask(t) && (t.rows || []).length
     && t.rows.every((r) => r.na || r.outcomeKind)));
   return [];
