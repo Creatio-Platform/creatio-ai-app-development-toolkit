@@ -8086,9 +8086,9 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     const find = (label) => { for (const t of disk) { const i = t.rows.findIndex((r) => r.label === label && t.pageKey === "main"); if (i >= 0) return { t, i, r: t.rows[i] }; } return null; };
     const mapOf = (x) => (x?.t?.decisions instanceof Map ? x.t.decisions : parseDecisionsMap(x?.t?.decisions));
     const got = Object.entries(T1_STATUS).map(([k, st]) => ({ k, st, x: find(LABELS[k]) }));
-    check("T1: a manifest status closes a field, a related-list, a method and a card-action row at the cut — `wont-do — <title> (D<N>)` with its `decisions:` entry",
+    check("T1: a manifest status closes a field, a related-list, a method and a card-action row at the cut — `wont-do — <title> (D<N>)` with its `decisions:` entry marked `D<N>=`",
       () => RUN_ST.statusIssues.length === 0 && !set.refused && got.every(({ st, x }) => x?.r.outcomeKind === "wont-do"
-        && x.r.outcome === `wont-do — ${DEC.get(st.decision)} (${st.decision})` && mapOf(x).get(x.i + 1) === st.decision),
+        && x.r.outcome === `wont-do — ${DEC.get(st.decision)} (${st.decision})` && mapOf(x).get(x.i + 1) === `${st.decision}=`),
       () => ({ issues: RUN_ST.statusIssues, refused: set.problems, got: got.map(({ k, x }) => [k, x?.r?.outcome, x && mapOf(x).get(x.i + 1)]) }));
     const onA = find("Handler — `onA`"), proc = find("Card action — Process");
     const mainF = find("Field `MainF`"), r1 = find("Related list `R1D`");
@@ -8099,6 +8099,151 @@ console.log("\n===== deliverable status: a planning decision closes its row befo
     const first = snap();
     syncTaskDir(dir, RUN_ST, OPTS_ST);
     check("T1: a second cut over the same folder writes nothing new", () => JSON.stringify(first) === JSON.stringify(snap()));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // The cut reconciles the cells it wrote: a removed entry or `build` reopens the row, another D<N> rewrites it,
+    // and a `--decide` cell or an unmarked entry is never touched.
+    // The two handlers get a task of their own, so a cleared cell has a closed task to reopen.
+    const handlers = new Set(["Handler — `onA`", "Handler — `onB`"]);
+    const groupEntry = (g) => (g.pageKey === "main" ? "" : `${g.pageKey}::`) + `@${g.baseTitle}`;
+    const split = parseSplit(JSON.stringify({ items: [
+      { id: "methods", title: "methods", pageKey: "main", writesTo: "main", rows: [...handlers] },
+      { id: "page", title: "Page", pageKey: "main", writesTo: "main",
+        rows: checklistGroups(RUN_ST, OPTS_ST).filter((g) => !(g.pageKey === "main" && g.rows.every((r) => handlers.has(r.label)))).map(groupEntry) },
+    ] })).split;
+    const { base, dir } = cut("status-reconcile", RUN_ST, OPTS_ST, split);
+    const locate = (label) => {
+      for (const t of readTaskDir(dir)) {
+        const i = t.rows.findIndex((r) => r.label === label);
+        if (i >= 0) return { t, i, r: t.rows[i], d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null };
+      }
+      return null;
+    };
+    const onA = locate("Handler — `onA`");
+    const manual = applyDecision(dir, RUN_ST, { ...OPTS_ST, split, decision: "D3", mode: "wont-do", rowRef: { taskId: onA.t.id, n: String(onA.i + 1) } });
+    const before = Object.fromEntries(Object.keys(LABELS).map((k) => [k, locate(LABELS[k])]));
+    const recut = (status) => { const m = stManifest(status); return syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC }, split); };
+    const next = { "main#related-list:R2D": { status: "build" }, "main#card-action:Print": WONT("D3") };
+    const resynced = recut(next);
+    const at = Object.fromEntries(Object.keys(LABELS).map((k) => [k, locate(LABELS[k])]));
+    const methodTask = () => locate("Handler — `onB`")?.t;
+    check("reconcile (anti-vacuity): before the re-cut every status cell carries `D<N>=` and the manual `--decide` on `onA` wrote a plain `D3`, in the task that holds `onB`",
+      () => !manual.refused && Object.values(before).every((x) => /^D\d+=$/.test(x?.d || "")) && before["main#method:onB"].t.id === onA.t.id
+        && before["main#method:onB"].t.status === "wont-do",
+      () => ({ manual: manual.problems, before: Object.values(before).map((x) => [x?.r.label, x?.d, x?.t.status]),
+      }));
+    check("reconcile: a removed entry reopens its row and drops its `decisions:` entry, for a field and for a method",
+      () => ["main#field:MainG", "main#method:onB"].every((k) => at[k] && !at[k].r.outcomeKind && at[k].r.outcome === "" && at[k].d === null),
+      () => ["main#field:MainG", "main#method:onB"].map((k) => [k, at[k]?.r.outcome, at[k]?.d]));
+    check("reconcile: an entry switched to `build` reopens its row",
+      () => !at["main#related-list:R2D"].r.outcomeKind && at["main#related-list:R2D"].d === null,
+      () => [at["main#related-list:R2D"]?.r.outcome, at["main#related-list:R2D"]?.d]);
+    check("reconcile: an entry switched to another D<N> is rewritten under it, still marked `D<N>=`",
+      () => at["main#card-action:Print"].r.outcome === "wont-do — not carried over (D3)" && at["main#card-action:Print"].d === "D3=",
+      () => [at["main#card-action:Print"]?.r.outcome, at["main#card-action:Print"]?.d]);
+    check("reconcile: the manual `--decide` cell survives the re-cut, and the task the cleared cell reopened is `todo` again",
+      () => locate("Handler — `onA`")?.r.outcome === "wont-do — not carried over (D3)" && locate("Handler — `onA`")?.d === "D3"
+        && methodTask()?.status === "todo" && resynced.tasks.find((t) => t.id === onA.t.id)?.status === "todo",
+      () => ({ onA: locate("Handler — `onA`")?.r.outcome, status: methodTask()?.status }));
+    const snap = () => fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+    const settled = snap();
+    recut(next);
+    check("reconcile: a second re-cut with the same statuses writes nothing new", () => JSON.stringify(settled) === JSON.stringify(snap()));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    const { base, dir } = cut("status-reconcile-unmarked", RUN_ST, OPTS_ST);
+    for (const f of fs.readdirSync(dir).filter((x) => x.startsWith("task-"))) {
+      const file = path.join(dir, f);
+      fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^decisions: .*$/m, (l) => l.replaceAll("=", "")));
+    }
+    const m = stManifest(undefined);
+    syncTaskDir(dir, runMigration(m, { decisions: DEC }), { ...optsOf(m), decisions: DEC });
+    const rows = readTaskDir(dir).flatMap((t) => t.rows.map((r, i) => ({ r, d: (t.decisions instanceof Map ? t.decisions : parseDecisionsMap(t.decisions)).get(i + 1) ?? null })));
+    const kept = Object.values(LABELS).map((l) => rows.find((x) => x.r.label === l));
+    check("reconcile: a folder whose status cells carry no `=` mark keeps them when the entries are removed",
+      () => kept.every((x) => x?.r.outcomeKind === "wont-do" && /^D\d+$/.test(x.d || "")),
+      () => kept.map((x) => [x?.r.label, x?.r.outcome, x?.d]));
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+  {
+    // `--verify --built --tasks` over per-item rows: a row closed by `--decide` leaves the page-level field match and
+    // related-list count, so one built field and one grid close the remaining field and list. Section 3 of the
+    // report lists every row the machine could not confirm.
+    const m = stManifest(undefined);
+    const verifyItems = (decide) => {
+      const base = tmp("status-verify-items");
+      const dir = path.join(base, "build-tasks");
+      fs.writeFileSync(path.join(base, "decisions.md"), DEC_MD);
+      fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(m));
+      fs.writeFileSync(path.join(base, "built.json"), JSON.stringify({ pages: { main: { schemaUId: "0b6f86b8-8f5e-4770-9462-b75ee2394b81",
+        viewConfig: [{ name: "MainF", type: "crt.Input", control: "$MainF" }, { name: "G1", type: "crt.DataGrid" }] } } }));
+      const cli = (...args) => spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), ...args], { encoding: "utf8" });
+      const cutRun = cli("--tasks", dir);
+      const rowRef = (label) => { for (const t of readTaskDir(dir)) { const i = t.rows.findIndex((r) => r.label === label); if (i >= 0) return `${t.id}:${i + 1}`; } return null; };
+      const decided = decide ? ["Field `MainG`", "Related list `R2D`"].map((l) => cli("--tasks", dir, "--decide", "D3", "--wont-do", "--row", rowRef(l)).status) : [];
+      const out = cli("--verify", "--built", path.join(base, "built.json"), "--tasks", dir).stdout.replaceAll("ˋ", "`");
+      fs.rmSync(base, { recursive: true, force: true });
+      const from = out.indexOf("## 3. The machine could not confirm");
+      const open = from < 0 ? "" : out.slice(from).split("\n## ")[0];
+      const lineFor = (label) => open.split("\n").find((l) => l.includes(`| ${label} |`)) || "";
+      return { cut: cutRun.status, decided, lineFor, open };
+    };
+    const withDecision = verifyItems(true), without = verifyItems(false);
+    const ITEMS = ["Field `MainF`", "Field `MainG`", "Related list `R1D`", "Related list `R2D`"];
+    check("per-item verify with recorded decisions: `--decide` on one of two Field rows and one of two Related list rows closes every field and related-list row of the page",
+      () => withDecision.cut === 0 && withDecision.decided.length === 2 && withDecision.decided.every((s) => s === 0)
+        && !!withDecision.open && ITEMS.every((l) => !withDecision.lineFor(l)),
+      () => ({ cut: withDecision.cut, decided: withDecision.decided, open: withDecision.open.slice(0, 2000) }));
+    check("per-item verify without the decisions: the second field is not found and one grid for two lists leaves both list rows open",
+      () => without.cut === 0 && !without.lineFor("Field `MainF`") && /⚠ verify.*missing: MainG/.test(without.lineFor("Field `MainG`"))
+        && ["Related list `R1D`", "Related list `R2D`"].every((l) => /⚠ verify/.test(without.lineFor(l))),
+      () => ITEMS.map((l) => without.lineFor(l)));
+  }
+  {
+    const issuesOf = (manifest, decisions = DEC) => runMigration(manifest, decisions ? { decisions } : {}).statusIssues || [];
+    // `helper` is called only by `onA`, so the plan folds it under `onA` and both share `onA`'s fold-chain subject.
+    const foldBody = stBody.replace('onA:function(){return this.get("x");}', 'onA:function(){this.helper();return this.get("x");},helper:function(){return this.get("z");}');
+    const foldManifest = (status) => ({ ...stManifest(status), schemas: [{ pkg: "P", body: foldBody }] });
+    const helperRow = checklistGroups(runMigration(foldManifest(undefined)), optsOf(foldManifest(undefined))).flatMap((g) => g.rows).find((r) => r.deliverableId === "method:helper");
+    const helperOnly = issuesOf(foldManifest({ "main#method:helper": WONT("D3") }));
+    const callerAnswered = issuesOf(foldManifest({ "main#method:helper": WONT("D3"), "main#method:onA": { status: "build" } }));
+    check("T5 (anti-vacuity): the fixture folds `helper` under `onA`",
+      () => helperRow?.vk?.parent === "onA", () => helperRow?.vk);
+    check("T5: a wont-do on a folded helper whose caller has no status is refused, naming the caller's key; a status on the caller clears it",
+      () => helperOnly.length === 1 && helperOnly[0].key === "main#method:helper" && /fold:/.test(helperOnly[0].problem)
+        && JSON.stringify(helperOnly[0].valid) === JSON.stringify(["main#method:onA"]) && callerAnswered.length === 0,
+      () => ({ helperOnly, callerAnswered }));
+    // A `confirm:<kind>:<item>` subject carries the item's own evidence id, which no other deliverable shares.
+    const confirmRows = checklistGroups(RUN_ST, OPTS_ST).flatMap((g) => g.rows.map((r) => ({ ...r, pageKey: g.pageKey, groupTitle: g.baseTitle })));
+    const subjects = TASKS_MODULE.rowSubjects(confirmRows);
+    const at = confirmRows.findIndex((r) => r.pageKey === "main" && r.deliverableId?.startsWith("confirm:"));
+    const confirmKey = at >= 0 ? `main#${confirmRows[at].deliverableId}` : null;
+    const confirmOnly = confirmKey ? issuesOf(stManifest({ [confirmKey]: WONT("D3") })) : null;
+    check("T5: a wont-do on a `confirm:<kind>:<item>` deliverable is accepted — its subject is that item's own `confirm:` id, which no other deliverable shares",
+      () => at >= 0 && subjects[at]?.startsWith("confirm:") && subjects.filter((s) => s === subjects[at]).length === 1 && confirmOnly?.length === 0,
+      () => ({ confirmKey, subject: subjects[at], confirmOnly }));
+  }
+  {
+    const issuesOf = (status) => runMigration(stManifest(status), { decisions: DEC }).statusIssues || [];
+    const badStatus = issuesOf({ "main#method:onB": { status: "wontdo", decision: "D3" } });
+    const noDecision = issuesOf({ "main#method:onB": { status: "wont-do" } });
+    const badDecision = issuesOf({ "main#method:onB": WONT("6") });
+    check("T5: a status other than `wont-do` / `build` is refused, naming the value it got",
+      () => badStatus.length === 1 && /`wontdo`/.test(badStatus[0].problem) && badStatus[0].kind === "status", () => badStatus);
+    check("T5: a `wont-do` with no decision, or with a decision not shaped D<N>, is refused",
+      () => [noDecision, badDecision].every((x) => x.length === 1 && /needs its own `decision`/.test(x[0].problem) && x[0].kind === "decision"),
+      () => ({ noDecision, badDecision }));
+    const base = tmp("status-optional-decisions");
+    fs.writeFileSync(path.join(base, "decisions.md"), "## D3 — not carried over\n");
+    fs.writeFileSync(path.join(base, "manifest.json"), JSON.stringify(stManifest({ "main#method:onB": WONT("D9") })));
+    fs.writeFileSync(path.join(base, "built.json"), JSON.stringify({ pages: {} }));
+    const verified = spawnSync(process.execPath, [MIGRATE, path.join(base, "manifest.json"), "--verify", "--built", path.join(base, "built.json"), "--out", path.join(base, "report.md")], { encoding: "utf8" });
+    const report = fs.existsSync(path.join(base, "report.md")) ? fs.readFileSync(path.join(base, "report.md"), "utf8") : "";
+    check("T5: a mode that reads decisions.md optionally still checks a D<N> when it reads one — `--verify --built --out` beside a decisions.md without D9 raises deliverableStatus INVALID",
+      () => verified.status === 2 && /deliverableStatus INVALID[^\n]*D9/.test(verified.stdout + verified.stderr + report),
+      () => ({ status: verified.status, out: (verified.stdout + verified.stderr).slice(0, 600) }));
     fs.rmSync(base, { recursive: true, force: true });
   }
   {

@@ -19,7 +19,7 @@ node migrate.mjs <manifest.json> --tasks <dir> --next   # ANSWER which task(s) a
 node migrate.mjs <manifest.json> --tasks <dir> --start <task-id>  # …first marking that task in-progress, stamping its clock and printing its dispatch token (call it BEFORE dispatching)
 node migrate.mjs <manifest.json> --tasks <dir> --route  # …opening a repair round over the rows a build agent recorded as NOT BUILT — mid-run, with no --built payload
 node migrate.mjs <manifest.json> --tasks <dir> --decide D13 --wont-do --pages typed:Service  # RECORD a person's scope decision into the Outcome cell of every row it covers (also --task <id> / --row <id>:<n>; --postponed additionally needs --to <destination>). REFUSES unless D13 already resolves in decisions.md (a `## D13 — …` heading, a `| D13 | … |` table row, or a plain `D13 — …` line in a file with neither) — it never creates a decision, and that refusal IS the safeguard. It writes only the addressed rows
-node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else (a cell written from a `manifest.deliverableStatus` entry is skipped: remove the entry and re-plan)
+node migrate.mjs <manifest.json> --tasks <dir> --revoke D13  # …and reverse one, clearing only the cells that decision wrote and nothing else (a cell whose `manifest.deliverableStatus` entry still cites D13 is skipped: remove the entry or set it to `build`, then re-run `--tasks`)
 node migrate.mjs <manifest.json> --checklist            # the Plan-vs-Done control table, AFTER implementing (Markdown)
 node migrate.mjs <manifest.json> --reads <dir>         # WRITE the read plan the verify gate needs into <dir>/reads/ (which reads, and the file each response goes into)
 node migrate.mjs <manifest.json> --verify --from <dir>  # …COMPOSING the payload from the files --reads named, and writing it to <dir>/built.json
@@ -419,12 +419,15 @@ id that names no deliverable (the page's valid ids are listed), a status other t
 `wont-do` whose `D<N>` decisions.md does not hold, an entry on a deliverable the engine already closed, and a
 `wont-do` whose subject (behaviour card, confirm item, fold chain) other deliverables share without a status of
 their own. The cut writes each `wont-do` through the `--decide` row writer — `wont-do — <title> (D<N>)` with a
-`decisions:` entry — and refuses (`deliverable-status`) when decisions.md does not hold its `D<N>`. A task
+`decisions:` entry marked `D<N>=` — and refuses (`deliverable-status`) when decisions.md does not hold its `D<N>`.
+On every cut, a `D<N>=` cell whose entry is gone or reads `build` is cleared and its row reopens, and one whose
+entry now cites another `D<N>` is rewritten; a `--decide` cell and an unmarked entry are never touched. A task
 whose rows are all closed computes its word on the pass that cuts it — `wont-do` when every row is `wont-do`,
 `not-applicable` when every row is `not-applicable`, `done` for any other closed mix; a `postponed` row keeps it
 `partial` — needs no dispatch
-record, and `--next` never offers it. `--revoke D<N>` skips a cell the cut wrote from a status and names the
-`<pageKey>#<id>` entry: the entry is removed from `manifest.deliverableStatus` and the plan re-run instead.
+record, and `--next` never offers it. `--revoke D<N>` skips a row whose status still cites `D<N>` and names the
+`<pageKey>#<id>` entry: remove it from `manifest.deliverableStatus` (or set it to `build`) and re-run `--tasks`,
+which clears the cell.
 
 **Two cards, when the body lives elsewhere.** Any row whose behaviour is defined outside the scope that owns it is
 described twice — a `mixin:` member or the method wiring one in, a method assigned from another module

@@ -56,7 +56,7 @@ import { GATE_KIND, featureVerifyType } from "./mapping-table.mjs";
 import { renderDesignSpec, renderPlan, renderChecklist, renderVerify, countFormFields, HANDOFF_MEMBER_KINDS,
   checklistGroups, childTemplateChoice, CHILD_TEMPLATE_SCHEMA, CHILD_PAGE_ANSWERS, reuseChildGroups, unresolvedChildGroups,
   planGaps, isTabOp, IMPERATIVE_MEMBER_KINDS,
-  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, engineStatusReason } from "./designspec.mjs";
+  boundaryChild, MEMBER_WORKLIST_KINDS, isNestedFold, statusKey, STATUS_WONT_DO, STATUS_BUILD, STATUS_ISSUE, engineStatusReason } from "./designspec.mjs";
 import { syncTaskDir, syncRepairDir, freezeSplit, startTask, addTasks, DECL_SHAPE, renderProgress,
   REPAIR_ROUND_CAP, TASK_INDEX_FILE, attentionSummary, dispatchAudit, readTaskDir, notBuiltOpenItems,
   readMergedTaskDir, refreshTaskIndex, startableTasks, HOLD_DEPS, HOLD_OVERLAP, HOLD_SEQUENCED, HOLD_LEDGER, HOLD_DECISION,
@@ -799,11 +799,7 @@ function unmatchedIndexKeys(index, stubIndex) {
 // through the repair round. They are separate functions on purpose — the workflow script is evaluated as a
 // function body and may not `import`, which is pinned by the `workflow sandbox: … imports nothing` test — so a
 // change to the membership or the strength of either leg has to be applied to both by hand.
-// The page tree's groups, built only when the run carries a deliverable status to validate.
-function rootStatusGroups(out, specOpts) {
-  return Object.keys(plainObject(specOpts.deliverableStatus)).length ? checklistGroups(out, specOpts) : null;
-}
-// Every `manifest.deliverableStatus` entry that cannot stand, as `{ key, problem, valid }`: an address that names
+// Every `manifest.deliverableStatus` entry that cannot stand, as `{ key, kind, problem, valid }` (`kind` from STATUS_ISSUE): an address that names
 // no deliverable (with the page's valid ids), a status other than wont-do / build, a wont-do without a D<N> that
 // decisions.md holds, an entry on a deliverable the engine already closed, and a wont-do whose subject (behaviour
 // card, confirm item, fold chain) other deliverables share without a status of their own. Nothing is closed on a
@@ -824,18 +820,18 @@ function entryProblems(key, entry, byKey, rows, opts) {
   const e = entry && typeof entry === "object" ? entry : {};
   const row = byKey.get(key);
   const page = key.includes("#") ? key.slice(0, key.indexOf("#")) : "";
-  if (!row) return [{ key, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
-  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
+  if (!row) return [{ key, kind: STATUS_ISSUE.unknownId, problem: "names no deliverable of this plan", valid: validIdsOf(page, rows) }];
+  if (e.status !== STATUS_WONT_DO && e.status !== STATUS_BUILD) return [{ key, kind: STATUS_ISSUE.status, problem: `status must be \`${STATUS_WONT_DO}\` or \`${STATUS_BUILD}\` (got \`${e.status ?? "(none)"}\`)`, valid: [] }];
   const closedBy = row.na || engineStatusReason(row, opts);
-  if (closedBy) return [{ key, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
+  if (closedBy) return [{ key, kind: STATUS_ISSUE.engineClosed, problem: `is already closed by the engine: ${closedBy}`, valid: [] }];
   if (e.status === STATUS_BUILD) return [];
   return decisionProblems(key, e.decision, opts);
 }
 function decisionProblems(key, decision, { decisions, decisionsOptional }) {
-  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
+  if (typeof decision !== "string" || !/^D\d+$/.test(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${STATUS_WONT_DO}\` needs its own \`decision\`: a D<N> recorded in decisions.md`, valid: [] }];
   if (!decisions && decisionsOptional) return [];
-  if (!decisions) return [{ key, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
-  if (!decisions.has(decision)) return [{ key, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
+  if (!decisions) return [{ key, kind: STATUS_ISSUE.decision, problem: `no decisions.md was read, so \`${decision}\` cannot be resolved — plan with \`--out\` into the migration folder that holds decisions.md`, valid: [] }];
+  if (!decisions.has(decision)) return [{ key, kind: STATUS_ISSUE.decision, problem: `\`${decision}\` does not resolve to an entry in decisions.md — add it there first`, valid: [] }];
   return [];
 }
 function relatedStatusIssues(rows, map) {
@@ -844,7 +840,7 @@ function relatedStatusIssues(rows, map) {
   return rows.flatMap((r, i) => {
     if (!subjects[i] || map[statusKey(r.pageKey, r.deliverableId)]?.status !== STATUS_WONT_DO) return [];
     const open = rows.filter((o, j) => j !== i && subjects[j] === subjects[i] && o.deliverableId && !hasStatus(o));
-    return open.length ? [{ key: statusKey(r.pageKey, r.deliverableId), problem: `shares its subject \`${subjects[i]}\` with deliverables that have no status — give each its own (\`${STATUS_WONT_DO}\` with a D<N>, or \`${STATUS_BUILD}\`)`, valid: open.map((o) => statusKey(o.pageKey, o.deliverableId)) }] : [];
+    return open.length ? [{ key: statusKey(r.pageKey, r.deliverableId), kind: STATUS_ISSUE.related, problem: `shares its subject \`${subjects[i]}\` with deliverables that have no status — give each its own (\`${STATUS_WONT_DO}\` with a D<N>, or \`${STATUS_BUILD}\`)`, valid: open.map((o) => statusKey(o.pageKey, o.deliverableId)) }] : [];
   });
 }
 function wiringOnlyKeys(index, stubIndex) {
@@ -2738,16 +2734,17 @@ export function runMigration(manifest, opts = {}) {
   out.placementBlockers = specOpts.placementBlockers;
   // The PLAN VERSION. Set BEFORE `renderPlan` can read it — it takes it off the result.
   out.planVersion = computePlanVersion(manifest, bodyOf);
-  // Planning decisions are validated once, at the root, against every deliverable of the whole page tree.
-  const statusGroups = opts.scopeSchema ? null : rootStatusGroups(out, specOpts);
-  if (!opts.scopeSchema) out.statusIssues = statusGroups ? deliverableStatusIssues(statusGroups, specOpts) : [];
+  // The page tree's groups, built once at the root: planning decisions are validated against every deliverable
+  // of the whole tree, and the plan's `### Won't do` list is rendered from them. A sub-scope run renders no list.
+  const planGroups = opts.scopeSchema ? null : checklistGroups(out, specOpts);
+  if (!opts.scopeSchema) out.statusIssues = deliverableStatusIssues(planGroups, specOpts);
   // a SUB-PAGE's design spec (child / mini / typed per-type form) is only ever EMBEDDED into
   // the parent plan, never emitted standalone, so render it `embedded`: no "## Design spec (generated)" header, no
   // Entity/Size preamble, no Member ledger — the parent plan owns those. `formOnly` is propagated for the typed fold
   // so the per-type spec skips the List-page block (a typed page is not its own section; the base fold owns the one
   // list page). `checklistOpts` carries isChildPage/isMiniPage but NOT formOnly, so it is re-applied here from `opts`.
   out.designSpec = renderDesignSpec(out, subPageSpecOpts(specOpts, opts));
-  out.plan = renderPlan(out, { ...specOpts, planGroups: statusGroups });
+  out.plan = renderPlan(out, { ...specOpts, planGroups });
   out.checklist = renderChecklist(out, specOpts); // the post-implementation Plan-vs-Done control table (CLI --checklist)
   return out;
 }

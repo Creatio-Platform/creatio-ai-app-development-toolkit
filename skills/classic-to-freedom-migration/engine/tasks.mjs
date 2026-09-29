@@ -38,7 +38,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey } from "./designspec.mjs";
+import { checklistGroups, subPageNodes, LIST_PAGE_KEY, verifyRowKey, STATUS_WONT_DO } from "./designspec.mjs";
 import { SPLIT_FILE, resolveSplit, reconcile, splitProblems, parseSplit,
   slotIndex, takeSlot, coverageProblem, isRetiredAggregate } from "./split.mjs";
 
@@ -799,15 +799,18 @@ const carriedOf = (meta = {}) => meta.status || S_TODO;
 // customer captions, up to a paragraph long, and the front matter is read by a person.
 const REPAIR_KEYS = ["kind", "cause", "repairRound", "covers"];
 
-// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>" | "D<N>+">, where a
+// The `decisions:` front-matter line, both directions. Map<row-number-1based, "D<N>" | "D<N>+" | "D<N>=">, where a
 // trailing `+` marks a cell the CASCADE wrote (the deliverable was closed by deciding a matching row on
-// another task) as opposed to one a person addressed directly. `--revoke` reverses the direct decision but
-// leaves the cascade closures standing, so the two are distinguished here, at the one place the provenance
-// is persisted.
+// another task) as opposed to one a person addressed directly, and a trailing `=` marks a cell the cut wrote
+// from a `manifest.deliverableStatus` entry. `--revoke` reverses the direct decision but leaves the cascade
+// closures standing; the cut reconciles only the cells it wrote. The provenance is persisted here and nowhere else.
 const CASCADE_MARK = "+";
-export const decisionOf = (v) => String(v || "").replace(/\+$/, "");
+const STATUS_DECISION_MARK = "=";
+export const decisionOf = (v) => String(v || "").replace(/[+=]$/, "");
 export const isCascadeDecision = (v) => String(v || "").endsWith(CASCADE_MARK);
 export const markCascade = (decision) => `${decision}${CASCADE_MARK}`;
+export const isStatusDecision = (v) => String(v || "").endsWith(STATUS_DECISION_MARK);
+export const markStatus = (decision) => `${decision}${STATUS_DECISION_MARK}`;
 export const renderDecisionsMap = (m) => {
   if (!m || (m instanceof Map ? m.size === 0 : Object.keys(m).length === 0)) return "";
   const entries = m instanceof Map ? [...m.entries()] : Object.entries(m);
@@ -821,8 +824,8 @@ export const parseDecisionsMap = (s) => {
     // `Number.isFinite` accepts `3.5` — a corrupted `3.5:D13` would then store a
     // row key that no real row index (an integer) can ever match, so `--revoke` would silently miss it.
     // `Number.isInteger` fails closed loud: the malformed entry is dropped and never becomes a live
-    // decision entry the engine cannot reach. The value keeps its cascade `+` marker verbatim.
-    if (Number.isInteger(num) && num >= 1 && /^D\d+\+?$/.test(String(d || ""))) out.set(num, d);
+    // decision entry the engine cannot reach. The value keeps its cascade `+` / status `=` marker verbatim.
+    if (Number.isInteger(num) && num >= 1 && /^D\d+[+=]?$/.test(String(d || ""))) out.set(num, d);
   }
   return out;
 };
@@ -3920,7 +3923,7 @@ function decidedCellOf({ mode, decision, title, destination }) {
 }
 // THE ONE WRITER of a decided row, for `--decide` and for a planning status at the cut. Returns why the row was
 // left alone, or null once it is written.
-function writeDecidedRow(task, idx, cell, cascade = false) {
+function writeDecidedRow(task, idx, cell, entry = cell.decision) {
   const row = task.rows[idx];
   // A plan-boundary row's Outcome is engine-owned (pre-filled from `r.na`). A person's decision does not
   // overturn a plan fact — raise it as a proposal in the plan, not by rewriting the cell.
@@ -3932,9 +3935,8 @@ function writeDecidedRow(task, idx, cell, cascade = false) {
   row.outcomeReason = cell.reason;
   row.naNoReason = false;
   task.decisions = task.decisions instanceof Map ? task.decisions : new Map();
-  // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
-  // round measures the page as it then stands and re-opens what still needs work.
-  task.decisions.set(idx + 1, cascade ? markCascade(cell.decision) : cell.decision);
+  // `entry` is the `decisions:` value: the D<N>, with the cascade or status marker when one applies.
+  task.decisions.set(idx + 1, entry);
   // A dirty flag for `persistTaskSet` — plan tasks are fully re-rendered from `task.rows`, so nothing extra
   // is needed for them. Adopted (repair / orchestrator) tasks keep their bodies byte-for-byte, so the
   // in-place cell writer in `persistTaskSet` picks these indices up.
@@ -3957,7 +3959,9 @@ export function applyDecision(dir, result, opts = {}) {
   const touched = [];
   const skipped = [];
   const writeCell = (task, idx, cascade = false) => {
-    const why = writeDecidedRow(task, idx, cell, cascade);
+    // A cascade-written cell carries the `+` marker so `--revoke` leaves it standing: the next `--verify`
+    // round measures the page as it then stands and re-opens what still needs work.
+    const why = writeDecidedRow(task, idx, cell, cascade ? markCascade(decision) : decision);
     if (why) skipped.push({ task, n: idx + 1, why });
     return !why;
   };
@@ -3995,12 +3999,12 @@ export function applyDecision(dir, result, opts = {}) {
 // every re-slice, but an adopted file or a hand edit can still leave an entry on a row it was not written for,
 // and blanking that row unconditionally destroys whatever sits there, including an agent's own `built` record,
 // the one mark this codebase cannot recover. So the cell must prove it is the one this decision wrote before it
-// is touched. A cell the cut wrote from a `manifest.deliverableStatus` entry is not revocable: the next cut would
-// write it again, so the entry itself is removed and the plan re-run.
+// is touched. A row whose `manifest.deliverableStatus` entry still cites this D<N> is not revocable: the next cut
+// would write it again, so the entry is removed and the cut re-run, which clears the cell.
 function revokeSkipReason(row, decision, pageKey) {
   if (!row) return "that row no longer exists in this task";
-  if (row.status?.kind === O_WONT_DO && row.status.decision === decision) {
-    return `its status comes from \`manifest.deliverableStatus\` \`${row.pageKey || pageKey}#${row.deliverableId}\` — remove that entry and re-run \`--plan\`; the next cut writes the cell again otherwise`;
+  if (row.status?.kind === STATUS_WONT_DO && row.status.decision === decision) {
+    return `its status comes from \`manifest.deliverableStatus\` \`${row.pageKey || pageKey}#${row.deliverableId}\` — remove that entry (or set it to \`build\`) and re-run \`--tasks\`: the cut then clears the cell`;
   }
   const decided = row.outcomeKind === O_WONT_DO || row.outcomeKind === O_POSTPONED;
   if (decided && String(row.outcome || "").includes(`(${decision})`)) return null;
@@ -4065,35 +4069,55 @@ export function revokeDecision(dir, result, opts = {}) {
   return { refused: false, decision, cleared, skipped, set: merged };
 }
 
+const isEngineTask = (t) => !t.unread && t.origin === TASK_ORIGIN_ENGINE;
 // The blank engine-task rows a `wont-do` planning status closes. A row that already carries an Outcome keeps it, so
-// a second cut writes nothing and a built row is never overwritten. `--revoke` leaves these cells alone
-// (revokeSkipReason), so a blank row with a status is one the cut has not written yet.
+// a second cut writes nothing and a built row is never overwritten.
 function pendingStatuses(tasks) {
   const out = [];
   for (const t of tasks) {
-    if (t.unread || t.origin !== TASK_ORIGIN_ENGINE) continue;
+    if (!isEngineTask(t)) continue;
     (t.rows || []).forEach((r, i) => {
-      if (r.status?.kind === "wont-do" && !r.na && !r.outcomeKind && !String(r.outcome || "").trim()) out.push({ task: t, idx: i });
+      if (r.status?.kind === STATUS_WONT_DO && !r.na && !r.outcomeKind && !String(r.outcome || "").trim()) out.push({ task: t, idx: i });
     });
   }
   return out;
 }
+// Clears each cell the cut wrote (a `D<N>=` entry) unless its row carries a `wont-do` status citing that same D<N>:
+// a removed entry and `build` leave the row open, and a status citing another D<N> is written by the pending pass.
+// A `--decide` cell and an unmarked entry are never touched. Returns the tasks a cell was cleared in.
+function clearStaleStatusCells(tasks) {
+  const cleared = new Set();
+  for (const t of tasks) {
+    if (!isEngineTask(t) || !(t.decisions instanceof Map)) continue;
+    for (const [n, d] of [...t.decisions.entries()]) {
+      const row = t.rows?.[n - 1];
+      if (!isStatusDecision(d) || (row?.status?.kind === STATUS_WONT_DO && row.status.decision === decisionOf(d))) continue;
+      if (row?.outcomeKind === O_WONT_DO) clearDecidedCell(t, n - 1);
+      t.decisions.delete(n);
+      cleared.add(t);
+    }
+  }
+  return cleared;
+}
 // The cut copies each planning status into its row through the `--decide` row writer: `wont-do — <title> (D<N>)`
-// with a `decisions:` entry. Every status must resolve against decisions.md before any is written. Every engine
-// task with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
+// with a `D<N>=` entry, after clearing the cells whose status is gone. Every status must resolve against
+// decisions.md before any is written. A task a cell was cleared in derives its status afresh; every engine task
+// with no open row then derives its status on this pass, so a task closed entirely by the plan (`na`) or by
 // statuses is never offered as `todo`.
 function applyPlanStatuses(merged, decisions) {
+  const reopened = clearStaleStatusCells(merged.tasks);
   const pending = pendingStatuses(merged.tasks);
   const problems = pending.flatMap(({ task, idx }) => {
     const d = task.rows[idx].status.decision;
-    return decisions?.has?.(d) ? [] : [`${task.file} row ${idx + 1} (${task.rows[idx].label}) — status \`wont-do\` cites \`${d}\`, which does not resolve in decisions.md`];
+    return decisions?.has?.(d) ? [] : [`${task.file} row ${idx + 1} (${task.rows[idx].label}) — status \`${STATUS_WONT_DO}\` cites \`${d}\`, which does not resolve in decisions.md`];
   });
   if (problems.length) return problems;
   for (const { task, idx } of pending) {
     const d = task.rows[idx].status.decision;
-    writeDecidedRow(task, idx, decidedCellOf({ mode: "wont-do", decision: d, title: decisions.get(d) }));
+    writeDecidedRow(task, idx, decidedCellOf({ mode: O_WONT_DO, decision: d, title: decisions.get(d) }), markStatus(d));
   }
-  recomputeDecidedStatuses(merged.tasks.filter((t) => !t.unread && t.origin === TASK_ORIGIN_ENGINE && (t.rows || []).length
+  recomputeDecidedStatuses(reopened, () => S_TODO, () => false);
+  recomputeDecidedStatuses(merged.tasks.filter((t) => isEngineTask(t) && (t.rows || []).length
     && t.rows.every((r) => r.na || r.outcomeKind)));
   return [];
 }

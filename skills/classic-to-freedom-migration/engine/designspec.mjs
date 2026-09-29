@@ -1998,7 +1998,8 @@ function boundaryScopeTarget(c) {
 // Honest label by resolution state (mapped/real page → Rebuild; verified-none → Without edit page; shipped Freedom
 // form → Reuse (Freedom); an approved cross-section boundary → Reuse (Classic); ancestor on this branch → Mapped
 // above; else ⚠ resolve, view/attach-only ALONE included — read-only tags the row, it does not answer whether a
-// page exists). Returns { target, call, label } so both the scope row AND the Call legend read the same value.
+// page exists). Returns { target, call, label } so both the scope row AND the Call legend read the same value, plus
+// `closed: true` when nothing is built for the child (its deliverable status reads that verdict).
 function childScopeMeta(c) {
   if (typeof c.reuseFreedomPage === "string" && c.reuseFreedomPage)
     return { target: `existing Freedom form \`${esc(c.reuseFreedomPage)}\``, call: "Reuse (Freedom)", label: esc(c.entity) };
@@ -2006,11 +2007,11 @@ function childScopeMeta(c) {
   // rendered as its OWN call: `Without edit page` would read as "no page exists" and `Reuse (Freedom)` as "a Freedom
   // form took over", and both are false here — the Classic card stays, and this list keeps opening it.
   if (boundaryChild(c))
-    return { target: boundaryScopeTarget(c), call: "Reuse (Classic)", label: esc(c.entity) };
+    return { target: boundaryScopeTarget(c), call: "Reuse (Classic)", label: esc(c.entity), closed: true };
   // Resolved-elsewhere: the same page is already mapped higher on this branch. The structure gate treats it as
   // resolved, so the scope table must say so too, rather than falling through to "⚠ resolve" and contradicting the gate.
   if (c.cyclic)
-    return { target: "↩ already mapped above (cycle) — same page, mapped higher in this plan", call: "Mapped above", label: esc(c.resolvedFrom || c.editPage || c.entity) };
+    return { target: "↩ already mapped above (cycle) — same page, mapped higher in this plan", call: "Mapped above", label: esc(c.resolvedFrom || c.editPage || c.entity), closed: true };
   // a folded child with 0 form fields is an inline-editable grid (its body is only an attribute
   // lookup-filter + column-render methods), NOT a form page. "Rebuild (child) → form page" with an empty Layout
   // misled the reader — there is no form to build; the related list itself is the editable grid.
@@ -2025,7 +2026,7 @@ function childScopeMeta(c) {
   // Only a recorded "no *Page exists" is `Without edit page` — `editable:false` does NOT reach this arm. The scope
   // table must never claim a row is settled while the gate blocks on it, nor the reverse (same rule as `cyclic`).
   if (c.editPage === false)
-    return { target: "— no separate page (read/attach-only)", call: "Without edit page", label: esc(c.entity) };
+    return { target: "— no separate page (read/attach-only)", call: "Without edit page", label: esc(c.entity), closed: true };
   return { target: "⚠ verify — does a Classic `*Page` exist for this child?", call: "⚠ resolve", label: esc(c.entity) };
 }
 function buildChildScopeRows(childs, opts = {}) {
@@ -2239,7 +2240,7 @@ function renderPlanWith(result, opts) {
   // presented AFTER implementation. See renderChecklist below.
   const childMappings = renderChildMappings(childs);
   // Rendered after every other section: the list names only the closed deliverables no line above printed.
-  const wontDo = renderWontDoList(result, opts);
+  const wontDo = renderWontDoList(opts);
   P.push(...childMappings, ...wontDo, "> **Supply the plan values via `manifest.planMeta` and re-run (that fills the `<FILL: …>` above), then present this VERBATIM** — ideally the file written by `--out`, not a hand-paste. Any remaining `<FILL: …>` means that planMeta value is still missing. Corrections/enrichments go in an *Adjustments* list at the very end — do NOT edit, reorder, or drop the generated tables/sections (Main scope · List page · form-page Layout/Business rules/⚠ Custom methods/⚠ Other declared logic/⚠ Confirm · Child page mappings).");
   return P.join("\n");
 }
@@ -2719,6 +2720,8 @@ export const childPageId = (c) => `child-page:${c.via || c.entity}`;
 export const NATIVE_CARD_ACTIONS_ID = "card-actions:native";
 export const STATUS_WONT_DO = "wont-do";
 export const STATUS_BUILD = "build";
+// The kinds of `manifest.deliverableStatus` issue; `related` lists the deliverables that need a status of their own.
+export const STATUS_ISSUE = Object.freeze({ unknownId: "unknown-id", status: "status", engineClosed: "engine-closed", decision: "decision", related: "related" });
 const isReusedChild = (c) => typeof c?.reuseFreedomPage === "string" && !!c.reuseFreedomPage;
 // The context a status is resolved in: the run's opts (the manifest entries, `isChildPage`, the host mode, the
 // decisions.md titles) plus the on-stand signals.
@@ -2727,7 +2730,6 @@ function statusCtx(result, opts) {
 }
 const CHILD_ACTION_REASON = "standard card action on a child edit page — the page has no section-level menu and the template ships its own controls";
 const PAGES_ONLY_REASON = "`placement.sectionHost.mode = pages-only-no-menu` — no section is registered, so no section entry or list page is built";
-const CLOSED_CHILD_CALLS = new Set(["Reuse (Classic)", "Mapped above", "Without edit page"]);
 // The engine's own "nothing to build" conclusions. Each reads the verdict the plan text is rendered from.
 function cardActionReason(row, ctx) {
   const v = row.action ? cardActionVerdict(row.action, ctx.signals, ctx) : null;
@@ -2738,7 +2740,7 @@ function cardActionReason(row, ctx) {
 function childPageReason(row) {
   if (!row.child || row.child.pageRows) return null;
   const meta = childScopeMeta(row.child);
-  return CLOSED_CHILD_CALLS.has(meta.call) ? meta.target : null;
+  return meta.closed ? meta.target : null;
 }
 const PAGES_ONLY_IDS = new Set(["page:section", "page:list-template", "page:list-not-built", "list-columns"]);
 function pagesOnlyReason(row, ctx) {
@@ -2782,10 +2784,12 @@ function withStatus(r, pageKey, ctx) {
   if (!st) return r;
   return st.kind === "not-applicable" ? { ...r, na: st.reason } : { ...r, status: { kind: st.kind, decision: st.decision } };
 }
-// "Won't do" at the end of the plan: every closed deliverable whose own line did not already say so.
-function renderWontDoList(result, opts) {
+// "Won't do" at the end of the plan: every closed deliverable whose own line did not already say so. Rendered from
+// the root run's `opts.planGroups`; a run without them renders no list.
+function renderWontDoList(opts) {
+  if (!opts.planGroups) return [];
   const printed = opts.printedStatus || new Set();
-  const rows = (opts.planGroups || checklistGroups(result, opts)).flatMap((g) => g.rows
+  const rows = opts.planGroups.flatMap((g) => g.rows
     .filter((r) => (r.na || r.status?.kind === STATUS_WONT_DO) && !printed.has(statusKey(g.pageKey, r.deliverableId)))
     .map((r) => `- \`${esc(statusKey(g.pageKey, r.deliverableId))}\` ${r.label.split(" — ")[0]} — ${statusText(r.na ? { kind: "not-applicable", reason: r.na } : r.status, opts)}`));
   return rows.length ? ["", "### Won't do", "", ...rows, ""] : [];
@@ -4652,7 +4656,7 @@ export function planGaps(result) {
 }
 // One `deliverableStatus` issue: the key, what is wrong, and the ids that correct it.
 function statusIssueText(x) {
-  const idsLabel = /subject/.test(x.problem) ? "needs a status" : "valid ids";
+  const idsLabel = x.kind === STATUS_ISSUE.related ? "needs a status" : "valid ids";
   const ids = (x.valid || []).length ? ` — ${idsLabel}: ${x.valid.join(", ")}` : "";
   return `\`${x.key}\` ${x.problem}${ids}`;
 }

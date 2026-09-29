@@ -13701,26 +13701,38 @@ check("identity T6b: the list-column verdict is untouched by the unwrap — a gr
   const named = (name, label) => new RegExp(`(^|[^A-Za-z0-9_])${escRe(name)}([^A-Za-z0-9_]|$)`).test(label.replace(/`/g, ""));
   const NOTHING = /\*\*Won't do\*\*|\*\*Not migrated\*\*|Not migrated —|\(not migrated\)/;
   const lines = (plan) => String(plan || "").split("\n").filter((l) => l.startsWith("| ") && NOTHING.test(l));
+  // The line's first two cells, multi-word ones included: one names the item, the other may name its region.
   const itemsOf = (line) => line.split("|").slice(1, 3).map((c) => c.trim().split(" — ")[0].replace(/`/g, "").trim())
-    .filter((c) => c && c !== "—" && !/\s/.test(c) && c !== "Header");
-  const drift = [];
+    .filter((c) => c && c !== "—" && c !== "Header");
+  const isClosed = (r) => !!r.na || r.status?.kind === "wont-do";
+  // A line drifts when no cell names a closed row and a cell names an open one.
+  const lineDrifts = (line, rows) => {
+    const items = itemsOf(line);
+    const names = (closed) => rows.filter(({ r }) => isClosed(r) === closed && items.some((it) => named(it, r.label)));
+    return names(true).length ? [] : names(false);
+  };
+  const drift = [], itemless = [];
   let cells = 0;
   for (const { manifest, result } of RUNS) {
     if (!result?.plan) continue;
     const rows = checklistGroups(result, checklistOpts(manifest)).flatMap((g) => g.rows.map((r) => ({ page: g.pageKey, r })));
     for (const line of lines(result.plan)) {
       cells++;
-      for (const item of itemsOf(line)) for (const { page, r } of rows) {
-        if (!r.na && r.status?.kind !== "wont-do" && named(item, r.label)) drift.push({ entity: manifest?.entity, page, planLine: line.slice(0, 160), label: r.label.slice(0, 100) });
-      }
+      if (!itemsOf(line).length) itemless.push({ entity: manifest?.entity, planLine: line.slice(0, 160) });
+      for (const { page, r } of lineDrifts(line, rows)) drift.push({ entity: manifest?.entity, page, planLine: line.slice(0, 160), label: r.label.slice(0, 100) });
     }
   }
-  check(`T3: across all ${RUNS.length} runs, no plan line saying there is nothing to build (${cells} of them) has an open row behind it`,
-    () => cells > 0 && drift.length === 0, () => ({ cells, drift: drift.slice(0, 10) }));
-  check("T3 (anti-vacuity): the matcher ties a closed plan line to the row it names, and not to a longer name",
+  check(`T3: across all ${RUNS.length} runs, every plan line saying there is nothing to build (${cells} of them) yields an item, and none names an open row without a closed one`,
+    () => cells > 0 && drift.length === 0 && itemless.length === 0, () => ({ cells, drift: drift.slice(0, 10), itemless: itemless.slice(0, 10) }));
+  const multi = "| Card actions | Run report | Action | — | — | **Won't do** — none |";
+  const at = (label, closed) => ({ page: "main", r: { label, ...(closed ? { na: "closed" } : {}) } });
+  check("T3 (anti-vacuity): the matcher ties a closed plan line to the row it names, and not to a longer name; a multi-word item is matched, and a line naming only open rows drifts",
     () => lines("| Card actions | Print | Action | — | — | **Won't do** — none |").length === 1
       && itemsOf("| Card actions | Print | Action | — | — | **Won't do** — none |").includes("Print")
-      && named("Print", "Card action — Print") && !named("Print", "Card action — printContract"));
+      && named("Print", "Card action — Print") && !named("Print", "Card action — printContract")
+      && itemsOf(multi).includes("Run report") && lineDrifts(multi, [at("Card action — Run report", true)]).length === 0
+      && lineDrifts(multi, [at("Card action — Run report", false)]).length === 1
+      && itemsOf("| — | — | **Won't do** — none |").length === 0);
 }
 
 console.log(`\n=================\nMAPPER GOLDEN: ${pass} passed, ${fail} failed`);
