@@ -10,19 +10,25 @@
   "c8": {
     "temp-directory": "coverage/tmp",
     "reports-dir": "coverage",
-    "reporter": ["text", "lcov", "html", "json-summary"],
+    "reporter": [
+      "text",
+      "lcov",
+      "html",
+      "json-summary"
+    ],
     "all": true,
-    "include": ["skills/**/*.mjs", "scripts/*.mjs", "hooks/**/*.mjs"],
+    "include": [
+      "skills/**/*.mjs"
+    ],
     "exclude": [
       "skills/classic-to-freedom-migration/engine/vendor/**",
-      "skills/classic-to-freedom-migration/engine/registry/**",
-      "skills/*/*.workflow.js"
+      "skills/classic-to-freedom-migration/engine/registry/**"
     ]
   },
   "devDependencies": {
-    "@eslint/js": "9.39.5",
-    "c8": "10.1.3",
-    "eslint": "9.39.5",
-    "globals": "16.5.0"
+    "@eslint/js": "10.0.1",
+    "c8": "12.0.0",
+    "eslint": "10.11.0",
+    "globals": "17.12.0"
   }
 }

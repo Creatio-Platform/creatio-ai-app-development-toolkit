@@ -141,20 +141,25 @@ jobs:
         working-directory: engine-tests/classic-to-freedom
         run: node run-tasks.mjs
       # The coverage report for everything the steps above ran, ubuntu leg only. Informational: no threshold is
-      # configured, so a low percentage can never fail this job. `always()` so a red golden still gets its report.
+      # configured, so a low percentage can never fail this job, and `continue-on-error` keeps a broken report
+      # (registry outage, c8 crash, artifact service) from failing it either — the failed step still shows in the
+      # run, only the goldens decide the check. `always()` so a red golden still gets its report.
       # NODE_V8_COVERAGE is unset for these tool processes, so npm and c8 do not record themselves.
       - name: Install coverage tooling (ubuntu only)
         if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
         run: env -u NODE_V8_COVERAGE npm ci --ignore-scripts
       - name: Coverage report (ubuntu only)
         if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
         run: |
+          mkdir -p coverage
           env -u NODE_V8_COVERAGE npm run --silent coverage:report > coverage/summary.txt
           cat coverage/summary.txt
           {
             echo "## Engine coverage (V8, every golden runner above)"
             echo
-            echo "Per file: statements, branches, functions, lines. \`All files\` is the overall total. No threshold is enforced."
+            echo "Per file: statements, branches, functions, lines, over the engine and workflow-core sources under \`skills/\`. \`All files\` is the overall total. No threshold is enforced."
             echo
             echo '```text'
             cat coverage/summary.txt
@@ -162,11 +167,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage report (ubuntu only)
         if: always() && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: engine-coverage
           path: |
             coverage/
             !coverage/tmp/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
